@@ -32,6 +32,14 @@ test('chart manager and editor remain usable at desktop and phone widths', async
   const basicsTitle = page.getByText('Basics', { exact: true }).last();
   const [previewBox, basicsBox] = await Promise.all([previewTitle.boundingBox(), basicsTitle.boundingBox()]);
   expect(previewBox!.x).toBeLessThan(basicsBox!.x);
+  await expect(page.getByRole('button', { name: 'sources' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'domain' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'curves' }).click();
+  await expect(page.getByText('Plotted over', { exact: true })).toBeVisible();
+  await page.getByText('Add curve', { exact: true }).click();
+  await page.getByRole('textbox', { name: 'Search curves' }).fill('battery level');
+  await expect(page.getByRole('button', { name: /Battery Level/ })).toBeVisible();
+  await expect(page.getByText(/production chart renderer/)).toBeVisible();
   await page.getByRole('button', { name: 'display' }).click();
   await expect(page.getByText('Axis labels', { exact: true })).toBeVisible();
   await expect(page.getByRole('switch', { name: 'Right Y axis' })).toBeVisible();

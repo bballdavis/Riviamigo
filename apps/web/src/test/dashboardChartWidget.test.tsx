@@ -11,7 +11,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { formatTemp } from '@riviamigo/ui/lib/utils';
-import { getBundledChartDefinition, getDefaultBySlug, getWidget } from '@riviamigo/dashboards';
+import { getBundledChartDefinition, getDefaultBySlug, getWidget, SPECIALIZED_RENDERER_COMPATIBILITY } from '@riviamigo/dashboards';
 import {
   getBatteryCapacityMileageYRange,
   getProjectedRangeMileageYRange,
@@ -43,6 +43,8 @@ beforeEach(() => {
     delete mockFavoriteState.chart_favorites[key];
   }
   mockUpdateDashboardChartFavorite.mockClear();
+  mockEffectiveCharts.mockReset();
+  mockEffectiveCharts.mockReturnValue({ data: [], isSuccess: false, isLoading: true, isError: false });
 });
 
 afterEach(() => {
@@ -70,13 +72,47 @@ vi.mock('uplot', () => {
 });
 
 describe('DashboardChartWidget - smoothing controls', () => {
-  it('uses specialized rendering only for an unchanged bundled system definition', () => {
+  it('keeps specialized rendering when only dashboard placement changes', () => {
     const bundled = getBundledChartDefinition('battery-capacity-mileage');
     if (!bundled) throw new Error('battery capacity chart seed is missing');
     const { slug, title, description, ...config } = bundled;
     const seed = { id: 'system', ownerId: null, slug, name: title, description, isDefault: true, isLocked: false, isEnabled: true, config };
     expect(usesBundledChartRenderer(seed)).toBe(true);
+    expect(usesBundledChartRenderer({ ...seed, config: { ...seed.config, placements: [{ dashboardSlug: 'overview' }] } })).toBe(true);
     expect(usesBundledChartRenderer({ ...seed, config: { ...seed.config, axes: { ...seed.config.axes, y: { ...seed.config.axes.y, label: 'Edited label' } } } })).toBe(false);
+  });
+  it('keeps specialized rendering when compatible object keys are reordered', () => {
+    const seed = chartRecord('battery-capacity-mileage');
+    const reordered = { ...seed, config: { interaction: seed.config.interaction, display: seed.config.display, axes: seed.config.axes, series: seed.config.series, x: seed.config.x, sources: seed.config.sources, timeframe: seed.config.timeframe, placements: seed.config.placements, schemaVersion: seed.config.schemaVersion } };
+    expect(usesBundledChartRenderer(reordered)).toBe(true);
+    expect(SPECIALIZED_RENDERER_COMPATIBILITY.find((renderer) => renderer.chartSlug === seed.slug)?.supportedDefinitionControls).toEqual([]);
+  });
+
+  it('keeps assigned Overview loading and errors from falling back to the fixed catalog', () => {
+    const instance = assignedOverviewInstance();
+    const loading = renderWidget(instance, { ...CTX, dashboardSlug: 'dashboard' });
+    expect(mockEffectiveCharts).toHaveBeenCalledWith('overview');
+    expect(screen.getByRole('status')).toHaveTextContent('Loading assigned charts');
+    expect(screen.queryByRole('button', { name: 'Chart' })).toBeNull();
+
+    loading.unmount();
+    mockEffectiveCharts.mockReturnValue({ data: [], isSuccess: false, isLoading: false, isError: true });
+    renderWidget(instance, { ...CTX, dashboardSlug: 'dashboard' });
+    expect(screen.getByRole('alert')).toHaveTextContent('Unable to load assigned charts');
+    expect(screen.queryByRole('button', { name: 'Chart' })).toBeNull();
+  });
+
+  it('uses the shared frame for assigned Overview charts and a true empty catalog', () => {
+    const instance = assignedOverviewInstance();
+    mockEffectiveCharts.mockReturnValue({ data: [chartRecord('soc-history'), chartRecord('projected-range-mileage')], isSuccess: true, isLoading: false, isError: false });
+    const populated = renderWidget(instance, { ...CTX, dashboardSlug: 'dashboard' });
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Projected Range by Mileage');
+    expect(screen.getByRole('button', { name: 'Chart settings' })).toBeInTheDocument();
+
+    populated.unmount();
+    mockEffectiveCharts.mockReturnValue({ data: [], isSuccess: true, isLoading: false, isError: false });
+    renderWidget(instance, { ...CTX, dashboardSlug: 'dashboard' });
+    expect(screen.getByText('No enabled charts are assigned to this dashboard.')).toBeInTheDocument();
   });
   it('uses projected range by mileage as the Overview app default', () => {
     const overview = getDefaultBySlug('dashboard');
@@ -166,6 +202,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
 
   it('keeps a saved favorite when a managed catalog gains a new chart', () => {
     mockFavoriteState.chart_favorites['dashboard:dashboard-a:test-soc-history'] = 'projected-range-mileage';
+    mockEffectiveCharts.mockReturnValue({ data: [chartRecord('soc-history'), chartRecord('projected-range-mileage'), chartRecord('tire-pressure-trips')], isSuccess: true, isLoading: false, isError: false });
     renderWidget(
       {
         ...makeInstance('soc-history', true),
@@ -662,9 +699,10 @@ const mockDashboardChartFavorites = vi.fn(() => ({ data: mockFavoriteState, isSu
 const mockUpdateDashboardChartFavorite = vi.fn(({ key, chartId }: { key: string; chartId: string }) => {
   mockFavoriteState.chart_favorites[key] = chartId;
 });
+const mockEffectiveCharts = vi.fn((_placement: string | null): { data: ReturnType<typeof chartRecord>[]; isSuccess: boolean; isLoading: boolean; isError: boolean } => ({ data: [], isSuccess: false, isLoading: true, isError: false }));
 
 vi.mock('@riviamigo/hooks', () => ({
-  useEffectiveCharts: () => ({ data: [], isSuccess: false }),
+  useEffectiveCharts: (placement: string | null) => mockEffectiveCharts(placement),
   useChartDatasets: () => ({ datasets: [], isLoading: false, errors: [] }),
   useSocHistory: () => mockSoc(),
   useRangeHistory: () => mockRange(),
@@ -821,6 +859,22 @@ function makeInstance(chartId: string, showPicker = false) {
     title: chartId,
     layout: { x: 0, y: 0, w: 12, h: 8 },
     options: { chartId, chartIds: [chartId], page: undefined, showPicker },
+  };
+}
+
+function chartRecord(slug: string) {
+  const bundled = getBundledChartDefinition(slug);
+  if (!bundled) throw new Error(`Missing bundled chart ${slug}`);
+  const { slug: recordSlug, title, description, ...config } = bundled;
+  return { id: `chart-${recordSlug}`, ownerId: null, slug: recordSlug, name: title, description, isDefault: true, isLocked: false, isEnabled: true, config };
+}
+
+function assignedOverviewInstance() {
+  return {
+    ...makeInstance('projected-range-mileage', true),
+    managed: true,
+    managedKey: 'overview.chart-catalog',
+    options: { chartId: 'projected-range-mileage', chartIds: ['projected-range-mileage'], page: 'overview' as const, showPicker: true },
   };
 }
 

@@ -72,7 +72,7 @@ import {
   type DashboardChartSettingsCapabilities,
 } from '../../charts/catalog';
 import { getBundledChartDefinition } from '../../charts/defaults';
-import { ChartDefinitionRenderer } from './ChartDefinitionRenderer';
+import { getChartRenderer, supportsSpecializedChartRenderer } from '../../charts/rendererRegistry';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { useMeasuredWidgetHeight } from '../useMeasuredWidgetHeight';
@@ -210,12 +210,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const favoriteInitializationRef = React.useRef<string | null>(null);
   const [search, setSearch] = React.useState('');
   const [draftChartSettings, setDraftChartSettings] = React.useState(options.chartSettings);
-  const [settingsOpen, setSettingsOpen] = React.useState(false);
-  const [viewerOpen, setViewerOpen] = React.useState(false);
   const [activeAxisRanges, setActiveAxisRanges] = React.useState<DashboardChartResolvedAxisRanges>({});
-  const settingsTriggerRef = React.useRef<HTMLButtonElement | null>(null);
-  const expandTriggerRef = React.useRef<HTMLButtonElement | null>(null);
-  const { ref, height } = useMeasuredWidgetHeight(260, 160);
   const chartSettingsSignature = JSON.stringify(options.chartSettings);
 
   React.useEffect(() => {
@@ -244,8 +239,11 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
     setActiveAxisRanges((current) => Object.keys(current).length === 0 ? current : {});
   }, [activeChartId]);
 
-  if (options.catalogMode === 'assigned' && assignedCatalog.isSuccess) {
-    return <AssignedChartRuntime instance={instance} ctx={ctx} options={options} charts={assignedCatalog.data} />;
+  if (options.catalogMode === 'assigned') {
+    if (assignedCatalog.isSuccess) {
+      return <AssignedChartRuntime instance={instance} ctx={ctx} options={options} charts={assignedCatalog.data} />;
+    }
+    return <DashboardChartCatalogState instance={instance} message={assignedCatalog.isError ? 'Unable to load assigned charts.' : 'Loading assigned charts…'} error={assignedCatalog.isError} />;
   }
 
   function updateActiveChartSettings(
@@ -264,164 +262,63 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
     updateFavorite.mutate({ key: defaultStorageKey, chartId: nextChartId });
   }
 
-  const settingsButton = (
-    <div className="relative">
-      <button
-        ref={settingsTriggerRef}
-        type="button"
-        aria-label="Chart settings"
-        aria-haspopup="dialog"
-        aria-expanded={settingsOpen}
-        onClick={() => setSettingsOpen((value) => !value)}
-        className={cn(
-          'flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors',
-          'hover:border-border-strong hover:text-fg focus:outline-none focus:ring-0 focus-visible:!outline-none focus-visible:!outline-offset-0 focus-visible:ring-0',
-          settingsOpen && 'border-accent text-accent',
-        )}
-      >
-        <SlidersHorizontal className="h-4 w-4" />
-      </button>
-    </div>
-  );
+  return <DashboardChartFrame
+    instance={instance}
+    options={options}
+    chartId={activeChartId}
+    chartOptions={chartOptions}
+    onChartChange={setChartId}
+    search={search}
+    onSearchChange={setSearch}
+    defaultChartId={defaultChartId}
+    onSetDefault={setChartAsDefault}
+    chartTitle={activeChartTitle}
+    settings={activeSettings}
+    capabilities={activeCapabilities}
+    activeAxisRanges={activeAxisRanges}
+    onUpdateSettings={updateActiveChartSettings}
+    persistent={Boolean(ctx.updateWidgetOptions)}
+    renderChart={(height, presentation) => <DashboardChartRenderer chartId={activeChartId} ctx={ctx} height={height} settings={activeSettings} presentation={presentation ?? 'embedded'} onResolvedAxisRanges={(ranges) => setActiveAxisRanges((current) => sameResolvedAxisRanges(current, ranges) ? current : ranges)} />}
+  />;
+}
 
-  const chartControls = (
-    <div className="flex items-center gap-2">
-      {settingsButton}
-      <button
-        ref={expandTriggerRef}
-        type="button"
-        aria-label="Expand chart"
-        onClick={() => setViewerOpen(true)}
-        className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg focus:outline-none focus:ring-0 focus-visible:!outline-none focus-visible:!outline-offset-0 focus-visible:ring-0 sm:hidden"
-      >
-        <Maximize2 className="h-4 w-4" />
-      </button>
-    </div>
-  );
+function DashboardChartCatalogState({ instance, message, error = false }: { instance: WidgetInstance; message: string; error?: boolean }) {
+  return <div className="relative flex h-full min-h-0 flex-col overflow-hidden">{instance.title ? <div className="mb-2 shrink-0"><p className="text-sm font-medium uppercase tracking-wider text-fg-secondary">{instance.title}</p></div> : null}<div role={error ? 'alert' : 'status'} className="flex min-h-32 flex-1 items-center justify-center rounded-lg border border-dashed border-border p-4 text-sm text-fg-tertiary">{message}</div></div>;
+}
 
-  return (
-    <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
-      {options.showPicker && chartOptions.length > 1 ? (
-        // Full picker row (chart selector + settings button).
-        <ChartPicker
-          value={activeChartId}
-          options={chartOptions}
-          onChange={setChartId}
-          searchValue={search}
-          onSearchChange={setSearch}
-          className="shrink-0"
-          trailing={chartControls}
-          defaultValue={defaultChartId}
-          onSetDefault={setChartAsDefault}
-        />
-      ) : instance.title ? (
-        // Compact header: title + optional subtitle on the left, settings button on
-        // the right. Keeps the button in flow so it doesn't overlap the chart canvas.
-        <div className="mb-2 flex shrink-0 items-start justify-between gap-3">
-          <div>
-            <p className="text-sm font-medium uppercase tracking-wider text-fg-secondary">
-              {instance.title}
-            </p>
-            {options.headerSubtitle && (
-              <p className="mt-0.5 text-xs text-fg-tertiary">{options.headerSubtitle}</p>
-            )}
-          </div>
-          <div className="shrink-0">{chartControls}</div>
-        </div>
-      ) : (
-        // No title and no picker — float the button so it doesn't consume height.
-        <div className="absolute right-0 top-0 z-10">{chartControls}</div>
-      )}
-      {!viewerOpen ? (
-        <div ref={ref} className="min-h-0 flex-1 overflow-hidden">
-          <DashboardChartRenderer
-            chartId={activeChartId}
-            ctx={ctx}
-            height={height}
-            settings={activeSettings}
-            onResolvedAxisRanges={(ranges) => setActiveAxisRanges((current) => (
-              sameResolvedAxisRanges(current, ranges) ? current : ranges
-            ))}
-          />
-        </div>
-      ) : null}
-      <ChartSettingsPanel
-        open={settingsOpen}
-        triggerRef={settingsTriggerRef}
-        chartTitle={activeChartTitle}
-        capabilities={activeCapabilities}
-        settings={activeSettings}
-        suggestedRanges={activeAxisRanges}
-        persistent={Boolean(ctx.updateWidgetOptions)}
-        onClose={() => setSettingsOpen(false)}
-        onTimeFilterChange={(next) =>
-          updateActiveChartSettings((current) => ({
-            ...current,
-            timeFilter: next,
-          }))
-        }
-        onSmoothnessChange={(next) =>
-          updateActiveChartSettings((current) => ({
-            ...current,
-            smoothness: next,
-          }))
-        }
-        onAxisModeChange={(axisId, mode) =>
-          updateActiveChartSettings((current) => ({
-            ...current,
-            axes: {
-              ...(current.axes ?? {}),
-              [axisId]: {
-                ...(current.axes?.[axisId] ?? {}),
-                mode,
-                ...(mode === 'manual' && axisId !== 'x' ? {
-                  ...(current.axes?.[axisId]?.min == null && activeAxisRanges[axisId] ? { min: activeAxisRanges[axisId]![0] } : {}),
-                  ...(current.axes?.[axisId]?.max == null && activeAxisRanges[axisId] ? { max: activeAxisRanges[axisId]![1] } : {}),
-                } : {}),
-              },
-            },
-          }))
-        }
-        onAxisValueChange={(axisId, bound, rawValue) =>
-          updateActiveChartSettings((current) => ({
-            ...current,
-            axes: {
-              ...(current.axes ?? {}),
-              [axisId]: {
-                ...(current.axes?.[axisId] ?? {}),
-                mode: current.axes?.[axisId]?.mode ?? 'manual',
-                [bound]: rawValue,
-              },
-            },
-          }))
-        }
-      />
-      {viewerOpen ? (
-        <MobileChartViewer
-          chartId={activeChartId}
-          chartTitle={activeChartTitle}
-          chartOptions={chartOptions}
-          onChartChange={setChartId}
-          defaultChartId={defaultChartId}
-          onSetDefault={setChartAsDefault}
-          onClose={() => {
-            setViewerOpen(false);
-            requestAnimationFrame(() => expandTriggerRef.current?.focus());
-          }}
-        >
-          {(viewerHeight) => (
-            <DashboardChartRenderer
-              chartId={activeChartId}
-              ctx={ctx}
-              height={viewerHeight}
-              settings={activeSettings}
-              presentation="mobile-viewer"
-            />
-          )}
-        </MobileChartViewer>
-      ) : null}
-    </div>
-  );
+interface DashboardChartFrameProps {
+  instance: WidgetInstance;
+  options: ResolvedDashboardChartOptions;
+  chartId: string;
+  chartOptions: Array<{ value: string; label: string }>;
+  onChartChange: (value: string) => void;
+  search: string;
+  onSearchChange: (value: string) => void;
+  defaultChartId: string;
+  onSetDefault: (value: string) => void;
+  chartTitle: string;
+  settings: ReturnType<typeof resolveChartDisplaySettings>;
+  capabilities: DashboardChartSettingsCapabilities;
+  activeAxisRanges: DashboardChartResolvedAxisRanges;
+  persistent: boolean;
+  onUpdateSettings: (updater: (current: DashboardChartDisplaySettings) => DashboardChartDisplaySettings) => void;
+  renderChart: (height: number, presentation?: 'embedded' | 'mobile-viewer') => React.ReactNode;
+}
+
+/** Single visual frame shared by assigned and fixed dashboard chart catalogs. */
+function DashboardChartFrame({ instance, options, chartId, chartOptions, onChartChange, search, onSearchChange, defaultChartId, onSetDefault, chartTitle, settings, capabilities, activeAxisRanges, persistent, onUpdateSettings, renderChart }: DashboardChartFrameProps) {
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [viewerOpen, setViewerOpen] = React.useState(false);
+  const settingsTriggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const expandTriggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const { ref, height } = useMeasuredWidgetHeight(260, 160);
+  const controls = <div className="flex items-center gap-2"><button ref={settingsTriggerRef} type="button" aria-label="Chart settings" aria-haspopup="dialog" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((value) => !value)} className={cn('flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors', 'hover:border-border-strong hover:text-fg focus:outline-none focus:ring-0 focus-visible:!outline-none focus-visible:!outline-offset-0 focus-visible:ring-0', settingsOpen && 'border-accent text-accent')}><SlidersHorizontal className="h-4 w-4" /></button><button ref={expandTriggerRef} type="button" aria-label="Expand chart" onClick={() => setViewerOpen(true)} className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg focus:outline-none focus:ring-0 focus-visible:!outline-none focus-visible:!outline-offset-0 focus-visible:ring-0 sm:hidden"><Maximize2 className="h-4 w-4" /></button></div>;
+  return <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
+    {options.showPicker && chartOptions.length > 1 ? <ChartPicker value={chartId} options={chartOptions} onChange={onChartChange} searchValue={search} onSearchChange={onSearchChange} className="shrink-0" trailing={controls} defaultValue={defaultChartId} onSetDefault={onSetDefault} /> : instance.title ? <div className="mb-2 flex shrink-0 items-start justify-between gap-3"><div><p className="text-sm font-medium uppercase tracking-wider text-fg-secondary">{instance.title}</p>{options.headerSubtitle ? <p className="mt-0.5 text-xs text-fg-tertiary">{options.headerSubtitle}</p> : null}</div><div className="shrink-0">{controls}</div></div> : <div className="absolute right-0 top-0 z-10">{controls}</div>}
+    {!viewerOpen ? <div ref={ref} className="min-h-0 flex-1 overflow-hidden">{renderChart(height)}</div> : null}
+    <ChartSettingsPanel open={settingsOpen} triggerRef={settingsTriggerRef} chartTitle={chartTitle} capabilities={capabilities} settings={settings} suggestedRanges={activeAxisRanges} persistent={persistent} onClose={() => setSettingsOpen(false)} onTimeFilterChange={(next) => onUpdateSettings((current) => ({ ...current, timeFilter: next }))} onSmoothnessChange={(next) => onUpdateSettings((current) => ({ ...current, smoothness: next }))} onAxisModeChange={(axisId, mode) => onUpdateSettings((current) => ({ ...current, axes: { ...(current.axes ?? {}), [axisId]: { ...(current.axes?.[axisId] ?? {}), mode, ...(mode === 'manual' && axisId !== 'x' ? { ...(current.axes?.[axisId]?.min == null && activeAxisRanges[axisId] ? { min: activeAxisRanges[axisId]![0] } : {}), ...(current.axes?.[axisId]?.max == null && activeAxisRanges[axisId] ? { max: activeAxisRanges[axisId]![1] } : {}) } : {}) } } }))} onAxisValueChange={(axisId, bound, rawValue) => onUpdateSettings((current) => ({ ...current, axes: { ...(current.axes ?? {}), [axisId]: { ...(current.axes?.[axisId] ?? {}), mode: current.axes?.[axisId]?.mode ?? 'manual', [bound]: rawValue } } }))} />
+    {viewerOpen ? <MobileChartViewer chartId={chartId} chartTitle={chartTitle} chartOptions={chartOptions} onChartChange={onChartChange} defaultChartId={defaultChartId} onSetDefault={onSetDefault} onClose={() => { setViewerOpen(false); requestAnimationFrame(() => expandTriggerRef.current?.focus()); }}>{(viewerHeight) => renderChart(viewerHeight, 'mobile-viewer')}</MobileChartViewer> : null}
+  </div>;
 }
 
 function AssignedChartRuntime({
@@ -443,12 +340,14 @@ function AssignedChartRuntime({
   const [chartId, setChartId] = React.useState(defaultChartId);
   const [defaultChartIdState, setDefaultChartId] = React.useState(defaultChartId);
   const [search, setSearch] = React.useState('');
-  const [viewerOpen, setViewerOpen] = React.useState(false);
+  const [draftChartSettings, setDraftChartSettings] = React.useState(options.chartSettings);
+  const [activeAxisRanges, setActiveAxisRanges] = React.useState<DashboardChartResolvedAxisRanges>({});
   const { data: favoriteResponse, isSuccess: favoritesLoaded } = useDashboardChartFavorites();
   const updateFavorite = useUpdateDashboardChartFavorite();
-  const { ref, height } = useMeasuredWidgetHeight(260, 160);
   const storageKey = chartDefaultStorageKey(ctx, instance);
   const favorite = favoriteResponse?.chart_favorites?.[storageKey];
+
+  React.useEffect(() => setDraftChartSettings(options.chartSettings), [options.chartSettings]);
 
   React.useEffect(() => {
     if (!available.length) return;
@@ -460,55 +359,95 @@ function AssignedChartRuntime({
   }, [available, defaultChartId, favorite, favoritesLoaded]);
 
   const active = available.find((chart) => chart.slug === chartId) ?? available[0];
-  const settings = resolveChartDisplaySettings(options.chartSettings, active?.slug ?? '', options.legacyTimeFilter, options.legacySmoothness);
-  const definition = active ? ({
-    ...active.config,
-    display: {
-      ...active.config.display,
-      ...(settings.timeFilter ? { timeFilter: settings.timeFilter as ChartDefinitionV1['display']['timeFilter'] } : {}),
-      ...(settings.smoothness ? { curveSmoothness: settings.smoothness as ChartDefinitionV1['display']['curveSmoothness'] } : {}),
-    },
-  } satisfies ChartDefinitionV1) : null;
-  const datasetState = useChartDatasets(definition, {
-    vehicleId: ctx.vehicleId,
-    from: ctx.from,
-    to: ctx.to,
-    lifetime: definition?.timeframe.mode === 'lifetime',
-    ...(ctx.chargeSessionId !== undefined ? { chargeSessionId: ctx.chargeSessionId } : {}),
-    ...(ctx.tripTagFilter ? { tripTagFilter: ctx.tripTagFilter } : {}),
-  });
+  const settings = resolveChartDisplaySettings(draftChartSettings, active?.slug ?? '', options.legacyTimeFilter, options.legacySmoothness);
+  const activeDefinition = active ? getChartDefinition(active.slug) : undefined;
+  const activeCapabilities = activeDefinition
+    ? { ...getChartSettingsCapabilities(activeDefinition), smoothness: supportsDashboardChartSmoothness(activeDefinition) }
+    : active ? {
+      timeFilter: active.config.x.kind === 'time',
+      smoothness: active.config.series.some((item) => item.mark === 'line' || item.mark === 'area' || item.mark === 'step'),
+      axes: {
+        x: { label: active.config.axes.x.label ?? 'X axis', ...(active.config.axes.x.unit ? { unit: active.config.axes.x.unit } : {}) },
+        y: { label: active.config.axes.y.label ?? 'Y axis', ...(active.config.axes.y.unit ? { unit: active.config.axes.y.unit } : {}) },
+        ...(active.config.axes.y2 ? { y2: { label: active.config.axes.y2.label ?? 'Y2 axis', ...(active.config.axes.y2.unit ? { unit: active.config.axes.y2.unit } : {}) } } : {}),
+      },
+      xDomainSource: active.config.timeframe.mode === 'dashboard' ? 'dashboard-timeframe' as const : 'chart-local' as const,
+    } : EMPTY_CAPABILITIES;
 
   function setChartAsDefault(next: string) {
     setDefaultChartId(next);
     updateFavorite.mutate({ key: storageKey, chartId: next });
   }
 
+  function updateChartSettings(updater: (current: DashboardChartDisplaySettings) => DashboardChartDisplaySettings) {
+    if (!active) return;
+    setDraftChartSettings((current) => {
+      const next = setChartSettingsEntry(current, active.slug, updater(current[active.slug] ?? {}));
+      ctx.updateWidgetOptions?.(instance.id, { chartSettings: next });
+      return next;
+    });
+  }
+
   if (!active) {
     return <div className="flex h-full min-h-32 items-center justify-center rounded-lg border border-dashed border-border p-4 text-sm text-fg-tertiary">No enabled charts are assigned to this dashboard.</div>;
   }
 
-  const usesBundledRenderer = usesBundledChartRenderer(active);
-  const renderedChart = usesBundledRenderer
-    ? <DashboardChartRenderer chartId={active.slug} ctx={ctx} height={height} settings={settings} />
-    : definition ? <ChartDefinitionRenderer definition={definition} datasets={datasetState.datasets} height={height} loading={datasetState.isLoading} /> : null;
+  const renderChart = (height: number, presentation: 'embedded' | 'mobile-viewer' = 'embedded') => active ? <ManagedChartRuntime chart={active} ctx={ctx} height={height} settings={settings} presentation={presentation} onResolvedAxisRanges={(ranges) => setActiveAxisRanges((current) => sameResolvedAxisRanges(current, ranges) ? current : ranges)} /> : null;
   return (
-    <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
-      {options.showPicker && chartOptions.length > 1 ? <ChartPicker value={active.slug} options={chartOptions} onChange={setChartId} searchValue={search} onSearchChange={setSearch} defaultValue={defaultChartIdState} onSetDefault={setChartAsDefault} /> : <div className="mb-2 flex shrink-0 items-center justify-between"><p className="text-sm font-medium uppercase tracking-wider text-fg-secondary">{active.name}</p><button type="button" aria-label="Expand chart" onClick={() => setViewerOpen(true)} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-fg-tertiary sm:hidden"><Maximize2 className="h-4 w-4" /></button></div>}
-      {!viewerOpen ? <div ref={ref} className="min-h-0 flex-1 overflow-hidden">{renderedChart}</div> : null}
-      {viewerOpen ? <MobileChartViewer chartId={active.slug} chartTitle={active.name} chartOptions={chartOptions} onChartChange={setChartId} defaultChartId={defaultChartIdState} onSetDefault={setChartAsDefault} onClose={() => setViewerOpen(false)}>{(viewerHeight) => usesBundledRenderer ? <DashboardChartRenderer chartId={active.slug} ctx={ctx} height={viewerHeight} settings={settings} presentation="mobile-viewer" /> : definition ? <ChartDefinitionRenderer definition={definition} datasets={datasetState.datasets} height={viewerHeight} loading={datasetState.isLoading} presentation="mobile-viewer" /> : null}</MobileChartViewer> : null}
-    </div>
+    <DashboardChartFrame instance={instance} options={options} chartId={active.slug} chartOptions={chartOptions} onChartChange={setChartId} search={search} onSearchChange={setSearch} defaultChartId={defaultChartIdState} onSetDefault={setChartAsDefault} chartTitle={active.name} settings={settings} capabilities={activeCapabilities} activeAxisRanges={activeAxisRanges} persistent={Boolean(ctx.updateWidgetOptions)} onUpdateSettings={updateChartSettings} renderChart={renderChart} />
   );
 }
 
 export function usesBundledChartRenderer(chart: ChartRecord) {
-  if (!chart.isDefault || getChartDefinition(chart.slug) == null) return false;
+  if (getChartDefinition(chart.slug) == null) return false;
   const bundled = getBundledChartDefinition(chart.slug);
   if (!bundled) return false;
-  const definition = { ...bundled } as Partial<typeof bundled>;
-  delete definition.slug;
-  delete definition.title;
-  delete definition.description;
-  return JSON.stringify(chart.config) === JSON.stringify(definition);
+  const bundledConfig = { ...bundled } as Partial<typeof bundled>;
+  delete bundledConfig.slug;
+  delete bundledConfig.title;
+  delete bundledConfig.description;
+  return supportsSpecializedChartRenderer(chart.slug, chart.config, bundledConfig as ChartRecord['config']);
+}
+
+export function ManagedChartRuntime({ chart, ctx, height, settings, presentation = 'embedded', onResolvedAxisRanges }: {
+  chart: ChartRecord;
+  ctx: WidgetCtx;
+  height: number;
+  settings?: DashboardChartDisplaySettings;
+  presentation?: 'embedded' | 'mobile-viewer';
+  onResolvedAxisRanges?: (ranges: DashboardChartResolvedAxisRanges) => void;
+}) {
+  if (usesBundledChartRenderer(chart)) {
+    return <DashboardChartRenderer chartId={chart.slug} ctx={ctx} height={height} presentation={presentation} {...(settings ? { settings } : {})} {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})} />;
+  }
+  return <ManagedDefinitionRuntime chart={chart} ctx={ctx} height={height} presentation={presentation} {...(settings ? { settings } : {})} />;
+}
+
+function ManagedDefinitionRuntime({ chart, ctx, height, settings, presentation }: {
+  chart: ChartRecord;
+  ctx: WidgetCtx;
+  height: number;
+  settings?: DashboardChartDisplaySettings;
+  presentation: 'embedded' | 'mobile-viewer';
+}) {
+  const draft = ({
+    ...chart.config,
+    display: {
+      ...chart.config.display,
+      ...(settings?.timeFilter ? { timeFilter: settings.timeFilter as ChartDefinitionV1['display']['timeFilter'] } : {}),
+      ...(settings?.smoothness ? { curveSmoothness: settings.smoothness as ChartDefinitionV1['display']['curveSmoothness'] } : {}),
+    },
+  } satisfies ChartDefinitionV1);
+  const datasetState = useChartDatasets(draft, {
+    vehicleId: ctx.vehicleId,
+    from: ctx.from,
+    to: ctx.to,
+    lifetime: draft.timeframe.mode === 'lifetime',
+    ...(ctx.chargeSessionId !== undefined ? { chargeSessionId: ctx.chargeSessionId } : {}),
+    ...(ctx.tripTagFilter ? { tripTagFilter: ctx.tripTagFilter } : {}),
+  });
+  const renderer = getChartRenderer(draft);
+  return <>{renderer?.render({ definition: draft, datasets: datasetState.datasets, height, loading: datasetState.isLoading, partial: datasetState.isPartial, refreshing: datasetState.isFetching && !datasetState.isLoading, error: datasetState.errors.length > 0 && datasetState.datasets.length === 0, presentation })}</>;
 }
 
 export function DashboardChartRenderer({

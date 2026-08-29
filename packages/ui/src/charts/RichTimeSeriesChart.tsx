@@ -19,6 +19,8 @@ export interface RichSeries {
   color?: string;
   values: Array<number | null>;
   mode?: 'line' | 'area' | 'bar' | 'scatter';
+  /** Optional per-series path interpolation. */
+  interpolation?: 'step';
   /** Marker diameter for scatter series. */
   pointSize?: number;
   /** Stroke width for line and area series. */
@@ -576,7 +578,7 @@ export function buildRichTimeSeriesUPlotSeries(
           : uPlot.paths.bars!(barOptions);
       }
       if (seriesMode === 'scatter') next.paths = () => null;
-      if (stepInterpolation && (seriesMode === 'line' || seriesMode === 'area')) {
+      if ((item.interpolation === 'step' || stepInterpolation) && (seriesMode === 'line' || seriesMode === 'area')) {
         next.paths = uPlot.paths.stepped!({ align: 1 });
       } else if (
         normalizeCurveSmoothness(smoothness) !== 'straight'
