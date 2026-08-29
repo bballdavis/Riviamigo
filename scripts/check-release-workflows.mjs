@@ -111,6 +111,11 @@ requireText(compose, /image: \$\{RIVIAMIGO_IMAGE:-/, 'production Compose must ac
 const freshInstall = read('scripts/verify-fresh-install.mjs');
 requireText(freshInstall, /const imageRef = value\('--image-ref'\)/, 'fresh-install verification must accept --image-ref');
 requireText(freshInstall, /RIVIAMIGO_IMAGE: imageRef/, 'fresh-install verification must pass the exact image reference to Compose');
+requireText(
+  freshInstall,
+  /restart', 'riviamigo'[\s\S]*?verifyBundledDashboards\(baseUrl, accessToken\)/,
+  'fresh-install verification must prove pre-restart access tokens survive a service restart',
+);
 const runtime = read('.github/workflows/runtime.yml');
 requireText(
   runtime,
