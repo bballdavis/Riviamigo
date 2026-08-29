@@ -72,7 +72,6 @@ import {
   type DashboardChartSettingsCapabilities,
 } from '../../charts/catalog';
 import { getChartRenderer } from '../../charts/rendererRegistry';
-import { getBundledChartDefinition } from '../../charts/defaults';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { useMeasuredWidgetHeight } from '../useMeasuredWidgetHeight';
@@ -404,19 +403,8 @@ function AssignedChartRuntime({
   );
 }
 
-function serializeChartConfig(config: unknown) {
-  return JSON.stringify(config, (_key, value: unknown) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)));
-  });
-}
-
 export function usesBundledChartRenderer(chart: ChartRecord) {
-  const bundled = getBundledChartDefinition(chart.slug);
-  if (!bundled) return false;
-  const { placements: _chartPlacements, ...chartConfig } = chart.config;
-  const { slug: _bundledSlug, title: _bundledTitle, description: _bundledDescription, placements: _bundledPlacements, ...bundledConfig } = bundled;
-  return serializeChartConfig(chartConfig) === serializeChartConfig(bundledConfig);
+  return getChartDefinition(chart.slug) != null;
 }
 
 export function ManagedChartRuntime({ chart, ctx, height, settings, presentation = 'embedded', onResolvedAxisRanges }: {

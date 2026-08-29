@@ -32,6 +32,7 @@ Use these entrypoints in this order:
 
 - Preserve shared page and dashboard behavior by changing the shared seam before patching route-local code.
 - For dashboard pages, audit `DashboardPageShell`, `DashboardRenderer`, `WidgetHost`, sensor widgets, shared tables, and hooks before adding one-off behavior.
+- The legacy dashboard chart renderer is the canonical visual contract for every known bundled chart slug. Chart-editor work may change chart sources, definitions, or dashboard assignments, but must not route bundled charts through the generic definition renderer unless the user explicitly requests a renderer migration.
 - Route files stay thin. Put reusable or page-specific composition in components, hooks, definitions, or widgets rather than route conditionals.
 
 ### Visual consistency is not optional

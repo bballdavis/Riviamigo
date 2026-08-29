@@ -7,6 +7,8 @@ Open **Settings > Charts** to manage chart defaults and personal charts. The man
 - Editing an app default creates a personal same-slug customization for your account.
 - Reset to app default removes that personal customization and reveals the bundled chart again.
 - Duplicate creates an independent personal chart with a new slug.
+
+Bundled chart slugs—including same-slug customizations—keep the established legacy dashboard renderer and visual language. Customization changes the chart definition, sources, or dashboard assignments; it does not switch a bundled chart to the generic definition renderer.
 - A disabled chart keeps its dashboard assignments. Re-enabling restores those placements and preserves the stored favorite.
 - Assignments control which dashboard catalogs include an enabled chart. An enabled chart with no assignments is saved as **Unassigned**.
 
