@@ -1,5 +1,7 @@
 export { Button } from './Button';
 export type { ButtonProps } from './Button';
+export { EfficiencyDisplayToggle } from './EfficiencyDisplayToggle';
+export type { EfficiencyDisplayToggleProps } from './EfficiencyDisplayToggle';
 
 export { Badge } from './Badge';
 export type { BadgeProps } from './Badge';

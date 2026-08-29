@@ -35,7 +35,7 @@ tail. `odometer_daily` has a separate hourly, materialized-only policy.
 
 Optional outbound services are governed by `external_connection_settings`, not environment variables. Weather and Nominatim execute on the server. Basemap and Iconify browser requests terminate at authenticated same-origin proxy routes. Custom endpoints are validated before storage, secrets are age-encrypted and write-only, and disabling a provider is enforced at the shared service seam.
 
-Parallax collection runs as an isolated Tokio companion inside each production
+Parallax collection runs as an integrated, isolated Tokio acquisition subsystem inside each production
 vehicle worker. It opens its own allowlisted GraphQL WebSocket and writes only normalized,
 typed readings to the `timeseries.parallax_*` tables. It never writes raw
 payloads, network identifiers, credentials, or canonical
@@ -43,7 +43,7 @@ payloads, network identifiers, credentials, or canonical
 the main telemetry worker. The API reads the normalized tables for the Health
 page and Rivian-reported Parked Energy panel; the existing Phantom Drain
 battery-change estimate remains an independent derived data source.
-The companion is enabled by default, shares only the latest canonical active-session
+The subsystem is integrated and enabled by default, shares only the latest canonical active-session
 context, and can be disabled for emergency rollback with `PARALLAX_ENABLED=false`.
 
 ## Major Backend Areas

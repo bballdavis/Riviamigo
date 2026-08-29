@@ -16,7 +16,7 @@ use crate::{
         chart_registry::{
             merge_entries, ChartManagerEntry, ChartRecord, BUNDLED_CHART_BASELINE_REVISION,
         },
-        chart_validation::parse_and_validate,
+        chart_validation::parse_and_validate_for_slug,
     },
 };
 
@@ -79,10 +79,8 @@ pub fn router() -> Router<AppState> {
 
 async fn source_manifest(_auth: AuthUser) -> Json<Value> {
     Json(
-        serde_json::from_str(include_str!(
-            "../../../../packages/dashboards/src/charts/sources/sources.json"
-        ))
-        .expect("bundled chart source manifest must be valid JSON"),
+        serde_json::from_str(include_str!("../../charts/sources.json"))
+            .expect("bundled chart source manifest must be valid JSON"),
     )
 }
 
@@ -148,7 +146,7 @@ async fn create(
     validate_slug(&body.slug)?;
 
     validate_name(&body.name)?;
-    validate_config(&body.config)?;
+    validate_config(&body.slug, &body.config)?;
     let row = sqlx::query_as::<_, ChartRecord>("INSERT INTO riviamigo.charts (owner_id, slug, name, description, is_default, is_locked, is_enabled, config) VALUES ($1,$2,$3,$4,FALSE,FALSE,COALESCE($5,TRUE),$6) RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at")
         .bind(auth.user_id).bind(body.slug).bind(body.name).bind(body.description).bind(body.is_enabled).bind(body.config).fetch_one(&state.pool).await.map_err(map_conflict)?;
     Ok((StatusCode::CREATED, Json(row)))
@@ -163,7 +161,7 @@ async fn update(
     let existing = get_chart(&state, id).await?;
     check_write(&existing, auth.user_id, false)?;
     if let Some(config) = &body.config {
-        validate_config(config)?;
+        validate_config(&existing.slug, config)?;
     }
     let row = sqlx::query_as::<_, ChartRecord>("UPDATE riviamigo.charts SET name=COALESCE($1,name),description=COALESCE($2,description),is_enabled=COALESCE($3,is_enabled),config=COALESCE($4,config),updated_at=NOW() WHERE id=$5 RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at")
         .bind(body.name).bind(body.description).bind(body.is_enabled).bind(body.config).bind(id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
@@ -235,6 +233,7 @@ async fn set_placements(
             "placements must contain at most 20 valid dashboard slugs".into(),
         ));
     }
+    let existing_slug = existing.slug.clone();
     let mut config = existing.config;
     let object = config
         .as_object_mut()
@@ -244,7 +243,7 @@ async fn set_placements(
         serde_json::to_value(&body.placements)
             .map_err(|_| AppError::Validation("placements could not be encoded".into()))?,
     );
-    validate_config(&config)?;
+    validate_config(&existing_slug, &config)?;
     let row = sqlx::query_as::<_, ChartRecord>("UPDATE riviamigo.charts SET config=$1,updated_at=NOW() WHERE id=$2 RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at")
 
         .bind(config)
@@ -262,8 +261,9 @@ async fn admin_update(
     Json(body): Json<ChartPatch>,
 ) -> Result<Json<ChartRecord>, AppError> {
     require_admin(&state, auth.user_id).await?;
+    let existing = get_chart(&state, id).await?;
     if let Some(config) = &body.config {
-        validate_config(config)?;
+        validate_config(&existing.slug, config)?;
     }
     let row=sqlx::query_as::<_,ChartRecord>("UPDATE riviamigo.charts SET name=COALESCE($1,name),description=COALESCE($2,description),is_enabled=COALESCE($3,is_enabled),config=COALESCE($4,config),updated_at=NOW() WHERE id=$5 RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at").bind(body.name).bind(body.description).bind(body.is_enabled).bind(body.config).bind(id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
     Ok(Json(row))
@@ -301,7 +301,7 @@ async fn admin_restore(
     let description = bundled["description"].as_str();
     let enabled = bundled["enabled"].as_bool().unwrap_or(true);
     let config = bundled["definition"].clone();
-    validate_config(&config)?;
+    validate_config(&row.slug, &config)?;
     let restored = sqlx::query_as::<_, ChartRecord>("UPDATE riviamigo.charts SET name=$1,description=$2,is_enabled=$3,config=$4,baseline_revision=$6,updated_at=NOW() WHERE id=$5 RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at")
         .bind(name)
         .bind(description)
@@ -385,15 +385,17 @@ fn validate_name(name: &str) -> Result<(), AppError> {
         Ok(())
     }
 }
-fn validate_config(config: &Value) -> Result<(), AppError> {
-    parse_and_validate(config).map(|_| ()).map_err(|errors| {
-        AppError::Validation(
-            serde_json::to_string(
-                &serde_json::json!({"code":"CHART_DEFINITION_INVALID","errors":errors}),
+fn validate_config(slug: &str, config: &Value) -> Result<(), AppError> {
+    parse_and_validate_for_slug(slug, config)
+        .map(|_| ())
+        .map_err(|errors| {
+            AppError::Validation(
+                serde_json::to_string(
+                    &serde_json::json!({"code":"CHART_DEFINITION_INVALID","errors":errors}),
+                )
+                .unwrap_or_else(|_| "invalid chart definition".into()),
             )
-            .unwrap_or_else(|_| "invalid chart definition".into()),
-        )
-    })
+        })
 }
 fn map_conflict(error: sqlx::Error) -> AppError {
     if error

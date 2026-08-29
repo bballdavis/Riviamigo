@@ -119,6 +119,7 @@ export const ChartSeriesDefinitionSchema = z.object({
   y: ChartFieldRefSchema,
   x: ChartFieldRefSchema.optional(),
   mark: z.enum(['line', 'area', 'step', 'bar', 'scatter', 'histogram']),
+  fill: z.boolean().optional(),
   yAxis: z.enum(['y', 'y2']),
   color: ChartColorDefinitionSchema,
   strokeWidth: finiteNumber.pipe(z.number().min(0.5).max(12)).optional(),

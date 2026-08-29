@@ -27,7 +27,6 @@
           "battery-degradation",
           "soc-history",
           "charge-level",
-          "charge-session-curve",
           "charging-curve-analysis",
           "charging-sessions-energy",
           "charging-weekly-energy",

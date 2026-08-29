@@ -1,6 +1,15 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
 import { useQuery } from '@tanstack/react-query';
+import { GiWeight } from 'react-icons/gi';
+import {
+  MdSignalWifiStatusbar1Bar,
+  MdSignalWifiStatusbar2Bar,
+  MdSignalWifiStatusbar3Bar,
+  MdSignalWifiStatusbar4Bar,
+  MdSignalWifiStatusbarNull,
+} from 'react-icons/md';
+import { RiTaxiWifiLine } from 'react-icons/ri';
 import { TbCarDoor } from 'react-icons/tb';
 import {
   Activity,
@@ -34,7 +43,7 @@ import {
   useResolvedVehicleSelection,
   useVehicleHealth,
 } from '@riviamigo/hooks';
-import { resolveVehicleGateCapability } from '@riviamigo/types';
+import { resolveVehicleGateCapability, type VehicleHealth } from '@riviamigo/types';
 import { SensorChipSummary } from '@riviamigo/dashboards';
 import {
   Badge,
@@ -42,6 +51,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  EfficiencyDisplayToggle,
   PageLayout,
   SelectPicker,
   Skeleton,
@@ -55,6 +65,12 @@ import {
   normalizeTireWheels,
   summarizeTireHealth,
 } from '@riviamigo/ui/lib/vehicleTires';
+import {
+  formatDistanceKm,
+  formatEfficiencyFromWhPerKm,
+  formatMassKg,
+  getUnitPreferences,
+} from '@riviamigo/ui/lib/utils';
 import {
   buildAvailabilityTooltip,
   formatAvailabilityLastUpdated,
@@ -97,6 +113,16 @@ export function VehicleHealthContent() {
 
   const diagnostics = summarizeDiagnostics(status);
   const extended = data?.extended_telemetry;
+  const [unitMode, setUnitMode] = useState(() => getUnitPreferences().mode);
+  useEffect(() => {
+    const handleUnits = () => setUnitMode(getUnitPreferences().mode);
+    window.addEventListener('rm-units-change', handleUnits as EventListener);
+    window.addEventListener('storage', handleUnits);
+    return () => {
+      window.removeEventListener('rm-units-change', handleUnits as EventListener);
+      window.removeEventListener('storage', handleUnits);
+    };
+  }, []);
   const vehicleName = data?.vehicle?.name || data?.vehicle?.model || 'Rivian';
   const displayModel = [data?.vehicle?.model, data?.vehicle?.trim].filter(Boolean).join(' ');
   const freshness = getFreshness(data?.runtime?.last_event_at ?? data?.latest?.ts ?? null);
@@ -163,21 +189,26 @@ export function VehicleHealthContent() {
         subtitle="Mechanical signals, software state, and telemetry freshness for your Rivian."
         className="pt-10 lg:pt-0"
         actions={
-          hasVehicleChoices ? (
-            <SelectPicker
-              className="min-w-[11rem]"
-              value={effectiveVehicleId ?? ''}
-              onChange={(vehicleId) => setSessionVehicleId(vehicleId || null)}
-              aria-label="Select vehicle"
-              options={availableVehicles.map((vehicle) => ({
-                value: vehicle.id,
-                label: vehicle.display_name || vehicle.model,
-                description:
-                  vehicle.display_name && vehicle.model !== vehicle.display_name
-                    ? vehicle.model
-                    : undefined,
-              }))}
-            />
+          hasVehicleChoices || unitMode !== 'custom' ? (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {unitMode !== 'custom' ? <EfficiencyDisplayToggle /> : null}
+              {hasVehicleChoices ? (
+                <SelectPicker
+                  className="min-w-[11rem]"
+                  value={effectiveVehicleId ?? ''}
+                  onChange={(vehicleId) => setSessionVehicleId(vehicleId || null)}
+                  aria-label="Select vehicle"
+                  options={availableVehicles.map((vehicle) => ({
+                    value: vehicle.id,
+                    label: vehicle.display_name || vehicle.model,
+                    description:
+                      vehicle.display_name && vehicle.model !== vehicle.display_name
+                        ? vehicle.model
+                        : undefined,
+                  }))}
+                />
+              ) : null}
+            </div>
           ) : null
         }
       >
@@ -190,7 +221,7 @@ export function VehicleHealthContent() {
           />
         ) : (
           <>
-            <section className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(22rem,0.65fr)]">
+            <section className="grid gap-4 xl:items-stretch xl:grid-cols-[minmax(0,1.35fr)_minmax(22rem,0.65fr)]">
               <Card
                 className="overflow-hidden border-accent/20 p-3"
                 style={{
@@ -243,33 +274,102 @@ export function VehicleHealthContent() {
                 </div>
               </Card>
 
-              <Card>
-                <CardHeader>
-                  <CardTitle>Signal Freshness</CardTitle>
-                  <Badge variant={freshness.variant} dot>
-                    {freshness.label}
-                  </Badge>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <HealthLine
-                    icon={<Radio className="h-4 w-4" />}
-                    label="Last vehicle event"
-                    value={formatDateTime(data?.runtime?.last_event_at ?? data?.latest?.ts)}
-                    detail={
-                      (data?.runtime?.auth_state === 'needs_reauth'
-                        ? 'Rivian access expired. Reconnect this vehicle from Settings.'
-                        : data?.runtime?.worker_health_msg) ??
-                      'Collector messages will appear here when Rivian access needs attention.'
-                    }
-                  />
-                  <HealthLine
-                    icon={<Activity className="h-4 w-4" />}
-                    label="API snapshot"
-                    value={formatDateTime(data?.generated_at)}
-                    detail="Generated from the latest stored telemetry and software periods."
-                  />
-                </CardContent>
-              </Card>
+              <div className="grid min-w-0 gap-2 xl:h-full xl:grid-rows-[auto_minmax(0,1fr)]">
+                <Card data-testid="vehicle-telemetry-summary" padding="none" className="px-3 py-2">
+                  <CardHeader className="mb-0.5 flex-wrap items-start gap-1">
+                    <div className="min-w-0">
+                      <CardTitle>Connectivity</CardTitle>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    {isLoading ? (
+                      <CompactTelemetrySkeleton />
+                    ) : !extended?.network && !extended?.efficiency && !extended?.mass && !extended?.cold_weather ? (
+                      <EmptyPanel text="Extended telemetry has not produced a meaningful frame yet. Canonical vehicle telemetry continues independently." />
+                    ) : (
+                      <div className="grid gap-2">
+                        <ConnectivitySection network={extended?.network} />
+                        <div className="grid gap-1.5 sm:grid-cols-2">
+                          <Tooltip
+                            content={formatEfficiencyProvenance(extended.efficiency?.reference_wh_per_km)}
+                            className="w-full min-w-0"
+                          >
+                            <HealthLine
+                              icon={<Gauge className="h-4 w-4" />}
+                              label="Est. Efficiency"
+                              value={formatEfficiencyFromWhPerKm(extended.efficiency?.learned_wh_per_km)}
+                            />
+                          </Tooltip>
+                          <Tooltip content="Rivian estimate" className="w-full min-w-0">
+                            <HealthLine
+                              icon={<GiWeight className="h-4 w-4" />}
+                              label="Vehicle mass"
+                              value={formatMassKg(extended.mass?.estimated_mass_kg)}
+                            />
+                          </Tooltip>
+                        </div>
+                        {extended?.cold_weather ? (
+                          <HealthLine
+                            icon={<Snowflake className="h-4 w-4" />}
+                            label="Cold-weather impact"
+                            value={
+                              extended.cold_weather.cold_range_impact_km == null
+                                ? 'Observed'
+                                : formatDistanceKm(extended.cold_weather.cold_range_impact_km)
+                            }
+                            detail="Rivian-reported cold-limited range impact."
+                          />
+                        ) : null}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card padding="none" className="flex flex-col px-3 py-2 xl:h-full">
+                  <CardHeader className="mb-0.5">
+                    <CardTitle>Signal Freshness</CardTitle>
+                    <Badge variant={freshness.variant} dot>
+                      {freshness.label}
+                    </Badge>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-1.5 xl:flex-1 xl:justify-between xl:gap-0">
+                    <HealthLine
+                      icon={<Radio className="h-4 w-4" />}
+                      label="Last vehicle event"
+                      value={formatDateTime(data?.runtime?.last_event_at ?? data?.latest?.ts)}
+                    />
+                    <Tooltip
+                      content="Generated from the latest stored telemetry and software periods."
+                      className="w-full"
+                    >
+                      <HealthLine
+                        icon={<Activity className="h-4 w-4" />}
+                        label="API snapshot"
+                        value={formatDateTime(data?.generated_at)}
+                      />
+                    </Tooltip>
+                    <HealthLine
+                      icon={<Cable className="h-4 w-4" />}
+                      label="Acquisition"
+                      labelAccessory={
+                        <Tooltip
+                          content={formatAcquisitionStatusTooltip(extended)}
+                          contentClassName="w-72"
+                        >
+                          <button
+                            type="button"
+                            className="relative inline-flex h-3 w-3 items-center justify-center rounded-sm text-fg-tertiary transition-colors before:absolute before:-inset-2 hover:bg-bg-elevated hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent"
+                            aria-label="About acquisition status"
+                          >
+                            <Info className="h-2.5 w-2.5" />
+                          </button>
+                        </Tooltip>
+                      }
+                      value={formatAcquisitionState(extended)}
+                    />
+                  </CardContent>
+                </Card>
+              </div>
             </section>
 
             <section className="grid gap-4 lg:grid-cols-3">
@@ -484,121 +584,6 @@ export function VehicleHealthContent() {
               </CardContent>
             </Card>
 
-            {
-              <Card data-testid="extended-vehicle-telemetry">
-                <CardHeader>
-                  <div>
-                    <CardTitle>Extended Vehicle Telemetry</CardTitle>
-                    <p className="mt-1 text-xs text-fg-tertiary">
-                      Privacy-filtered readings from the in-process extended telemetry companion.
-                    </p>
-                  </div>
-                  <Badge
-                    variant={(extended?.parallax?.status ?? extended?.collector?.status) === 'connected' ? 'success' : 'default'}
-                    dot
-                  >
-                    {formatParallaxState(extended?.parallax?.status ?? extended?.collector?.status)}
-                  </Badge>
-                </CardHeader>
-                <CardContent>
-                  {isLoading ? (
-                    <HealthGridSkeleton />
-                  ) : !extended?.network && !extended?.efficiency && !extended?.mass ? (
-                    <EmptyPanel text="Extended telemetry has not produced a meaningful frame yet. Canonical vehicle telemetry continues independently." />
-                  ) : (
-                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                      <ExtendedReading
-                        icon={<Radio className="h-4 w-4" />}
-                        label="Connectivity"
-                        value={
-                          extended.network?.wifi_connected
-                            ? `Wi-Fi ${formatSignal(extended.network.wifi_rssi_dbm)}`
-                            : (extended.network?.cellular_access_technology ?? 'Disconnected')
-                        }
-                        detail={[
-                          extended.network?.wifi_link_speed_mbps == null
-                            ? null
-                            : `${extended.network.wifi_link_speed_mbps} Mbps`,
-                          extended.network?.wifi_frequency_mhz == null
-                            ? null
-                            : `${extended.network.wifi_frequency_mhz} MHz`,
-                        ]
-                          .filter(Boolean)
-                          .join(' · ')}
-                      />
-                      <ExtendedReading
-                        icon={<Gauge className="h-4 w-4" />}
-                        label="Rivian learned estimate"
-                        value={formatEfficiency(extended.efficiency?.learned_wh_per_km)}
-                        detail={
-                          extended.efficiency?.reference_wh_per_km == null
-                            ? ''
-                            : `${formatEfficiency(extended.efficiency.reference_wh_per_km)} reference`
-                        }
-                      />
-                      <ExtendedReading
-                        icon={<Activity className="h-4 w-4" />}
-                        label="Estimated vehicle mass"
-                        value={
-                          extended.mass
-                            ? `${Math.round(extended.mass.estimated_mass_kg * 2.20462).toLocaleString()} lb`
-                            : '—'
-                        }
-                        detail={
-                          extended.mass
-                            ? `${extended.mass.estimated_mass_kg.toLocaleString()} kg · Rivian estimate`
-                            : ''
-                        }
-                      />
-                      {extended.cold_weather ? (
-                        <ExtendedReading
-                          icon={<Snowflake className="h-4 w-4" />}
-                          label="Cold-weather impact"
-                          value={
-                            extended.cold_weather.cold_range_impact_km == null
-                              ? 'Observed'
-                              : `${(extended.cold_weather.cold_range_impact_km * 0.621371).toFixed(1)} mi`
-                          }
-                          detail="Shown only when the vehicle reports a cold-limited value."
-                        />
-                      ) : null}
-                    </div>
-                  )}
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                    <ExtendedReading
-                      icon={<Radio className="h-4 w-4" />}
-                      label="Acquisition"
-                      value="Operational state"
-                      detail={extended?.parallax?.last_meaningful_frame_at
-                        ? `${formatParallaxState(extended?.parallax?.status ?? extended?.collector?.status)} · meaningful frame ${formatAppDateTime(extended.parallax.last_meaningful_frame_at)}`
-                        : `${formatParallaxState(extended?.parallax?.status ?? extended?.collector?.status)} · ${extended?.parallax?.last_error ?? 'no meaningful frame observed'}`}
-                    />
-                    <ExtendedReading
-                      icon={<Activity className="h-4 w-4" />}
-                      label="Acquisition diagnostics"
-                      value={`${extended?.parallax?.reconnect_count ?? 0} reconnects`}
-                      detail={`${extended?.parallax?.decode_error_count ?? 0} decode · ${extended?.parallax?.empty_frame_count ?? 0} empty · ${extended?.parallax?.ambiguity_count ?? 0} ambiguous`}
-                    />
-                    <ExtendedReading
-                      icon={<Cable className="h-4 w-4" />}
-                      label="Legacy chargingSession"
-                      value={extended?.legacy_charging_session?.classification.replace('_', ' ') ?? 'not observed'}
-                      detail={extended?.legacy_charging_session?.last_meaningful_frame_at
-                        ? `Meaningful frame ${formatAppDateTime(extended.legacy_charging_session.last_meaningful_frame_at)}`
-                        : `${extended?.legacy_charging_session?.all_null_count ?? 0} all-null · ${extended?.legacy_charging_session?.malformed_count ?? 0} malformed`}
-                    />
-                  </div>
-                  {extended?.session_repair ? (
-                    <p className="mt-3 text-xs text-fg-tertiary">
-                      Last session repair: {extended.session_repair.reason.replaceAll('_', ' ')} ·{' '}
-                      {formatAppDateTime(extended.session_repair.created_at)}
-                    </p>
-                  ) : (
-                    <p className="mt-3 text-xs text-fg-tertiary">No automatic session repairs recorded.</p>
-                  )}
-                </CardContent>
-              </Card>
-            }
           </>
         )}
       </PageLayout>
@@ -618,6 +603,171 @@ function formatParallaxState(status: string | undefined) {
     case 'starting': return 'Starting';
     default: return 'Never observed';
   }
+}
+
+function formatAcquisitionState(extended: VehicleHealth['extended_telemetry'] | undefined) {
+  // The collector state is the authoritative connection state. Parallax is a
+  // compatibility fallback for older API responses, not a second status.
+  return formatParallaxState(extended?.collector?.status ?? extended?.parallax?.status);
+}
+
+function formatWifiRadioDetail(network: VehicleHealth['extended_telemetry']['network'] | undefined) {
+  if (!network) return 'No radio reading';
+  return [
+    network.wifi_frequency_mhz == null ? null : `${(network.wifi_frequency_mhz / 1000).toFixed(1)} GHz`,
+    network.wifi_channel_width_mhz == null ? null : `${network.wifi_channel_width_mhz} MHz`,
+  ].filter(Boolean).join(' · ') || 'No radio reading';
+}
+
+function getWifiStrengthLabel(rssi: number) {
+  if (rssi >= -55) return 'Strong';
+  if (rssi >= -67) return 'Good';
+  if (rssi >= -75) return 'Fair';
+  return 'Weak';
+}
+
+function getWifiStrengthLevel(connected: boolean | null | undefined, rssi: number | null | undefined) {
+  if (connected !== true || rssi == null) return 0;
+  if (rssi >= -55) return 4;
+  if (rssi >= -67) return 3;
+  if (rssi >= -75) return 2;
+  return 1;
+}
+
+function WifiStrengthGlyph({
+  connected,
+  rssi,
+}: {
+  connected: boolean | null | undefined;
+  rssi: number | null | undefined;
+}) {
+  const level = getWifiStrengthLevel(connected, rssi);
+  const Icon = connected !== true || rssi == null
+    ? MdSignalWifiStatusbarNull
+    : level >= 4
+      ? MdSignalWifiStatusbar4Bar
+      : level === 3
+        ? MdSignalWifiStatusbar3Bar
+        : level === 2
+          ? MdSignalWifiStatusbar2Bar
+          : MdSignalWifiStatusbar1Bar;
+
+  return <Icon className="h-7 w-7" aria-hidden="true" />;
+}
+
+function ConnectivitySection({
+  network,
+}: {
+  network: VehicleHealth['extended_telemetry']['network'] | undefined;
+}) {
+  const connected = network?.wifi_connected;
+  const rssi = network?.wifi_rssi_dbm;
+  const status = connected === true ? 'Connected' : connected === false ? 'Disconnected' : 'Unavailable';
+  const strength = connected === true && rssi != null ? getWifiStrengthLabel(rssi) : 'Unavailable';
+
+  return (
+    <section aria-label="Connectivity">
+      <div className="grid grid-cols-3 gap-1.5">
+        <ConnectivityMetric
+          icon={<WifiStrengthGlyph connected={connected} rssi={rssi} />}
+          iconLabel={`Wi-Fi strength: ${strength}`}
+          label="Wi-Fi signal"
+          value={strength}
+          detail={rssi == null ? 'No dBm reading' : `${rssi} dBm`}
+        />
+        <ConnectivityMetric
+          icon={<Gauge className="h-4 w-4" />}
+          label="Throughput"
+          value={network?.wifi_link_speed_mbps == null ? 'Unavailable' : `${network.wifi_link_speed_mbps} Mbps`}
+          detail={formatWifiRadioDetail(network)}
+        />
+        <ConnectivityMetric
+          icon={<RiTaxiWifiLine className="h-4 w-4" />}
+          label="Wi-Fi status"
+          value={status}
+          valueVariant={connected === true ? 'success' : connected === false ? 'warning' : 'default'}
+          detail={
+            connected === false && network?.cellular_access_technology
+              ? `${network.cellular_access_technology} cellular`
+              : undefined
+          }
+        />
+      </div>
+    </section>
+  );
+}
+
+function ConnectivityMetric({
+  icon,
+  iconLabel,
+  label,
+  value,
+  valueVariant,
+  detail,
+}: {
+  icon: React.ReactNode;
+  iconLabel?: string;
+  label: string;
+  value: string;
+  valueVariant?: BadgeProps['variant'];
+  detail?: string | undefined;
+}) {
+  return (
+    <div className="min-w-0 rounded-lg border border-border bg-bg-elevated/45 p-1.5">
+      <div className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-bg-elevated text-accent">
+        {iconLabel ? <span role="img" aria-label={iconLabel}>{icon}</span> : icon}
+      </div>
+      <p className="mt-1.5 truncate text-[10px] font-semibold uppercase tracking-wider text-fg-tertiary">{label}</p>
+      {valueVariant ? (
+        <Badge variant={valueVariant} size="sm" className="mt-0.5 max-w-full truncate">
+          {value}
+        </Badge>
+      ) : (
+        <p className="mt-0.5 truncate font-mono text-[12px] text-fg">{value}</p>
+      )}
+      {detail ? <p className="mt-0.5 truncate text-[10px] text-fg-secondary">{detail}</p> : null}
+    </div>
+  );
+}
+
+function formatEfficiencyProvenance(referenceWhPerKm: number | null | undefined) {
+  return referenceWhPerKm == null
+    ? 'Rivian estimate. No reference efficiency is available.'
+    : `Rivian estimate · ${formatEfficiencyFromWhPerKm(referenceWhPerKm)} reference`;
+}
+
+function formatAcquisitionTooltip(extended: VehicleHealth['extended_telemetry'] | undefined) {
+  const parallax = extended?.parallax;
+  const frame = parallax?.last_meaningful_frame_at
+    ? formatAppDateTime(parallax.last_meaningful_frame_at)
+    : parallax?.last_error ?? 'No meaningful frame observed';
+  const diagnostics = `${parallax?.reconnect_count ?? 0} reconnects · ${parallax?.decode_error_count ?? 0} decode · ${parallax?.empty_frame_count ?? 0} empty · ${parallax?.ambiguity_count ?? 0} ambiguous`;
+  return (
+    <div className="grid gap-1">
+      <span className="font-medium text-fg">Meaningful frame</span>
+      <span>{frame}</span>
+      <span>{diagnostics}</span>
+    </div>
+  );
+}
+
+function formatAcquisitionStatusTooltip(extended: VehicleHealth['extended_telemetry'] | undefined) {
+  return (
+    <div className="grid gap-2 leading-4">
+      <div className="grid gap-0.5">
+        <span className="font-medium text-fg">Parallax acquisition</span>
+        <span>This is Riviamigo&apos;s integrated Parallax acquisition WebSocket, separate from the canonical vehicle telemetry connection.</span>
+      </div>
+      <div className="grid gap-0.5 border-t border-border pt-2">
+        <span className="font-medium text-fg">What the status means</span>
+        <span>Connected means the socket handshake and subscription are active. Error means the latest token, socket, subscription, or heartbeat attempt failed and will be retried; it does not by itself indicate a vehicle fault.</span>
+      </div>
+      <div className="grid gap-0.5 border-t border-border pt-2">
+        <span className="font-medium text-fg">Latest evidence</span>
+        {formatAcquisitionTooltip(extended)}
+      </div>
+    </div>
+  );
 }
 
 function HeroMetric({
@@ -700,22 +850,27 @@ function HealthLine({
   label,
   value,
   detail,
+  labelAccessory,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
-  detail: string;
+  detail?: React.ReactNode;
+  labelAccessory?: React.ReactNode;
 }) {
   return (
-    <div className="flex gap-3">
-      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-bg-elevated text-accent">
+    <div className="grid grid-cols-[2.125rem_minmax(0,1fr)] items-start gap-x-2">
+      <div className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-lg border border-border bg-bg-elevated text-accent">
         {icon}
       </div>
-      <div className="min-w-0">
-        <p className="text-xs font-semibold uppercase tracking-wider text-fg-tertiary">{label}</p>
-        <p className="mt-1 truncate font-mono text-sm text-fg">{value}</p>
-        <p className="mt-1 text-xs leading-5 text-fg-tertiary">{detail}</p>
+      <div className="grid h-[34px] min-w-0 grid-rows-[14px_20px]">
+        <p className="relative -top-px inline-flex items-start gap-1 text-[13px] font-semibold uppercase leading-[14px] tracking-wider text-fg-tertiary">
+          {label}
+          {labelAccessory}
+        </p>
+        <p className="self-end truncate font-mono text-[15px] leading-5 text-fg">{value}</p>
       </div>
+      {detail ? <p className="col-start-2 mt-1 text-[11px] leading-3 text-fg-tertiary">{detail}</p> : null}
     </div>
   );
 }
@@ -856,6 +1011,16 @@ function HealthGridSkeleton() {
   );
 }
 
+function CompactTelemetrySkeleton() {
+  return (
+    <div className="space-y-3">
+      {Array.from({ length: 3 }).map((_, index) => (
+        <Skeleton key={index} className="h-12" />
+      ))}
+    </div>
+  );
+}
+
 function EmptyPanel({ text }: { text: string }) {
   return (
     <div className="rounded-xl border border-dashed border-border bg-bg-elevated/40 px-4 py-8 text-center text-sm text-fg-tertiary">
@@ -935,37 +1100,6 @@ function LiftgateIcon({ className }: { className: string }) {
       <path d="m16 12 3 3-3 3" />
     </svg>
   );
-}
-
-function ExtendedReading({
-  icon,
-  label,
-  value,
-  detail,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  detail: string;
-}) {
-  return (
-    <div className="min-w-0 rounded-xl border border-border bg-bg-elevated/35 p-3">
-      <div className="flex items-center gap-2 text-fg-secondary">
-        {icon}
-        <span className="text-xs font-medium">{label}</span>
-      </div>
-      <p className="mt-2 truncate text-lg font-semibold text-fg">{value}</p>
-      {detail ? <p className="mt-1 text-xs text-fg-tertiary">{detail}</p> : null}
-    </div>
-  );
-}
-
-function formatSignal(value: number | null | undefined) {
-  return value == null ? '' : `(${value} dBm)`;
-}
-
-function formatEfficiency(value: number | null | undefined) {
-  return value == null ? '—' : `${Math.round(value * 1.60934)} Wh/mi`;
 }
 
 function summarizeTires(

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChartDataset, ChartDefinitionV1 } from '@riviamigo/types';
 
 const richChart = vi.hoisted(() => vi.fn((_props: Record<string, unknown>) => <div data-testid="rich-chart" />));
-type CapturedProps = Record<string, unknown> & { points: Array<{ ts: string | number }>; series: Array<{ values: Array<number | null>; color: string }> };
+type CapturedProps = Record<string, unknown> & { points: Array<{ ts: string | number }>; series: Array<{ values: Array<number | null>; color: string; mode?: string; interpolation?: string }> };
 vi.mock('@riviamigo/ui/charts', () => ({
   getChartColor: (token: string) => `token:${token}`,
   RichTimeSeriesChart: richChart,
@@ -64,5 +64,21 @@ describe('ChartDefinitionRenderer', () => {
 
     render(<ChartDefinitionRenderer definition={definition} datasets={datasets} height={280} refreshing />);
     expect(screen.getByRole('status')).toHaveTextContent('Updating chart');
+  });
+
+  it('translates fill metadata into area mode without changing step interpolation', () => {
+    const filledLine = { ...definition.series[0]!, mark: 'line' as const, fill: true };
+    const unfilledStep = { ...definition.series[1]!, mark: 'step' as const };
+    render(<ChartDefinitionRenderer definition={{ ...definition, series: [filledLine, unfilledStep] }} datasets={datasets} height={280} />);
+    const props = richChart.mock.calls[0]![0] as CapturedProps;
+    expect(props.series.map((series) => ({ mode: series.mode, interpolation: series.interpolation }))).toEqual([
+      { mode: 'area', interpolation: undefined },
+      { mode: 'line', interpolation: 'step' },
+    ]);
+
+    richChart.mockClear();
+    const filledStep = { ...definition.series[0]!, mark: 'step' as const, fill: true };
+    render(<ChartDefinitionRenderer definition={{ ...definition, series: [filledStep] }} datasets={[datasets[0]!]} height={280} />);
+    expect((richChart.mock.calls[0]![0] as CapturedProps).series[0]).toMatchObject({ mode: 'area', interpolation: 'step' });
   });
 });

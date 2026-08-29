@@ -106,6 +106,8 @@ export interface ChartSeriesDefinition {
   y: ChartFieldRef;
   x?: ChartFieldRef;
   mark: ChartMark;
+  /** Fill line/step series as an area while preserving their line interpolation. */
+  fill?: boolean;
   yAxis: 'y' | 'y2';
   color: ChartColorDefinition;
   strokeWidth?: number;

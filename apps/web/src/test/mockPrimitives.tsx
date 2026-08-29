@@ -186,6 +186,10 @@ export const CardTitle = ({ children }: { children: React.ReactNode }) =>
 export const CardContent = ({ children }: { children: React.ReactNode }) =>
   <div>{children}</div>;
 
+export const EfficiencyDisplayToggle = () => (
+  <button type="button" aria-label="Toggle efficiency units, currently mi/kWh" aria-pressed="true" />
+);
+
 export const Button = ({ children, onClick, iconLeft, iconRight, loading, ...p }: {
   children: React.ReactNode; onClick?: () => void; iconLeft?: React.ReactNode; iconRight?: React.ReactNode;
   variant?: string; size?: string; type?: 'button' | 'submit' | 'reset';

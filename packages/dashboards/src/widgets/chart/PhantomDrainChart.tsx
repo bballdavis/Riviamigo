@@ -38,6 +38,8 @@ export interface PhantomDrainChartProps {
   emptyTitle?: string | undefined;
   yRange?: [number, number] | undefined;
   interactionMode?: 'standard' | 'touch-explore' | undefined;
+  /** Optional definition-driven color. Omitted preserves the established session palette. */
+  seriesColor?: string | undefined;
 }
 
 function isFiniteNumber(value: number | null | undefined): value is number {
@@ -127,6 +129,7 @@ export function PhantomDrainChart({
   emptyTitle = 'No phantom drain data for this period',
   yRange,
   interactionMode = 'standard',
+  seriesColor,
 }: PhantomDrainChartProps) {
   const data = React.useMemo(() => buildPhantomDrainDailySeries(periods), [periods]);
   const dailyYRange = React.useMemo<[number, number] | undefined>(() => {
@@ -141,7 +144,7 @@ export function PhantomDrainChart({
   const sessionSeries = Array.from({ length: sessionCount }, (_, sessionIndex) => ({
     key: `phantom-drain-session-${sessionIndex}`,
     label: `Drain session ${sessionIndex + 1}`,
-    color: SESSION_COLORS[sessionIndex % SESSION_COLORS.length]!,
+    color: seriesColor ?? SESSION_COLORS[sessionIndex % SESSION_COLORS.length]!,
     values: data.map((point) => point.sessions[sessionIndex]?.socLost ?? null),
     mode: 'bar' as const,
     stackId: 'phantom-drain-day',
@@ -151,6 +154,7 @@ export function PhantomDrainChart({
   }));
   return (
     <RichTimeSeriesChart
+      rendererId="phantom-drain"
       points={data.map((point) => ({ ts: point.ts }))}
       series={[
         ...sessionSeries,
