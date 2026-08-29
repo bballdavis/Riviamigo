@@ -152,6 +152,16 @@ requireText(
   /prepareDataDirectory\(targetData\);[\s\S]*?startStack\(targetProject/,
   'S3 drill must prepare the target bind mount before starting its stack',
 );
+requireText(
+  backupRestoreS3,
+  /waitForBackupCompletion\(sourceUrl, sourceToken, backup\.run\.id\)/,
+  'S3 drill must wait for the asynchronous backup run before restoring it',
+);
+requireText(
+  backupRestoreS3,
+  /run\?\.status === 'succeeded'[\s\S]*?storage_type === 'local'[\s\S]*?storage_type === 's3'/,
+  'S3 drill must require both local and S3 artifacts from the completed run',
+);
 
 if (failures.length) {
   console.error(`Release workflow contract failed with ${failures.length} issue(s):`);
