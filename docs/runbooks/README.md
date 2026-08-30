@@ -32,8 +32,6 @@ This directory is canonical for operational and process runbooks. Update it when
   Refresh a disposable production clone from a verified recovery package and test an immutable dev image.
 - [`dependency-maintenance.md`](./dependency-maintenance.md)
   Catalog ownership, upgrade grouping, runtime baselines, audits, and release qualification.
-- [`parallax-capture.md`](./parallax-capture.md)
-  Operate and troubleshoot the optional, independent normalized Parallax telemetry collector.
 - [`rivian-connection-renewal.md`](./rivian-connection-renewal.md)
   Interpret the advisory 180-day timer, renew credentials safely, and verify live recovery.
 - [`charge-payload-cleanup.md`](./charge-payload-cleanup.md)

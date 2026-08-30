@@ -54,20 +54,37 @@ fn is_auth_error(e: &anyhow::Error) -> bool {
 /// The access token is preserved unchanged — only the short-lived CSRF pair rotates.
 async fn try_refresh_csrf(
     vehicle_id: Uuid,
-    current_tokens: &RivianTokenBundle,
+    rejected_tokens: &RivianTokenBundle,
     client: &reqwest::Client,
     pool: &PgPool,
     age_key: &str,
 ) -> Result<RivianTokenBundle> {
     tracing::info!(vehicle_id=%vehicle_id, "refreshing Rivian CSRF session");
-
-    let new_tokens = rivian_refresh_csrf(client, current_tokens)
-        .await
-        .map_err(|e| anyhow!("CSRF refresh failed: {e}"))?;
-
     let identity = age_key
         .parse::<age::x25519::Identity>()
         .map_err(|e| anyhow!("bad age key: {e}"))?;
+
+    // The credential row is the per-vehicle refresh coordinator. Holding its
+    // row lock across refresh prevents concurrent REST callers from persisting
+    // an older token bundle over a newer one.
+    let mut tx = pool.begin().await?;
+    let encrypted_current = sqlx::query_scalar::<_, Vec<u8>>(
+        "SELECT encrypted_tokens FROM riviamigo.vehicle_credentials WHERE vehicle_id=$1 FOR UPDATE",
+    )
+    .bind(vehicle_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let current_tokens = decrypt_tokens(&encrypted_current, &identity)?;
+    if session_token_snapshot_changed(rejected_tokens, &current_tokens) {
+        // Another request refreshed while this caller waited for the row lock.
+        // Reuse that newer bundle instead of rotating a second time.
+        tx.commit().await?;
+        tracing::debug!(vehicle_id=%vehicle_id, "reusing concurrently refreshed Rivian session");
+        return Ok(current_tokens);
+    }
+    let new_tokens = rivian_refresh_csrf(client, &current_tokens)
+        .await
+        .map_err(|e| anyhow!("CSRF refresh failed: {e}"))?;
 
     let encrypted = encrypt_tokens(&new_tokens, &identity)?;
 
@@ -82,14 +99,22 @@ async fn try_refresh_csrf(
     .bind(vehicle_id)
     .bind(&encrypted)
     .bind(new_tokens.created_at)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     tracing::info!(vehicle_id=%vehicle_id, "Rivian CSRF session refreshed");
     Ok(new_tokens)
 }
 
-async fn load_vehicle_tokens(
+fn session_token_snapshot_changed(left: &RivianTokenBundle, right: &RivianTokenBundle) -> bool {
+    left.app_session_token != right.app_session_token
+        || left.user_session_token != right.user_session_token
+        || left.csrf_token != right.csrf_token
+        || left.created_at != right.created_at
+}
+
+pub(crate) async fn load_vehicle_tokens(
     vehicle_id: Uuid,
     pool: &PgPool,
     age_key: &str,
@@ -816,6 +841,10 @@ async fn fetch_charge_history_locked(
     let mut total_linked = 0usize;
     let mut payloads_reused = 0usize;
     let mut payloads_inserted = 0usize;
+    let mut payloads_repaired = 0usize;
+    let mut payloads_evidence_expired = 0usize;
+    let mut payload_audit_failures = 0usize;
+    let mut payload_audit_error_sample: Option<String> = None;
     for summary in &data.get_completed_session_summaries.unwrap_or_default() {
         let payload = serde_json::to_value(summary).unwrap_or_else(|_| serde_json::json!({}));
         let payload_ref = match record_charge_payload_with_ref(
@@ -828,7 +857,13 @@ async fn fetch_charge_history_locked(
         )
         .await
         {
-            Ok(payload_ref) => {
+            Ok(ChargePayloadRecordOutcome::Recorded {
+                payload_ref,
+                repaired,
+            }) => {
+                if repaired {
+                    payloads_repaired += 1;
+                }
                 if payload_ref.unchanged {
                     payloads_reused += 1;
                 } else {
@@ -836,8 +871,15 @@ async fn fetch_charge_history_locked(
                 }
                 Some(payload_ref)
             }
-            Err(error) => {
-                tracing::debug!(vehicle_id=%vehicle_id, error=%error, "charge history payload audit failed");
+            Ok(ChargePayloadRecordOutcome::EvidenceExpired) => {
+                payloads_evidence_expired += 1;
+                None
+            }
+            Err(_error) => {
+                payload_audit_failures += 1;
+                if payload_audit_error_sample.is_none() {
+                    payload_audit_error_sample = Some(safe_charge_audit_error(&_error));
+                }
                 None
             }
         };
@@ -880,6 +922,23 @@ async fn fetch_charge_history_locked(
         total_processed += 1;
     }
 
+    if payloads_repaired > 0 || payload_audit_failures > 0 {
+        tracing::warn!(
+            vehicle_id=%vehicle_id,
+            payloads_repaired,
+            payload_audit_failures,
+            error_sample = payload_audit_error_sample.as_deref().unwrap_or("none"),
+            "charge history payload audit required repair"
+        );
+    }
+    if payloads_evidence_expired > 0 {
+        tracing::info!(
+            vehicle_id=%vehicle_id,
+            payloads_evidence_expired,
+            "charge history retained payload evidence expired"
+        );
+    }
+
     tracing::debug!(
         vehicle_id=%vehicle_id,
         total_processed,
@@ -903,6 +962,24 @@ fn unchanged_linked_session(payload_ref: Option<ChargeSessionPayloadRef>) -> Opt
     })
 }
 
+fn safe_charge_audit_error(error: &anyhow::Error) -> String {
+    let text = error.to_string();
+    let lower = text.to_ascii_lowercase();
+    if [
+        "payload",
+        "fingerprint",
+        "identity",
+        "transaction",
+        "vehicle",
+    ]
+    .iter()
+    .any(|term| lower.contains(term))
+    {
+        return "sensitive_audit_error".to_owned();
+    }
+    text.chars().take(256).collect()
+}
+
 async fn record_charge_payload_with_ref(
     pool: &PgPool,
     vehicle_id: Uuid,
@@ -910,245 +987,399 @@ async fn record_charge_payload_with_ref(
     rivian_transaction_id: Option<&str>,
     rivian_vehicle_id: Option<&str>,
     payload: serde_json::Value,
-) -> Result<ChargeSessionPayloadRef> {
+) -> Result<ChargePayloadRecordOutcome> {
     let mut tx = pool.begin().await?;
-
-    let existing = sqlx::query_as::<_, (Uuid, DateTime<Utc>, Option<Uuid>)>(
-        r#"WITH candidate AS (
-               SELECT riviamigo.charge_payload_identity_key(
-                          $1::uuid, $2, $3, $4,
-                          riviamigo.charge_payload_fingerprint($5::jsonb)
-                      ) AS identity_key
-           )
-           SELECT payload.id, payload.captured_at, payload.charge_session_id
-           FROM candidate
-           JOIN riviamigo.rivian_charge_payload_identities identity
-             ON identity.identity_key = candidate.identity_key
-           JOIN riviamigo.rivian_charge_payloads payload
-             ON payload.id = identity.canonical_payload_id
-           LIMIT 1"#,
+    let (identity_key, fingerprint) = sqlx::query_as::<_, (Vec<u8>, Vec<u8>)>(
+        r#"SELECT
+               riviamigo.charge_payload_identity_key(
+                   $1::uuid, $2, $3, $4,
+                   riviamigo.charge_payload_fingerprint($5::jsonb)
+               ),
+               riviamigo.charge_payload_fingerprint($5::jsonb)"#,
     )
     .bind(vehicle_id)
     .bind(operation)
     .bind(rivian_transaction_id)
     .bind(rivian_vehicle_id)
     .bind(&payload)
-    .fetch_optional(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
 
-    if let Some(existing) = existing {
-        tx.commit().await?;
-        return Ok(ChargeSessionPayloadRef {
-            payload_id: existing.0,
-            captured_at: existing.1,
-            charge_session_id: existing.2,
-            unchanged: true,
-        });
-    }
-
-    // A historical row may not have reached the background identity worker
-    // yet. Reconcile that row before inserting a new payload so replay
-    // idempotency remains intact while the worker is catching up.
-    let pending_existing = sqlx::query_as::<_, (Uuid, DateTime<Utc>, Option<Uuid>)>(
-        r#"SELECT payload.id, payload.captured_at, payload.charge_session_id
-           FROM riviamigo.rivian_charge_payloads payload
-           WHERE payload.vehicle_id = $1
-             AND payload.operation = $2
-             AND payload.rivian_transaction_id IS NOT DISTINCT FROM $3::text
-             AND payload.rivian_vehicle_id IS NOT DISTINCT FROM $4::text
-             AND payload.payload_fingerprint IS NULL
-             AND riviamigo.charge_payload_fingerprint(payload.payload)
-                 = riviamigo.charge_payload_fingerprint($5::jsonb)
-           ORDER BY payload.captured_at, payload.id
-           LIMIT 1
+    let identity = sqlx::query_as::<_, (String, Vec<u8>, Uuid, Option<Uuid>)>(
+        r#"SELECT operation, payload_fingerprint, vehicle_id, canonical_payload_id
+           FROM riviamigo.rivian_charge_payload_identities
+           WHERE identity_key = $1
            FOR UPDATE"#,
     )
-    .bind(vehicle_id)
-    .bind(operation)
-    .bind(rivian_transaction_id)
-    .bind(rivian_vehicle_id)
-    .bind(&payload)
+    .bind(&identity_key)
     .fetch_optional(&mut *tx)
     .await?;
 
-    if let Some(pending_existing) = pending_existing {
-        sqlx::query(
-            r#"UPDATE riviamigo.rivian_charge_payloads
-               SET payload_fingerprint = riviamigo.charge_payload_fingerprint(payload)
-               WHERE id = $1 AND payload_fingerprint IS NULL"#,
+    if let Some((identity_operation, identity_fingerprint, identity_vehicle, canonical_id)) =
+        identity
+    {
+        if identity_vehicle != vehicle_id
+            || identity_operation != operation
+            || identity_fingerprint != fingerprint
+        {
+            return Err(anyhow!("charge payload identity metadata is inconsistent"));
+        }
+
+        let canonical = match canonical_id {
+            Some(id) => {
+                sqlx::query_as::<
+                    _,
+                    (
+                        DateTime<Utc>,
+                        Option<Uuid>,
+                        Uuid,
+                        String,
+                        Option<String>,
+                        Option<String>,
+                        Option<Vec<u8>>,
+                        bool,
+                    ),
+                >(
+                    r#"SELECT payload.captured_at,
+                          CASE WHEN cs.vehicle_id = payload.vehicle_id
+                               THEN payload.charge_session_id ELSE NULL END,
+                          payload.vehicle_id,
+                          payload.operation, payload.rivian_transaction_id,
+                          payload.rivian_vehicle_id, payload.payload_fingerprint,
+                          (riviamigo.charge_payload_fingerprint(payload.payload) = $2)
+                   FROM riviamigo.rivian_charge_payloads payload
+                   LEFT JOIN riviamigo.charge_sessions cs
+                     ON cs.id = payload.charge_session_id
+                   WHERE payload.id = $1"#,
+                )
+                .bind(id)
+                .bind(&fingerprint)
+                .fetch_optional(&mut *tx)
+                .await?
+            }
+            None => None,
+        };
+        let canonical_evidence_missing = canonical_id.is_none() || canonical.is_none();
+
+        if let (
+            Some(id),
+            Some((
+                captured_at,
+                session_id,
+                payload_vehicle,
+                payload_operation,
+                payload_transaction,
+                payload_rivian_vehicle,
+                stored_fingerprint,
+                semantic_match,
+            )),
+        ) = (canonical_id, canonical)
+        {
+            if payload_vehicle == vehicle_id
+                && payload_operation == operation
+                && payload_transaction.as_deref() == rivian_transaction_id
+                && payload_rivian_vehicle.as_deref() == rivian_vehicle_id
+                && semantic_match
+            {
+                if stored_fingerprint.as_deref() != Some(fingerprint.as_slice()) {
+                    sqlx::query("UPDATE riviamigo.rivian_charge_payloads SET payload_fingerprint = $2 WHERE id = $1")
+                        .bind(id)
+                        .bind(&fingerprint)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+                tx.commit().await?;
+                return Ok(ChargePayloadRecordOutcome::Recorded {
+                    payload_ref: ChargeSessionPayloadRef {
+                        payload_id: id,
+                        captured_at,
+                        charge_session_id: session_id,
+                        unchanged: true,
+                    },
+                    repaired: false,
+                });
+            }
+        }
+
+        let survivor = find_exact_payload_survivor(
+            &mut tx,
+            vehicle_id,
+            operation,
+            rivian_transaction_id,
+            rivian_vehicle_id,
+            &fingerprint,
         )
-        .bind(pending_existing.0)
+        .await?;
+
+        if let Some((payload_id, captured_at, charge_session_id)) = survivor {
+            sqlx::query(
+            "UPDATE riviamigo.rivian_charge_payloads SET payload_fingerprint = $2 WHERE id = $1",
+        )
+        .bind(payload_id)
+        .bind(&fingerprint)
         .execute(&mut *tx)
         .await?;
+            sqlx::query(
+                "UPDATE riviamigo.rivian_charge_payload_identities
+                 SET canonical_payload_id = $2
+                 WHERE identity_key = $1",
+            )
+            .bind(&identity_key)
+            .bind(payload_id)
+            .execute(&mut *tx)
+            .await?;
+            if let Some(previous_payload_id) = canonical_id {
+                repair_payload_aliases(&mut tx, previous_payload_id, payload_id, captured_at)
+                    .await?;
+            }
+            tx.commit().await?;
+            return Ok(ChargePayloadRecordOutcome::Recorded {
+                payload_ref: ChargeSessionPayloadRef {
+                    payload_id,
+                    captured_at,
+                    charge_session_id,
+                    unchanged: true,
+                },
+                repaired: true,
+            });
+        }
 
+        if !canonical_evidence_missing {
+            return Err(anyhow!("charge payload canonical evidence is inconsistent"));
+        }
+
+        clear_expired_payload_aliases(&mut tx, canonical_id).await?;
         sqlx::query(
-            r#"WITH candidate AS (
-                   SELECT riviamigo.charge_payload_fingerprint($5::jsonb) AS fingerprint
-               )
-               INSERT INTO riviamigo.rivian_charge_payload_identities (
-                   identity_key, vehicle_id, operation, payload_fingerprint,
-                   canonical_payload_id
-               )
-               SELECT riviamigo.charge_payload_identity_key(
-                          $1::uuid, $2, $3, $4, candidate.fingerprint
-                      ),
-                      $1,
-                      $2,
-                      candidate.fingerprint,
-                      $6
-               FROM candidate
-               ON CONFLICT (identity_key) DO NOTHING"#,
+            "UPDATE riviamigo.rivian_charge_payload_identities
+             SET canonical_payload_id = NULL
+             WHERE identity_key = $1",
         )
-        .bind(vehicle_id)
-        .bind(operation)
-        .bind(rivian_transaction_id)
-        .bind(rivian_vehicle_id)
-        .bind(&payload)
-        .bind(pending_existing.0)
+        .bind(&identity_key)
         .execute(&mut *tx)
         .await?;
-
-        let canonical = sqlx::query_as::<_, (Uuid, DateTime<Utc>, Option<Uuid>)>(
-            r#"WITH candidate AS (
-                   SELECT riviamigo.charge_payload_identity_key(
-                              $1::uuid, $2, $3, $4,
-                              riviamigo.charge_payload_fingerprint($5::jsonb)
-                          ) AS identity_key
-               )
-               SELECT payload.id, payload.captured_at, payload.charge_session_id
-               FROM candidate
-               JOIN riviamigo.rivian_charge_payload_identities identity
-                 ON identity.identity_key = candidate.identity_key
-               JOIN riviamigo.rivian_charge_payloads payload
-                 ON payload.id = identity.canonical_payload_id
-               LIMIT 1"#,
-        )
-        .bind(vehicle_id)
-        .bind(operation)
-        .bind(rivian_transaction_id)
-        .bind(rivian_vehicle_id)
-        .bind(&payload)
-        .fetch_one(&mut *tx)
-        .await?;
-
         tx.commit().await?;
-        return Ok(ChargeSessionPayloadRef {
-            payload_id: canonical.0,
-            captured_at: canonical.1,
-            charge_session_id: canonical.2,
-            unchanged: true,
+        return Ok(ChargePayloadRecordOutcome::EvidenceExpired);
+    }
+
+    // No durable identity exists yet. A historical payload can still be
+    // claimed without inserting another JSON copy while the backfill worker
+    // catches up.
+    let survivor = find_exact_payload_survivor(
+        &mut tx,
+        vehicle_id,
+        operation,
+        rivian_transaction_id,
+        rivian_vehicle_id,
+        &fingerprint,
+    )
+    .await?;
+    if let Some((payload_id, captured_at, charge_session_id)) = survivor {
+        let won_identity = sqlx::query_scalar::<_, Vec<u8>>(
+            "INSERT INTO riviamigo.rivian_charge_payload_identities
+             (identity_key, vehicle_id, operation, payload_fingerprint, canonical_payload_id)
+             VALUES ($1,$2,$3,$4,$5)
+             ON CONFLICT (identity_key) DO NOTHING
+             RETURNING identity_key",
+        )
+        .bind(&identity_key)
+        .bind(vehicle_id)
+        .bind(operation)
+        .bind(&fingerprint)
+        .bind(payload_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .is_some();
+
+        if !won_identity {
+            let previous_payload_id: Option<Uuid> = sqlx::query_scalar(
+                "SELECT canonical_payload_id
+                 FROM riviamigo.rivian_charge_payload_identities
+                 WHERE identity_key = $1
+                 FOR UPDATE",
+            )
+            .bind(&identity_key)
+            .fetch_one(&mut *tx)
+            .await?;
+            sqlx::query(
+                "UPDATE riviamigo.rivian_charge_payload_identities
+                 SET canonical_payload_id = $2
+                 WHERE identity_key = $1",
+            )
+            .bind(&identity_key)
+            .bind(payload_id)
+            .execute(&mut *tx)
+            .await?;
+            if previous_payload_id.is_some_and(|previous| previous != payload_id) {
+                repair_payload_aliases(
+                    &mut tx,
+                    previous_payload_id.expect("checked above"),
+                    payload_id,
+                    captured_at,
+                )
+                .await?;
+            }
+        }
+        tx.commit().await?;
+        return Ok(ChargePayloadRecordOutcome::Recorded {
+            payload_ref: ChargeSessionPayloadRef {
+                payload_id,
+                captured_at,
+                charge_session_id,
+                unchanged: true,
+            },
+            repaired: !won_identity,
         });
     }
 
     let charge_session_id: Option<Uuid> = if let Some(transaction_id) = rivian_transaction_id {
-        sqlx::query_scalar(
-            r#"SELECT cs.id
-               FROM riviamigo.charge_sessions cs
-               LEFT JOIN riviamigo.charge_session_external_aliases alias
-                 ON alias.charge_session_id = cs.id
-               WHERE cs.vehicle_id = $1
-                 AND (cs.rivian_session_id = $2 OR alias.external_id = $2)
-               ORDER BY cs.started_at DESC
-               LIMIT 1"#,
-        )
-        .bind(vehicle_id)
-        .bind(transaction_id)
-        .fetch_optional(&mut *tx)
-        .await?
+        sqlx::query_scalar("SELECT cs.id FROM riviamigo.charge_sessions cs LEFT JOIN riviamigo.charge_session_external_aliases alias ON alias.charge_session_id = cs.id WHERE cs.vehicle_id = $1 AND (cs.rivian_session_id = $2 OR alias.external_id = $2) ORDER BY cs.started_at DESC LIMIT 1")
+            .bind(vehicle_id).bind(transaction_id).fetch_optional(&mut *tx).await?
     } else {
         None
     };
-
-    let candidate_id = Uuid::new_v4();
-    let inserted = sqlx::query_as::<_, (Uuid, DateTime<Utc>)>(
-        r#"WITH candidate AS (
-               SELECT riviamigo.charge_payload_fingerprint($6::jsonb) AS fingerprint
-           )
-           INSERT INTO riviamigo.rivian_charge_payloads
-               (id, vehicle_id, charge_session_id, operation, rivian_transaction_id,
-                rivian_vehicle_id, payload_fingerprint, payload)
-           SELECT $1, $2, $3, $4, $5, $7, candidate.fingerprint, $6
-           FROM candidate
-           RETURNING id, captured_at"#,
-    )
-    .bind(candidate_id)
-    .bind(vehicle_id)
-    .bind(charge_session_id)
-    .bind(operation)
-    .bind(rivian_transaction_id)
-    .bind(&payload)
-    .bind(rivian_vehicle_id)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    let canonical = sqlx::query_scalar::<_, Uuid>(
-        r#"WITH candidate AS (
-               SELECT riviamigo.charge_payload_fingerprint($5::jsonb) AS fingerprint,
-                      riviamigo.charge_payload_identity_key(
-                          $1::uuid, $2, $3, $4,
-                          riviamigo.charge_payload_fingerprint($5::jsonb)
-                      ) AS identity_key
-           )
-           INSERT INTO riviamigo.rivian_charge_payload_identities
-               (identity_key, vehicle_id, operation, payload_fingerprint, canonical_payload_id)
-           SELECT candidate.identity_key, $1, $2, candidate.fingerprint, $6
-           FROM candidate
-           ON CONFLICT (identity_key) DO NOTHING
-           RETURNING canonical_payload_id"#,
-    )
-    .bind(vehicle_id)
-    .bind(operation)
-    .bind(rivian_transaction_id)
-    .bind(rivian_vehicle_id)
-    .bind(&payload)
-    .bind(candidate_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-
-    if canonical.is_none() {
-        sqlx::query("DELETE FROM riviamigo.rivian_charge_payloads WHERE id = $1")
-            .bind(candidate_id)
-            .execute(&mut *tx)
-            .await?;
-        let existing = sqlx::query_as::<_, (Uuid, DateTime<Utc>, Option<Uuid>)>(
-            r#"WITH candidate AS (
-                   SELECT riviamigo.charge_payload_fingerprint($5::jsonb) AS identity_payload,
-                          riviamigo.charge_payload_identity_key(
-                              $1::uuid, $2, $3, $4,
-                              riviamigo.charge_payload_fingerprint($5::jsonb)
-                          ) AS identity_key
-               )
-               SELECT payload.id, payload.captured_at, payload.charge_session_id
-               FROM candidate
-               JOIN riviamigo.rivian_charge_payload_identities identity
-                 ON identity.identity_key = candidate.identity_key
-               JOIN riviamigo.rivian_charge_payloads payload
-                 ON payload.id = identity.canonical_payload_id
-               LIMIT 1"#,
-        )
-        .bind(vehicle_id)
-        .bind(operation)
-        .bind(rivian_transaction_id)
-        .bind(rivian_vehicle_id)
-        .bind(&payload)
-        .fetch_one(&mut *tx)
-        .await?;
+    let payload_id = Uuid::new_v4();
+    let captured_at = sqlx::query_as::<_, (DateTime<Utc>,)>("INSERT INTO riviamigo.rivian_charge_payloads (id, vehicle_id, charge_session_id, operation, rivian_transaction_id, rivian_vehicle_id, payload_fingerprint, payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING captured_at")
+        .bind(payload_id).bind(vehicle_id).bind(charge_session_id).bind(operation).bind(rivian_transaction_id).bind(rivian_vehicle_id).bind(&fingerprint).bind(&payload).fetch_one(&mut *tx).await?.0;
+    let won_identity = sqlx::query_scalar::<_, Vec<u8>>("INSERT INTO riviamigo.rivian_charge_payload_identities (identity_key, vehicle_id, operation, payload_fingerprint, canonical_payload_id) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (identity_key) DO NOTHING RETURNING identity_key")
+        .bind(&identity_key).bind(vehicle_id).bind(operation).bind(&fingerprint).bind(payload_id).fetch_optional(&mut *tx).await?.is_some();
+    if won_identity {
         tx.commit().await?;
-        return Ok(ChargeSessionPayloadRef {
-            payload_id: existing.0,
-            captured_at: existing.1,
-            charge_session_id: existing.2,
-            unchanged: true,
+        return Ok(ChargePayloadRecordOutcome::Recorded {
+            payload_ref: ChargeSessionPayloadRef {
+                payload_id,
+                captured_at,
+                charge_session_id,
+                unchanged: false,
+            },
+            repaired: false,
         });
     }
 
+    sqlx::query("DELETE FROM riviamigo.rivian_charge_payloads WHERE id = $1")
+        .bind(payload_id)
+        .execute(&mut *tx)
+        .await?;
+    let existing = sqlx::query_as::<_, (Option<Uuid>,)>(
+        "SELECT canonical_payload_id
+         FROM riviamigo.rivian_charge_payload_identities
+         WHERE identity_key = $1
+         FOR UPDATE",
+    )
+    .bind(&identity_key)
+    .fetch_one(&mut *tx)
+    .await?;
+    let Some(existing_payload_id) = existing.0 else {
+        tx.commit().await?;
+        return Ok(ChargePayloadRecordOutcome::EvidenceExpired);
+    };
+    let existing = sqlx::query_as::<_, (DateTime<Utc>, Option<Uuid>)>(
+        "SELECT payload.captured_at, payload.charge_session_id
+         FROM riviamigo.rivian_charge_payloads payload
+         WHERE payload.id = $1",
+    )
+    .bind(existing_payload_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((captured_at, charge_session_id)) = existing else {
+        clear_expired_payload_aliases(&mut tx, Some(existing_payload_id)).await?;
+        sqlx::query("UPDATE riviamigo.rivian_charge_payload_identities SET canonical_payload_id = NULL WHERE identity_key = $1")
+            .bind(&identity_key)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Ok(ChargePayloadRecordOutcome::EvidenceExpired);
+    };
     tx.commit().await?;
-    Ok(ChargeSessionPayloadRef {
-        payload_id: inserted.0,
-        captured_at: inserted.1,
-        charge_session_id,
-        unchanged: false,
+    Ok(ChargePayloadRecordOutcome::Recorded {
+        payload_ref: ChargeSessionPayloadRef {
+            payload_id: existing_payload_id,
+            captured_at,
+            charge_session_id,
+            unchanged: true,
+        },
+        repaired: false,
     })
+}
+
+#[derive(Debug)]
+enum ChargePayloadRecordOutcome {
+    Recorded {
+        payload_ref: ChargeSessionPayloadRef,
+        repaired: bool,
+    },
+    /// The durable semantic identity remains, but retention has expired every
+    /// matching JSON payload. The caller must continue normal session
+    /// reconciliation without manufacturing replacement evidence.
+    EvidenceExpired,
+}
+
+async fn find_exact_payload_survivor(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    vehicle_id: Uuid,
+    operation: &str,
+    rivian_transaction_id: Option<&str>,
+    rivian_vehicle_id: Option<&str>,
+    fingerprint: &[u8],
+) -> Result<Option<(Uuid, DateTime<Utc>, Option<Uuid>)>> {
+    Ok(sqlx::query_as::<_, (Uuid, DateTime<Utc>, Option<Uuid>)>(
+        r#"SELECT payload.id, payload.captured_at,
+                  CASE WHEN cs.vehicle_id = payload.vehicle_id
+                       THEN payload.charge_session_id ELSE NULL END
+           FROM riviamigo.rivian_charge_payloads payload
+           LEFT JOIN riviamigo.charge_sessions cs ON cs.id = payload.charge_session_id
+           WHERE payload.vehicle_id = $1 AND payload.operation = $2
+             AND payload.rivian_transaction_id IS NOT DISTINCT FROM $3::text
+             AND payload.rivian_vehicle_id IS NOT DISTINCT FROM $4::text
+             AND riviamigo.charge_payload_fingerprint(payload.payload) = $5
+           ORDER BY (payload.charge_session_id IS NOT NULL AND cs.vehicle_id = $1) DESC,
+                    payload.captured_at, payload.id
+           LIMIT 1 FOR UPDATE OF payload"#,
+    )
+    .bind(vehicle_id)
+    .bind(operation)
+    .bind(rivian_transaction_id)
+    .bind(rivian_vehicle_id)
+    .bind(fingerprint)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+async fn repair_payload_aliases(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    previous_payload_id: Uuid,
+    replacement_payload_id: Uuid,
+    replacement_captured_at: DateTime<Utc>,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE riviamigo.charge_session_external_aliases
+         SET latest_payload_id = $2,
+             latest_payload_captured_at = $3
+         WHERE latest_payload_id = $1",
+    )
+    .bind(previous_payload_id)
+    .bind(replacement_payload_id)
+    .bind(replacement_captured_at)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn clear_expired_payload_aliases(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    previous_payload_id: Option<Uuid>,
+) -> Result<()> {
+    if let Some(previous_payload_id) = previous_payload_id {
+        sqlx::query(
+            "UPDATE riviamigo.charge_session_external_aliases
+             SET latest_payload_id = NULL,
+                 latest_payload_captured_at = NULL
+             WHERE latest_payload_id = $1",
+        )
+        .bind(previous_payload_id)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
 }
 
 const LIVE_SESSION_HISTORY_QUERY: &str = r#"
@@ -2361,14 +2592,594 @@ pub(crate) async fn run_poll_loop(
 #[cfg(test)]
 mod tests {
     use super::{
-        live_session_redis_key, unchanged_linked_session, LIVE_SESSION_HISTORY_QUERY,
-        LIVE_SESSION_TTL_SECONDS,
+        live_session_redis_key, record_charge_payload_with_ref, unchanged_linked_session,
+        ChargePayloadRecordOutcome, LIVE_SESSION_HISTORY_QUERY, LIVE_SESSION_TTL_SECONDS,
     };
     use crate::ingestion::parser::parse_charging_session_message;
+    use crate::ingestion::session_store::{decrypt_tokens, encrypt_tokens, RivianTokenBundle};
+    use crate::services::charge_payload_identity::reconcile_retained_payload_references;
     use crate::services::charge_sessions::{
         infer_is_rivian_network, normalize_api_charger_type, ChargeSessionPayloadRef,
     };
+    use age::secrecy::ExposeSecret;
+    use axum::{extract::State, routing::post, Json, Router};
     use chrono::Utc;
+    use serde_json::json;
+    use sqlx::{postgres::PgPoolOptions, Executor, PgPool};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    fn recorded_payload(outcome: ChargePayloadRecordOutcome) -> (ChargeSessionPayloadRef, bool) {
+        match outcome {
+            ChargePayloadRecordOutcome::Recorded {
+                payload_ref,
+                repaired,
+            } => (payload_ref, repaired),
+            ChargePayloadRecordOutcome::EvidenceExpired => {
+                panic!("expected retained charge-payload evidence")
+            }
+        }
+    }
+
+    struct DisposableDatabase {
+        admin: PgPool,
+        name: String,
+        pool: PgPool,
+    }
+
+    impl DisposableDatabase {
+        async fn new() -> Self {
+            let base_url =
+                std::env::var("DATABASE_URL").expect("DATABASE_URL for ignored DB tests");
+            let admin_url = replace_database_name(&base_url, "postgres");
+            let name = format!("riviamigo_charge_test_{}", uuid::Uuid::new_v4().simple());
+            let admin = PgPoolOptions::new()
+                .max_connections(1)
+                .connect(&admin_url)
+                .await
+                .expect("connect to disposable database administrator");
+            admin
+                .execute(sqlx::AssertSqlSafe(format!("CREATE DATABASE \"{name}\"")))
+                .await
+                .expect("create disposable charge test database");
+            let pool = PgPoolOptions::new()
+                .max_connections(8)
+                .connect(&replace_database_name(&base_url, &name))
+                .await
+                .expect("connect to disposable charge test database");
+            crate::db::migrations::run_current_migrations(&pool)
+                .await
+                .expect("migrate disposable charge test database");
+            Self { admin, name, pool }
+        }
+
+        async fn cleanup(self) {
+            self.pool.close().await;
+            self.admin
+                .execute(sqlx::AssertSqlSafe(format!(
+                    "DROP DATABASE \"{}\"",
+                    self.name
+                )))
+                .await
+                .expect("drop disposable charge test database");
+            self.admin.close().await;
+        }
+    }
+
+    fn replace_database_name(url: &str, name: &str) -> String {
+        let (prefix, _) = url
+            .rsplit_once('/')
+            .expect("DATABASE_URL has database name");
+        format!("{prefix}/{name}")
+    }
+
+    async fn seed_vehicle(pool: &PgPool) -> uuid::Uuid {
+        let user_id: uuid::Uuid = sqlx::query_scalar(
+            "INSERT INTO riviamigo.users (email, password_hash) VALUES ($1, 'test-only') RETURNING id",
+        )
+        .bind(format!("charge-test-{}@example.test", uuid::Uuid::new_v4()))
+        .fetch_one(pool)
+        .await
+        .expect("seed test user");
+        sqlx::query_scalar(
+            "INSERT INTO riviamigo.vehicles (user_id, rivian_vehicle_id, model, name) VALUES ($1, $2, 'test', 'Charge test') RETURNING id",
+        )
+        .bind(user_id)
+        .bind(format!("charge-test-{}", uuid::Uuid::new_v4()))
+        .fetch_one(pool)
+        .await
+        .expect("seed test vehicle")
+    }
+
+    async fn payload_count(pool: &PgPool, vehicle_id: uuid::Uuid) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM riviamigo.rivian_charge_payloads WHERE vehicle_id = $1",
+        )
+        .bind(vehicle_id)
+        .fetch_one(pool)
+        .await
+        .expect("count payloads")
+    }
+
+    async fn seed_charge_session(pool: &PgPool, vehicle_id: uuid::Uuid) -> uuid::Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO riviamigo.charge_sessions (vehicle_id, started_at)
+             VALUES ($1, now()) RETURNING id",
+        )
+        .bind(vehicle_id)
+        .fetch_one(pool)
+        .await
+        .expect("seed charge session")
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn concurrent_auth_rejections_refresh_once_without_stale_overwrite() {
+        let db = DisposableDatabase::new().await;
+        let vehicle_id = seed_vehicle(&db.pool).await;
+        let identity = age::x25519::Identity::generate();
+        let age_key = identity.to_string().expose_secret().to_owned();
+        let rejected = RivianTokenBundle {
+            access_token: "access".into(),
+            refresh_token: "refresh".into(),
+            app_session_token: "rejected-app".into(),
+            user_session_token: "user".into(),
+            csrf_token: "rejected-csrf".into(),
+            created_at: Utc::now(),
+        };
+        let encrypted = encrypt_tokens(&rejected, &identity).unwrap();
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_credentials(vehicle_id,encrypted_tokens,token_created_at) VALUES($1,$2,$3)",
+        )
+        .bind(vehicle_id)
+        .bind(encrypted)
+        .bind(rejected.created_at)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        let refresh_count = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route(
+                "/graphql",
+                post(
+                    |State(count): State<Arc<AtomicUsize>>, Json(_body): Json<serde_json::Value>| async move {
+                        count.fetch_add(1, Ordering::SeqCst);
+                        Json(json!({"data":{"createCsrfToken":{"csrfToken":"fresh-csrf","appSessionToken":"fresh-app"}}}))
+                    },
+                ),
+            )
+            .with_state(refresh_count.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        std::env::set_var(
+            "RIVIAN_GRAPHQL_GATEWAY_URL",
+            format!("http://{address}/graphql"),
+        );
+
+        let client = reqwest::Client::new();
+        let (left, right) = tokio::join!(
+            super::try_refresh_csrf(vehicle_id, &rejected, &client, &db.pool, &age_key),
+            super::try_refresh_csrf(vehicle_id, &rejected, &client, &db.pool, &age_key),
+        );
+        let left = left.unwrap();
+        let right = right.unwrap();
+        assert_eq!(refresh_count.load(Ordering::SeqCst), 1);
+        assert_eq!(left.csrf_token, "fresh-csrf");
+        assert_eq!(right.csrf_token, "fresh-csrf");
+
+        let persisted = sqlx::query_scalar::<_, Vec<u8>>(
+            "SELECT encrypted_tokens FROM riviamigo.vehicle_credentials WHERE vehicle_id=$1",
+        )
+        .bind(vehicle_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        let persisted = decrypt_tokens(&persisted, &identity).unwrap();
+        assert_eq!(persisted.csrf_token, "fresh-csrf");
+        assert_eq!(persisted.app_session_token, "fresh-app");
+
+        std::env::remove_var("RIVIAN_GRAPHQL_GATEWAY_URL");
+        server.abort();
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn record_charge_payload_reuses_a_valid_canonical() {
+        let db = DisposableDatabase::new().await;
+        let vehicle_id = seed_vehicle(&db.pool).await;
+        let payload = serde_json::json!({"state":"complete","energy":12.5});
+        let first = recorded_payload(
+            record_charge_payload_with_ref(
+                &db.pool,
+                vehicle_id,
+                "history",
+                Some("tx-1"),
+                Some("rv-1"),
+                payload.clone(),
+            )
+            .await
+            .unwrap(),
+        );
+        let second = recorded_payload(
+            record_charge_payload_with_ref(
+                &db.pool,
+                vehicle_id,
+                "history",
+                Some("tx-1"),
+                Some("rv-1"),
+                payload,
+            )
+            .await
+            .unwrap(),
+        );
+        assert!(!first.0.unchanged);
+        assert!(!first.1);
+        assert!(second.0.unchanged);
+        assert_eq!(first.0.payload_id, second.0.payload_id);
+        assert_eq!(payload_count(&db.pool, vehicle_id).await, 1);
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn record_charge_payload_repairs_an_orphan_survivor_without_duplicate() {
+        let db = DisposableDatabase::new().await;
+        let vehicle_id = seed_vehicle(&db.pool).await;
+        let payload = serde_json::json!({"state":"orphan"});
+        let orphaned = recorded_payload(
+            record_charge_payload_with_ref(
+                &db.pool,
+                vehicle_id,
+                "history",
+                Some("tx-orphan"),
+                Some("rv-1"),
+                payload.clone(),
+            )
+            .await
+            .unwrap(),
+        )
+        .0;
+        let survivor = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO riviamigo.rivian_charge_payloads (id, vehicle_id, operation, rivian_transaction_id, rivian_vehicle_id, payload) VALUES ($1,$2,'history','tx-orphan','rv-1',$3)")
+            .bind(survivor).bind(vehicle_id).bind(&payload).execute(&db.pool).await.unwrap();
+        let alias_session_id = seed_charge_session(&db.pool, vehicle_id).await;
+        sqlx::query(
+            "INSERT INTO riviamigo.charge_session_external_aliases
+             (charge_session_id, external_id, alias_kind, latest_payload_id, latest_payload_captured_at)
+             VALUES ($1, 'orphan-alias', 'test', $2, now())",
+        )
+        .bind(alias_session_id)
+        .bind(orphaned.payload_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM riviamigo.rivian_charge_payloads WHERE id = $1")
+            .bind(orphaned.payload_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let result = recorded_payload(
+            record_charge_payload_with_ref(
+                &db.pool,
+                vehicle_id,
+                "history",
+                Some("tx-orphan"),
+                Some("rv-1"),
+                payload,
+            )
+            .await
+            .unwrap(),
+        );
+        assert!(result.1);
+        assert_eq!(result.0.payload_id, survivor);
+        assert_eq!(payload_count(&db.pool, vehicle_id).await, 1);
+        let canonical: uuid::Uuid = sqlx::query_scalar(
+            "SELECT canonical_payload_id FROM riviamigo.rivian_charge_payload_identities",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(canonical, survivor);
+        let alias_payload_id: Option<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT latest_payload_id FROM riviamigo.charge_session_external_aliases
+             WHERE charge_session_id = $1 AND external_id = 'orphan-alias'",
+        )
+        .bind(alias_session_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(alias_payload_id, Some(survivor));
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn record_charge_payload_tombstones_expired_evidence_without_replacement() {
+        let db = DisposableDatabase::new().await;
+        let vehicle_id = seed_vehicle(&db.pool).await;
+        let payload = serde_json::json!({"state":"replaced"});
+        let first = recorded_payload(
+            record_charge_payload_with_ref(
+                &db.pool,
+                vehicle_id,
+                "history",
+                Some("tx-replaced"),
+                Some("rv-1"),
+                payload.clone(),
+            )
+            .await
+            .unwrap(),
+        )
+        .0;
+        sqlx::query("DELETE FROM riviamigo.rivian_charge_payloads WHERE id = $1")
+            .bind(first.payload_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let expired = record_charge_payload_with_ref(
+            &db.pool,
+            vehicle_id,
+            "history",
+            Some("tx-replaced"),
+            Some("rv-1"),
+            payload,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            expired,
+            ChargePayloadRecordOutcome::EvidenceExpired
+        ));
+        assert_eq!(payload_count(&db.pool, vehicle_id).await, 0);
+        let canonical: Option<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT canonical_payload_id FROM riviamigo.rivian_charge_payload_identities",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(canonical, None);
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn record_charge_payload_concurrent_calls_converge_on_one_row() {
+        let db = DisposableDatabase::new().await;
+        let vehicle_id = seed_vehicle(&db.pool).await;
+        let payload = serde_json::json!({"state":"concurrent"});
+        let calls = (0..8).map(|_| {
+            record_charge_payload_with_ref(
+                &db.pool,
+                vehicle_id,
+                "history",
+                Some("tx-concurrent"),
+                Some("rv-1"),
+                payload.clone(),
+            )
+        });
+        let results = futures::future::join_all(calls).await;
+        let ids: std::collections::HashSet<_> = results
+            .into_iter()
+            .map(|result| recorded_payload(result.unwrap()).0.payload_id)
+            .collect();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(payload_count(&db.pool, vehicle_id).await, 1);
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn concurrent_expired_payload_replay_never_recreates_json_evidence() {
+        let db = DisposableDatabase::new().await;
+        let vehicle_id = seed_vehicle(&db.pool).await;
+        let payload = serde_json::json!({"state":"expired-concurrent"});
+        let original = recorded_payload(
+            record_charge_payload_with_ref(
+                &db.pool,
+                vehicle_id,
+                "history",
+                Some("tx-expired-concurrent"),
+                Some("rv-1"),
+                payload.clone(),
+            )
+            .await
+            .unwrap(),
+        )
+        .0;
+        sqlx::query("DELETE FROM riviamigo.rivian_charge_payloads WHERE id = $1")
+            .bind(original.payload_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let results = futures::future::join_all((0..8).map(|_| {
+            record_charge_payload_with_ref(
+                &db.pool,
+                vehicle_id,
+                "history",
+                Some("tx-expired-concurrent"),
+                Some("rv-1"),
+                payload.clone(),
+            )
+        }))
+        .await;
+        assert!(results
+            .into_iter()
+            .all(|result| matches!(result.unwrap(), ChargePayloadRecordOutcome::EvidenceExpired)));
+        assert_eq!(payload_count(&db.pool, vehicle_id).await, 0);
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn retention_reconciler_clears_orphan_identity_and_alias_cache() {
+        let db = DisposableDatabase::new().await;
+        let vehicle_id = seed_vehicle(&db.pool).await;
+        let payload = serde_json::json!({"state":"reconcile-orphan"});
+        let recorded = recorded_payload(
+            record_charge_payload_with_ref(
+                &db.pool,
+                vehicle_id,
+                "history",
+                Some("tx-reconcile"),
+                Some("rv-1"),
+                payload,
+            )
+            .await
+            .unwrap(),
+        )
+        .0;
+        let session_id = seed_charge_session(&db.pool, vehicle_id).await;
+        sqlx::query(
+            "INSERT INTO riviamigo.charge_session_external_aliases
+             (charge_session_id, external_id, alias_kind, latest_payload_id, latest_payload_captured_at)
+             VALUES ($1, 'retention-orphan', 'test', $2, now())",
+        )
+        .bind(session_id)
+        .bind(recorded.payload_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM riviamigo.rivian_charge_payloads WHERE id = $1")
+            .bind(recorded.payload_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            reconcile_retained_payload_references(&db.pool, 10)
+                .await
+                .unwrap(),
+            (1, 1)
+        );
+        let canonical: Option<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT canonical_payload_id FROM riviamigo.rivian_charge_payload_identities",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        let alias: (Option<uuid::Uuid>, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+            "SELECT latest_payload_id, latest_payload_captured_at
+             FROM riviamigo.charge_session_external_aliases
+             WHERE charge_session_id = $1 AND external_id = 'retention-orphan'",
+        )
+        .bind(session_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(canonical, None);
+        assert_eq!(alias, (None, None));
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn retention_reconciler_clears_stale_alias_when_identity_keeps_a_survivor() {
+        let db = DisposableDatabase::new().await;
+        let vehicle_id = seed_vehicle(&db.pool).await;
+        let keeper = recorded_payload(
+            record_charge_payload_with_ref(
+                &db.pool,
+                vehicle_id,
+                "history",
+                Some("tx-keeper"),
+                Some("rv-1"),
+                serde_json::json!({"state":"keeper"}),
+            )
+            .await
+            .unwrap(),
+        )
+        .0;
+        let victim = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO riviamigo.rivian_charge_payloads
+             (id, vehicle_id, operation, payload)
+             VALUES ($1, $2, 'compaction-victim', '{\"state\":\"victim\"}'::jsonb)",
+        )
+        .bind(victim)
+        .bind(vehicle_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let session_id = seed_charge_session(&db.pool, vehicle_id).await;
+        sqlx::query(
+            "INSERT INTO riviamigo.charge_session_external_aliases
+             (charge_session_id, external_id, alias_kind, latest_payload_id, latest_payload_captured_at)
+             VALUES ($1, 'compactor-race', 'test', $2, now())",
+        )
+        .bind(session_id)
+        .bind(victim)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM riviamigo.rivian_charge_payloads WHERE id = $1")
+            .bind(victim)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            reconcile_retained_payload_references(&db.pool, 10)
+                .await
+                .unwrap(),
+            (0, 1)
+        );
+        let canonical: Option<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT canonical_payload_id FROM riviamigo.rivian_charge_payload_identities",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        let alias: (Option<uuid::Uuid>, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+            "SELECT latest_payload_id, latest_payload_captured_at
+             FROM riviamigo.charge_session_external_aliases
+             WHERE charge_session_id = $1 AND external_id = 'compactor-race'",
+        )
+        .bind(session_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(canonical, Some(keeper.payload_id));
+        assert_eq!(alias, (None, None));
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn retention_reference_migration_preserves_the_ninety_day_policy() {
+        let db = DisposableDatabase::new().await;
+        let nullable: String = sqlx::query_scalar(
+            "SELECT is_nullable
+             FROM information_schema.columns
+             WHERE table_schema = 'riviamigo'
+               AND table_name = 'rivian_charge_payload_identities'
+               AND column_name = 'canonical_payload_id'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        let retention_is_unchanged: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1
+                 FROM timescaledb_information.jobs
+                 WHERE hypertable_schema = 'riviamigo'
+                   AND hypertable_name = 'rivian_charge_payloads'
+                   AND proc_name = 'policy_retention'
+                   AND (config ->> 'drop_after')::interval = interval '90 days'
+             )",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(nullable, "YES");
+        assert!(retention_is_unchanged);
+        db.cleanup().await;
+    }
 
     #[test]
     fn live_session_redis_contract_uses_expected_key_and_ttl() {

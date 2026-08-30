@@ -14,7 +14,7 @@ export type { ChartTooltipProps } from './ChartTooltip';
 export { RichTimeSeriesChart } from './RichTimeSeriesChart';
 export type { RichSeries, RichTimeInterval, PackedRichTimeInterval, RichReferenceLine, RichTimeIntervalBandGeometry, RichTimeSeriesChartProps } from './RichTimeSeriesChart';
 export { packRichTimeIntervals } from './RichTimeSeriesChart';
-export { carryForwardTooltipValues, getAdaptiveDecimalPrecision, formatAxisDateForSpan, formatChartNumber, getCalendarDateSplits, clampExplorationRange, getRichTimeIntervalBandGeometry, isZoomedXRange } from './RichTimeSeriesChart';
+export { carryForwardTooltipValues, getAdaptiveDecimalPrecision, formatAxisDateForSpan, formatAxisDateValuesForScale, formatChartNumber, getCalendarDateSplits, getResponsiveCalendarTickMaximum, clampExplorationRange, getRichTimeIntervalBandGeometry, isZoomedXRange } from './RichTimeSeriesChart';
 export { MiniSparkline, resolveCanvasColor } from './MiniSparkline';
 export type { MiniSparklineProps, MiniSparklineType, MiniSparklineYDomain } from './MiniSparkline';
 export {

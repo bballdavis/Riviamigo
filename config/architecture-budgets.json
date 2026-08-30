@@ -1,15 +1,15 @@
 {
   "hotspots": {
-    "apps/web/src/features/settings/SettingsPage.tsx": { "maxLines": 1892, "maxBytes": 100100 },
+    "apps/web/src/features/settings/SettingsPage.tsx": { "maxLines": 1905, "maxBytes": 100100 },
     "apps/web/src/components/settings/BackupSection.tsx": { "maxLines": 1700, "maxBytes": 71666 },
     "apps/web/src/components/layout/AppLayout.tsx": { "maxLines": 483, "maxBytes": 18139 },
     "apps/web/src/components/dashboard/DashboardPageShell.tsx": { "maxLines": 485, "maxBytes": 18178 },
     "apps/api/src/routes/vehicles.rs": { "maxLines": 5676, "maxBytes": 201797 },
-    "apps/api/src/routes/charging.rs": { "maxLines": 2242, "maxBytes": 83776 },
+    "apps/api/src/routes/charging.rs": { "maxLines": 2258, "maxBytes": 85053 },
     "apps/api/src/routes/trips.rs": { "maxLines": 1833, "maxBytes": 65504 },
     "apps/api/src/services/backups.rs": { "maxLines": 2673, "maxBytes": 98764 },
     "apps/api/src/services/charge_sessions.rs": { "maxLines": 1949, "maxBytes": 73563 },
-    "packages/hooks/src/api/transport.ts": { "maxLines": 2262, "maxBytes": 77124 }
+    "packages/hooks/src/api/transport.ts": { "maxLines": 2268, "maxBytes": 77421 }
   },
   "orchestration": {
     "maxLines": 500,
@@ -42,6 +42,9 @@
       "packages/ui/src/charts/RichTimeSeriesChart.tsx": "Existing specialized renderer; split only after F7 regression coverage.",
       "apps/api/src/services/demo_seed.rs": "Existing maintenance/data fixture service; keep behavior explicit.",
       "apps/api/src/routes/dashboards.rs": "Existing dashboard contract route; split with dashboard ownership work.",
+      "apps/api/src/services/chart_validation.rs": "Chart definition validation registry; split after chart schema stabilizes.",
+      "apps/api/src/services/charge_session_repair.rs": "Transactional charging-session repair workflow; split only with database-backed recovery coverage.",
+      "apps/web/src/features/charts/editor/ChartEditorPage.tsx": "Integrated chart authoring workflow; split after portable import and preview contracts stabilize.",
       "apps/api/src/services/trip_enrichment.rs": "Existing trip enrichment service; split after route extraction.",
       "apps/api/src/services/restore_compatibility.rs": "Existing restore safety service; preserve compatibility contract.",
       "apps/api/src/routes/idle_drain.rs": "Existing analytics route hotspot; split with query ownership work.",
@@ -89,9 +92,10 @@
       "allow": [
         "apps/web/src/features/settings/SettingsPage.tsx",
         "apps/web/src/components/settings/BackupSection.tsx",
-        "packages/dashboards/src/editor/WidgetEditForm.tsx"
+        "packages/dashboards/src/editor/WidgetEditForm.tsx",
+        "packages/ui/src/primitives/Switch.tsx"
       ],
-      "maxMatches": 3,
+      "maxMatches": 4,
       "message": "Production switch semantics must use the shared Switch primitive"
     },
     "directPortal": {
@@ -104,9 +108,10 @@
         "packages/dashboards/src/widgets/chart/MobileChartViewer.tsx",
         "packages/dashboards/src/widgets/chart/DashboardChartWidget.tsx",
         "packages/dashboards/src/editor/EditorDrawer.tsx",
-        "packages/dashboards/src/editor/IconPicker.tsx"
+        "packages/dashboards/src/editor/IconPicker.tsx",
+        "packages/ui/src/primitives/ResponsiveDialog.tsx"
       ],
-      "maxMatches": 8,
+      "maxMatches": 9,
       "message": "Production overlays must use the shared overlay foundation"
     },
     "directToastDispatch": {
@@ -146,9 +151,11 @@
         "packages/hooks/src/useStats.ts",
         "packages/hooks/src/useTelemetryLanes.ts",
         "packages/hooks/src/useTrips.ts",
-        "packages/hooks/src/useVehicleArtwork.tsx"
+        "packages/hooks/src/useVehicleArtwork.tsx",
+        "packages/hooks/src/useCharts.ts",
+        "packages/hooks/src/chartSources.ts"
       ],
-      "maxMatches": 116,
+      "maxMatches": 123,
       "message": "Domain queries must migrate from raw queryKey arrays to query factories"
     },
     "resolveTimeBounds": {

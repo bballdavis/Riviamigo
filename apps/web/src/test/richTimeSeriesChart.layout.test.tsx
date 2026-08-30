@@ -1,7 +1,21 @@
 import React from 'react';
 import { render, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { carryForwardTooltipValues, formatAxisDateForSpan, formatChartNumber, getAdaptiveDecimalPrecision, getCalendarDateSplits, isZoomedXRange, RichTimeSeriesChart } from '@riviamigo/ui/charts';
+import { carryForwardTooltipValues, formatAxisDateForSpan, formatAxisDateValuesForScale, formatChartNumber, getAdaptiveDecimalPrecision, getCalendarDateSplits, getResponsiveCalendarTickMaximum, isZoomedXRange, RichTimeSeriesChart } from '@riviamigo/ui/charts';
+import { buildRichTimeSeriesAlignedData } from '../../../../packages/ui/src/charts/RichTimeSeriesChart';
+
+describe('RichTimeSeriesChart aligned data', () => {
+  it('drops invalid x values and reorders every series with the same stable permutation', () => {
+    expect(
+      buildRichTimeSeriesAlignedData(
+        [{ ts: '3' }, { ts: 'invalid' }, { ts: '1' }, { ts: '2' }],
+        [{ key: 'a', label: 'A', values: [30, 99, 10, 20] }],
+        'raw',
+        false,
+      ),
+    ).toEqual([[1, 2, 3], [10, 20, 30]]);
+  });
+});
 
 describe('RichTimeSeriesChart layout safety', () => {
   it('keeps a left gutter so y-axis labels are not clipped', async () => {
@@ -74,5 +88,29 @@ describe('RichTimeSeriesChart multi-day time axes', () => {
     expect(splits).toBeDefined();
     expect(splits?.length).toBeLessThanOrEqual(7);
     expect(splits?.every((split, index) => index === 0 || split > splits[index - 1]!)).toBe(true);
+  });
+
+  it('reduces calendar ticks to two when a dual-axis mobile plot is narrow', () => {
+    expect(getResponsiveCalendarTickMaximum(170)).toBe(2);
+    expect(getResponsiveCalendarTickMaximum(700)).toBe(7);
+
+    const start = Date.parse('2026-08-18T00:00:00Z') / 1000;
+    const end = Date.parse('2026-08-29T00:00:00Z') / 1000;
+    expect(getCalendarDateSplits(start, end, getResponsiveCalendarTickMaximum(170))).toHaveLength(2);
+  });
+
+  it('formats zoomed dates from the visible scale instead of the full data span', () => {
+    const first = Date.parse('2026-08-18T00:00:00Z') / 1000;
+    const second = Date.parse('2026-08-20T00:00:00Z') / 1000;
+    const labels = formatAxisDateValuesForScale(
+      [first, second],
+      first,
+      second,
+      365 * 86400
+    );
+
+    expect(labels).toHaveLength(2);
+    expect(new Set(labels).size).toBe(2);
+    expect(labels.every((label) => label.includes('Aug'))).toBe(true);
   });
 });

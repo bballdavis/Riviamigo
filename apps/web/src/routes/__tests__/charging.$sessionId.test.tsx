@@ -42,9 +42,7 @@ vi.mock('@riviamigo/hooks', () => ({
 }));
 
 vi.mock('@riviamigo/dashboards', () => ({
-  DashboardChartWidget: ({ title }: { title?: string }) => (
-    <div data-testid="dashboard-chart-widget">{title}</div>
-  ),
+  ChargeSessionCurveDetail: () => <div data-testid="dashboard-chart-widget" />,
   SensorChipSummary: ({ title, value, secondary }: { title: string; value: string; secondary?: string }) => (
     <div data-testid={`sensor-chip-${title.toLowerCase().replace(/\s+/g, '-')}`}>
       <span>{title}</span>

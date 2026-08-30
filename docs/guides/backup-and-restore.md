@@ -6,6 +6,8 @@ slug: /operations/backup-and-restore/
 
 # Backup and restore
 
+Chart definitions, personal overrides, dashboard placements, and chart baseline metadata are included in the PostgreSQL backup. A restore keeps compatible chart records and rejects a newer unsupported definition with a visible compatibility error rather than silently dropping it.
+
 Riviamigo recovery packages are full durable-state packages. They include the PostgreSQL database and the persistent vehicle artwork cache, so a downloaded package can be restored into a clean installation running the same or a newer Riviamigo release.
 
 Redis live snapshots, browser storage, refresh sessions, Rivian/provider credentials, provider connection activity history, installation keys, and backup target secrets are intentionally not restored. Non-secret backup scheduling and target configuration is restored; reconnect providers and re-enter the backup target secret after a restore. During an in-place restore, Riviamigo preserves the host's backup catalog, backup execution history, and restore request history outside PostgreSQL and merges them into the restored database after startup. A clean installation can rebuild its S3 catalog from the configured bucket.
@@ -95,8 +97,6 @@ Recovery is forward-compatible through the versioned v3 schema contract. A recog
 The former five-migration pre-release chain remains a rollback path when a matching historical application image is available. A v3 archive from that era can be considered by the current restore engine only through the same candidate schema proof above; an incompatible candidate is rejected before activation. The explicit adoption command remains an operator action for a stopped installation: it verifies a recovery dump and complete canonical schema against a scratch baseline, then replaces only SQLx bookkeeping. It never replays baseline SQL on populated data and is never run automatically at startup, backup, or restore.
 
 Matching migration numbers or visibly matching tables do not prove migration identity. The raw migration bytes, ordered catalog, chain identifier, and schema contract must all agree.
-
-The temporary custom chart-definition migration is forward-cleaned by `0012_remove_chart_definitions.sql`. A database that applied `0011_chart_definitions.sql` drops the unused `riviamigo.charts` table during the normal forward migration; static dashboard charts are retained.
 
 Before relying on a package, restore it into an isolated installation and verify users, dashboards, vehicles, telemetry, trips, charging history, artwork, and application health. Treat packages as sensitive because they contain account, location, and vehicle history.
 

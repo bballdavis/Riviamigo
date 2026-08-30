@@ -1,5 +1,7 @@
 export { Button } from './Button';
 export type { ButtonProps } from './Button';
+export { EfficiencyDisplayToggle } from './EfficiencyDisplayToggle';
+export type { EfficiencyDisplayToggleProps } from './EfficiencyDisplayToggle';
 
 export { Badge } from './Badge';
 export type { BadgeProps } from './Badge';
@@ -47,3 +49,9 @@ export { AmbientOrbs } from './AmbientOrbs';
 
 export { MetricTabs } from './MetricTabs';
 export type { MetricTabsProps, MetricTab } from './MetricTabs';
+
+export { Switch } from './Switch';
+export type { SwitchProps } from './Switch';
+
+export { ResponsiveDialog } from './ResponsiveDialog';
+export type { ResponsiveDialogProps } from './ResponsiveDialog';

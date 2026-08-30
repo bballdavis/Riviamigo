@@ -209,6 +209,18 @@ export function formatEfficiency(value: number | null | undefined): string {
   return `${formatted} ${getEfficiencyUnitLabel()}`;
 }
 
+export function formatEfficiencyFromWhPerKm(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+  return formatEfficiency(value * MILES_TO_KM);
+}
+
+export function formatMassKg(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+  const prefs = getUnitPreferences();
+  if (prefs.distance_unit === 'kilometers') return `${formatNumber(value, 0)} kg`;
+  return `${formatNumber(value * 2.2046226218, 0)} lb`;
+}
+
 export function getEfficiencyUnitLabel(): string {
   const prefs = getUnitPreferences();
   if (prefs.efficiency_display === 'energy_per_distance') {

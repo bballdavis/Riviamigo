@@ -19,6 +19,19 @@ pub const RECOVERY_FORMAT_V2: &str = "riviamigo-recovery-v2";
 pub const RECOVERY_FORMAT_V3: &str = "riviamigo-recovery-v3";
 pub const RESTORE_ENGINE_VERSION: u32 = 3;
 pub const SCHEMA_CONTRACT_VERSION: &str = "riviamigo-schema-contract-v1";
+const REQUIRED_SCHEMA_RELATIONS: &[&str] = &[
+    "riviamigo.users",
+    "riviamigo.vehicles",
+    "riviamigo.dashboards",
+    "riviamigo.charts",
+    "riviamigo.trips",
+    "riviamigo.charge_sessions",
+    "riviamigo.backup_runs",
+    "riviamigo.backup_artifacts",
+    "riviamigo.backup_restore_requests",
+    "timeseries.telemetry",
+    "timeseries.telemetry_1min",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DatabaseProfile {
@@ -425,20 +438,8 @@ pub async fn schema_fingerprint(pool: &PgPool) -> Result<String, AppError> {
 }
 
 pub async fn validate_schema_contract(pool: &PgPool) -> Result<SchemaContractReport, AppError> {
-    const REQUIRED_RELATIONS: &[&str] = &[
-        "riviamigo.users",
-        "riviamigo.vehicles",
-        "riviamigo.dashboards",
-        "riviamigo.trips",
-        "riviamigo.charge_sessions",
-        "riviamigo.backup_runs",
-        "riviamigo.backup_artifacts",
-        "riviamigo.backup_restore_requests",
-        "timeseries.telemetry",
-        "timeseries.telemetry_1min",
-    ];
     let mut missing_relations = Vec::new();
-    for relation in REQUIRED_RELATIONS {
+    for relation in REQUIRED_SCHEMA_RELATIONS {
         let present: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
             .bind(relation)
             .fetch_one(pool)
@@ -907,6 +908,11 @@ fn parse_version_triplet(value: &str) -> Option<(u32, u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_contract_requires_chart_relation() {
+        assert!(REQUIRED_SCHEMA_RELATIONS.contains(&"riviamigo.charts"));
+    }
 
     fn v3_manifest() -> Value {
         serde_json::json!({

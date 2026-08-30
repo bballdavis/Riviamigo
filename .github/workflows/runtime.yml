@@ -40,6 +40,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
+      RIVIAMIGO_ENV: development
       DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo_smoke
       UPGRADE_DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo_upgrade
       REDIS_URL: redis://localhost:6379
@@ -75,7 +76,7 @@ jobs:
       - name: Start API and probe health
         working-directory: apps/api
         run: |
-          REDIS_URL=redis://localhost:6379 cargo run &
+          REDIS_URL=redis://localhost:6379 cargo run --bin riviamigo-api &
           API_PID=$!
           for i in $(seq 1 20); do
             if curl -sf http://localhost:3001/health; then

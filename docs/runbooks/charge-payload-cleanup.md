@@ -15,6 +15,29 @@ The canonical `charge_payload_fingerprint` and
 `charge_payload_identity_key` database functions are shared by ingestion,
 backfill, and this compactor; do not reintroduce an inline identity expression.
 
+## Retention-aware identities
+
+`rivian_charge_payloads` is TimescaleDB evidence retained for 90 days. Its
+JSON rows are intentionally dropped by the normal retention policy; this is
+not a database corruption event. The separate payload identity table keeps the
+semantic identity key and fingerprint indefinitely, but its
+`canonical_payload_id` is only an optional pointer to retained evidence.
+
+When the last matching JSON payload has expired, the identity becomes a
+logical tombstone (`canonical_payload_id = NULL`). Replaying the same upstream
+session must not insert replacement JSON or repeatedly grow the hypertable.
+The session reconciliation path still runs normally without a payload pointer.
+
+The background identity worker runs a small cache-reference reconciliation pass
+after its historical backfill completes and then every six hours. It clears
+orphaned identity pointers and all orphaned alias cache pointers independently;
+it never deletes identities, changes the 90-day policy, or manufactures payload JSON.
+An aggregated `charge_payload_retention_reconciled` INFO log reports the
+identity and alias counts. A poll-level aggregated INFO with
+`payloads_evidence_expired` means retained evidence expired; investigate it
+only if it affects unexpectedly recent sessions. A poll-level aggregated WARN
+indicates a repair or `payload_audit_failures`.
+
 ## Before cleanup
 
 1. Create and verify a recovery package or PostgreSQL dump.
@@ -75,10 +98,20 @@ when the recovered disk space justifies that operational cost.
    dashboard.
 4. During the next idle completed-history poll, confirm `payloads_reused`
    increases while `payloads_inserted` remains zero for identical upstream
-   data.
+   data. For sessions older than 90 days, `payloads_evidence_expired` may
+   increase instead; it must not cause new payload rows.
 5. For an active charge, confirm that curve writes correspond only to new or
    genuinely corrected points, not the full historical curve length.
 
 If counts or costs change unexpectedly, stop synchronization, restore the
 verified backup in an isolated database, and investigate the replay before
 deleting more evidence.
+
+## Rollback compatibility
+
+Migration `0014_charge_payload_retention_references` only makes
+`canonical_payload_id` nullable and documents the cache semantics. It performs
+no data rewrite and does not alter TimescaleDB retention. A rollback to code
+that assumes a non-null canonical UUID is unsafe once tombstones exist; first
+deploy a version that understands nullable pointers, or restore the compatible
+database backup in an isolated environment.

@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { formatDistanceKm, setUnitPreferences } from './utils';
+import {
+  formatDistanceKm,
+  formatEfficiencyFromWhPerKm,
+  formatMassKg,
+  setEfficiencyDisplay,
+  setUnitPreferences,
+} from './utils';
 
 const imperialPreferences = {
   mode: 'imperial' as const,
@@ -36,5 +42,25 @@ describe('formatDistanceKm', () => {
     expect(formatDistanceKm(null)).toBe('-');
     expect(formatDistanceKm(undefined)).toBe('-');
     expect(formatDistanceKm(Number.NaN)).toBe('-');
+  });
+});
+
+describe('extended telemetry unit formatting', () => {
+  it('formats Wh/km using the selected efficiency display', () => {
+    expect(formatEfficiencyFromWhPerKm(248)).toBe('2.5 mi/kWh');
+
+    setEfficiencyDisplay('energy_per_distance');
+    expect(formatEfficiencyFromWhPerKm(248)).toBe('399 Wh/mi');
+
+    setUnitPreferences({ ...imperialPreferences, mode: 'metric', distance_unit: 'kilometers' }, { suppressEvent: true });
+    setEfficiencyDisplay('distance_per_energy');
+    expect(formatEfficiencyFromWhPerKm(248)).toBe('4.0 km/kWh');
+  });
+
+  it('formats vehicle mass using the selected unit system', () => {
+    expect(formatMassKg(3160)).toBe('6,967 lb');
+
+    setUnitPreferences({ ...imperialPreferences, mode: 'metric', distance_unit: 'kilometers' }, { suppressEvent: true });
+    expect(formatMassKg(3160)).toBe('3,160 kg');
   });
 });

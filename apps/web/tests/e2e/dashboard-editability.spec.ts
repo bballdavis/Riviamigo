@@ -3,14 +3,22 @@ import { readFileSync } from 'node:fs';
 import {
   DEFAULT_DASHBOARD_VISIBILITY_STATE,
   isWidgetVisible,
-  type DashboardConfig,
-} from '@riviamigo/dashboards';
+} from '../../../../packages/dashboards/src/dashboardVisibility';
+import type { DashboardConfig } from '../../../../packages/dashboards/src/schema';
 
 const dashboard = loadDashboard('dashboard');
 const battery = loadDashboard('battery');
 const charging = loadDashboard('charging');
 const efficiency = loadDashboard('efficiency');
 const trips = loadDashboard('trips');
+const chartSeeds = readJson<Array<{
+  slug: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  definition: { placements: Array<{ dashboardSlug: string }> };
+}>>('../../../../packages/dashboards/src/charts/defaults/defaults.json');
+const chartSources = readJson<unknown[]>('../../../../packages/dashboards/src/charts/sources/sources.json');
 const customDashboard: DashboardConfig = {
   ...dashboard,
   id: '11111111-1111-1111-1111-111111111111',
@@ -126,9 +134,9 @@ test.describe('dashboard editability in a browser', () => {
       const visibleWidgets = config.widgets.filter((widget) => isWidgetVisible(widget, DEFAULT_DASHBOARD_VISIBILITY_STATE));
       await expect(page.locator('[data-widget-frame="edit"]')).toHaveCount(visibleWidgets.length);
       const editControls = page.locator('[data-widget-edit-control="true"]');
-      await expect(editControls).toHaveCount(visibleWidgets.length);
+      await expect(editControls).toHaveCount(visibleWidgets.filter((widget) => !widget.managed).length);
 
-      for (let index = 0; index < visibleWidgets.length; index += 1) {
+      for (let index = 0; index < await editControls.count(); index += 1) {
         const button = editControls.nth(index).getByRole('button', { name: 'Edit widget settings' });
         await button.scrollIntoViewIfNeeded();
         await expectEditControl(button);
@@ -365,6 +373,10 @@ function loadDashboard(slug: string): DashboardConfig {
   return JSON.parse(readFileSync(path, 'utf8')) as DashboardConfig;
 }
 
+function readJson<T>(path: string): T {
+  return JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8')) as T;
+}
+
 async function installApiMocks(page: Page, options: { vehicleStatus?: Record<string, unknown> } = {}) {
   const createdDashboards: Array<{ config: DashboardConfig }> = [];
 
@@ -407,6 +419,28 @@ async function installApiMocks(page: Page, options: { vehicleStatus?: Record<str
     if (path.startsWith('/v1/dashboards/by-slug/')) {
       const slug = decodeURIComponent(path.slice('/v1/dashboards/by-slug/'.length));
       return json(route, dashboards.get(slug) ?? customDashboard);
+    }
+    if (path === '/v1/charts/effective') {
+      const dashboardSlug = url.searchParams.get('dashboard_slug');
+      return json(route, chartSeeds
+        .filter((chart) => chart.enabled && chart.definition.placements.some(
+          (placement) => placement.dashboardSlug === dashboardSlug,
+        ))
+        .map((chart, index) => ({
+          id: `chart-${index + 1}`,
+          ownerId: null,
+          slug: chart.slug,
+          name: chart.name,
+          description: chart.description,
+          isDefault: true,
+          isLocked: false,
+          isEnabled: true,
+          baselineRevision: 5,
+          config: chart.definition,
+        })));
+    }
+    if (path === '/v1/chart-sources') {
+      return json(route, chartSources);
     }
     if (path === '/v1/dashboards' && method === 'POST') {
       const body = request.postDataJSON() as { config: DashboardConfig };

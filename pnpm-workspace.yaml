@@ -57,3 +57,10 @@ overrides:
 
 patchedDependencies:
   image-size@2.0.2: patches/image-size@2.0.2.patch
+
+auditConfig:
+  # Both advisories are backported by patches/image-size@2.0.2.patch until the
+  # registry publishes the 2.0.3 release referenced by the advisory metadata.
+  ignoreGhsas:
+    - GHSA-w3rx-r6r6-pgpr
+    - GHSA-5p2g-fcmc-qvqq

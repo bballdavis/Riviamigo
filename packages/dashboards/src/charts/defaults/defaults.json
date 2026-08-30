@@ -1,0 +1,730 @@
+[
+  {
+    "slug": "battery-capacity-mileage",
+    "name": "Battery Capacity by Mileage",
+    "description": "Usable battery capacity over time with mileage on a secondary axis.",
+    "enabled": true,
+    "definition": {
+      "schemaVersion": 1,
+      "placements": [{ "dashboardSlug": "overview" }, { "dashboardSlug": "battery" }],
+      "timeframe": { "mode": "dashboard" },
+      "sources": [
+        {
+          "id": "main",
+          "sourceId": "battery.mileage",
+          "params": {},
+          "filters": [],
+          "inherit": { "vehicle": true, "timeframe": true }
+        }
+      ],
+      "x": { "field": { "sourceBindingId": "main", "field": "timestamp" }, "kind": "time" },
+      "series": [
+        {
+          "id": "usable_kwh",
+          "label": "Usable Capacity",
+          "y": { "sourceBindingId": "main", "field": "usable_kwh" },
+          "mark": "line",
+          "fill": true,
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "accent" },
+          "transforms": [],
+          "visibleInLegend": true
+        },
+        {
+          "id": "odometer_miles",
+          "label": "Mileage",
+          "y": { "sourceBindingId": "main", "field": "odometer_miles" },
+          "mark": "line",
+          "fill": false,
+          "yAxis": "y2",
+          "color": { "mode": "token", "token": "emerald" },
+          "transforms": [],
+          "visibleInLegend": true
+        }
+      ],
+      "axes": {
+        "x": { "scale": "linear", "domain": { "mode": "auto" } },
+        "y": { "scale": "linear", "unit": "kWh", "domain": { "mode": "auto" } },
+        "y2": { "scale": "linear", "unit": "mi", "domain": { "mode": "auto" } }
+      },
+      "display": {
+        "legend": "auto",
+        "grid": true,
+        "tooltip": true,
+        "timeFilter": "raw",
+        "curveSmoothness": "gentle",
+        "emptyTitle": "No battery capacity mileage data recorded yet"
+      },
+      "interaction": { "panZoom": true, "touchExplore": true, "connectGaps": true }
+    }
+  },
+  {
+    "slug": "battery-degradation",
+    "name": "Battery Health",
+    "description": "Estimated battery capacity percentage over time.",
+    "enabled": true,
+    "definition": {
+      "schemaVersion": 1,
+      "placements": [{ "dashboardSlug": "overview" }, { "dashboardSlug": "battery" }],
+      "timeframe": { "mode": "dashboard" },
+      "sources": [
+        {
+          "id": "main",
+          "sourceId": "battery.degradation",
+          "params": {},
+          "filters": [],
+          "inherit": { "vehicle": true, "timeframe": true }
+        }
+      ],
+      "x": { "field": { "sourceBindingId": "main", "field": "timestamp" }, "kind": "time" },
+      "series": [
+        {
+          "id": "capacity_pct",
+          "label": "Battery Health",
+          "y": { "sourceBindingId": "main", "field": "capacity_pct" },
+          "mark": "line",
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "accent" },
+          "transforms": [],
+          "visibleInLegend": true
+        }
+      ],
+      "axes": {
+        "x": { "scale": "linear", "domain": { "mode": "auto" } },
+        "y": { "scale": "linear", "unit": "%", "domain": { "mode": "fixed", "min": 80, "max": 100 } }
+      },
+      "display": {
+        "legend": "hide",
+        "grid": true,
+        "tooltip": true,
+        "timeFilter": "raw",
+        "curveSmoothness": "gentle",
+        "emptyTitle": "No battery health history recorded yet"
+      },
+      "interaction": { "panZoom": true, "touchExplore": true, "connectGaps": false }
+    }
+  },
+  {
+    "slug": "charge-level",
+    "name": "Charge Level",
+    "description": "State of charge from telemetry.",
+    "enabled": true,
+    "definition": {
+      "schemaVersion": 1,
+      "placements": [{ "dashboardSlug": "overview" }, { "dashboardSlug": "charging" }],
+      "timeframe": { "mode": "dashboard" },
+      "sources": [
+        {
+          "id": "main",
+          "sourceId": "metrics.series",
+          "params": { "metric": "battery_level" },
+          "filters": [],
+          "inherit": { "vehicle": true, "timeframe": true }
+        }
+      ],
+      "x": { "field": { "sourceBindingId": "main", "field": "timestamp" }, "kind": "time" },
+      "series": [
+        {
+          "id": "battery_level",
+          "label": "State of Charge",
+          "y": { "sourceBindingId": "main", "field": "battery_level" },
+          "mark": "step",
+          "fill": true,
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "accent" },
+          "transforms": [],
+          "visibleInLegend": true
+        }
+      ],
+      "axes": {
+        "x": { "scale": "linear", "domain": { "mode": "auto" } },
+        "y": { "scale": "linear", "unit": "%", "domain": { "mode": "fixed", "min": 0, "max": 100 } }
+      },
+      "display": {
+        "legend": "hide",
+        "grid": true,
+        "tooltip": true,
+        "timeFilter": "raw",
+        "curveSmoothness": "gentle",
+        "emptyTitle": "No charge level data for this period"
+      },
+      "interaction": { "panZoom": true, "touchExplore": true, "connectGaps": false }
+    }
+  },
+  {
+    "slug": "charging-curve-analysis",
+    "name": "DC Charging Curve Trend",
+    "description": "Verified charge sessions by state of charge.",
+    "enabled": true,
+    "definition": {
+      "schemaVersion": 1,
+      "placements": [{ "dashboardSlug": "overview" }, { "dashboardSlug": "charging" }],
+      "timeframe": { "mode": "dashboard" },
+      "sources": [
+        {
+          "id": "main",
+          "sourceId": "charging.curve-analysis",
+          "params": {},
+          "filters": [],
+          "inherit": { "vehicle": true, "timeframe": true }
+        }
+      ],
+      "x": { "field": { "sourceBindingId": "main", "field": "soc_pct" }, "kind": "number" },
+      "series": [
+        {
+          "id": "power_kw",
+          "label": "Verified DC sessions",
+          "y": { "sourceBindingId": "main", "field": "power_kw" },
+          "mark": "scatter",
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "accent" },
+          "transforms": [],
+          "visibleInLegend": true
+        }
+      ],
+      "axes": {
+        "x": { "scale": "linear", "domain": { "mode": "auto" } },
+        "y": { "scale": "linear", "unit": "kW", "domain": { "mode": "auto" } }
+      },
+      "display": {
+        "legend": "hide",
+        "grid": true,
+        "tooltip": true,
+        "timeFilter": "raw",
+        "curveSmoothness": "straight",
+        "showPoints": true,
+        "emptyTitle": "No charging curve history is available for this period"
+      },
+      "interaction": { "panZoom": true, "touchExplore": true, "connectGaps": false }
+    }
+  },
+  {
+    "slug": "charging-sessions-energy",
+    "name": "Daily Charge Sessions",
+    "description": "Daily stacked charge sessions.",
+    "enabled": true,
+    "definition": {
+      "schemaVersion": 1,
+      "placements": [{ "dashboardSlug": "overview" }, { "dashboardSlug": "charging" }],
+      "timeframe": { "mode": "dashboard" },
+      "sources": [
+        {
+          "id": "main",
+          "sourceId": "charging.sessions",
+          "params": {},
+          "filters": [],
+          "inherit": { "vehicle": true, "timeframe": true }
+        }
+      ],
+      "x": { "field": { "sourceBindingId": "main", "field": "day_start" }, "kind": "time" },
+      "series": [
+        {
+          "id": "total_energy_kwh",
+          "label": "Energy Charged",
+          "y": { "sourceBindingId": "main", "field": "total_energy_kwh" },
+          "mark": "bar",
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "accent" },
+          "transforms": [],
+          "visibleInLegend": true
+        }
+      ],
+      "axes": {
+        "x": { "scale": "linear", "domain": { "mode": "auto" } },
+        "y": { "scale": "linear", "unit": "kWh", "domain": { "mode": "auto", "includeZero": true } }
+      },
+      "display": {
+        "legend": "hide",
+        "grid": true,
+        "tooltip": true,
+        "timeFilter": "raw",
+        "curveSmoothness": "straight",
+        "emptyTitle": "No charging sessions for this period"
+      },
+      "interaction": { "panZoom": true, "touchExplore": true, "connectGaps": false }
+    }
+  },
+  {
+    "slug": "charging-weekly-energy",
+    "name": "Energy Charged",
+    "description": "Daily total charging energy.",
+    "enabled": true,
+    "definition": {
+      "schemaVersion": 1,
+      "placements": [{ "dashboardSlug": "overview" }, { "dashboardSlug": "charging" }],
+      "timeframe": { "mode": "dashboard" },
+      "sources": [
+        {
+          "id": "main",
+          "sourceId": "charging.sessions",
+          "params": {},
+          "filters": [],
+          "inherit": { "vehicle": true, "timeframe": true }
+        }
+      ],
+      "x": { "field": { "sourceBindingId": "main", "field": "day_start" }, "kind": "time" },
+      "series": [
+        {
+          "id": "total_energy_kwh",
+          "label": "Energy Charged",
+          "y": { "sourceBindingId": "main", "field": "total_energy_kwh" },
+          "mark": "bar",
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "accent" },
+          "transforms": [],
+          "visibleInLegend": true
+        }
+      ],
+      "axes": {
+        "x": { "scale": "linear", "domain": { "mode": "auto" } },
+        "y": { "scale": "linear", "unit": "kWh", "domain": { "mode": "auto", "includeZero": true } }
+      },
+      "display": {
+        "legend": "hide",
+        "grid": true,
+        "tooltip": true,
+        "timeFilter": "raw",
+        "curveSmoothness": "straight",
+        "emptyTitle": "No charging energy for this period"
+      },
+      "interaction": { "panZoom": true, "touchExplore": true, "connectGaps": false }
+    }
+  },
+  {
+    "slug": "efficiency-mode",
+    "name": "Efficiency by Drive Mode",
+    "description": "Average driving efficiency grouped by drive mode.",
+    "enabled": true,
+    "definition": {
+      "schemaVersion": 1,
+      "placements": [{ "dashboardSlug": "overview" }, { "dashboardSlug": "efficiency" }],
+      "timeframe": { "mode": "dashboard" },
+      "sources": [
+        {
+          "id": "main",
+          "sourceId": "efficiency.drive-mode",
+          "params": {},
+          "filters": [],
+          "inherit": { "vehicle": true, "timeframe": true, "tripTags": true }
+        }
+      ],
+      "x": { "field": { "sourceBindingId": "main", "field": "drive_mode" }, "kind": "category" },
+      "series": [
+        {
+          "id": "avg_efficiency_wh_mi",
+          "label": "Efficiency",
+          "y": { "sourceBindingId": "main", "field": "avg_efficiency_wh_mi" },
+          "mark": "bar",
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "accent" },
+          "transforms": [],
+          "visibleInLegend": true
+        }
+      ],
+      "axes": {
+        "x": { "scale": "linear", "domain": { "mode": "auto" } },
+        "y": {
+          "scale": "linear",
+          "unit": "Wh/mi",
+          "domain": { "mode": "auto", "includeZero": true }
+        }
+      },
+      "display": {
+        "legend": "hide",
+        "grid": true,
+        "tooltip": true,
+        "timeFilter": "raw",
+        "curveSmoothness": "straight",
+        "showPoints": true,
+        "emptyTitle": "No drive mode efficiency data for this period"
+      },
+      "interaction": { "panZoom": true, "touchExplore": true, "connectGaps": false }
+    }
+  },
+  {
+    "slug": "efficiency-tags",
+    "name": "Efficiency by Tag",
+    "description": "Distance-weighted efficiency grouped by trip tags.",
+    "enabled": true,
+    "definition": {
+      "schemaVersion": 1,
+      "placements": [{ "dashboardSlug": "overview" }, { "dashboardSlug": "efficiency" }],
+      "timeframe": { "mode": "dashboard" },
+      "sources": [
+        {
+          "id": "main",
+          "sourceId": "efficiency.trip-tags",
+          "params": {},
+          "filters": [],
+          "inherit": { "vehicle": true, "timeframe": true, "tripTags": true }
+        }
+      ],
+      "x": { "field": { "sourceBindingId": "main", "field": "tag_name" }, "kind": "category" },
+      "series": [
+        {
+          "id": "avg_efficiency_wh_mi",
+          "label": "Efficiency",
+          "y": { "sourceBindingId": "main", "field": "avg_efficiency_wh_mi" },
+          "mark": "bar",
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "accent" },
+          "transforms": [],
+          "visibleInLegend": true
+        }
+      ],
+      "axes": {
+        "x": { "scale": "linear", "domain": { "mode": "auto" } },
+        "y": {
+          "scale": "linear",
+          "unit": "Wh/mi",
+          "domain": { "mode": "auto", "includeZero": true }
+        }
+      },
+      "display": {
+        "legend": "hide",
+        "grid": true,
+        "tooltip": true,
+        "timeFilter": "raw",
+        "curveSmoothness": "straight",
+        "showPoints": true,
+        "emptyTitle": "No tagged trip efficiency data for this period"
+      },
+      "interaction": { "panZoom": true, "touchExplore": true, "connectGaps": false }
+    }
+  },
+  {
+    "slug": "efficiency-temperature",
+    "name": "Efficiency by Temperature",
+    "description": "Driving efficiency against outside temperature.",
+    "enabled": true,
+    "definition": {
+      "schemaVersion": 1,
+      "placements": [{ "dashboardSlug": "overview" }, { "dashboardSlug": "efficiency" }],
+      "timeframe": { "mode": "dashboard" },
+      "sources": [
+        {
+          "id": "main",
+          "sourceId": "efficiency.temperature",
+          "params": {},
+          "filters": [],
+          "inherit": { "vehicle": true, "timeframe": true, "tripTags": true }
+        }
+      ],
+      "x": { "field": { "sourceBindingId": "main", "field": "temp_c_low" }, "kind": "number" },
+      "series": [
+        {
+          "id": "avg_efficiency_wh_mi",
+          "label": "Efficiency",
+          "y": { "sourceBindingId": "main", "field": "avg_efficiency_wh_mi" },
+          "mark": "scatter",
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "accent" },
+          "transforms": [],
+          "visibleInLegend": true
+        }
+      ],
+      "axes": {
+        "x": { "scale": "linear", "domain": { "mode": "auto" } },
+        "y": { "scale": "linear", "unit": "Wh/mi", "domain": { "mode": "auto" } }
+      },
+      "display": {
+        "legend": "hide",
+        "grid": true,
+        "tooltip": true,
+        "timeFilter": "raw",
+        "curveSmoothness": "straight",
+        "showPoints": true,
+        "emptyTitle": "No outside-temperature telemetry is available for this range yet"
+      },
+      "interaction": { "panZoom": true, "touchExplore": true, "connectGaps": false }
+    }
+  },
+  {
+    "slug": "efficiency-trend",
+    "name": "Efficiency Trend",
+    "description": "Per-trip driving efficiency and rolling trend.",
+    "enabled": true,
+    "definition": {
+      "schemaVersion": 1,
+      "placements": [
+        { "dashboardSlug": "overview" },
+        { "dashboardSlug": "efficiency" },
+        { "dashboardSlug": "trips" }
+      ],
+      "timeframe": { "mode": "dashboard" },
+      "sources": [
+        {
+          "id": "main",
+          "sourceId": "efficiency.trend",
+          "params": {},
+          "filters": [],
+          "inherit": { "vehicle": true, "timeframe": true, "tripTags": true }
+        }
+      ],
+      "x": { "field": { "sourceBindingId": "main", "field": "timestamp" }, "kind": "time" },
+      "series": [
+        {
+          "id": "trip_efficiency_wh_mi",
+          "label": "Trip efficiency",
+          "y": { "sourceBindingId": "main", "field": "trip_efficiency_wh_mi" },
+          "mark": "scatter",
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "accent" },
+          "transforms": [],
+          "visibleInLegend": true
+        },
+        {
+          "id": "rolling_24h_wh_mi",
+          "label": "24-hour avg",
+          "y": { "sourceBindingId": "main", "field": "rolling_24h_wh_mi" },
+          "mark": "line",
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "emerald" },
+          "transforms": [],
+          "visibleInLegend": true
+        }
+      ],
+      "axes": {
+        "x": { "scale": "linear", "domain": { "mode": "auto" } },
+        "y": { "scale": "linear", "unit": "Wh/mi", "domain": { "mode": "auto" } }
+      },
+      "display": {
+        "legend": "auto",
+        "grid": true,
+        "tooltip": true,
+        "timeFilter": "raw",
+        "curveSmoothness": "gentle",
+        "emptyTitle": "No efficiency data for this period"
+      },
+      "interaction": { "panZoom": true, "touchExplore": true, "connectGaps": false }
+    }
+  },
+  {
+    "slug": "phantom-drain",
+    "name": "Daily Phantom Drain",
+    "description": "Battery lost during validated parked periods.",
+    "enabled": true,
+    "definition": {
+      "schemaVersion": 1,
+      "placements": [{ "dashboardSlug": "overview" }, { "dashboardSlug": "battery" }],
+      "timeframe": { "mode": "dashboard" },
+      "sources": [
+        {
+          "id": "main",
+          "sourceId": "battery.idle-drain",
+          "params": {},
+          "filters": [],
+          "inherit": { "vehicle": true, "timeframe": true }
+        }
+      ],
+      "x": { "field": { "sourceBindingId": "main", "field": "day_start" }, "kind": "time" },
+      "series": [
+        {
+          "id": "soc_lost_pct",
+          "label": "SoC Lost",
+          "y": { "sourceBindingId": "main", "field": "soc_lost_pct" },
+          "mark": "bar",
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "accent" },
+          "transforms": [],
+          "visibleInLegend": true
+        }
+      ],
+      "axes": {
+        "x": { "scale": "linear", "domain": { "mode": "auto" } },
+        "y": { "scale": "linear", "unit": "% SoC lost", "domain": { "mode": "auto", "includeZero": true } }
+      },
+      "display": {
+        "legend": "hide",
+        "grid": true,
+        "tooltip": true,
+        "timeFilter": "raw",
+        "curveSmoothness": "straight",
+        "emptyTitle": "No phantom drain data for this period"
+      },
+      "interaction": { "panZoom": true, "touchExplore": true, "connectGaps": false }
+    }
+  },
+  {
+    "slug": "projected-range-mileage",
+    "name": "Projected Range by Mileage",
+    "description": "Projected maximum range over mileage.",
+    "enabled": true,
+    "definition": {
+      "schemaVersion": 1,
+      "placements": [{ "dashboardSlug": "overview" }, { "dashboardSlug": "battery" }],
+      "timeframe": { "mode": "dashboard" },
+      "sources": [
+        {
+          "id": "main",
+          "sourceId": "battery.mileage",
+          "params": {},
+          "filters": [],
+          "inherit": { "vehicle": true, "timeframe": true }
+        }
+      ],
+      "x": { "field": { "sourceBindingId": "main", "field": "timestamp" }, "kind": "time" },
+      "series": [
+        {
+          "id": "projected_max_range_mi",
+          "label": "Projected Max Range",
+          "y": { "sourceBindingId": "main", "field": "projected_max_range_mi" },
+          "mark": "line",
+          "fill": true,
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "amber" },
+          "transforms": [],
+          "visibleInLegend": true
+        },
+        {
+          "id": "odometer_miles",
+          "label": "Mileage",
+          "y": { "sourceBindingId": "main", "field": "odometer_miles" },
+          "mark": "line",
+          "fill": false,
+          "yAxis": "y2",
+          "color": { "mode": "token", "token": "emerald" },
+          "transforms": [],
+          "visibleInLegend": true
+        }
+      ],
+      "axes": {
+        "x": { "scale": "linear", "domain": { "mode": "auto" } },
+        "y": { "scale": "linear", "unit": "mi", "domain": { "mode": "auto" } },
+        "y2": { "scale": "linear", "unit": "mi", "domain": { "mode": "auto" } }
+      },
+      "display": {
+        "legend": "auto",
+        "grid": true,
+        "tooltip": true,
+        "timeFilter": "raw",
+        "curveSmoothness": "gentle",
+        "emptyTitle": "No projected range mileage data recorded yet"
+      },
+      "interaction": { "panZoom": true, "touchExplore": true, "connectGaps": true }
+    }
+  },
+  {
+    "slug": "soc-history",
+    "name": "State of Charge",
+    "description": "State of charge over time.",
+    "enabled": true,
+    "definition": {
+      "schemaVersion": 1,
+      "placements": [{ "dashboardSlug": "overview" }, { "dashboardSlug": "battery" }],
+      "timeframe": { "mode": "dashboard" },
+      "sources": [
+        {
+          "id": "main",
+          "sourceId": "metrics.series",
+          "params": { "metric": "battery_level" },
+          "filters": [],
+          "inherit": { "vehicle": true, "timeframe": true }
+        }
+      ],
+      "x": { "field": { "sourceBindingId": "main", "field": "timestamp" }, "kind": "time" },
+      "series": [
+        {
+          "id": "battery_level",
+          "label": "State of Charge",
+          "y": { "sourceBindingId": "main", "field": "battery_level" },
+          "mark": "step",
+          "fill": true,
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "accent" },
+          "transforms": [],
+          "visibleInLegend": true
+        }
+      ],
+      "axes": {
+        "x": { "scale": "linear", "domain": { "mode": "auto" } },
+        "y": { "scale": "linear", "unit": "%", "domain": { "mode": "fixed", "min": 0, "max": 100 } }
+      },
+      "display": {
+        "legend": "hide",
+        "grid": true,
+        "tooltip": true,
+        "timeFilter": "raw",
+        "curveSmoothness": "gentle",
+        "emptyTitle": "No state of charge history for this period"
+      },
+      "interaction": { "panZoom": true, "touchExplore": true, "connectGaps": false }
+    }
+  },
+  {
+    "slug": "tire-pressure-trips",
+    "name": "Tire Pressure and Trips",
+    "description": "Tire pressure readings aligned with trip intervals.",
+    "enabled": true,
+    "definition": {
+      "schemaVersion": 1,
+      "placements": [{ "dashboardSlug": "overview" }, { "dashboardSlug": "trips" }],
+      "timeframe": { "mode": "dashboard" },
+      "sources": [
+        {
+          "id": "main",
+          "sourceId": "trips.tire-pressure-timeline",
+          "params": {},
+          "filters": [],
+          "inherit": { "vehicle": true, "timeframe": true, "tripTags": true }
+        }
+      ],
+      "x": { "field": { "sourceBindingId": "main", "field": "timestamp" }, "kind": "time" },
+      "series": [
+        {
+          "id": "front_left_psi",
+          "label": "Front left",
+          "y": { "sourceBindingId": "main", "field": "front_left_psi" },
+          "mark": "line",
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "accent" },
+          "transforms": [],
+          "visibleInLegend": true
+        },
+        {
+          "id": "front_right_psi",
+          "label": "Front right",
+          "y": { "sourceBindingId": "main", "field": "front_right_psi" },
+          "mark": "line",
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "sky" },
+          "transforms": [],
+          "visibleInLegend": true
+        },
+        {
+          "id": "rear_left_psi",
+          "label": "Rear left",
+          "y": { "sourceBindingId": "main", "field": "rear_left_psi" },
+          "mark": "line",
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "emerald" },
+          "transforms": [],
+          "visibleInLegend": true
+        },
+        {
+          "id": "rear_right_psi",
+          "label": "Rear right",
+          "y": { "sourceBindingId": "main", "field": "rear_right_psi" },
+          "mark": "line",
+          "yAxis": "y",
+          "color": { "mode": "token", "token": "amber" },
+          "transforms": [],
+          "visibleInLegend": true
+        }
+      ],
+      "axes": {
+        "x": { "scale": "linear", "domain": { "mode": "auto" } },
+        "y": { "scale": "linear", "unit": "psi", "domain": { "mode": "auto" } }
+      },
+      "display": {
+        "legend": "auto",
+        "grid": true,
+        "tooltip": true,
+        "timeFilter": "raw",
+        "curveSmoothness": "gentle",
+        "emptyTitle": "No tire pressure or trip data for this period"
+      },
+      "interaction": { "panZoom": true, "touchExplore": true, "connectGaps": false }
+    }
+  }
+]

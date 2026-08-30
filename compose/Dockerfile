@@ -2,10 +2,11 @@
 
 FROM --platform=$BUILDPLATFORM rust:1.97.1-slim-bookworm@sha256:2775a09d208ff0d7c1f50490c45b62db929e87ba1dcbc3f2132ac71a704bcdd3 AS api-builder
 ARG TARGETARCH
+ARG BUILDARCH
 WORKDIR /build/apps/api
-ENV SQLX_OFFLINE=true CARGO_BUILD_JOBS=1
+ENV SQLX_OFFLINE=true CARGO_BUILD_JOBS=2
 RUN set -eux; \
-    if [ "$TARGETARCH" = "arm64" ]; then \
+    if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then \
         dpkg --add-architecture arm64; \
         apt-get update; \
         apt-get install -y --no-install-recommends \
@@ -20,11 +21,10 @@ RUN set -eux; \
 COPY apps/api/Cargo.toml apps/api/Cargo.lock ./
 RUN mkdir -p src/bin && printf 'fn main() {}\n' > src/main.rs \
     && printf 'fn main() {}\n' > src/bin/riviamigo-restore-agent.rs \
-    && printf 'fn main() {}\n' > src/bin/riviamigo-parallax-collector.rs \
     && printf 'fn main() {}\n' > src/bin/rebaseline_db.rs \
     && printf 'pub fn __riviamigo_dummy() {}\n' > src/lib.rs \
     && target_flag='' \
-    && if [ "$TARGETARCH" = "arm64" ]; then \
+    && if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then \
         export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
             CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
             AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar \
@@ -38,14 +38,13 @@ RUN mkdir -p src/bin && printf 'fn main() {}\n' > src/main.rs \
     && cargo build --release $target_flag \
         --bin riviamigo-api \
         --bin riviamigo-restore-agent \
-        --bin riviamigo-parallax-collector \
         --bin rebaseline_db \
     && rm -rf src
 COPY apps/api/ ./
-RUN touch src/lib.rs src/main.rs src/bin/riviamigo-restore-agent.rs src/bin/riviamigo-parallax-collector.rs src/bin/rebaseline_db.rs migrations/0001_initial_schema.sql \
+RUN touch src/lib.rs src/main.rs src/bin/riviamigo-restore-agent.rs src/bin/rebaseline_db.rs migrations/0001_initial_schema.sql \
     && target_flag='' \
     && binary_path=target/release/riviamigo-api \
-    && if [ "$TARGETARCH" = "arm64" ]; then \
+    && if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then \
         export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
             CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
             AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar \
@@ -60,17 +59,13 @@ RUN touch src/lib.rs src/main.rs src/bin/riviamigo-restore-agent.rs src/bin/rivi
     && cargo build --release $target_flag \
         --bin riviamigo-api \
         --bin riviamigo-restore-agent \
-        --bin riviamigo-parallax-collector \
         --bin rebaseline_db \
     && cp "$binary_path" /build/apps/api/riviamigo-api \
     && restore_binary_path=target/release/riviamigo-restore-agent \
-    && if [ "$TARGETARCH" = "arm64" ]; then restore_binary_path=target/aarch64-unknown-linux-gnu/release/riviamigo-restore-agent; fi \
+    && if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then restore_binary_path=target/aarch64-unknown-linux-gnu/release/riviamigo-restore-agent; fi \
     && cp "$restore_binary_path" /build/apps/api/riviamigo-restore-agent \
-    && parallax_binary_path=target/release/riviamigo-parallax-collector \
-    && if [ "$TARGETARCH" = "arm64" ]; then parallax_binary_path=target/aarch64-unknown-linux-gnu/release/riviamigo-parallax-collector; fi \
-    && cp "$parallax_binary_path" /build/apps/api/riviamigo-parallax-collector \
     && rebaseline_binary_path=target/release/rebaseline_db \
-    && if [ "$TARGETARCH" = "arm64" ]; then rebaseline_binary_path=target/aarch64-unknown-linux-gnu/release/rebaseline_db; fi \
+    && if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then rebaseline_binary_path=target/aarch64-unknown-linux-gnu/release/rebaseline_db; fi \
     && cp "$rebaseline_binary_path" /build/apps/api/rebaseline_db
 
 FROM --platform=$BUILDPLATFORM node:24.18.0-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS web-builder
@@ -109,7 +104,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY --chown=1001:1001 --from=api-builder /build/apps/api/riviamigo-api ./riviamigo-api
 COPY --chown=1001:1001 --from=api-builder /build/apps/api/riviamigo-restore-agent ./riviamigo-restore-agent
-COPY --chown=1001:1001 --from=api-builder /build/apps/api/riviamigo-parallax-collector ./riviamigo-parallax-collector
 COPY --chown=1001:1001 --from=api-builder /build/apps/api/rebaseline_db ./rebaseline_db
 COPY --chown=1001:1001 --from=api-builder /build/apps/api/migrations ./migrations
 COPY --chown=1001:1001 --from=web-builder /build/apps/web/dist ./dist

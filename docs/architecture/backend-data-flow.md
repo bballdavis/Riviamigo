@@ -14,7 +14,7 @@ This document is canonical for the high-level backend flow. Update it when the A
 2. Vehicle credentials and session state are stored by the API.
 3. Per-vehicle ingestion workers maintain Rivian connectivity through WebSocket and supporting poll flows, with a watchdog that restarts a collector if the WebSocket stream goes silent while still holding the worker lock. The authenticated socket carries both `vehicleState` and the documented `chargingSession` subscription.
 4. Parsed telemetry updates a canonical `vehicle_latest_status` row using per-field Rivian timestamps so older partial payloads cannot overwrite fresher SoC, range, charge-state, or odometer values.
-5. Supporting poll flows reconcile completed charging sessions and post-session history into canonical `charge_sessions`, preserving telemetry-backed windows as the public session timeline while storing Rivian aliases and API-only history as enrichment evidence. An active telemetry-backed charge row is materialized when charging begins so live WebSocket enrichment can update it before finalization. Live charging values and chart power points come from the `chargingSession` WebSocket subscription and write `vehicle:{vehicle_id}:live_session` to Redis with a 120-second TTL. Empty live frames do not overwrite the snapshot; the key is deleted when the subscription reports no active session. REST `getLiveSessionHistory` is an enrichment/reconciliation path, not a live-telemetry source.
+5. Supporting poll flows reconcile completed charging sessions and post-session history into canonical `charge_sessions`, preserving telemetry-backed windows as the public session timeline while storing Rivian aliases and API-only history as enrichment evidence. Canonical `vehicleState` owns charge lifecycle and UUID identity. Fresh, fixture-proven Parallax fields enrich power, curve, energy-breakdown, and time estimates; meaningful legacy `chargingSession` values fill only missing fields. Empty, stale, or terminal legacy frames never extend the live projection, and canonical termination deletes Redis state immediately.
 6. API routes expose typed data to the frontend through `packages/types` and `packages/hooks`.
 7. Completed trips enqueue an idempotent weather-enrichment job. The worker samples the exact route at endpoints and 15-minute intervals, derives rounded provider cells, batches Open-Meteo requests, stores `trip_weather_samples`, and updates the time-weighted `trips.outside_temp_c` summary used by trip and efficiency APIs.
 
@@ -35,15 +35,16 @@ tail. `odometer_daily` has a separate hourly, materialized-only policy.
 
 Optional outbound services are governed by `external_connection_settings`, not environment variables. Weather and Nominatim execute on the server. Basemap and Iconify browser requests terminate at authenticated same-origin proxy routes. Custom endpoints are validated before storage, secrets are age-encrypted and write-only, and disabling a provider is enforced at the shared service seam.
 
-Parallax collection remains intentionally separate from the production
-vehicle-state ingestion worker. The optional `riviamigo-parallax-collector`
-binary opens its own allowlisted GraphQL WebSocket and writes only normalized,
+Parallax collection runs as an integrated, isolated Tokio acquisition subsystem inside each production
+vehicle worker. It opens its own allowlisted GraphQL WebSocket and writes only normalized,
 typed readings to the `timeseries.parallax_*` tables. It never writes raw
 payloads, network identifiers, credentials, or canonical
 `vehicle_runtime_state`. This separation means collector failure cannot stall
 the main telemetry worker. The API reads the normalized tables for the Health
 page and Rivian-reported Parked Energy panel; the existing Phantom Drain
 battery-change estimate remains an independent derived data source.
+The subsystem is integrated and enabled by default, shares only the latest canonical active-session
+context, and can be disabled for emergency rollback with `PARALLAX_ENABLED=false`.
 
 ## Major Backend Areas
 

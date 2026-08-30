@@ -171,6 +171,12 @@ export interface LiveSession {
   is_free_session?: boolean | null;
   vehicle_charger_state?: string | null;
   started_at?: string | null;
+  pack_energy_kwh?: number | null;
+  thermal_energy_kwh?: number | null;
+  provenance?: Partial<Record<
+    'power_kw' | 'energy_kwh' | 'pack_energy_kwh' | 'thermal_energy_kwh' | 'time_remaining_min',
+    { source: 'canonical' | 'parallax' | 'legacy_charging_session'; observed_at: string }
+  >>;
 }
 
 export interface BackfillStatus {

@@ -1,4 +1,4 @@
-//! Optional, independent Parallax telemetry collector.
+//! Default, isolated in-process Parallax telemetry companion.
 //!
 //! This module deliberately does not call or modify the canonical
 //! `ingestion::ws_client` flow. It opens its own allowlisted subscription and
@@ -15,6 +15,10 @@ use prost::Message as ProstMessage;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use tokio::{
+    sync::{broadcast, watch},
+    task::JoinHandle,
+};
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 use uuid::Uuid;
 
@@ -31,8 +35,151 @@ const TOPICS: &[&str] = &[
     "dynamics.vehicle.drive_mode",
     "energy_edge_compute.graphs.parked_energy_distributions",
     "energy_edge_compute.graphs.charge_session_breakdown",
+    "energy.high_voltage.battery_state",
+    "energy_edge_compute.graphs.charging_graph_global",
+    "charging.session.time_estimation",
+    "charging.session.status",
     "energy_edge_compute.graphs.cold_weather_soc",
 ];
+
+/// The subscription allowlist is public for contract/fixture tests.  Keeping
+/// it in one place prevents a newly enabled topic from bypassing decoder
+/// review and accidentally becoming a raw-payload write path.
+pub fn charging_topics() -> &'static [&'static str] {
+    TOPICS
+}
+
+/// Start the isolated Parallax companion for one vehicle.  The returned task
+/// owns its socket and reconnect loop; it never receives the canonical
+/// telemetry channel, so backpressure or schema failures cannot delay it.
+/// `active_sessions` is deliberately a watch channel: only the latest
+/// canonical lifecycle context is relevant to enrichment consumers.
+pub fn spawn_in_process(
+    pool: PgPool,
+    vehicle_id: Uuid,
+    rivian_vehicle_id: String,
+    age_key: String,
+    mut active_sessions: watch::Receiver<crate::ingestion::worker::ActiveSessionContext>,
+    mut shutdown: broadcast::Receiver<()>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let owner_id = Uuid::new_v4();
+        loop {
+            match acquire_in_process_lease(&pool, vehicle_id, owner_id).await {
+                Ok(true) => break,
+                Ok(false) => {
+                    tracing::warn!(vehicle_id=%vehicle_id, "fresh standalone Parallax owner detected; waiting for upgrade overlap to clear");
+                }
+                Err(error) => {
+                    tracing::warn!(vehicle_id=%vehicle_id, err=%error, "Parallax lease acquisition failed")
+                }
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+                _ = shutdown.recv() => { return; }
+            }
+        }
+        let mut backoff = 2u64;
+        loop {
+            let tokens = match crate::ingestion::rivian_poll::load_vehicle_tokens(
+                vehicle_id, &pool, &age_key,
+            )
+            .await
+            {
+                Ok((_, tokens)) => tokens,
+                Err(error) => {
+                    let _ =
+                        set_collector_state(&pool, vehicle_id, "error", Some(&error.to_string()))
+                            .await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
+                        _ = shutdown.recv() => { break; }
+                    }
+                    backoff = (backoff * 2).min(120);
+                    continue;
+                }
+            };
+            let session = CollectorSession {
+                vehicle_id,
+                rivian_vehicle_id: rivian_vehicle_id.clone(),
+                tokens,
+            };
+            let result = tokio::select! {
+                _ = shutdown.recv() => {
+                    let _ = set_collector_state(&pool, vehicle_id, "disconnected", Some("shutdown")).await;
+                    break;
+                }
+                result = collect_connection_with_context(&pool, &session, &mut active_sessions) => result
+            };
+            if result.is_ok() {
+                backoff = 2;
+            } else if shutdown.try_recv().is_ok() {
+                break;
+            } else {
+                let _ = sqlx::query("UPDATE riviamigo.parallax_collector_state SET reconnect_count=reconnect_count+1 WHERE vehicle_id=$1")
+                    .bind(vehicle_id).execute(&pool).await;
+                let message = result.err().map(|e| e.to_string());
+                let _ = set_collector_state(&pool, vehicle_id, "error", message.as_deref()).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
+                    _ = shutdown.recv() => { break; }
+                }
+                backoff = (backoff * 2).min(120);
+            }
+        }
+        let _ = release_in_process_lease(&pool, vehicle_id, owner_id).await;
+    })
+}
+
+async fn acquire_in_process_lease(pool: &PgPool, vehicle_id: Uuid, owner_id: Uuid) -> Result<bool> {
+    let acquired = sqlx::query_scalar::<_, bool>(
+        r#"INSERT INTO riviamigo.parallax_collector_state
+               (vehicle_id,status,schema_version,owner_kind,owner_instance_id,last_error)
+           VALUES ($1,'starting',$2,'in_process',$3,NULL)
+           ON CONFLICT (vehicle_id) DO UPDATE SET
+               status='starting', owner_kind='in_process', owner_instance_id=$3,
+               last_error=NULL, updated_at=now()
+           WHERE riviamigo.parallax_collector_state.owner_instance_id=$3
+              OR riviamigo.parallax_collector_state.updated_at < now()-interval '2 minutes'
+              OR riviamigo.parallax_collector_state.status='disconnected'
+           RETURNING true"#,
+    )
+    .bind(vehicle_id)
+    .bind(SCHEMA_VERSION)
+    .bind(owner_id)
+    .fetch_optional(pool)
+    .await?
+    .unwrap_or(false);
+    Ok(acquired)
+}
+
+pub(crate) async fn release_in_process_lease(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    owner_id: Uuid,
+) -> Result<()> {
+    sqlx::query(
+        r#"UPDATE riviamigo.parallax_collector_state
+           SET status='disconnected',owner_instance_id=NULL,last_error='shutdown',updated_at=now()
+           WHERE vehicle_id=$1 AND owner_kind='in_process' AND owner_instance_id=$2"#,
+    )
+    .bind(vehicle_id)
+    .bind(owner_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn update_parallax_power(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    session_id: Uuid,
+    power_kw: f64,
+    observed_at: DateTime<Utc>,
+) -> Result<u64> {
+    Ok(sqlx::query("UPDATE riviamigo.charge_sessions SET parallax_live_power_kw=$1,parallax_power_observed_at=$4 WHERE id=$2 AND vehicle_id=$3 AND ended_at IS NULL AND (parallax_power_observed_at IS NULL OR $4>=parallax_power_observed_at)")
+        .bind(power_kw).bind(session_id).bind(vehicle_id).bind(observed_at).execute(pool).await?.rows_affected())
+}
 
 #[derive(Debug)]
 struct CollectorSession {
@@ -143,17 +290,65 @@ struct ParkedEnergyWindow {
 struct ChargeBreakdown {
     #[prost(float, optional, tag = "1")]
     total_kwh: Option<f32>,
-    #[prost(float, optional, tag = "2")]
-    pack_kwh: Option<f32>,
-    #[prost(float, optional, tag = "5")]
-    thermal_kwh: Option<f32>,
-    #[prost(int32, optional, tag = "6")]
-    duration_minutes: Option<i32>,
     // Tag 11 (cost display text) is intentionally omitted.
-    #[prost(int32, optional, tag = "12")]
-    charging_state: Option<i32>,
+    #[prost(float, optional, tag = "9")]
+    current_power_kw: Option<f32>,
+    #[prost(int32, optional, tag = "10")]
+    fallback_power_kw: Option<i32>,
     #[prost(int32, optional, tag = "13")]
-    completion_state: Option<i32>,
+    charging_state: Option<i32>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct HvBatteryState {
+    #[prost(message, optional, tag = "1")]
+    charge_state: Option<HvChargeState>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct HvChargeState {
+    #[prost(double, optional, tag = "1")]
+    soc: Option<f64>,
+    #[prost(double, optional, tag = "2")]
+    pack_energy_kwh: Option<f64>,
+    #[prost(float, optional, tag = "3")]
+    range_km: Option<f32>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct ChargingGraphGlobal {
+    #[prost(message, repeated, tag = "1")]
+    segments: Vec<ChargingGraphSegment>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct ChargingGraphSegment {
+    #[prost(int32, optional, tag = "1")]
+    soc: Option<i32>,
+    #[prost(float, optional, tag = "2")]
+    power_kw: Option<f32>,
+    #[prost(int64, optional, tag = "3")]
+    start_unix_ms: Option<i64>,
+    #[prost(int64, optional, tag = "4")]
+    end_unix_ms: Option<i64>,
+    #[prost(int32, optional, tag = "6")]
+    state: Option<i32>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct ChargingTimeEstimation {
+    #[prost(int32, optional, tag = "1")]
+    remaining_seconds: Option<i32>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct ChargingStatus {
+    #[prost(int32, optional, tag = "1")]
+    plug_connection_status: Option<i32>,
+    #[prost(int32, optional, tag = "2")]
+    display_status: Option<i32>,
+    #[prost(int32, optional, tag = "3")]
+    evse_type: Option<i32>,
 }
 
 #[derive(Clone, PartialEq, ProstMessage)]
@@ -172,8 +367,7 @@ pub async fn run(database_url: &str) -> Result<()> {
         .connect(database_url)
         .await
         .context("connect Parallax collector to Riviamigo database")?;
-    crate::db::migrations::MIGRATOR
-        .run(&pool)
+    crate::db::migrations::run_current_migrations(&pool)
         .await
         .context("apply Parallax telemetry migrations")?;
 
@@ -254,6 +448,16 @@ async fn run_vehicle(pool: PgPool, session: CollectorSession) -> Result<()> {
 }
 
 async fn collect_connection(pool: &PgPool, session: &CollectorSession) -> Result<()> {
+    let (_tx, mut context) =
+        watch::channel(crate::ingestion::worker::ActiveSessionContext::default());
+    collect_connection_with_context(pool, session, &mut context).await
+}
+
+async fn collect_connection_with_context(
+    pool: &PgPool,
+    session: &CollectorSession,
+    active_sessions: &mut watch::Receiver<crate::ingestion::worker::ActiveSessionContext>,
+) -> Result<()> {
     let mut request = WS_URL.into_client_request()?;
     request
         .headers_mut()
@@ -333,7 +537,12 @@ async fn collect_connection(pool: &PgPool, session: &CollectorSession) -> Result
                                 else {
                                     continue;
                                 };
-                                persist_envelope(pool, session.vehicle_id, envelope).await?;
+                                let context = active_sessions.borrow_and_update().clone();
+                                if let Err(error) = persist_envelope(pool, session.vehicle_id, envelope, &context).await {
+                                    tracing::debug!(vehicle_id=%session.vehicle_id, err=%error, "Parallax frame rejected by typed decoder");
+                                    let _ = sqlx::query("UPDATE riviamigo.parallax_collector_state SET decode_error_count=decode_error_count+1,last_frame_at=now(),updated_at=now() WHERE vehicle_id=$1")
+                                        .bind(session.vehicle_id).execute(pool).await;
+                                }
                             }
                             Some("error") => anyhow::bail!("Parallax subscription rejected"),
                             Some("complete") => {
@@ -411,7 +620,12 @@ fn subscription_message(vehicle_id: &str) -> Value {
     })
 }
 
-async fn persist_envelope(pool: &PgPool, vehicle_id: Uuid, envelope: &Value) -> Result<()> {
+async fn persist_envelope(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    envelope: &Value,
+    active_session: &crate::ingestion::worker::ActiveSessionContext,
+) -> Result<()> {
     let topic = envelope
         .get("rvm")
         .and_then(Value::as_str)
@@ -424,6 +638,7 @@ async fn persist_envelope(pool: &PgPool, vehicle_id: Uuid, envelope: &Value) -> 
     let hash = Sha256::digest(&payload).to_vec();
     let received_at = Utc::now();
     let source_at = parse_source_at(envelope.get("timestamp")).unwrap_or(received_at);
+    let associated_session = matching_active_session(active_session, source_at);
 
     match topic {
         "vehicle.network.state" => {
@@ -521,25 +736,167 @@ async fn persist_envelope(pool: &PgPool, vehicle_id: Uuid, envelope: &Value) -> 
         }
         "energy_edge_compute.graphs.charge_session_breakdown" => {
             let value = ChargeBreakdown::decode(payload.as_slice())?;
+            let total_kwh = f64_opt(value.total_kwh).filter(|v| v.is_finite() && *v >= 0.0);
+            let current_power_kw = value
+                .current_power_kw
+                .map(f64::from)
+                .or_else(|| value.fallback_power_kw.map(f64::from))
+                .filter(|v| v.is_finite() && (0.0..=500.0).contains(v));
+            if total_kwh.is_none() && current_power_kw.is_none() && value.charging_state.is_none() {
+                record_empty_frame(pool, vehicle_id).await?;
+                return Ok(());
+            }
             sqlx::query(
                 r#"INSERT INTO timeseries.parallax_charge_breakdown_samples
-                   (vehicle_id, source_at, received_at, payload_hash, total_kwh, pack_kwh,
+                   (vehicle_id, source_at, received_at, payload_hash, charge_session_id, total_kwh, pack_kwh,
                     thermal_kwh, duration_minutes, charging_state, completion_state, schema_version)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING"#,
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT DO NOTHING"#,
             )
             .bind(vehicle_id)
             .bind(source_at)
             .bind(received_at)
             .bind(hash)
-            .bind(f64_opt(value.total_kwh))
-            .bind(f64_opt(value.pack_kwh))
-            .bind(f64_opt(value.thermal_kwh))
-            .bind(value.duration_minutes)
+            .bind(associated_session)
+            .bind(total_kwh)
+            .bind(None::<f64>)
+            .bind(None::<f64>)
+            .bind(None::<i32>)
             .bind(value.charging_state)
-            .bind(value.completion_state)
+            .bind(None::<i32>)
             .bind(SCHEMA_VERSION)
             .execute(pool)
             .await?;
+            if let Some(session_id) = associated_session {
+                if let Some(total_kwh) = total_kwh {
+                    sqlx::query("UPDATE riviamigo.charge_sessions SET parallax_total_charged_kwh=$1,parallax_total_energy_observed_at=$4 WHERE id=$2 AND vehicle_id=$3 AND ended_at IS NULL AND (parallax_total_energy_observed_at IS NULL OR $4>=parallax_total_energy_observed_at)")
+                        .bind(total_kwh).bind(session_id).bind(vehicle_id).bind(source_at).execute(pool).await?;
+                }
+                if let Some(power_kw) = current_power_kw {
+                    update_parallax_power(pool, vehicle_id, session_id, power_kw, source_at)
+                        .await?;
+                }
+            }
+        }
+        "energy.high_voltage.battery_state" => {
+            let value = match HvBatteryState::decode(payload.as_slice()) {
+                Ok(v) => v,
+                Err(_) => {
+                    record_decode_error(pool, vehicle_id).await?;
+                    return Ok(());
+                }
+            };
+            let Some(pack) = value
+                .charge_state
+                .and_then(|state| state.pack_energy_kwh)
+                .filter(|v| v.is_finite() && (0.0..=500.0).contains(v))
+            else {
+                record_empty_frame(pool, vehicle_id).await?;
+                return Ok(());
+            };
+            if let Some(session_id) = associated_session {
+                sqlx::query("UPDATE riviamigo.charge_sessions SET parallax_pack_energy_kwh=$1,parallax_pack_energy_observed_at=$4 WHERE id=$2 AND vehicle_id=$3 AND ended_at IS NULL AND (parallax_pack_energy_observed_at IS NULL OR $4>=parallax_pack_energy_observed_at)")
+                    .bind(pack).bind(session_id).bind(vehicle_id).bind(source_at).execute(pool).await?;
+            }
+        }
+        "energy_edge_compute.graphs.charging_graph_global" => {
+            let value = match ChargingGraphGlobal::decode(payload.as_slice()) {
+                Ok(v) => v,
+                Err(_) => {
+                    record_decode_error(pool, vehicle_id).await?;
+                    return Ok(());
+                }
+            };
+            let mut persisted = 0usize;
+            let mut latest_power: Option<(DateTime<Utc>, f64)> = None;
+            for (index, segment) in value.segments.into_iter().enumerate() {
+                let Some(ms) = segment.start_unix_ms else {
+                    continue;
+                };
+                let Some(ts) = Utc.timestamp_millis_opt(ms).single() else {
+                    continue;
+                };
+                let power_kw = segment
+                    .power_kw
+                    .filter(|v| v.is_finite() && (0.0..=500.0).contains(v));
+                let soc = segment.soc.filter(|v| (0..=100).contains(v));
+                if power_kw.is_none() && soc.is_none() {
+                    continue;
+                }
+                if let Some(power) = power_kw {
+                    if latest_power.is_none_or(|(latest_ts, _)| ts >= latest_ts) {
+                        latest_power = Some((ts, f64::from(power)));
+                    }
+                }
+                let session_id = matching_active_session(active_session, ts);
+                sqlx::query("INSERT INTO timeseries.parallax_charge_curve_points (vehicle_id,source_at,segment_index,charge_session_id,power_kw,soc,delivered_energy_kwh,received_at,schema_version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING")
+                        .bind(vehicle_id).bind(ts).bind(index as i32).bind(session_id)
+                        .bind(power_kw.map(f64::from)).bind(soc.map(f64::from))
+                        .bind(None::<f64>).bind(received_at).bind(SCHEMA_VERSION)
+                        .execute(pool).await?;
+                persisted += 1;
+            }
+            if persisted == 0 {
+                record_empty_frame(pool, vehicle_id).await?;
+                return Ok(());
+            }
+            if let Some((observed_at, power)) = latest_power {
+                if let Some(session_id) = matching_active_session(active_session, observed_at) {
+                    update_parallax_power(pool, vehicle_id, session_id, power, observed_at).await?;
+                }
+            }
+        }
+        "charging.session.time_estimation" => {
+            let value = match ChargingTimeEstimation::decode(payload.as_slice()) {
+                Ok(v) => v,
+                Err(_) => {
+                    record_decode_error(pool, vehicle_id).await?;
+                    return Ok(());
+                }
+            };
+            let Some(seconds) = value
+                .remaining_seconds
+                .filter(|v| (0..=172_800).contains(v))
+            else {
+                record_empty_frame(pool, vehicle_id).await?;
+                return Ok(());
+            };
+            let minutes = (seconds + 59) / 60;
+            if let Some(session_id) = associated_session {
+                sqlx::query("UPDATE riviamigo.charge_sessions SET parallax_time_remaining_minutes=$1,parallax_time_observed_at=$4 WHERE id=$2 AND vehicle_id=$3 AND ended_at IS NULL AND (parallax_time_observed_at IS NULL OR $4>=parallax_time_observed_at)")
+                    .bind(minutes).bind(session_id).bind(vehicle_id).bind(source_at).execute(pool).await?;
+            }
+        }
+        "charging.session.status" => {
+            let value = match ChargingStatus::decode(payload.as_slice()) {
+                Ok(v) => v,
+                Err(_) => {
+                    record_decode_error(pool, vehicle_id).await?;
+                    return Ok(());
+                }
+            };
+            if value.plug_connection_status.is_none()
+                && value.display_status.is_none()
+                && value.evse_type.is_none()
+            {
+                record_empty_frame(pool, vehicle_id).await?;
+                return Ok(());
+            }
+            if let Some(session_id) = associated_session {
+                let state = format!(
+                    "plug={};display={};evse={}",
+                    value
+                        .plug_connection_status
+                        .map_or_else(|| "unknown".into(), |v| v.to_string()),
+                    value
+                        .display_status
+                        .map_or_else(|| "unknown".into(), |v| v.to_string()),
+                    value
+                        .evse_type
+                        .map_or_else(|| "unknown".into(), |v| v.to_string()),
+                );
+                sqlx::query("UPDATE riviamigo.charge_sessions SET parallax_charger_status=$1,parallax_status_observed_at=$4 WHERE id=$2 AND vehicle_id=$3 AND ended_at IS NULL AND (parallax_status_observed_at IS NULL OR $4>=parallax_status_observed_at)")
+                    .bind(state).bind(session_id).bind(vehicle_id).bind(source_at).execute(pool).await?;
+            }
         }
         "energy_edge_compute.graphs.cold_weather_soc" => {
             let value = ColdWeatherSoc::decode(payload.as_slice())?;
@@ -563,13 +920,19 @@ async fn persist_envelope(pool: &PgPool, vehicle_id: Uuid, envelope: &Value) -> 
         "dynamics.vehicle.drive_mode" => {
             // Retained in the allowlist for continued schema observation. No
             // stable enum labels are exposed until more modes are observed.
+            record_empty_frame(pool, vehicle_id).await?;
+            return Ok(());
         }
-        _ => {}
+        _ => {
+            record_empty_frame(pool, vehicle_id).await?;
+            return Ok(());
+        }
     }
 
     sqlx::query(
         r#"UPDATE riviamigo.parallax_collector_state
-           SET last_event_at = $2, status = 'connected', last_error = NULL, updated_at = now()
+           SET last_event_at = $2, last_frame_at=$2, last_meaningful_frame_at=$2,
+               status = 'connected', last_error = NULL, updated_at = now()
            WHERE vehicle_id = $1"#,
     )
     .bind(vehicle_id)
@@ -577,6 +940,34 @@ async fn persist_envelope(pool: &PgPool, vehicle_id: Uuid, envelope: &Value) -> 
     .execute(pool)
     .await?;
     Ok(())
+}
+
+async fn record_decode_error(pool: &PgPool, vehicle_id: Uuid) -> Result<()> {
+    sqlx::query("UPDATE riviamigo.parallax_collector_state SET decode_error_count=decode_error_count+1, last_error='unsupported or malformed charging schema', updated_at=now() WHERE vehicle_id=$1")
+        .bind(vehicle_id).execute(pool).await?;
+    Ok(())
+}
+
+async fn record_empty_frame(pool: &PgPool, vehicle_id: Uuid) -> Result<()> {
+    sqlx::query("UPDATE riviamigo.parallax_collector_state SET empty_frame_count=empty_frame_count+1,last_frame_at=now(),updated_at=now() WHERE vehicle_id=$1")
+        .bind(vehicle_id).execute(pool).await?;
+    Ok(())
+}
+
+fn matching_active_session(
+    context: &crate::ingestion::worker::ActiveSessionContext,
+    source_at: DateTime<Utc>,
+) -> Option<Uuid> {
+    let id = context.session_id?;
+    if context
+        .started_at
+        .is_some_and(|started| source_at < started)
+        || context.ended_at.is_some_and(|ended| source_at > ended)
+    {
+        None
+    } else {
+        Some(id)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -778,10 +1169,94 @@ mod tests {
         )
         .unwrap();
         assert!((charge.total_kwh.unwrap() - 22.8).abs() < 0.01);
-        assert!((charge.pack_kwh.unwrap() - 21.8).abs() < 0.01);
-        assert_eq!(charge.duration_minutes, Some(171));
 
         let cold = ColdWeatherSoc::decode(BASE64.decode("CEI=").unwrap().as_slice()).unwrap();
         assert_eq!(cold.available_soc_pct, Some(66));
+    }
+
+    #[test]
+    fn charging_topic_fixtures_decode_only_proven_fields() {
+        let battery = HvBatteryState::decode(
+            [
+                0x0a, 0x12, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x49, 0x40, 0x11, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x39, 0x40,
+            ]
+            .as_slice(),
+        )
+        .unwrap();
+        assert_eq!(battery.charge_state.unwrap().pack_energy_kwh, Some(25.0));
+
+        let time = ChargingTimeEstimation::decode([0x08, 0xd8, 0x13].as_slice()).unwrap();
+        assert_eq!(time.remaining_seconds, Some(2520));
+
+        let status =
+            ChargingStatus::decode([0x08, 0x01, 0x10, 0x02, 0x18, 0x03].as_slice()).unwrap();
+        assert_eq!(status.plug_connection_status, Some(1));
+        assert_eq!(status.display_status, Some(2));
+        assert_eq!(status.evse_type, Some(3));
+
+        let graph = ChargingGraphGlobal::decode(
+            [
+                0x0a, 0x0f, 0x08, 0x32, 0x15, 0x00, 0x00, 0x30, 0x41, 0x18, 0xe8, 0x07, 0x20, 0xd0,
+                0x0f, 0x30, 0x03,
+            ]
+            .as_slice(),
+        )
+        .unwrap();
+        assert_eq!(graph.segments.len(), 1);
+        assert_eq!(graph.segments[0].start_unix_ms, Some(1000));
+        assert_eq!(graph.segments[0].power_kw, Some(11.0));
+        assert_eq!(graph.segments[0].soc, Some(50));
+    }
+
+    #[test]
+    fn unknown_charging_schema_decodes_to_no_authoritative_fields() {
+        let unknown = [0xa0, 0x06, 0x01];
+        assert_eq!(
+            HvBatteryState::decode(unknown.as_slice())
+                .unwrap()
+                .charge_state,
+            None
+        );
+        assert!(ChargingGraphGlobal::decode(unknown.as_slice())
+            .unwrap()
+            .segments
+            .is_empty());
+        assert_eq!(
+            ChargingTimeEstimation::decode(unknown.as_slice())
+                .unwrap()
+                .remaining_seconds,
+            None
+        );
+        let status = ChargingStatus::decode(unknown.as_slice()).unwrap();
+        assert!(
+            status.plug_connection_status.is_none()
+                && status.display_status.is_none()
+                && status.evse_type.is_none()
+        );
+    }
+
+    #[test]
+    fn session_association_enforces_canonical_window() {
+        let started = Utc::now();
+        let id = Uuid::new_v4();
+        let context = crate::ingestion::worker::ActiveSessionContext {
+            session_id: Some(id),
+            started_at: Some(started),
+            ended_at: None,
+        };
+        assert_eq!(matching_active_session(&context, started), Some(id));
+        assert_eq!(
+            matching_active_session(&context, started - chrono::Duration::seconds(1)),
+            None
+        );
+        let terminal = crate::ingestion::worker::ActiveSessionContext {
+            ended_at: Some(started + chrono::Duration::minutes(1)),
+            ..context
+        };
+        assert_eq!(
+            matching_active_session(&terminal, started + chrono::Duration::minutes(2)),
+            None
+        );
     }
 }

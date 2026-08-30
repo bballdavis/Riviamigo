@@ -275,6 +275,10 @@ Bad examples:
 
 When a chart is presented on both a dashboard and a dedicated detail page, share the typed chart component and data transform. Both surfaces should consume the same validated source rows and timeframe rather than maintaining separate chart-only aggregation paths.
 
+Chart authoring is curve-first for rich time-series and independent charts. The standard editor exposes **Basics**, **Curves**, **Display**, and **Advanced**; it derives a compatible shared domain from selected data groups while incompatible curves remain visible with an explanation. Fixed-geometry bundled renderers expose only controls their production component consumes. Their X encoding, curve structure, mark, axes, display, and interaction contract are validated as immutable; use a custom slug when different geometry is required. A chart may combine up to four compatible data groups. Imported mixed-domain custom definitions remain unchanged and are edited through Advanced rather than silently normalized.
+
+Preview the unsaved definition through `ManagedChartRuntime`, the same production registry and runtime adapter used by assignment-driven dashboard catalogs. A bundled slug always retains its established specialized renderer. Rich renderers receive supported series/display edits; fixed-geometry renderers receive only their declared capability subset, and frontend/API validation rejects everything else. Placement metadata only controls where the chart is eligible. Database definitions are authoritative; portable import and export serialize that same validated structure. Keep explicit regressions for renderer-family routing, required X encoding, preview/dashboard parity, and rejected no-op edits.
+
 ## File Placement Checklist
 
 ### New built-in dashboard page

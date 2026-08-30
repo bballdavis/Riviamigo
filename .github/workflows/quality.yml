@@ -64,6 +64,8 @@ jobs:
         run: pnpm docs:check
       - name: Compose deployment contracts
         run: pnpm compose:check
+      - name: Release workflow contract
+        run: pnpm release-workflows:check
       - name: Render standard and Synology Compose files
         run: pnpm compose:render-check
       - name: Detect documentation-site changes
@@ -76,7 +78,7 @@ jobs:
             docs apps/docs apps/web/public/favicon.svg apps/web/public/logo_color_lighter.svg \
             packages/ui/src/tokens README.md AGENTS.md CLAUDE.md \
             package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json \
-            scripts/check-docs.mjs scripts/generate-synology-compose.mjs compose \
+            scripts/check-docs.mjs compose \
             .github/workflows/publish-docs.yml .github/workflows/quality.yml; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
@@ -87,3 +89,5 @@ jobs:
         run: pnpm docs:build
       - name: Dashboard default drift check
         run: pnpm dashboards:sync-defaults --check
+      - name: Chart default drift check
+        run: pnpm charts:sync-defaults --check

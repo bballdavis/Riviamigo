@@ -33,6 +33,8 @@ Riviamigo's repository documentation is the source of truth for the application,
 | Update or recover an installation | [Operations](./operations.md) |
 | Understand the repository structure | [Architecture overview](./architecture/overview.md) |
 | Build or change dashboards | [Dashboard architecture](./frontend/dashboard-architecture.md) |
+| Build or manage charts | [Chart architecture](./frontend/chart-architecture.md) |
+| Verify chart migration and editor preview compatibility | [Chart compatibility testing](./frontend/chart-compatibility-testing.md) |
 | Look up APIs, metrics, or dashboard data | [Reference](./reference.md) |
 
 ## Canonical entry points

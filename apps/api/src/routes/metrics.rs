@@ -432,6 +432,12 @@ const METRICS: &[MetricDef] = &[
     },
 ];
 
+pub(crate) fn is_series_metric(metric_id: &str) -> bool {
+    METRICS
+        .iter()
+        .any(|metric| metric.id == metric_id && metric.supports_series)
+}
+
 async fn get_catalog(
     _auth: AuthUser,
     Query(_p): Query<CatalogParams>,

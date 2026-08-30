@@ -50,17 +50,19 @@ jobs:
             echo "RUSTSEC-2026-0173 exception expired; upgrade age/i18n-embed-fl"
             exit 1
           fi
-          # aws-sdk-s3 1.140.0 currently depends on rustls-webpki 0.101.7, and
-          # AWS has not yet released a fixed 0.21.x-compatible dependency stack.
-          # This expires 2026-10-01 so we can re-check the underlying SDK stack.
-          if [[ "$(date -u +%F)" > "2026-10-01" ]]; then
-            echo "RUSTSEC-2026-0098/0099/0104 exception expired; remove after AWS refresh"
-            exit 1
-          fi
-          cargo audit --deny warnings --ignore RUSTSEC-2026-0173 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0104
+          cargo audit --deny warnings --ignore RUSTSEC-2026-0173
       - name: pnpm audit
         if: github.event_name != 'pull_request'
-        run: pnpm audit --prod --audit-level=high
+        shell: bash
+        run: |
+          # image-size 2.0.2 is patched in-repo for both upstream infinite-loop
+          # advisories while npm still reports 2.0.3 as the unpublished fix.
+          # Keep this exception time-bounded so the patch is replaced promptly.
+          if [[ "$(date -u +%F)" > "2026-10-01" ]]; then
+            echo "image-size audit exceptions expired; upgrade to the upstream fixed release"
+            exit 1
+          fi
+          pnpm audit --prod --audit-level=high
       - name: Secret scan
         uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
         env:

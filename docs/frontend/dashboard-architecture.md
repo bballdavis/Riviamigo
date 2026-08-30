@@ -14,6 +14,12 @@ This document defines the approved layering for dashboard work and the package b
 - Keep widgets small and reusable.
 - Make non-grid page sections explicit instead of implicit slug-based hacks.
 
+Chart widgets use one shared host. Assigned hosts resolve the effective
+persisted chart catalog by dashboard slug and render the active definition
+through the trusted source registry; fixed and legacy hosts remain readable
+during migration. Favorites and dashboard-specific display settings continue
+to use the stable chart slug.
+
 ## Current Anchors
 
 - Shared page shell: `apps/web/src/components/dashboard/DashboardPageShell.tsx`
@@ -130,6 +136,7 @@ If multiple widgets need shared derived data, move that derivation to a hook or 
 
 The shared chart widget owns reusable chart display controls.
 
+- Fixed and assignment-driven catalogs are data providers for one shared chart frame; they must not fork picker, settings, measured plot, mobile viewer, or focus behavior. The persisted Overview slug `dashboard` resolves chart assignments through the runtime placement `overview`, but that mapping does not authorize Overview-specific chart chrome or rendering.
 - Persist chart display settings per chart ID inside widget `options.chartSettings`, not as route-local state.
 - Keep legacy `curveSmoothing` read compatibility, but write new edits through the per-chart settings map.
 - The shared settings panel groups display filtering, curve shaping, and supported axis ranges into collapsible sections. Display filtering and smoothing apply to every compatible curve in the active chart; a series may opt out only when its data semantics require it.

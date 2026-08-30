@@ -43,7 +43,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Personalize your dashboard',
       collapsed: false,
-      items: ['guides/dashboard-customization'],
+      items: ['guides/dashboard-customization', 'guides/chart-customization'],
     },
     {
       type: 'category',
@@ -73,7 +73,6 @@ const sidebars: SidebarsConfig = {
         'runbooks/release-images',
         'runbooks/release-database-cutover',
         'runbooks/vehicle-history-rebuild',
-        'runbooks/parallax-capture',
         'runbooks/rivian-connection-renewal',
         'runbooks/charge-payload-cleanup',
       ],
@@ -91,7 +90,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Architecture',
       collapsed: false,
-      items: ['architecture/backend-data-flow', 'architecture/unification-baseline', 'frontend/dashboard-architecture', 'rivian-auth'],
+      items: ['architecture/backend-data-flow', 'architecture/unification-baseline', 'frontend/dashboard-architecture', 'frontend/chart-architecture', 'rivian-auth'],
     },
     {
       type: 'category',
@@ -99,6 +98,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'frontend/dashboard-authoring',
+        'frontend/chart-compatibility-testing',
         'branding',
         { type: 'link', label: 'Security implementation', href: '/docs/security/' },
       ],

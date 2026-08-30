@@ -97,3 +97,7 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
         run: cargo test --all --all-features
+      - name: Test disposable migration ledger repair
+        run: >-
+          cargo test --lib db::migrations::tests::valid_public_ledger_removes_empty_legacy_ledger
+          -- --ignored --exact --test-threads=1

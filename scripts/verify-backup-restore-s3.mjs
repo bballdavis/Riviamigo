@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,7 +57,7 @@ function environmentFile(name, port) {
     'COOKIE_INSECURE=true',
     'BACKUP_ARTIFACT_DIR=/backups',
     'VEHICLE_IMAGE_CACHE_DIR=/data/cache/riviamigo/vehicle-images',
-    'RUST_LOG=riviamigo_api=info,tower_http=info',
+    'RUST_LOG=riviamigo_api=info,riviamigo_restore_agent=error,tower_http=info',
   ].join('\n') + '\n');
   return path;
 }
@@ -108,6 +108,37 @@ function runDataCommand(dataDir, script) {
   run('docker', ['run', '--rm', '--user', '0:0', '--mount', `type=bind,source=${dataDir},target=/data`, 'alpine:3.22.1', 'sh', '-ceu', script]);
 }
 
+async function waitForBackupCompletion(baseUrl, token, runId) {
+  const deadline = Date.now() + 360000;
+  while (Date.now() < deadline) {
+    const overview = await request(baseUrl, '/v1/admin/backups?per_page=100', { token });
+    const run = overview.recent_runs?.find((candidate) => candidate.id === runId);
+    if (run?.status === 'failed' || run?.status === 'canceled') {
+      throw new Error(`Backup run ${runId} ${run.status}: ${run.error_message || 'no error message'}`);
+    }
+    if (run?.status === 'succeeded') {
+      const artifacts = overview.artifacts?.filter((artifact) => artifact.run_id === runId) ?? [];
+      if (artifacts.some((artifact) => artifact.storage_type === 'local') && artifacts.some((artifact) => artifact.storage_type === 's3')) {
+        return { run, artifacts };
+      }
+      throw new Error(`Backup run ${runId} succeeded without both local and S3 artifacts.`);
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
+  }
+  throw new Error(`Backup run ${runId} did not complete before the timeout.`);
+}
+
+function prepareDataDirectory(dataDir) {
+  // Docker creates missing bind-mounted subdirectories as root. The API image
+  // intentionally runs as UID 1001, so prepare the disposable drill paths
+  // before the service starts instead of weakening the production image.
+  mkdirSync(dataDir, { recursive: true });
+  runDataCommand(
+    dataDir,
+    'mkdir -p /data/backups /data/cache && (chown 1001:1001 /data/backups /data/cache && chmod 0770 /data/backups /data/cache || chmod 0777 /data/backups /data/cache)'
+  );
+}
+
 function createArtworkSentinel(dataDir) {
   runDataCommand(dataDir, `mkdir -p /data/cache/riviamigo/vehicle-images/drill && printf %s '${nonce}' > /data/cache/riviamigo/vehicle-images/drill/sentinel.txt`);
 }
@@ -132,6 +163,7 @@ try {
 
   const sourceData = join(tempRoot, 'source');
   const sourceEnv = environmentFile('source', sourcePort);
+  prepareDataDirectory(sourceData);
   startStack(sourceProject, sourceData, sourceEnv, sourcePort);
   const sourceUrl = `http://localhost:${sourcePort}`;
   await waitFor(`${sourceUrl}/health`);
@@ -140,11 +172,12 @@ try {
   await request(sourceUrl, '/v1/admin/backups/settings', { token: sourceToken, method: 'PUT', body: backupSettings(endpoint) });
   await request(sourceUrl, '/v1/admin/backups/s3/test', { token: sourceToken, method: 'POST', body: backupSettings(endpoint) });
   const backup = await request(sourceUrl, '/v1/admin/backups/run', { token: sourceToken, method: 'POST' });
-  if (!backup.artifacts?.some((artifact) => artifact.storage_type === 'local') || !backup.artifacts?.some((artifact) => artifact.storage_type === 's3')) throw new Error('Combined backup did not publish both Local and S3 artifacts.');
+  await waitForBackupCompletion(sourceUrl, sourceToken, backup.run.id);
   removeLocalPackages(sourceData);
 
   const targetData = join(tempRoot, 'target');
   const targetEnv = environmentFile('target', targetPort);
+  prepareDataDirectory(targetData);
   startStack(targetProject, targetData, targetEnv, targetPort);
   const targetUrl = `http://localhost:${targetPort}`;
   await waitFor(`${targetUrl}/health`);
@@ -165,12 +198,23 @@ try {
   const deadline = Date.now() + 360000;
   let phase;
   while (Date.now() < deadline) {
+    let job;
     try {
-      const job = await fetch(`${targetUrl}/v1/restore-runtime/jobs/${started.job.id}`, { headers: { 'x-riviamigo-restore-token': started.capability_token } }).then((response) => response.json());
-      phase = job.phase;
-      if (phase === 'failed') throw new Error(job.error_message || 'Remote restore failed.');
-      if (phase === 'completed') break;
-    } catch (error) { if (String(error).includes('Remote restore failed')) throw error; }
+      const response = await fetch(`${targetUrl}/v1/restore-runtime/jobs/${started.job.id}`, { headers: { 'x-riviamigo-restore-token': started.capability_token } });
+      if (!response.ok) throw new Error(`restore job status returned HTTP ${response.status}`);
+      job = await response.json();
+    } catch {
+      // The target may briefly restart while the restore agent swaps the
+      // isolated candidate back into service. Keep polling during that
+      // expected transition; terminal job errors are handled below.
+      await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
+      continue;
+    }
+    phase = job.phase;
+    if (phase === 'failed') {
+      throw new Error(`Remote restore failed: ${job.error_message || 'restore agent returned no error message'}`);
+    }
+    if (phase === 'completed') break;
     await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
   }
   if (phase !== 'completed') throw new Error(`Remote restore did not complete; final phase was ${phase ?? 'unknown'}.`);

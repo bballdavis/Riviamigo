@@ -684,7 +684,7 @@ describe('/health page cleanup', () => {
     expect(screen.getByText('Full history (1 entries)')).toBeInTheDocument();
   });
 
-  it('renders privacy-filtered extended telemetry with Rivian estimate labels', () => {
+  it('renders compact telemetry with tooltip-only diagnostics and unit controls', () => {
     mockUseVehicleHealth.mockReturnValueOnce({
       data: {
         ...healthDataBase,
@@ -696,6 +696,31 @@ describe('/health page cleanup', () => {
             last_event_at: '2026-05-30T01:00:00Z',
             last_error: null,
             updated_at: '2026-05-30T01:00:00Z',
+          },
+          parallax: {
+            status: 'connected',
+            last_frame_at: '2026-05-30T01:00:00Z',
+            last_meaningful_frame_at: '2026-05-30T01:00:00Z',
+            reconnect_count: 2,
+            decode_error_count: 1,
+            empty_frame_count: 4,
+            ambiguity_count: 0,
+            last_error: null,
+          },
+          legacy_charging_session: {
+            classification: 'meaningful',
+            last_frame_at: '2026-05-30T01:00:00Z',
+            last_meaningful_frame_at: '2026-05-30T01:00:00Z',
+            null_count: 3,
+            missing_count: 0,
+            malformed_count: 0,
+            all_null_count: 8,
+            meaningful_count: 2,
+          },
+          session_repair: {
+            repair_key: 'active-tail-merge:a:b',
+            reason: 'telemetry_proven_restart_split',
+            created_at: '2026-05-30T00:30:00Z',
           },
           network: {
             source_at: '2026-05-30T01:00:00Z',
@@ -717,7 +742,12 @@ describe('/health page cleanup', () => {
             source_at: '2026-05-30T01:00:00Z',
             estimated_mass_kg: 3160,
           },
-          cold_weather: null,
+          cold_weather: {
+            source_at: '2026-05-30T01:00:00Z',
+            available_soc_pct: 74,
+            cold_limited_soc_pct: 68,
+            cold_range_impact_km: 12.4,
+          },
         },
       },
       isLoading: false,
@@ -725,20 +755,41 @@ describe('/health page cleanup', () => {
 
     render(<HealthContent />);
 
-    expect(screen.getByText('Extended Vehicle Telemetry')).toBeInTheDocument();
-    expect(screen.getByText('Collector connected')).toBeInTheDocument();
-    expect(screen.getByText('Rivian learned estimate')).toBeInTheDocument();
-    expect(screen.getByText('Estimated vehicle mass')).toBeInTheDocument();
-    expect(screen.queryByText('Cold-weather impact')).not.toBeInTheDocument();
+    expect(screen.queryByText('Vehicle telemetry')).not.toBeInTheDocument();
+    expect(screen.getByText('Connectivity')).toBeInTheDocument();
+    expect(screen.getByText('Wi-Fi signal')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Wi-Fi strength: Good' })).toBeInTheDocument();
+    expect(screen.getByText('Throughput')).toBeInTheDocument();
+    expect(screen.getByText('117 Mbps')).toBeInTheDocument();
+    expect(screen.getByText('Wi-Fi status')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Wi-Fi connection details' })).not.toBeInTheDocument();
+    expect(screen.getByText(/-56 dBm/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Toggle efficiency units/ })).toBeInTheDocument();
+    expect(screen.getByText('Est. Efficiency')).toBeInTheDocument();
+    expect(screen.getByText('Vehicle mass')).toBeInTheDocument();
+    expect(screen.getByText('Cold-weather impact')).toBeInTheDocument();
+    expect(screen.getAllByText('Connected')).toHaveLength(2);
+    expect(screen.getByText('Acquisition')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'About acquisition status' })).toBeInTheDocument();
+    expect(screen.queryByText(/2 reconnects/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/1 decode · 4 empty · 0 ambiguous/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Generated from the latest stored telemetry/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Acquisition diagnostics')).not.toBeInTheDocument();
+    expect(screen.queryByText('Legacy chargingSession')).not.toBeInTheDocument();
+    expect(screen.queryByText(/telemetry proven restart split/)).not.toBeInTheDocument();
 
     const softwareHistory = screen.getByText('Software History');
-    const extendedTelemetry = screen.getByTestId('extended-vehicle-telemetry');
-    expect(
-      softwareHistory.compareDocumentPosition(extendedTelemetry) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
+    const telemetrySummary = screen.getByTestId('vehicle-telemetry-summary');
+    const signalFreshness = screen.getByText('Signal Freshness');
+    const toggle = screen.getByRole('button', { name: /Toggle efficiency units/ });
+    const vehiclePicker = screen.getByRole('combobox', { name: 'Select vehicle' });
+    expect(toggle.compareDocumentPosition(vehiclePicker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(telemetrySummary.compareDocumentPosition(softwareHistory) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(telemetrySummary.compareDocumentPosition(signalFreshness) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByTestId('extended-vehicle-telemetry')).not.toBeInTheDocument();
   });
 
-  it('hides extended telemetry when the Parallax collector is not running', () => {
+  it('keeps compact telemetry visible when the Parallax companion is not running', () => {
     mockUseVehicleHealth.mockReturnValueOnce({
       data: {
         ...healthDataBase,
@@ -751,6 +802,27 @@ describe('/health page cleanup', () => {
             last_error: 'Collector stopped',
             updated_at: '2026-05-30T01:00:00Z',
           },
+          parallax: {
+            status: 'duplicate_owner',
+            last_frame_at: null,
+            last_meaningful_frame_at: null,
+            reconnect_count: 0,
+            decode_error_count: 0,
+            empty_frame_count: 0,
+            ambiguity_count: 0,
+            last_error: 'Standalone collector lease is still fresh',
+          },
+          legacy_charging_session: {
+            classification: 'all_null',
+            last_frame_at: '2026-05-30T01:00:00Z',
+            last_meaningful_frame_at: null,
+            null_count: 0,
+            missing_count: 0,
+            malformed_count: 0,
+            all_null_count: 12,
+            meaningful_count: 0,
+          },
+          session_repair: null,
           network: null,
           efficiency: null,
           mass: null,
@@ -762,6 +834,9 @@ describe('/health page cleanup', () => {
 
     render(<HealthContent />);
 
+    expect(screen.getByTestId('vehicle-telemetry-summary')).toBeInTheDocument();
+    expect(screen.getByText('Disconnected')).toBeInTheDocument();
+    expect(screen.getByText(/canonical vehicle telemetry continues independently/i)).toBeInTheDocument();
     expect(screen.queryByTestId('extended-vehicle-telemetry')).not.toBeInTheDocument();
   });
 });

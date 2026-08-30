@@ -16,10 +16,6 @@ path = "src/main.rs"
 name = "riviamigo-restore-agent"
 path = "src/bin/riviamigo-restore-agent.rs"
 
-[[bin]]
-name = "riviamigo-parallax-collector"
-path = "src/bin/riviamigo-parallax-collector.rs"
-
 [dependencies]
 # Web framework
 axum            = { version = "0.8", features = ["macros", "ws"] }
@@ -41,7 +37,7 @@ redis           = { version = "1", features = ["tokio-comp", "connection-manager
 
 # HTTP client
 reqwest         = { version = "0.13", features = ["json", "native-tls", "query"] }
-aws-sdk-s3      = "1.139.0"
+aws-sdk-s3      = { version = "1.144.0", default-features = false, features = ["default-https-client", "http-1x", "rt-tokio"] }
 
 # Serialization
 serde           = { version = "1", features = ["derive"] }

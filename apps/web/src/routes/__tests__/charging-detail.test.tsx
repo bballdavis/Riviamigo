@@ -30,7 +30,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 });
 
 vi.mock('@riviamigo/dashboards', () => ({
-  DashboardChartWidget: () => <div data-testid="charge-curve-chart" />,
+  ChargeSessionCurveDetail: () => <div data-testid="charge-curve-chart" />,
   SensorChipSummary: ({ title, value, secondary }: { title: string; value: string; secondary?: string }) => (
     <div data-testid={`sensor-chip-${title.toLowerCase().replace(/\s+/g, '-')}`}>
       <span>{title}</span>
@@ -138,8 +138,7 @@ describe('ChargeSessionContent', () => {
     expect(screen.queryByTestId('sensor-chip-range')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Hide session source details' }));
     expect(screen.queryByText('Telemetry + Rivian API')).not.toBeInTheDocument();
-    // Chart title/subtitle are rendered inside DashboardChartWidget (mocked);
-    // assert only on the testid that the mock emits.
+    expect(screen.getByRole('heading', { name: 'Session charging trace' })).toBeInTheDocument();
     expect(screen.getByTestId('charge-curve-chart')).toBeInTheDocument();
     expect(screen.queryByText('Corrections')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Edit charging session' })).toBeInTheDocument();

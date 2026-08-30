@@ -24,6 +24,7 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `RIVIAMIGO_IMAGE` | Unset | Complete image reference override, including an optional `@sha256:` digest. When set, it takes precedence over `RIVIAMIGO_IMAGE_REGISTRY` and `IMAGE_TAG`. |
 | `RIVIAMIGO_IMAGE_REGISTRY` | `ghcr.io/bballdavis` | Registry namespace containing the unified `riviamigo` image. |
 | `IMAGE_TAG` | `latest` | Image tag; use a Calendar Version for repeatable deployments. |
 | `RIVIAMIGO_ORIGIN_PORT` | `8080` | Host port mapped to the unified app container. Protect it with host firewall rules when using a remote gateway. |
@@ -103,6 +104,7 @@ treat key changes as a migration.
 | `RIVIAN_RAW_EVENT_RETENTION_DAYS` | `7` | Raw telemetry retention window in days. |
 | `RIVIAN_PERSIST_RAW_EVENTS` | `true` | Persists raw Rivian events for diagnostics and repair. |
 | `RIVIAN_SUPPRESS_DUPLICATE_TELEMETRY` | `true` | Avoids storing unchanged duplicate telemetry samples. |
+| `PARALLAX_ENABLED` | `true` | Runs the integrated in-process extended telemetry acquisition subsystem. Set `false` only for emergency rollback. |
 
 ## API rate limits
 
