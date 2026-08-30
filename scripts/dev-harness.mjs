@@ -10,8 +10,6 @@ import { chmodSync, copyFileSync, existsSync, lstatSync, readdirSync, readFileSy
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const PRODUCTION_ROOT = '<production-root>';
-export const DEFAULT_TEST_ROOT = `${PRODUCTION_ROOT}/testing`;
 const SHA256 = /^[a-f0-9]{64}$/i;
 const IMAGE_DIGEST = /@sha256:([a-f0-9]{64})$/i;
 const PACKAGE_NAME = /\.rma\.tar\.gz$/i;
@@ -29,7 +27,10 @@ export function parseArgs(args) {
   const latestDir = valueAfter(args, '--latest-package-dir');
   const baselineImage = valueAfter(args, '--baseline-image');
   const devImage = valueAfter(args, '--dev-image');
-  const testRoot = valueAfter(args, '--test-root') ?? DEFAULT_TEST_ROOT;
+  const productionRoot = valueAfter(args, '--production-root');
+  const productionPortText = valueAfter(args, '--production-port');
+  const productionPort = Number(productionPortText);
+  const testRoot = valueAfter(args, '--test-root');
   const envFile = valueAfter(args, '--env-file');
   const composeFile = valueAfter(args, '--compose-file');
   const project = valueAfter(args, '--project');
@@ -38,9 +39,9 @@ export function parseArgs(args) {
   const prereleaseTag = valueAfter(args, '--prerelease-tag');
   const composeSourceSha = valueAfter(args, '--compose-source-sha');
   const healthHost = valueAfter(args, '--health-host') ?? '127.0.0.1';
-  const portText = valueAfter(args, '--port') ?? '8067';
+  const portText = valueAfter(args, '--port');
   const port = Number(portText);
-  const knownWithValue = new Set(['--package', '--latest-package-dir', '--baseline-image', '--dev-image', '--test-root', '--env-file', '--compose-file', '--port', '--project', '--komodo-revision', '--health-host', '--source-sha', '--prerelease-tag', '--compose-source-sha']);
+  const knownWithValue = new Set(['--package', '--latest-package-dir', '--baseline-image', '--dev-image', '--production-root', '--production-port', '--test-root', '--env-file', '--compose-file', '--port', '--project', '--komodo-revision', '--health-host', '--source-sha', '--prerelease-tag', '--compose-source-sha']);
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg.startsWith('-') && !knownWithValue.has(arg) && arg !== '--dry-run' && arg !== '--plan' && arg !== '--execute' && arg !== '--reset-test-storage' && arg !== '--sha256') {
@@ -53,12 +54,15 @@ export function parseArgs(args) {
   if (packagePath && latestDir) throw new HarnessError('Use exactly one of --package or --latest-package-dir.');
   if (!packagePath && !latestDir) throw new HarnessError('--package or --latest-package-dir is required.');
   if (!baselineImage || !devImage) throw new HarnessError('--baseline-image and --dev-image are required.');
+  if (!productionRoot || !isAbsolute(productionRoot)) throw new HarnessError('--production-root must be an absolute path.');
+  if (!Number.isInteger(productionPort) || productionPort < 1 || productionPort > 65535) throw new HarnessError('--production-port must be an integer from 1 to 65535.');
+  if (!testRoot || !isAbsolute(testRoot)) throw new HarnessError('--test-root must be an absolute path.');
   if (!envFile) throw new HarnessError('--env-file is required.');
   if (!composeFile) throw new HarnessError('--compose-file is required; do not use the production Compose file implicitly.');
   if (!project) throw new HarnessError('--project is required.');
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new HarnessError('--port must be an integer from 1 to 65535.');
-  if (port === 8066) throw new HarnessError('Production port 8066 is not allowed.');
-  return { packagePath, latestDir, baselineImage, devImage, testRoot, envFile, composeFile, project, port, healthHost, komodoRevision, sourceSha, prereleaseTag, composeSourceSha, suppliedSha, reset: args.includes('--reset-test-storage'), execute: args.includes('--execute'), dryRun: args.includes('--dry-run') || args.includes('--plan') || !args.includes('--execute') };
+  if (port === productionPort) throw new HarnessError('The test port must differ from --production-port.');
+  return { packagePath, latestDir, baselineImage, devImage, productionRoot, productionPort, testRoot, envFile, composeFile, project, port, healthHost, komodoRevision, sourceSha, prereleaseTag, composeSourceSha, suppliedSha, reset: args.includes('--reset-test-storage'), execute: args.includes('--execute'), dryRun: args.includes('--dry-run') || args.includes('--plan') || !args.includes('--execute') };
 }
 
 function under(child, parent) {
@@ -74,25 +78,24 @@ function assertImage(ref, label) {
 
 function imageInfo(ref) { return { ref, digest: ref.match(IMAGE_DIGEST)[1].toLowerCase() }; }
 
-function assertTestRoot(root) {
+function assertTestRoot(root, productionRoot) {
   const resolved = resolve(root);
-  const canonical = resolve(DEFAULT_TEST_ROOT);
-  if (under(resolved, resolve(PRODUCTION_ROOT))) {
-    if (resolved.toLowerCase() !== canonical.toLowerCase()) throw new HarnessError(`Production path is not an allowed test target; use ${DEFAULT_TEST_ROOT}.`);
-    return resolved;
-  }
-  const labelled = resolved.toLowerCase().split(/[\\/]/).some((part) => /^(test|tests|tmp|temp|dev|harness)$/.test(part) || /(?:^|[-_])(test|dev|harness)(?:[-_]|$)/.test(part));
-  if (!under(resolved, canonical) && !labelled) throw new HarnessError('Target root must be under the test root or explicitly test-labelled.');
+  const production = resolve(productionRoot);
+  if (resolved.toLowerCase() === production.toLowerCase()) throw new HarnessError('The production root is not an allowed test target.');
+  const labelPattern = /^(test|tests|testing|tmp|temp|dev|harness)$|(?:^|[-_])(test|testing|dev|harness)(?:[-_]|$)/i;
+  const relativeToProduction = relative(production, resolved);
+  const labelled = under(resolved, production)
+    ? labelPattern.test(relativeToProduction.split(/[\\/]/)[0])
+    : resolved.split(/[\\/]/).some((part) => labelPattern.test(part));
+  if (!labelled) throw new HarnessError('Target root must be explicitly test-labelled.');
   return resolved;
 }
 
-function containsDisallowedProductionPath(text) {
+function containsDisallowedProductionPath(text, productionRoot, testRoot) {
   const normalized = text.replaceAll('\\', '/').toLowerCase();
-  const testRoot = DEFAULT_TEST_ROOT.toLowerCase();
-  for (const match of normalized.matchAll(/\/share\/containers\/riviamigo-prod(?:\/[a-z0-9._-]+)*/gi)) {
-    if (!match[0].startsWith(`${testRoot}/`)) return true;
-  }
-  return false;
+  const production = resolve(productionRoot).replaceAll('\\', '/').toLowerCase();
+  const test = resolve(testRoot).replaceAll('\\', '/').toLowerCase();
+  return normalized.includes(production) && !normalized.split(production).slice(1).every((suffix) => suffix.startsWith(test.slice(production.length)));
 }
 
 function assertProject(project) {
@@ -110,11 +113,11 @@ function choosePackage(input, cwd = process.cwd()) {
   return candidates.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs || a.localeCompare(b))[0];
 }
 
-function packageInsideLiveData(packagePath) {
+function packageInsideLiveData(packagePath, productionRoot) {
   const normalized = packagePath.replaceAll('\\', '/').toLowerCase();
-  const productionBackupRoot = resolve(join(PRODUCTION_ROOT, 'backups'));
+  const productionBackupRoot = resolve(join(productionRoot, 'backups'));
   if (under(packagePath, productionBackupRoot)) return false;
-  return (under(packagePath, resolve(PRODUCTION_ROOT)) && !under(packagePath, productionBackupRoot))
+  return (under(packagePath, resolve(productionRoot)) && !under(packagePath, productionBackupRoot))
     || /(?:^|\/)(?:postgres(?:ql)?|pgdata|timescaledb|database|live-data)(?:\/|$)/.test(normalized);
 }
 
@@ -138,10 +141,10 @@ function tarEntries(buffer) {
   return entries;
 }
 
-export function inspectPackage(packagePath, suppliedSha, { requireChecksum = false } = {}) {
+export function inspectPackage(packagePath, suppliedSha, { requireChecksum = false, productionRoot } = {}) {
   if (!existsSync(packagePath) || !lstatSync(packagePath).isFile()) throw new HarnessError(`Recovery package does not exist: ${packagePath}`);
   const resolvedPackagePath = realpathSync(packagePath);
-  if (packageInsideLiveData(resolvedPackagePath)) throw new HarnessError('Recovery package may not be inside PostgreSQL live data.');
+  if (productionRoot && packageInsideLiveData(resolvedPackagePath, productionRoot)) throw new HarnessError('Recovery package may not be inside PostgreSQL live data.');
   const bytes = readFileSync(resolvedPackagePath);
   const hash = createHash('sha256').update(bytes).digest('hex');
   const sidecar = `${resolvedPackagePath}.sha256`;
@@ -203,32 +206,34 @@ export function inspectPackage(packagePath, suppliedSha, { requireChecksum = fal
 
 export function buildPlan(raw, cwd = process.cwd()) {
   const packagePath = choosePackage(raw, cwd);
-  const testRoot = assertTestRoot(resolve(cwd, raw.testRoot));
+  const productionRoot = resolve(cwd, raw.productionRoot);
+  const testRoot = assertTestRoot(resolve(cwd, raw.testRoot), productionRoot);
   assertProject(raw.project);
-  if (!Number.isInteger(raw.port) || raw.port < 1 || raw.port > 65535 || raw.port === 8066) throw new HarnessError('Production port 8066 or an invalid port is not allowed.');
+  if (!Number.isInteger(raw.productionPort) || raw.productionPort < 1 || raw.productionPort > 65535) throw new HarnessError('Production port is invalid.');
+  if (!Number.isInteger(raw.port) || raw.port < 1 || raw.port > 65535 || raw.port === raw.productionPort) throw new HarnessError('Test port is invalid or matches the production port.');
   assertImage(raw.baselineImage, 'Baseline image');
   assertImage(raw.devImage, 'Dev image');
   const envFile = resolve(cwd, raw.envFile);
   if (!existsSync(envFile) || !lstatSync(envFile).isFile()) throw new HarnessError(`Environment file does not exist: ${envFile}`);
-  const testSecretsRoot = resolve(join(DEFAULT_TEST_ROOT, 'secrets'));
-  if (under(envFile, resolve(PRODUCTION_ROOT)) && !under(envFile, testSecretsRoot)) throw new HarnessError('Production env files may not be copied into the test harness.');
+  const testSecretsRoot = resolve(join(testRoot, 'secrets'));
+  if (under(envFile, productionRoot) && !under(envFile, testSecretsRoot)) throw new HarnessError('Production env files may not be copied into the test harness.');
   const composeFile = resolve(cwd, raw.composeFile);
   if (!existsSync(composeFile) || !lstatSync(composeFile).isFile()) throw new HarnessError(`Compose file does not exist: ${composeFile}`);
   const composeText = readFileSync(composeFile, 'utf8');
-  if (/\blatest\b/i.test(composeText) || containsDisallowedProductionPath(composeText) || /(?:^|\D)8066(?:\D|$)/.test(composeText) || /t3_proxy|traefik|riviamigo-prod-internal/i.test(composeText)) {
+  if (/\blatest\b/i.test(composeText) || containsDisallowedProductionPath(composeText, productionRoot, testRoot) || new RegExp(`(?:^|\\D)${raw.productionPort}(?:\\D|$)`).test(composeText) || /t3_proxy|traefik|riviamigo-prod-internal/i.test(composeText)) {
     throw new HarnessError('Compose file contains production or mutable-image configuration.');
   }
-  const pkg = inspectPackage(packagePath, raw.suppliedSha, { requireChecksum: true });
+  const pkg = inspectPackage(packagePath, raw.suppliedSha, { requireChecksum: true, productionRoot });
   const dataPaths = Object.fromEntries(['db', 'redis', 'backups', 'cache'].map((name) => [name, join(testRoot, name)]));
   const populated = Object.values(dataPaths).filter((path) => existsSync(path) && readdirSync(path).length > 0);
   if (populated.length && !raw.reset) throw new HarnessError('Target storage is populated; pass --reset-test-storage to replace it.');
   if (raw.reset && Object.values(dataPaths).some((path) => !under(path, testRoot))) throw new HarnessError('Refusing to reset storage outside the exact test root.');
   const createdAt = new Date().toISOString();
-  return { version: 1, kind: 'riviamigo-dev-harness-plan', createdAt, package: pkg, images: { baseline: imageInfo(raw.baselineImage), dev: imageInfo(raw.devImage) }, provenance: { sourceSha: raw.sourceSha ?? 'not-provided', prereleaseTag: raw.prereleaseTag ?? 'not-provided', composeSourceSha: raw.composeSourceSha ?? 'not-provided' }, target: { root: testRoot, data: dataPaths, state: join(testRoot, 'harness-state.json'), lock: join(testRoot, 'harness.lock.json'), envFile, composeFile, port: raw.port, healthHost: raw.healthHost, project: raw.project, komodoRevision: raw.komodoRevision ?? 'not-provided' }, phases: ['preflight', ...(raw.reset ? ['reset-test-storage'] : []), 'stage-package-read-only', 'restore-with-baseline-image', 'verify-baseline-data', 'upgrade-to-dev-image', 'verify-dev-health', 'record-komodo-readback'], destructive: Boolean(raw.reset), execution: raw.execute ? 'execute' : 'dry-run' };
+  return { version: 1, kind: 'riviamigo-dev-harness-plan', createdAt, package: pkg, images: { baseline: imageInfo(raw.baselineImage), dev: imageInfo(raw.devImage) }, provenance: { sourceSha: raw.sourceSha ?? 'not-provided', prereleaseTag: raw.prereleaseTag ?? 'not-provided', composeSourceSha: raw.composeSourceSha ?? 'not-provided' }, target: { root: testRoot, data: dataPaths, state: join(testRoot, 'harness-state.json'), lock: join(testRoot, 'harness.lock.json'), envFile, composeFile, port: raw.port, productionRoot, productionPort: raw.productionPort, healthHost: raw.healthHost, project: raw.project, komodoRevision: raw.komodoRevision ?? 'not-provided' }, phases: ['preflight', ...(raw.reset ? ['reset-test-storage'] : []), 'stage-package-read-only', 'restore-with-baseline-image', 'verify-baseline-data', 'upgrade-to-dev-image', 'verify-dev-health', 'record-komodo-readback'], destructive: Boolean(raw.reset), execution: raw.execute ? 'execute' : 'dry-run' };
 }
 
 export function help() {
-  return `Usage: node scripts/dev-harness.mjs [options]\n\nRequired: --package PATH or --latest-package-dir DIR, --baseline-image REF, --dev-image REF, --test-root PATH, --env-file PATH, --compose-file PATH, --port PORT, --project NAME\nOptional: --sha256 HASH, --source-sha SHA, --prerelease-tag TAG, --compose-source-sha SHA, --health-host HOST, --komodo-revision REV, --reset-test-storage, --dry-run/--plan (default), --execute\nImages require immutable @sha256 digests. Execution invokes the existing isolated restore script, then upgrades only the test Compose project; Komodo is not called.`;
+  return `Usage: node scripts/dev-harness.mjs [options]\n\nRequired: --package PATH or --latest-package-dir DIR, --baseline-image REF, --dev-image REF, --production-root PATH, --production-port PORT, --test-root PATH, --env-file PATH, --compose-file PATH, --port PORT, --project NAME\nOptional: --sha256 HASH, --source-sha SHA, --prerelease-tag TAG, --compose-source-sha SHA, --health-host HOST, --komodo-revision REV, --reset-test-storage, --dry-run/--plan (default), --execute\nImages require immutable @sha256 digests. Execution invokes the existing isolated restore script, then upgrades only the test Compose project; Komodo is not called.`;
 }
 
 function writeJson(path, value) {

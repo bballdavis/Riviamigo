@@ -1,98 +1,132 @@
-# Production-test clone and dev-upgrade harness
+# Riviamigo production-test clone and dev-upgrade harness
 
-This runbook owns the disposable `riviamigo-prod-test` workflow. It consumes a verified production `.rma.tar.gz` recovery package, restores it into new test-only storage, and starts the clone on an immutable baseline image. A later development-image upgrade is a separate, optional phase that runs only against the clone.
+This runbook owns Riviamigo's portable, disposable production-package test. It
+restores a verified Riviamigo `.rma.tar.gz` package into isolated test storage,
+starts an immutable baseline image, and optionally upgrades only that clone to
+an immutable development image.
 
-Production is not a source or target of the restore operation. The package contains PostgreSQL and vehicle artwork. Redis live state, provider credentials, refresh sessions, browser state, installation keys, and backup target secrets are intentionally fresh after restore; reconnect providers in the test installation when a test needs them.
+Do not record a real account name, host name, LAN address, filesystem layout,
+port, repository namespace, credential location, or historical release in this
+file. Keep environment-specific values in host-local configuration or Komodo
+variables.
 
 ## Invariants
 
-- The production stack remains `riviamigo-prod`, port `8066`, and `<production-root>`.
-- The test stack is `riviamigo-prod-test`, port `<private-test-host>:8067`, and `<production-root>/testing/{db,redis,backups,cache,secrets}`.
-- The test Compose file uses `riviamigo-prod-test-internal`, has no `t3_proxy`, Traefik labels, public router, or production network name, and pins every application image by `tag@sha256`.
-- Test credentials are host-only. Never copy the production `.env` into Forgejo, Komodo environment, a command line, or a log.
-- A migrated test database is never downgraded in place. Rollback means fresh test storage plus the preserved package and the prior image lock.
+- Production is never a restore target and is never modified by the harness.
+- The test root, project, port, Compose file, and image references are explicit.
+- The test project and root are clearly labelled as test-only.
+- The production root and port are supplied only as safety boundaries; the test
+  root and port must differ.
+- Riviamigo images are immutable digest-qualified references. `latest` is rejected.
+- Credentials and environment files remain host-local and outside source
+  control, Forgejo, command arguments, and logs.
+- Rollback recreates disposable storage from the preserved package. It never
+  runs an older image against an already-migrated test database.
 
 ## Preflight
 
-Before running the procedure, prove all of the following:
+Before executing the harness, verify:
 
-1. A verified package exists under `<production-root>/backups`, or an explicit package path was supplied. The package must have its SHA-256 recorded and must pass the existing recovery manifest, migration-chain, schema, checksum, and compatibility contract.
-2. The currently running production app has a proven immutable image digest. A Komodo record containing `ghcr.io/bballdavis/riviamigo:latest` without a digest is not sufficient; strict two-phase mode stops rather than guessing.
-3. If performing the optional development upgrade, the candidate is a prerelease image built from the intended remote `dev` SHA. Record its source SHA, prerelease tag, image digest, and Compose source SHA in the test repository's `deployment.lock`.
-4. `<private-test-host>:8067` is unused, the trusted-LAN CIDR is known, and the host firewall—not a public router—owns the allow rule. The HTTP exception is private-LAN-only and weaker than HTTPS.
-5. GHCR pull access and Komodo's absolute host-file behavior have been tested without printing secrets.
-
-The current branch flow is `dev` only. Re-read the Forgejo/GitHub `dev` revision immediately before publishing. If a local candidate is not on remote `dev`, only an explicit fast-forward push to `dev` is allowed. Never push or merge this workflow to `main`.
+1. The recovery package has a recorded SHA-256 and passes the recovery manifest,
+   migration, schema, checksum, and compatibility checks.
+2. Both application images are pinned by `tag@sha256` and their source commits
+   are known.
+3. The test root, project, port, network, Compose file, and env file cannot
+   overlap the production deployment.
+4. The test endpoint is private or protected by an authenticated gateway.
+5. The remote `dev` SHA and image provenance are re-read immediately before an
+   optional development upgrade.
 
 ## Harness command
 
-The repository-owned command defaults to a read-only plan. Use an explicit test-only env file containing the generated test passwords and setup-token file reference; do not point it at the production env file.
+Use environment-appropriate values; the angle-bracket values below are
+placeholders, not defaults.
 
 ```bash
 node scripts/dev-harness.mjs \
-  --package <production-root>/backups/<verified-package>.rma.tar.gz \
+  --package <verified-package-path> \
   --sha256 <64-hex-package-sha256> \
   --baseline-image ghcr.io/bballdavis/riviamigo:<baseline-tag>@sha256:<baseline-digest> \
   --dev-image ghcr.io/bballdavis/riviamigo:<dev-tag>@sha256:<dev-digest> \
-  --test-root <production-root>/testing \
-  --env-file <production-root>/testing/secrets/compose.env \
-  --port 8067 \
-  --project riviamigo-prod-test \
+  --production-root <absolute-production-root> \
+  --production-port <production-port> \
+  --test-root <absolute-test-root> \
+  --env-file <absolute-test-env-file> \
+  --compose-file <absolute-test-compose-file> \
+  --port <test-port> \
+  --project <test-project> \
   --plan
 ```
 
-The command rejects mutable `latest`, unpinned images, port `8066`, every production path except the exact `<production-root>/testing` root and its disposable data directories, production-labelled projects, packages inside live database directories, unsafe archive members, missing recovery manifest components, and populated test storage. Add `--reset-test-storage` only after confirming the resolved path is exactly the disposable test root. Add `--execute` only after the plan JSON has been reviewed.
+Plan mode is the default. Review its package checksum, archive members, image
+digests, target paths, ports, and phases before adding `--execute`. Use
+`--reset-test-storage` only after confirming the resolved root is the disposable
+test root.
 
-The repository also provides `pnpm dev:harness:procedure`, a thin entrypoint for a Komodo Procedure. Configure the Procedure to supply the `RIVIAMIGO_HARNESS_*` variables (paths, exact image refs, provenance, port, and optional reset flag) and invoke `node scripts/dev-harness-procedure.mjs` from the source checkout. The wrapper passes only non-secret paths and provenance values as arguments; credentials remain in the host env file. Komodo remains the owner of stack deployment and supplies the resulting stack revision for the state record; the harness never calls Komodo HTTP or bypasses the Forgejo/Komodo contract.
+For a Komodo Procedure, use `pnpm dev:harness:procedure` and supply the
+`RIVIAMIGO_HARNESS_*` variables. The package or package directory, production
+root and port, test root and port, env file, Compose file, project, and immutable
+images are all required configuration. The procedure passes only non-secret
+paths and provenance values; credentials remain in the host-local env file.
 
-## Test stack configuration
+Create the private test GitOps repository as
+`<forgejo-owner>/Riviamigo-prod-test` (or another clearly test-labelled
+Riviamigo name). Its tracked files are the isolated Compose contract,
+non-secret runtime settings, `deployment.lock`, and rollback instructions.
 
-Create private Forgejo repository `<forgejo-owner>/Riviamigo-prod-test` with deployment branch `prod-test`. Its tracked files are the isolated Compose contract, non-secret runtime settings, `deployment.lock`, and the README/rollback instructions. Host-only files under `<production-root>/testing/secrets` contain the generated app/database/Redis credentials and one-time setup token.
+## Test stack requirements
 
-The selected baseline image uses the same combined startup entrypoint as production, so its isolated Compose contract contains only the unified app, TimescaleDB, and Redis. The restore agent runs as a one-off Compose command during restore; it is not a long-lived init service. Newer images may use a separate init service, but the Compose contract must match the pinned image's startup behavior. The stack uses the canonical digest-pinned database and Redis images, a test-only internal network, a separate app egress bridge, and literal host paths only under `<production-root>/testing`. It must not mount the production `db`, `redis`, `cache`, or secret files, and must not include a proxy network, Traefik labels, public DNS/router names, `8066`, or `latest`.
+The isolated Compose contract contains the unified Riviamigo app, TimescaleDB,
+and Redis for current images. The Riviamigo restore agent runs as a one-off
+restore command, not a long-lived service. The contract must use a test-only
+internal network and storage, must not mount production data or secrets, and
+must not include production ports, routes, Traefik labels, network names, or
+mutable images.
 
-The selected older baseline predates the current trusted-LAN HTTP exception. For this disposable baseline test only, the test app env therefore uses development mode while retaining the explicit non-loopback bind acknowledgement required by the image startup script:
+If an older baseline requires development-mode HTTP cookies for a private test
+origin, configure that only in the host-local test env file. Never publish the
+origin or copy that setting into production.
 
 ```dotenv
 RIVIAMIGO_BIND_ADDRESS=0.0.0.0
 ALLOW_PUBLIC_ORIGIN_BIND=true
 ALLOW_INSECURE_LAN_HTTP_AUTH=true
-ALLOWED_ORIGINS=http://<private-test-host>:8067
+ALLOWED_ORIGINS=http://<private-test-host>:<test-port>
 RIVIAMIGO_ENV=development
 COOKIE_INSECURE=true
 ```
 
-`COOKIE_INSECURE=true` is required for this disposable HTTP test origin. It
-allows the browser to retain and resend the `HttpOnly` refresh cookie after a
-page reload. The harness also adds this value when it generates a test env
-from a development source env. Never copy it into the production env; the
-production configuration rejects `COOKIE_INSECURE` and expects HTTPS.
-
-Do not expose that origin through a router or public DNS. Prefer an authenticated HTTPS gateway if the test needs access beyond the trusted LAN.
-
 ## Ordered operation
 
-1. Run the harness in plan mode and inspect the package SHA, archive members, baseline/dev digests, target paths, and phases.
-2. With `--reset-test-storage`, create only `<production-root>/testing/{db,redis,backups,cache}` and stage a read-only copy of the newest verified package from `<production-root>/backups` into the test backup directory. Never read or copy PostgreSQL's production data directory.
-3. Run the existing `scripts/restore-backup.mjs` engine, or its equivalent one-off restore-agent sequence, against the isolated Compose project and baseline image. Confirm the restore completes, setup is already closed, and users, dashboards, historical telemetry, vehicles, trips, charging history, artwork, and health are present.
-4. Stop the baseline test deployment only as needed, update the test GitOps lock to the immutable dev digest, and deploy only `riviamigo-prod-test` through Komodo. The app startup migration may advance only the cloned test database.
-5. Record the migration transition, resulting app digest, health/setup state, source SHA, Compose source SHA, and Komodo stack revision. Re-read the Komodo stack and containers after deployment.
-6. Restart the test stack and verify the restored users, generated application keys, database, artwork, and test configuration persist. Verify provider credentials and live sessions remain absent until deliberately reauthenticated.
-7. Re-read `riviamigo-prod` and prove its revision, containers, port, network, route, and storage are unchanged.
+1. Generate and inspect the plan.
+2. Create or reset only the resolved disposable data directories.
+3. Stage a read-only package copy and restore it with the baseline image.
+4. Verify users, dashboards, telemetry, vehicles, trips, charging history,
+   artwork, setup state, and health in the clone.
+5. Update only the test lock to the immutable development digest and deploy only
+   the test project through Komodo.
+6. Record source and Compose SHAs, image digests, migration transition, health,
+   and Komodo revision.
+7. Restart the test deployment and verify persistence.
+8. Re-read production and prove its revision, containers, route, port, network,
+   and storage are unchanged.
 
 ## Rollback
 
-Do not run an older image against a test database after dev migrations have succeeded. Stop and remove only the `riviamigo-prod-test` containers, preserve the failed `<production-root>/testing` root for diagnosis if needed, create fresh `testing/{db,redis,backups,cache}` directories, restore the preserved package with the prior immutable image, and redeploy the prior test lock. Production is never part of rollback.
-
-The harness writes non-secret state and lock records under the test root. Keep the package and its checksum until the upgraded test has passed the data and migration checks; these are the rollback authority.
+Stop only the test deployment, preserve failed test state when diagnosis is
+needed, recreate fresh disposable storage, restore the preserved package with
+the prior immutable image, and redeploy the prior test lock. Production is never
+part of rollback.
 
 ## Acceptance evidence
 
-- App, TimescaleDB, and Redis are healthy; the restore-agent candidate is activated and finalized.
-- Only `<private-test-host>:8067` is published by the test stack.
-- The rendered test Compose has no mutable image, production path, production port/network, or proxy labels.
-- Restored users and historical data are present; providers and live sessions require reauthentication.
-- Dev migrations succeed only in the test database.
+- The test application and dependencies are healthy.
+- Only the configured test port is published.
+- Rendered Compose contains no mutable image or production path, port, network,
+  route, or proxy label.
+- Restored data is present; provider credentials and live sessions remain absent
+  until deliberately reauthenticated.
+- Development migrations affect only the clone.
 - Restart preserves test data and generated application keys.
-- Komodo and Forgejo read-back matches the recorded lock.
-- Production remains running at its original revision and route.
+- Komodo and source-control read-back match the recorded lock.
+- Production remains unchanged.
