@@ -500,14 +500,11 @@ describe('DashboardChartWidget - smoothing controls', () => {
     );
   });
 
-  it('registers the tire-pressure timeline through the shared catalog widget on Trips', () => {
+  it('does not force the tire-pressure timeline into the Trips dashboard', () => {
     const trips = getDefaultBySlug('trips');
-    const chart = trips?.widgets.find((widget) => widget.definitionId === 'catalog');
-    const options = chart?.options as Record<string, unknown> | undefined;
+    const chart = trips?.widgets.find((widget) => widget.options?.['chartId'] === 'tire-pressure-trips');
 
-    expect(chart?.componentType).toBe('chart');
-    expect(options?.page).toBe('trips');
-    expect(options?.chartId).toBe('tire-pressure-trips');
+    expect(chart).toBeUndefined();
   });
 
   it('persists an explicitly selected default for this component across remounts', () => {

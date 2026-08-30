@@ -15,7 +15,12 @@ use crate::{
 
 // Advance this whenever a bundled system dashboard changes so existing
 // installations receive the new baseline on their next startup.
-const BUNDLED_DASHBOARD_BASELINE_REVISION: i32 = 7;
+const BUNDLED_DASHBOARD_BASELINE_REVISION: i32 = 8;
+
+const RETIRED_TRIPS_MANAGED_WIDGETS: &[(&str, &str)] = &[(
+    "trips.tire-pressure-timeline",
+    "d5000005-0000-0000-0000-000000000007",
+)];
 
 const UPSERT_SYSTEM_DEFAULT_SQL: &str = r#"
     INSERT INTO dashboards
@@ -609,11 +614,12 @@ pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Apply bundled fixed-composition widgets without replacing a personal layout.
+/// Apply bundled fixed-composition changes without replacing a personal layout.
 ///
 /// Managed widgets own their visual composition, but their saved grid position,
-/// title, visibility, and unrelated options remain user-owned. The operation is
-/// intentionally additive and idempotent so it can run on every API startup.
+/// title, visibility, and unrelated options remain user-owned. Explicitly retired
+/// managed widgets are removed, and only unchanged canonical layouts are compacted.
+/// The operation is idempotent so it can run on every API startup.
 async fn migrate_user_owned_managed_widgets(
     pool: &sqlx::PgPool,
     defaults: &[(&str, &str)],
@@ -629,7 +635,8 @@ async fn migrate_user_owned_managed_widgets(
             .flatten()
             .filter(|widget| widget["managed"].as_bool() == Some(true))
             .collect::<Vec<_>>();
-        if managed_widgets.is_empty() {
+        let retired_widgets = retired_managed_widgets(slug);
+        if managed_widgets.is_empty() && retired_widgets.is_empty() {
             continue;
         }
 
@@ -641,7 +648,8 @@ async fn migrate_user_owned_managed_widgets(
         .await?;
 
         for (id, current) in rows {
-            let Some(next) = merge_managed_widgets(current, &managed_widgets) else {
+            let Some(next) = merge_managed_widgets(current, &managed_widgets, retired_widgets)
+            else {
                 continue;
             };
             sqlx::query(
@@ -657,9 +665,37 @@ async fn migrate_user_owned_managed_widgets(
     Ok(())
 }
 
-fn merge_managed_widgets(mut config: Value, bundled_widgets: &[&Value]) -> Option<Value> {
+fn retired_managed_widgets(slug: &str) -> &'static [(&'static str, &'static str)] {
+    match slug {
+        "trips" => RETIRED_TRIPS_MANAGED_WIDGETS,
+        _ => &[],
+    }
+}
+
+fn merge_managed_widgets(
+    mut config: Value,
+    bundled_widgets: &[&Value],
+    retired_widgets: &[(&str, &str)],
+) -> Option<Value> {
     let widgets = config.get_mut("widgets")?.as_array_mut()?;
     let mut changed = false;
+
+    let previous_len = widgets.len();
+    widgets.retain(|widget| {
+        !retired_widgets.iter().any(|(managed_key, id)| {
+            widget["managedKey"].as_str() == Some(*managed_key)
+                || widget["id"].as_str() == Some(*id)
+        })
+    });
+    if widgets.len() != previous_len {
+        changed = true;
+        if retired_widgets
+            .iter()
+            .any(|(managed_key, _)| *managed_key == "trips.tire-pressure-timeline")
+        {
+            changed |= compact_canonical_trips_layout(widgets);
+        }
+    }
 
     for bundled in bundled_widgets {
         let bundled_id = bundled["id"].as_str();
@@ -765,6 +801,26 @@ fn merge_managed_widgets(mut config: Value, bundled_widgets: &[&Value]) -> Optio
     changed.then_some(config)
 }
 
+fn compact_canonical_trips_layout(widgets: &mut [Value]) -> bool {
+    let mut changed = false;
+    for widget in widgets {
+        let (expected_y, expected_height, next_y) = match widget["id"].as_str() {
+            Some("d5000005-0000-0000-0000-000000000005") => (9, 10, 2),
+            Some("d5000005-0000-0000-0000-000000000006") => (19, 14, 12),
+            _ => continue,
+        };
+        let layout_is_canonical = widget["layout"]["x"].as_i64() == Some(0)
+            && widget["layout"]["y"].as_i64() == Some(expected_y)
+            && widget["layout"]["w"].as_i64() == Some(12)
+            && widget["layout"]["h"].as_i64() == Some(expected_height);
+        if layout_is_canonical {
+            widget["layout"]["y"] = Value::from(next_y);
+            changed = true;
+        }
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -816,7 +872,7 @@ mod tests {
             .and_then(|widget| widget["options"]["chartIds"].as_array())
             .expect("efficiency chart IDs");
 
-        assert_eq!(BUNDLED_DASHBOARD_BASELINE_REVISION, 7);
+        assert_eq!(BUNDLED_DASHBOARD_BASELINE_REVISION, 8);
         assert!(chart_ids.iter().any(|id| id == "efficiency-tags"));
         assert!(UPSERT_SYSTEM_DEFAULT_SQL.contains("dashboards.owner_id IS NULL"));
         assert!(UPSERT_SYSTEM_DEFAULT_SQL.contains("dashboards.is_default = TRUE"));
@@ -890,27 +946,29 @@ mod tests {
 
     #[test]
     fn managed_composition_patch_preserves_personal_layout_and_options() {
-        let bundled: Value =
-            serde_json::from_str(include_str!("../../dashboards/trips.json")).unwrap();
-        let managed = bundled["widgets"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|widget| widget["managed"].as_bool() == Some(true))
-            .collect::<Vec<_>>();
+        let bundled = serde_json::json!({
+            "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "componentType": "chart",
+            "definitionId": "catalog",
+            "managed": true,
+            "managedKey": "example.chart",
+            "options": { "page": "example", "chartId": "example-chart", "showPicker": false },
+            "layout": { "x": 0, "y": 2, "w": 12, "h": 7 }
+        });
+        let managed = vec![&bundled];
         let current = serde_json::json!({
             "widgets": [{
-                "id": "d5000005-0000-0000-0000-000000000007",
+                "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
                 "componentType": "chart",
-                "definitionId": "tire-pressure-trips",
+                "definitionId": "legacy-chart",
                 "title": "My timeline",
                 "layout": { "x": 2, "y": 41, "w": 8, "h": 9 },
                 "visibility": [{ "type": "vehicle-connection", "value": "plugged" }],
-                "options": { "chartSettings": { "tire-pressure-trips": { "timeFilter": "24h" } }, "custom": true }
+                "options": { "chartSettings": { "example-chart": { "timeFilter": "24h" } }, "custom": true }
             }]
         });
 
-        let patched = merge_managed_widgets(current, &managed).unwrap();
+        let patched = merge_managed_widgets(current, &managed, &[]).unwrap();
         let widget = &patched["widgets"][0];
         assert_eq!(widget["layout"]["y"], 41);
         assert_eq!(widget["layout"]["w"], 8);
@@ -919,26 +977,28 @@ mod tests {
         assert_eq!(widget["componentType"], "chart");
         assert_eq!(widget["definitionId"], "catalog");
         assert_eq!(widget["managed"], true);
-        assert_eq!(widget["managedKey"], "trips.tire-pressure-timeline");
+        assert_eq!(widget["managedKey"], "example.chart");
         assert_eq!(widget["options"]["custom"], true);
         assert_eq!(
-            widget["options"]["chartSettings"]["tire-pressure-trips"]["timeFilter"],
+            widget["options"]["chartSettings"]["example-chart"]["timeFilter"],
             "24h"
         );
-        assert_eq!(widget["options"]["chartId"], "tire-pressure-trips");
+        assert_eq!(widget["options"]["chartId"], "example-chart");
         assert_eq!(widget["options"]["showPicker"], false);
     }
 
     #[test]
     fn managed_composition_patch_appends_missing_widget_without_overlap() {
-        let bundled: Value =
-            serde_json::from_str(include_str!("../../dashboards/trips.json")).unwrap();
-        let managed = bundled["widgets"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|widget| widget["managed"].as_bool() == Some(true))
-            .collect::<Vec<_>>();
+        let bundled = serde_json::json!({
+            "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "componentType": "chart",
+            "definitionId": "catalog",
+            "managed": true,
+            "managedKey": "example.chart",
+            "options": { "page": "example", "chartId": "example-chart", "showPicker": false },
+            "layout": { "x": 0, "y": 2, "w": 12, "h": 7 }
+        });
+        let managed = vec![&bundled];
         let current = serde_json::json!({
             "widgets": [{
                 "id": "11111111-1111-1111-1111-111111111111",
@@ -946,16 +1006,80 @@ mod tests {
             }]
         });
 
-        let patched = merge_managed_widgets(current, &managed).unwrap();
+        let patched = merge_managed_widgets(current, &managed, &[]).unwrap();
         assert_eq!(patched["widgets"].as_array().unwrap().len(), 2);
-        assert_eq!(
-            patched["widgets"][1]["managedKey"],
-            "trips.tire-pressure-timeline"
-        );
+        assert_eq!(patched["widgets"][1]["managedKey"], "example.chart");
         assert_eq!(patched["widgets"][1]["layout"]["y"], 10);
 
-        let again = merge_managed_widgets(patched, &managed);
+        let again = merge_managed_widgets(patched, &managed, &[]);
         assert!(again.is_none(), "the managed patch should be idempotent");
+    }
+
+    #[test]
+    fn retired_trips_timeline_is_removed_and_only_canonical_layouts_compact() {
+        let current = serde_json::json!({
+            "widgets": [
+                {
+                    "id": "d5000005-0000-0000-0000-000000000007",
+                    "componentType": "chart",
+                    "managed": true,
+                    "managedKey": "trips.tire-pressure-timeline",
+                    "layout": { "x": 0, "y": 2, "w": 12, "h": 7 }
+                },
+                {
+                    "id": "d5000005-0000-0000-0000-000000000005",
+                    "componentType": "custom",
+                    "definitionId": "trips.map",
+                    "layout": { "x": 0, "y": 9, "w": 12, "h": 10 }
+                },
+                {
+                    "id": "d5000005-0000-0000-0000-000000000006",
+                    "componentType": "custom",
+                    "definitionId": "trips.table",
+                    "layout": { "x": 0, "y": 19, "w": 12, "h": 14 }
+                },
+                {
+                    "id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                    "componentType": "chart",
+                    "options": { "chartId": "tire-pressure-trips" },
+                    "layout": { "x": 0, "y": 33, "w": 12, "h": 7 }
+                }
+            ]
+        });
+
+        let patched =
+            merge_managed_widgets(current, &[], retired_managed_widgets("trips")).unwrap();
+        let widgets = patched["widgets"].as_array().unwrap();
+        assert_eq!(widgets.len(), 3);
+        assert_eq!(widgets[0]["layout"]["y"], 2);
+        assert_eq!(widgets[1]["layout"]["y"], 12);
+        assert_eq!(widgets[2]["options"]["chartId"], "tire-pressure-trips");
+        assert!(merge_managed_widgets(patched, &[], retired_managed_widgets("trips"),).is_none());
+    }
+
+    #[test]
+    fn retired_trips_timeline_preserves_customized_layouts() {
+        let current = serde_json::json!({
+            "widgets": [
+                {
+                    "managedKey": "trips.tire-pressure-timeline",
+                    "layout": { "x": 0, "y": 2, "w": 12, "h": 7 }
+                },
+                {
+                    "id": "d5000005-0000-0000-0000-000000000005",
+                    "componentType": "custom",
+                    "definitionId": "trips.map",
+                    "layout": { "x": 1, "y": 40, "w": 11, "h": 9 }
+                }
+            ]
+        });
+
+        let patched =
+            merge_managed_widgets(current, &[], retired_managed_widgets("trips")).unwrap();
+        assert_eq!(patched["widgets"][0]["layout"]["x"], 1);
+        assert_eq!(patched["widgets"][0]["layout"]["y"], 40);
+        assert_eq!(patched["widgets"][0]["layout"]["w"], 11);
+        assert_eq!(patched["widgets"][0]["layout"]["h"], 9);
     }
 
     #[test]
@@ -978,7 +1102,7 @@ mod tests {
             }]
         });
 
-        let patched = merge_managed_widgets(current.clone(), &managed);
+        let patched = merge_managed_widgets(current.clone(), &managed, &[]);
         assert!(patched.is_some());
         assert_eq!(patched.unwrap()["widgets"][0], current["widgets"][0]);
     }
