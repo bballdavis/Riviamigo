@@ -3,8 +3,9 @@
 FROM --platform=$BUILDPLATFORM rust:1.97.1-slim-bookworm@sha256:2775a09d208ff0d7c1f50490c45b62db929e87ba1dcbc3f2132ac71a704bcdd3 AS api-builder
 ARG TARGETARCH
 ARG BUILDARCH
+ARG CARGO_BUILD_JOBS
 WORKDIR /build/apps/api
-ENV SQLX_OFFLINE=true CARGO_BUILD_JOBS=2
+ENV SQLX_OFFLINE=true
 RUN set -eux; \
     if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then \
         dpkg --add-architecture arm64; \
@@ -35,7 +36,8 @@ RUN mkdir -p src/bin && printf 'fn main() {}\n' > src/main.rs \
             AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/usr/include; \
         target_flag='--target aarch64-unknown-linux-gnu'; \
     fi \
-    && cargo build --release $target_flag \
+    && build_jobs="${CARGO_BUILD_JOBS:-$(nproc)}" \
+    && cargo build --profile container --jobs "$build_jobs" $target_flag \
         --bin riviamigo-api \
         --bin riviamigo-restore-agent \
         --bin rebaseline_db \
@@ -43,7 +45,7 @@ RUN mkdir -p src/bin && printf 'fn main() {}\n' > src/main.rs \
 COPY apps/api/ ./
 RUN touch src/lib.rs src/main.rs src/bin/riviamigo-restore-agent.rs src/bin/rebaseline_db.rs migrations/0001_initial_schema.sql \
     && target_flag='' \
-    && binary_path=target/release/riviamigo-api \
+    && binary_path=target/container/riviamigo-api \
     && if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then \
         export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
             CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
@@ -54,18 +56,19 @@ RUN touch src/lib.rs src/main.rs src/bin/riviamigo-restore-agent.rs src/bin/reba
             AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu \
             AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/usr/include; \
         target_flag='--target aarch64-unknown-linux-gnu'; \
-        binary_path=target/aarch64-unknown-linux-gnu/release/riviamigo-api; \
+        binary_path=target/aarch64-unknown-linux-gnu/container/riviamigo-api; \
     fi \
-    && cargo build --release $target_flag \
+    && build_jobs="${CARGO_BUILD_JOBS:-$(nproc)}" \
+    && cargo build --profile container --jobs "$build_jobs" $target_flag \
         --bin riviamigo-api \
         --bin riviamigo-restore-agent \
         --bin rebaseline_db \
     && cp "$binary_path" /build/apps/api/riviamigo-api \
-    && restore_binary_path=target/release/riviamigo-restore-agent \
-    && if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then restore_binary_path=target/aarch64-unknown-linux-gnu/release/riviamigo-restore-agent; fi \
+    && restore_binary_path=target/container/riviamigo-restore-agent \
+    && if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then restore_binary_path=target/aarch64-unknown-linux-gnu/container/riviamigo-restore-agent; fi \
     && cp "$restore_binary_path" /build/apps/api/riviamigo-restore-agent \
-    && rebaseline_binary_path=target/release/rebaseline_db \
-    && if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then rebaseline_binary_path=target/aarch64-unknown-linux-gnu/release/rebaseline_db; fi \
+    && rebaseline_binary_path=target/container/rebaseline_db \
+    && if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then rebaseline_binary_path=target/aarch64-unknown-linux-gnu/container/rebaseline_db; fi \
     && cp "$rebaseline_binary_path" /build/apps/api/rebaseline_db
 
 FROM --platform=$BUILDPLATFORM node:24.18.0-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS web-builder

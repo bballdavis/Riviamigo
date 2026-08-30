@@ -5,7 +5,7 @@ import { gzipSync } from 'node:zlib';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildPlan, DEFAULT_TEST_ROOT, HarnessError, inspectPackage, writeHarnessEnv } from './dev-harness.mjs';
+import { buildPlan, HarnessError, inspectPackage, writeHarnessEnv } from './dev-harness.mjs';
 
 const root = () => mkdtempSync(join(tmpdir(), 'riviamigo-test-'));
 function tar(files) {
@@ -33,7 +33,7 @@ const image = (name) => `registry.example/${name}:1@sha256:${'a'.repeat(64)}`;
 const base = (dir, overrides = {}) => {
   const composeFile = join(dir, 'docker-compose.test.yml');
   writeFileSync(composeFile, 'services:\n  riviamigo:\n    image: ${RIVIAMIGO_IMAGE_REF:?}\n  timescaledb:\n    image: timescale/timescaledb:2@sha256:' + 'b'.repeat(64) + '\n  redis:\n    image: redis:8@sha256:' + 'c'.repeat(64) + '\nnetworks:\n  riviamigo-prod-test-internal:\n    internal: true\n');
-  return { packagePath: packageFile(dir), baselineImage: image('base'), devImage: image('dev'), testRoot: join(dir, 'target-test'), envFile: join(dir, '.env.test'), composeFile, port: 18066, project: 'riviamigo-test', reset: false, ...overrides };
+  return { packagePath: packageFile(dir), baselineImage: image('base'), devImage: image('dev'), productionRoot: join(dir, 'production'), productionPort: 18065, testRoot: join(dir, 'target-test'), envFile: join(dir, '.env.test'), composeFile, port: 18066, project: 'riviamigo-test', reset: false, ...overrides };
 };
 
 test('rejects latest and unpinned images', () => {
@@ -43,19 +43,22 @@ test('rejects latest and unpinned images', () => {
 });
 test('rejects production path, port, and project', () => {
   const dir = root(); writeFileSync(join(dir, '.env.test'), 'SAFE=1');
-  assert.throws(() => buildPlan(base(dir, { testRoot: '<production-root>/data' })), /Production/);
-  assert.throws(() => buildPlan(base(dir, { testRoot: '<production-root>/testing/db' })), /Production/);
-  assert.throws(() => buildPlan(base(dir, { port: 8066 })), /Production port/);
+  const productionRoot = join(dir, 'production');
+  assert.throws(() => buildPlan(base(dir, { productionRoot, testRoot: productionRoot })), /production root/);
+  assert.throws(() => buildPlan(base(dir, { productionRoot, testRoot: join(productionRoot, 'data') })), /test-labelled/);
+  assert.throws(() => buildPlan(base(dir, { port: 18065 })), /matches the production port/);
   assert.throws(() => buildPlan(base(dir, { project: 'riviamigo-prod' })), /test-labelled/);
   assert.doesNotThrow(() => buildPlan(base(dir, { project: 'riviamigo-prod-test' })));
 });
 test('accepts only the canonical production testing child and its mounts', () => {
   const dir = root(); writeFileSync(join(dir, '.env.test'), 'SAFE=1');
   const composeFile = join(dir, 'docker-compose.test.yml');
-  const raw = base(dir, { testRoot: DEFAULT_TEST_ROOT, composeFile });
-  writeFileSync(composeFile, 'services:\n  riviamigo:\n    image: ${RIVIAMIGO_IMAGE_REF:?}\n    volumes:\n      - <production-root>/testing/db:/db\n');
+  const productionRoot = join(dir, 'production');
+  const testRoot = join(productionRoot, 'testing');
+  const raw = base(dir, { productionRoot, testRoot, composeFile });
+  writeFileSync(composeFile, `services:\n  riviamigo:\n    image: \${RIVIAMIGO_IMAGE_REF:?}\n    volumes:\n      - ${join(testRoot, 'db')}:/db\n`);
   assert.doesNotThrow(() => buildPlan(raw));
-  writeFileSync(composeFile, 'services:\n  riviamigo:\n    image: ${RIVIAMIGO_IMAGE_REF:?}\n    volumes:\n      - <production-root>/db:/db\n');
+  writeFileSync(composeFile, `services:\n  riviamigo:\n    image: \${RIVIAMIGO_IMAGE_REF:?}\n    volumes:\n      - ${join(productionRoot, 'db')}:/db\n`);
   assert.throws(() => buildPlan(raw), /Compose/);
 });
 test('rejects traversal archive and missing manifest', () => {

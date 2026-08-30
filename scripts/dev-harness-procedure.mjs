@@ -10,11 +10,21 @@ const value = (name) => process.env[name]?.trim();
 const args = [];
 const packagePath = value('RIVIAMIGO_HARNESS_PACKAGE');
 if (packagePath) args.push('--package', packagePath);
-else args.push('--latest-package-dir', value('RIVIAMIGO_HARNESS_PACKAGE_DIR') || '<production-root>/backups');
+else {
+  const packageDir = value('RIVIAMIGO_HARNESS_PACKAGE_DIR');
+  if (!packageDir) {
+    console.error('dev-harness-procedure: RIVIAMIGO_HARNESS_PACKAGE or RIVIAMIGO_HARNESS_PACKAGE_DIR is required.');
+    process.exitCode = 1;
+    process.exit();
+  }
+  args.push('--latest-package-dir', packageDir);
+}
 
 const required = {
   RIVIAMIGO_HARNESS_BASELINE_IMAGE: '--baseline-image',
   RIVIAMIGO_HARNESS_DEV_IMAGE: '--dev-image',
+  RIVIAMIGO_HARNESS_PRODUCTION_ROOT: '--production-root',
+  RIVIAMIGO_HARNESS_PRODUCTION_PORT: '--production-port',
   RIVIAMIGO_HARNESS_TEST_ROOT: '--test-root',
   RIVIAMIGO_HARNESS_ENV_FILE: '--env-file',
   RIVIAMIGO_HARNESS_COMPOSE_FILE: '--compose-file',

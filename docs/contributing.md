@@ -83,8 +83,13 @@ Set `SKIP_LOCAL_CI=1` only for an emergency bypass; the hook prints the
 bypass so it is visible in the terminal. Remove the hooks with
 `pnpm hooks:uninstall`.
 
-The local gate does not replace GitHub-hosted security scans, real S3 backup
-drills, multi-architecture image publishing/signing, or self-hosted release
+The local gate does not build the production container on every commit. Run
+`pnpm verify:image` after changing API, web, package, nginx, dependency-lock, or
+Dockerfile inputs; it builds the normal AMD64 release image locally with the
+same Dockerfile and production profile as GitHub. Use
+`pnpm verify:release-image -- --all-platforms` only for explicit ARM64
+qualification. The local gates do not replace GitHub-hosted security scans,
+real S3 backup drills, image publication/signing, or self-hosted release
 checkpoints. After the local gate passes, use `gh pr checks` or `gh run watch`
 to observe the authoritative remote result.
 
@@ -116,32 +121,35 @@ CI is organized into independently visible workflows so contributors can rerun
 the evidence closest to their change:
 
 The fast validation gate runs on pull requests targeting `dev` or `main`, not
-on every push to either protected branch. Container images are published only
-by intentional release workflows: stable images from a validated `main` tag
-and pre-release images from an approved `dev` candidate.
+on every push to either protected branch. Pushes to `main` and `dev` build an
+unversioned, commit-addressed AMD64 candidate that feeds the shared GHCR layer
+cache. Versioned container images are published only by intentional release
+workflows: stable images from a validated `main` tag and pre-release images
+from an approved `dev` candidate.
 
 PRs run deterministic quality, typecheck, unit-test, SQLx, route-security, and
 source-scan checks. Coverage and Storybook run from the scheduled/manual
 frontend workflow. Browser E2E is manual-only; it is not a required
-PR gate. Runtime migration/health, populated-upgrade, deployable-image, and
+PR gate. Runtime migration/health, populated-upgrade, commit-candidate, and
 full dependency/image security audits are scheduled/manual release evidence.
 Restore and vehicle-artwork contracts remain path-targeted PR checks, while
 fresh-install acceptance remains manual-only. Use the documented coverage and
 E2E commands when reproducing the longer-running checks locally.
 
-The runtime workflow proves fresh migration, idempotency, health, the deployable
-image contract, and the populated charge-identity upgrade. The populated gate
+The runtime workflow proves fresh migration, idempotency, health, the exact
+commit-candidate contract, and the populated charge-identity upgrade. The populated gate
 creates its disposable database through migration 0006, seeds synthetic data,
 and proves health-first startup plus resumable, idempotent background completion.
-Release workflows repeat that gate against both published image platforms.
+Release workflows repeat that gate against the promoted AMD64 digest. ARM64 is
+an explicit compatibility build rather than a release-default platform.
 
-| Area        | Current checks                                                                                                                               |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| PR Quality  | Repository hygiene, linting, design-token guard, docs check, and dashboard-default drift                                                     |
-| PR Frontend | Typecheck and repository test contract; coverage and Storybook are scheduled/manual                                               |
-| PR Backend  | `cargo fmt --check`, SQLx metadata, Clippy with warnings denied, and Rust tests                                                              |
-| Runtime     | Scheduled/manual fresh TimescaleDB migration, migration-ledger inspection, API health, populated upgrade, Compose validation, and image build |
-| PR Security | Route authorization inventory, Gitleaks, and Semgrep; dependency audits and Trivy run scheduled/manual                                      |
+| Area        | Current checks                                                                                                                                         |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| PR Quality  | Repository hygiene, linting, design-token guard, docs check, and dashboard-default drift                                                               |
+| PR Frontend | Typecheck and repository test contract; coverage and Storybook are scheduled/manual                                                                    |
+| PR Backend  | `cargo fmt --check`, SQLx metadata, Clippy with warnings denied, and Rust tests                                                                        |
+| Runtime     | Scheduled/manual fresh TimescaleDB migration, migration-ledger inspection, API health, populated upgrade, Compose validation, and candidate inspection |
+| PR Security | Route authorization inventory, Gitleaks, and Semgrep; dependency audits and Trivy run scheduled/manual                                                 |
 
 Dependency and secret failures are release blockers. High-risk Semgrep
 findings and fixable critical/high Trivy findings are also blocking. Unfixed

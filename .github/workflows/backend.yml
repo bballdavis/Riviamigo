@@ -85,6 +85,8 @@ jobs:
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: apps/api
+          shared-key: riviamigo-api
+          save-if: false
       - name: Install sqlx-cli
         run: cargo install sqlx-cli --no-default-features --features postgres --locked
       - name: Format

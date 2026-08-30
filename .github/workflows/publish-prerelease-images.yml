@@ -7,6 +7,11 @@ on:
         description: Pre-release version, for example 2026.07.0-rc.1
         required: true
         type: string
+      include_arm64:
+        description: Merge a prebuilt ARM64 candidate into this preview
+        required: false
+        default: false
+        type: boolean
 
 env:
   REGISTRY: ghcr.io
@@ -23,6 +28,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       source_sha: ${{ steps.version.outputs.source_sha }}
+      include_arm64: ${{ steps.version.outputs.include_arm64 }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -31,7 +37,7 @@ jobs:
       - id: version
         env:
           VERSION: ${{ inputs.version }}
-        shell: bash
+          INCLUDE_ARM64: ${{ inputs.include_arm64 || false }}
         run: |
           set -euo pipefail
           if [[ ! "$VERSION" =~ ^[0-9]{4}\.(0[1-9]|1[0-2])\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]]; then
@@ -40,142 +46,62 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "include_arm64=$INCLUDE_ARM64" >> "$GITHUB_OUTPUT"
 
-  build-image:
-    name: Build ${{ matrix.pair }} image
+  promote-image:
+    name: Promote commit candidate
     needs: validate
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            pair: amd64
-            runner: ubuntu-24.04
-          - platform: linux/arm64
-            pair: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          ref: ${{ needs.validate.outputs.source_sha }}
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Start platform timing
-        run: echo "BUILD_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
-      - id: push
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
-        with:
-          context: .
-          file: ./compose/Dockerfile
-          platforms: ${{ matrix.platform }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo,push-by-digest=true,name-canonical=true,push=true
-          provenance: false
-          cache-from: |
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:buildcache-${{ matrix.pair }}
-            type=gha,scope=riviamigo-container-image-${{ matrix.pair }}
-          cache-to: |
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:buildcache-${{ matrix.pair }},mode=max,compression=zstd,oci-mediatypes=true,image-manifest=true,ignore-error=true
-            type=gha,scope=riviamigo-container-image-${{ matrix.pair }},mode=min,ignore-error=true
-          labels: |
-            org.opencontainers.image.source=https://github.com/bballdavis/Riviamigo
-            org.opencontainers.image.revision=${{ needs.validate.outputs.source_sha }}
-            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
-      - name: Write platform digest and timing
-        if: always()
-        env:
-          DIGEST: ${{ steps.push.outputs.digest }}
-        run: |
-          set -euo pipefail
-          test -n "$DIGEST"
-          mkdir -p "$RUNNER_TEMP/prerelease-image-artifacts/digests" "$RUNNER_TEMP/prerelease-image-artifacts/timings"
-          echo "$DIGEST" > "$RUNNER_TEMP/prerelease-image-artifacts/digests/${{ matrix.pair }}.digest"
-          node -e 'const fs = require("node:fs"); const started = Number(process.env.BUILD_STARTED_AT); const finished = Math.floor(Date.now() / 1000); fs.writeFileSync(process.argv[1], JSON.stringify({ platform: process.argv[2], startedAt: started, finishedAt: finished, durationSeconds: Math.max(0, finished - started) }) + "\n");' "$RUNNER_TEMP/prerelease-image-artifacts/timings/${{ matrix.pair }}.json" "${{ matrix.platform }}"
-      - name: Upload platform digest and timing
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
-        with:
-          name: prerelease-image-${{ matrix.pair }}
-          path: ${{ runner.temp }}/prerelease-image-artifacts
-          if-no-files-found: error
-          retention-days: 1
-      - name: Summarize platform timing
-        if: always()
-        run: |
-          if [[ -f "$RUNNER_TEMP/prerelease-image-artifacts/timings/${{ matrix.pair }}.json" ]]; then
-            echo "${{ matrix.platform }} build timing: $(node -p "require('$RUNNER_TEMP/prerelease-image-artifacts/timings/${{ matrix.pair }}.json').durationSeconds") seconds" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "${{ matrix.platform }} build timing: unavailable" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-  merge-image:
-    name: Merge pre-release image
-    needs: [validate, build-image]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
       attestations: write
       id-token: write
     outputs:
-      digest: ${{ steps.merge.outputs.digest }}
+      digest: ${{ steps.promote.outputs.digest }}
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
-        with:
-          pattern: prerelease-image-*
-          path: ${{ runner.temp }}/prerelease-image-artifacts
-          merge-multiple: true
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: merge
-        name: Merge platform manifests
+      - id: promote
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo
           VERSION: ${{ needs.validate.outputs.version }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+          INCLUDE_ARM64: ${{ needs.validate.outputs.include_arm64 }}
         run: |
           set -euo pipefail
           started=$(date +%s)
-          mapfile -t digest_files < <(find "$RUNNER_TEMP/prerelease-image-artifacts/digests" -type f -name '*.digest' | sort)
-          mapfile -t timing_files < <(find "$RUNNER_TEMP/prerelease-image-artifacts/timings" -type f -name '*.json' | sort)
-          test "${#digest_files[@]}" -eq 2
-          test "${#timing_files[@]}" -eq 2
-          digests=()
-          for file in "${digest_files[@]}"; do
-            digest=$(tr -d '[:space:]' < "$file")
-            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-            digests+=("$IMAGE@$digest")
-          done
+          sources=("$IMAGE:candidate-$SOURCE_SHA-amd64")
+          docker buildx imagetools inspect "${sources[0]}" >/dev/null
+          if [[ "$INCLUDE_ARM64" == "true" ]]; then
+            sources+=("$IMAGE:candidate-$SOURCE_SHA-arm64")
+            docker buildx imagetools inspect "${sources[1]}" >/dev/null
+          fi
           docker buildx imagetools create --metadata-file "$RUNNER_TEMP/prerelease-image-metadata.json" \
-            --tag "$IMAGE:$VERSION" "${digests[@]}"
+            --tag "$IMAGE:$VERSION" "${sources[@]}"
           digest=$(node -e 'const m = require(process.argv[1]); const d = m["containerimage.descriptor"]?.digest ?? m["containerimage.digest"]; if (!d) process.exit(1); process.stdout.write(d);' "$RUNNER_TEMP/prerelease-image-metadata.json")
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          finished=$(date +%s)
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "Pre-release manifest digest: $digest" >> "$GITHUB_STEP_SUMMARY"
-          echo "Pre-release manifest merge timing: $((finished - started)) seconds" >> "$GITHUB_STEP_SUMMARY"
-          node -e 'const fs = require("node:fs"); const files = process.argv.slice(1); const rows = files.map(f => JSON.parse(fs.readFileSync(f, "utf8"))); for (const row of rows) console.log(`${row.platform} build timing: ${row.durationSeconds} seconds`);' "${timing_files[@]}" >> "$GITHUB_STEP_SUMMARY"
+          platforms=linux/amd64
+          if [[ "$INCLUDE_ARM64" == "true" ]]; then platforms="$platforms, linux/arm64"; fi
+          echo "### Preview promotion" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Source commit: \`$SOURCE_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Platforms: \`$platforms\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Digest: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Promotion: $(( $(date +%s) - started ))s" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo
-          subject-digest: ${{ steps.merge.outputs.digest }}
+          subject-digest: ${{ steps.promote.outputs.digest }}
           push-to-registry: true
 
   release-smoke:
     name: Smoke test
-    needs: [validate, merge-image]
+    needs: [validate, promote-image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -184,7 +110,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
-      - name: Authenticate pre-release smoke test to GHCR
+      - name: Authenticate preview smoke test to GHCR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
@@ -197,16 +123,12 @@ jobs:
           sed -i 's|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://prerelease-smoke.example.test|' "$smoke_env"
           echo "RIVIAMIGO_SETUP_TOKEN=$(openssl rand -hex 32)" >> "$smoke_env"
           echo "PRERELEASE_SMOKE_ENV=$smoke_env" >> "$GITHUB_ENV"
-      - name: Exercise published pre-release image stack
-        run: node scripts/verify-fresh-install.mjs --mode production --production-env "$PRERELEASE_SMOKE_ENV" --image-ref "${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo@${{ needs.merge-image.outputs.digest }}"
+      - name: Exercise published preview image stack
+        run: node scripts/verify-fresh-install.mjs --mode production --production-env "$PRERELEASE_SMOKE_ENV" --image-ref "${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo@${{ needs.promote-image.outputs.digest }}"
 
   populated-upgrade:
-    name: Populated upgrade (${{ matrix.platform }})
-    needs: [validate, merge-image]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [linux/amd64, linux/arm64]
+    name: Populated upgrade (linux/amd64)
+    needs: [validate, promote-image]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -219,27 +141,21 @@ jobs:
           POSTGRES_DB: postgres
           POSTGRES_USER: riviamigo
           POSTGRES_PASSWORD: devpassword
-        ports:
-          - 5432:5432
+        ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U riviamigo -d postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
+          --health-interval 10s --health-timeout 5s --health-retries 10
       redis:
         image: redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
-        ports:
-          - 6379:6379
+        ports: ['6379:6379']
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 10s --health-timeout 5s --health-retries 5
     env:
-      UPGRADE_DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo_upgrade_${{ matrix.platform == 'linux/arm64' && 'arm64' || 'amd64' }}
+      UPGRADE_DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo_upgrade_amd64
       REDIS_URL: redis://127.0.0.1:6379
-      UPGRADE_IMAGE: ghcr.io/bballdavis/riviamigo@${{ needs.merge-image.outputs.digest }}
-      UPGRADE_PLATFORM: ${{ matrix.platform }}
+      UPGRADE_IMAGE: ghcr.io/bballdavis/riviamigo@${{ needs.promote-image.outputs.digest }}
+      UPGRADE_PLATFORM: linux/amd64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -247,7 +163,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '24.18.0'
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ${{ env.REGISTRY }}
@@ -259,15 +174,17 @@ jobs:
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
         with:
           workspaces: apps/api
+          shared-key: riviamigo-api
+          save-if: false
       - name: Install sqlx-cli
         working-directory: apps/api
         run: cargo install sqlx-cli --no-default-features --features postgres --locked
-      - name: Verify populated upgrade on the pre-release image
+      - name: Verify populated upgrade on the preview image
         run: node scripts/verify-populated-upgrade.mjs
 
   create-release:
-    name: Create release
-    needs: [validate, merge-image, release-smoke, populated-upgrade]
+    name: Create preview release
+    needs: [validate, promote-image, release-smoke, populated-upgrade]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -275,15 +192,14 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
-      - name: Verify published multi-architecture image
-        run: docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo@${{ needs.merge-image.outputs.digest }}"
+      - name: Verify published image
+        run: docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo@${{ needs.promote-image.outputs.digest }}"
       - name: Create digest lock and GitHub pre-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.validate.outputs.version }}
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
-          IMAGE_DIGEST: ${{ needs.merge-image.outputs.digest }}
-        shell: bash
+          IMAGE_DIGEST: ${{ needs.promote-image.outputs.digest }}
         run: |
           echo "ghcr.io/bballdavis/riviamigo@${IMAGE_DIGEST}" > images.lock
           cp compose/docker-compose.yml docker-compose.yml
