@@ -56,6 +56,38 @@ The API embeds the reviewed profile and owns all demo generation. Do not add par
 
 ## CI Coverage
 
+### Local verification gates
+
+Install the repository hooks once in each checkout:
+
+```bash
+pnpm hooks:install
+```
+
+The hooks select the appropriate gate automatically:
+
+- Commits and pushes on `main` run `pnpm verify:ci`.
+- Pushes for an existing GitHub PR run `pnpm verify:ci`.
+- Other feature-branch commits and pushes run `pnpm verify:local`.
+- Use `pnpm pr:create -- --base dev --fill` to run the full gate before creating the first PR for a branch.
+
+`verify:local` runs the static, dependency, frontend, backend, documentation,
+contract, and unit-test checks without starting disposable services.
+`verify:ci` starts isolated digest-pinned TimescaleDB and Redis containers,
+then adds SQLx migration/metadata checks, Clippy, database-backed tests, the
+ignored migration-ledger repair test, and workspace/documentation builds. The
+containers use the `riviamigo-ci-local` Compose project and are removed when
+the command finishes.
+
+Set `SKIP_LOCAL_CI=1` only for an emergency bypass; the hook prints the
+bypass so it is visible in the terminal. Remove the hooks with
+`pnpm hooks:uninstall`.
+
+The local gate does not replace GitHub-hosted security scans, real S3 backup
+drills, multi-architecture image publishing/signing, or self-hosted release
+checkpoints. After the local gate passes, use `gh pr checks` or `gh run watch`
+to observe the authoritative remote result.
+
 ### Migration and recovery contract
 
 Migration files under `apps/api/migrations/` are an immutable release
