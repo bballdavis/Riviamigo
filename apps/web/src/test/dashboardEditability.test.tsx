@@ -217,7 +217,7 @@ describe('dashboard editability', () => {
     ['battery', 'd2000002-0000-0000-0000-000000000001', 9, 9],
     ['charging', 'd4000004-0000-0000-0000-000000000001', 9, 9],
     ['efficiency', 'd3000003-0000-0000-0000-000000000001', 5, 5],
-    ['trips', 'd5000005-0000-0000-0000-000000000005', 7, 6],
+    ['trips', 'd5000005-0000-0000-0000-000000000005', 6, 6],
   ] as const)('opens widget editing from the shared shell for %s', async (slug, widgetId, widgetCount, editableWidgetCount) => {
     render(<DashboardPageShell navKey={slug} slug={slug} title={slug} />);
 

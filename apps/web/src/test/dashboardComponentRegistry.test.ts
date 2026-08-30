@@ -163,7 +163,7 @@ describe('dashboard component registry', () => {
     expect(apiOverview.widgets).toEqual(frontendOverview?.widgets);
   });
 
-  it('marks fixed page composition charts as managed while keeping their layout in the dashboard config', () => {
+  it('keeps only intended fixed page composition charts in bundled dashboards', () => {
     const overview = DEFAULT_DASHBOARDS.find((dashboard) => dashboard.slug === 'dashboard');
     const trips = DEFAULT_DASHBOARDS.find((dashboard) => dashboard.slug === 'trips');
 
@@ -171,11 +171,9 @@ describe('dashboard component registry', () => {
       managed: true,
       componentType: 'chart',
     });
-    expect(trips?.widgets.find((widget) => widget.managedKey === 'trips.tire-pressure-timeline')).toMatchObject({
-      managed: true,
-      componentType: 'chart',
-      layout: { x: 0, y: 2, w: 12, h: 7 },
-    });
+    expect(trips?.widgets.some((widget) => widget.managedKey === 'trips.tire-pressure-timeline')).toBe(false);
+    expect(trips?.widgets.find((widget) => widget.definitionId === 'trips.map')?.layout).toEqual({ x: 0, y: 2, w: 12, h: 10 });
+    expect(trips?.widgets.find((widget) => widget.definitionId === 'trips.table')?.layout).toEqual({ x: 0, y: 12, w: 12, h: 14 });
   });
 
   it('reshapes the charging summary around the connected charging custom chip', () => {
