@@ -33,6 +33,21 @@ function run(command, args = [], options = {}) {
   if (result.status !== 0) throw new Error(`${label} failed with exit code ${result.status ?? 'unknown'}.`);
 }
 
+function runWithRetries(command, args = [], options = {}) {
+  const attempts = options.attempts ?? 3;
+  const retryDelayMs = options.retryDelayMs ?? 2_000;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      run(command, args, options);
+      return;
+    } catch (error) {
+      if (attempt === attempts) throw error;
+      console.warn(`${options.label ?? command} failed during service startup; retrying in ${retryDelayMs / 1_000}s (${attempt}/${attempts}).`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, retryDelayMs);
+    }
+  }
+}
+
 function git(args) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true });
   return result.status === 0 ? result.stdout.trim() : '';
@@ -116,7 +131,13 @@ function ciChecks() {
     Object.assign(process.env, ciEnv);
     ensureSqlxCli();
     compose(['up', '-d', '--wait', 'timescaledb', 'redis']);
-    run('cargo', ['sqlx', 'migrate', 'run'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'SQLx migrations' });
+    runWithRetries('cargo', ['sqlx', 'migrate', 'run'], {
+      cwd: join(root, 'apps/api'),
+      env: ciEnv,
+      label: 'SQLx migrations',
+      attempts: 5,
+      retryDelayMs: 2_000,
+    });
     commonChecks({ includeInstall: true, includeBuild: true, apiTests: 'none', env: ciEnv });
     run('cargo', ['sqlx', 'prepare', '--check', '--workspace', '--', '--all-targets', '--all-features'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'SQLx offline metadata' });
     run('cargo', ['clippy', '--all-targets', '--all-features', '--', '-D', 'warnings'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'Clippy' });
