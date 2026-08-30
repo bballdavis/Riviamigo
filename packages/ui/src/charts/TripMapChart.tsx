@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { BasemapStyleDescriptor, MapStylePreference } from '@riviamigo/types';
 import { CHART_COLORS } from './ChartProvider';
 
 export interface LatLng { lat: number; lng: number; }
@@ -14,14 +15,17 @@ export type MapStyleMode = 'dark' | 'light';
 /** Resolved by the application data layer before the chart is rendered. */
 export interface BasemapConfig {
   enabled: boolean;
-  /** The configured Remote CARTO basemap has no server-side API key. */
-  carto_api_key_missing: boolean;
-  /** Non-secret persisted configuration revision for cache-safe tile replacement. */
+  provider_preference?: string;
+  resolved_provider?: string;
   revision: string;
-  light_url: string;
-  dark_url: string;
-  attribution: string | null;
-  attribution_url: string | null;
+  styles?: BasemapStyleDescriptor[];
+  attributions?: Array<{ label: string; url?: string | null }>;
+  // Legacy fields are retained for consumers upgrading alongside the API.
+  carto_api_key_missing?: boolean;
+  light_url?: string;
+  dark_url?: string;
+  attribution?: string | null;
+  attribution_url?: string | null;
 }
 
 export interface TripMapChartProps {
@@ -35,6 +39,7 @@ export interface TripMapChartProps {
   height?: number;
   className?: string;
   mapStyle?: MapStyleMode;
+  mapStylePreference?: MapStylePreference;
   /** Bearer token used only for Riviamigo's same-origin basemap proxy. */
   accessToken?: string | null;
   /** Resolved basemap policy. UI never performs API requests. */
@@ -66,6 +71,9 @@ interface MapApi {
   setPaintProperty(layerId: string, name: string, value: unknown): void;
   getCanvas(): { style: CSSStyleDeclaration };
   setStyle(style: unknown): void;
+  setPitch?(pitch: number): void;
+  setBearing?(bearing: number): void;
+  dragRotate?: { enable(): void; disable(): void };
 }
 
 const FALLBACK_ROUTE_COLORS = [
@@ -85,7 +93,6 @@ const ROUTE_HIT_LAYER_ID = 'trip-routes-hit';
 
 export const NEUTRAL_BASEMAP_CONFIG: BasemapConfig = {
   enabled: false,
-  carto_api_key_missing: false,
   revision: 'neutral',
   dark_url: '',
   light_url: '',
@@ -93,7 +100,15 @@ export const NEUTRAL_BASEMAP_CONFIG: BasemapConfig = {
   attribution_url: null,
 };
 
-function buildMapLibreStyle(mode: MapStyleMode, basemap: BasemapConfig) {
+function resolveStyleDescriptor(basemap: BasemapConfig, preference: MapStylePreference, mode: MapStyleMode) {
+  const descriptors = basemap.styles ?? [];
+  const follow = descriptors.find((descriptor) => descriptor.id === 'follow-theme');
+  const selected = descriptors.find((descriptor) => descriptor.id === preference) ?? follow;
+  if (selected) return { descriptor: selected, url: mode === 'dark' ? selected.dark_url : selected.light_url };
+  return { descriptor: undefined, url: mode === 'dark' ? basemap.dark_url ?? '' : basemap.light_url ?? '' };
+}
+
+function buildMapLibreStyle(mode: MapStyleMode, basemap: BasemapConfig, preference: MapStylePreference = 'follow-theme') {
   if (!basemap.enabled) {
     return {
       version: 8 as const,
@@ -105,22 +120,25 @@ function buildMapLibreStyle(mode: MapStyleMode, basemap: BasemapConfig) {
       }],
     };
   }
+  const { descriptor, url } = resolveStyleDescriptor(basemap, preference, mode);
+  if (descriptor?.kind === 'style' && url) return url;
   return {
     version: 8 as const,
     sources: {
       'carto-base': {
         type: 'raster' as const,
-        tiles: [mode === 'dark' ? basemap.dark_url : basemap.light_url],
+        tiles: [url],
         tileSize: 256,
-        attribution: basemap.attribution ?? '',
+        attribution: basemap.attributions?.map((item) => item.label).join(' | ') ?? basemap.attribution ?? '',
       },
     },
     layers: [{ id: 'background', type: 'raster' as const, source: 'carto-base' }],
   };
 }
 
-function basemapSignature(basemap: BasemapConfig, mode: MapStyleMode) {
-  return `${mode}|${basemap.enabled}|${basemap.revision}|${basemap.light_url}|${basemap.dark_url}`;
+function basemapSignature(basemap: BasemapConfig, mode: MapStyleMode, preference: MapStylePreference) {
+  const resolved = resolveStyleDescriptor(basemap, preference, mode);
+  return `${mode}|${preference}|${basemap.enabled}|${basemap.revision}|${resolved.url}|${resolved.descriptor?.kind ?? 'raster'}`;
 }
 
 export async function loadMapLibre() {
@@ -142,6 +160,7 @@ export function TripMapChart({
   height = 320,
   className,
   mapStyle = 'dark',
+  mapStylePreference = 'follow-theme',
   accessToken = null,
   basemapConfig,
   basemapError = null,
@@ -162,6 +181,8 @@ export function TripMapChart({
   const accessTokenRef = React.useRef<string | null>(accessToken);
   const basemap = basemapConfig ?? NEUTRAL_BASEMAP_CONFIG;
   const basemapRef = React.useRef<BasemapConfig>(basemap);
+  const mapStyleRef = React.useRef<MapStyleMode>(mapStyle);
+  const mapStylePreferenceRef = React.useRef<MapStylePreference>(mapStylePreference);
   const appliedBasemapSignatureRef = React.useRef('');
   const [mapError, setMapError] = React.useState<string | null>(null);
 
@@ -172,6 +193,11 @@ export function TripMapChart({
   React.useEffect(() => {
     basemapRef.current = basemap;
   }, [basemap]);
+
+  React.useEffect(() => {
+    mapStyleRef.current = mapStyle;
+    mapStylePreferenceRef.current = mapStylePreference;
+  }, [mapStyle, mapStylePreference]);
 
   const routeList = React.useMemo(
     () => (routes?.length ? routes : [{ id: 'trip', track }]).filter((route) => route.track.length > 1),
@@ -231,10 +257,12 @@ export function TripMapChart({
       if (!firstPoint) return;
 
       const initialBasemap = basemapRef.current;
-      appliedBasemapSignatureRef.current = basemapSignature(initialBasemap, mapStyle);
+      const initialMapStyle = mapStyleRef.current;
+      const initialMapStylePreference = mapStylePreferenceRef.current;
+      appliedBasemapSignatureRef.current = basemapSignature(initialBasemap, initialMapStyle, initialMapStylePreference);
       const map = new maplibregl.Map({
         container: containerRef.current!,
-        style: buildMapLibreStyle(mapStyle, initialBasemap),
+        style: buildMapLibreStyle(initialMapStyle, initialBasemap, initialMapStylePreference),
         center: [firstPoint.lng, firstPoint.lat],
         zoom: 12,
         attributionControl: false,
@@ -273,10 +301,15 @@ export function TripMapChart({
           latestVisibleRouteSignatureRef.current,
         );
         syncActivePoint(mapRef.current, latestActivePointRef.current, lastActivePointRef);
+        applyPerspective(map, basemapRef.current, mapStylePreferenceRef.current);
         // Configuration can arrive after the map is constructed but before
         // its initial style loads. Reapply it after route sync; the regular
         // style-load handler below restores the route source after the swap.
-        const currentSignature = basemapSignature(basemapRef.current, mapStyle);
+        const currentSignature = basemapSignature(
+          basemapRef.current,
+          mapStyleRef.current,
+          mapStylePreferenceRef.current,
+        );
         if (currentSignature !== appliedBasemapSignatureRef.current) {
           appliedBasemapSignatureRef.current = currentSignature;
           const restoreAfterInitialSwap = () => {
@@ -289,10 +322,16 @@ export function TripMapChart({
               onRouteClickRef,
               latestVisibleRouteSignatureRef.current,
             );
+            lastActivePointRef.current = null;
             syncActivePoint(map, latestActivePointRef.current, lastActivePointRef);
+            applyPerspective(map, basemapRef.current, mapStylePreferenceRef.current);
           };
           map.on('style.load', restoreAfterInitialSwap);
-          map.setStyle(buildMapLibreStyle(mapStyle, basemapRef.current));
+          map.setStyle(buildMapLibreStyle(
+            mapStyleRef.current,
+            basemapRef.current,
+            mapStylePreferenceRef.current,
+          ));
         }
         requestAnimationFrame(() => {
           mapRef.current?.resize();
@@ -333,17 +372,19 @@ export function TripMapChart({
         onRouteClickRef,
         latestVisibleRouteSignatureRef.current,
       );
+      lastActivePointRef.current = null;
       syncActivePoint(map, latestActivePointRef.current, lastActivePointRef);
+      applyPerspective(map, basemap, mapStylePreference);
     }
 
     map.on('style.load', onStyleLoad);
-    appliedBasemapSignatureRef.current = basemapSignature(basemap, mapStyle);
-    map.setStyle(buildMapLibreStyle(mapStyle, basemap));
+    appliedBasemapSignatureRef.current = basemapSignature(basemap, mapStyle, mapStylePreference);
+    map.setStyle(buildMapLibreStyle(mapStyle, basemap, mapStylePreference));
 
     return () => {
       map.off('style.load', onStyleLoad);
     };
-  }, [basemap, mapStyle]);
+  }, [basemap, mapStyle, mapStylePreference]);
 
   // Sync routes whenever routes or selection changes
   React.useEffect(() => {
@@ -470,19 +511,10 @@ export function TripMapChart({
           style={{ height }}
           className={className ?? 'w-full rounded-xl overflow-hidden'}
         />
-        {basemap.enabled && basemap.attribution ? (
-          basemap.attribution_url ? (
-            <a href={basemap.attribution_url} target="_blank" rel="noopener noreferrer" className="absolute bottom-1 right-1 rounded bg-bg/80 px-1.5 py-0.5 text-[10px] text-fg-tertiary hover:text-fg">
-              {basemap.attribution}
-            </a>
-          ) : (
-            <span className="absolute bottom-1 right-1 rounded bg-bg/80 px-1.5 py-0.5 text-[10px] text-fg-tertiary">{basemap.attribution}</span>
-          )
-        ) : null}
-        {basemap.carto_api_key_missing ? (
-          <div className="pointer-events-none absolute left-1/2 top-3 z-10 w-[min(22rem,calc(100%-1.5rem))] -translate-x-1/2 rounded-lg border border-status-warning/30 bg-bg-elevated/95 px-3 py-2 text-center text-xs text-fg-secondary shadow-lg" role="status">
-            <span className="font-medium text-fg">CARTO Basemap key required</span>
-            <span className="ml-1">The map remains available with CARTO watermarking until an administrator adds a key in External Connections.</span>
+        {basemap.enabled && ((basemap.attributions?.length ?? 0) > 0 || basemap.attribution) ? (
+          <div className="absolute bottom-1 right-1 max-w-[calc(100%-0.5rem)] rounded bg-bg/80 px-1.5 py-0.5 text-right text-[10px] text-fg-tertiary">
+            {basemap.attributions?.map((item, index) => <React.Fragment key={`${item.label}-${index}`}>{index > 0 ? ' · ' : ''}{item.url ? <a href={item.url} target="_blank" rel="noopener noreferrer" className="hover:text-fg">{item.label}</a> : item.label}</React.Fragment>)}
+            {!basemap.attributions?.length && (basemap.attribution_url ? <a href={basemap.attribution_url} target="_blank" rel="noopener noreferrer" className="hover:text-fg">{basemap.attribution}</a> : basemap.attribution)}
           </div>
         ) : null}
         {mapError || basemapError ? (
@@ -551,6 +583,19 @@ function syncActivePoint(
         'circle-stroke-color': getCssColor('--rm-bg', CHART_COLORS.muted),
       },
     });
+  }
+}
+
+function applyPerspective(map: MapApi, basemap: BasemapConfig, preference: MapStylePreference) {
+  const perspective = resolveStyleDescriptor(basemap, preference, 'light').descriptor?.perspective_3d === true;
+  if (perspective) {
+    map.setPitch?.(45);
+    map.setBearing?.(-15);
+    map.dragRotate?.enable();
+  } else {
+    map.setPitch?.(0);
+    map.setBearing?.(0);
+    map.dragRotate?.disable();
   }
 }
 

@@ -45,6 +45,10 @@ pub fn metadata_router() -> Router<AppState> {
             axum::routing::get(get_preferences).put(update_preferences),
         )
         .route(
+            "/auth/preferences/map-style",
+            axum::routing::put(update_map_style),
+        )
+        .route(
             "/auth/preferences/chart-favorites",
             axum::routing::get(get_chart_favorites).put(update_chart_favorite),
         )
@@ -125,11 +129,22 @@ struct UnitPreferencesPayload {
 #[derive(Serialize)]
 struct PreferencesResponse {
     units: UnitPreferencesPayload,
+    map_style: String,
 }
 
 #[derive(Deserialize)]
 struct PreferencesUpdateBody {
     units: UnitPreferencesPayload,
+}
+
+#[derive(Deserialize)]
+struct MapStyleUpdateBody {
+    map_style: String,
+}
+
+#[derive(Serialize)]
+struct MapStyleResponse {
+    map_style: String,
 }
 
 #[derive(Serialize)]
@@ -616,12 +631,18 @@ async fn get_preferences(
         "SELECT unit_mode, distance_unit, temperature_unit, \
                 custom_distance_unit, custom_speed_unit, custom_temperature_unit, \
                 custom_pressure_unit, custom_altitude_unit, custom_place_radius_unit, \
-                custom_efficiency_display \
+                custom_efficiency_display, map_style \
          FROM riviamigo.user_preferences WHERE user_id = $1",
     )
     .bind(auth.user_id)
     .fetch_optional(&state.pool)
     .await?;
+
+    let map_style = row
+        .as_ref()
+        .and_then(|row| row.try_get::<String, _>("map_style").ok())
+        .filter(|value| is_valid_map_style(value))
+        .unwrap_or_else(|| "follow-theme".to_string());
 
     let units = if let Some(row) = row {
         let mode = row
@@ -681,7 +702,7 @@ async fn get_preferences(
         )
     };
 
-    Ok(Json(PreferencesResponse { units }))
+    Ok(Json(PreferencesResponse { units, map_style }))
 }
 
 async fn update_preferences(
@@ -735,7 +756,37 @@ async fn update_preferences(
     .execute(&state.pool)
     .await?;
 
-    Ok(Json(PreferencesResponse { units }))
+    let map_style = sqlx::query_scalar::<_, String>(
+        "SELECT map_style FROM riviamigo.user_preferences WHERE user_id = $1",
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .filter(|value| is_valid_map_style(value))
+    .unwrap_or_else(|| "follow-theme".to_string());
+    Ok(Json(PreferencesResponse { units, map_style }))
+}
+
+async fn update_map_style(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<MapStyleUpdateBody>,
+) -> Result<Json<MapStyleResponse>, AppError> {
+    if !is_valid_map_style(&body.map_style) {
+        return Err(AppError::Validation("invalid map style".into()));
+    }
+    sqlx::query(
+        "INSERT INTO riviamigo.user_preferences (user_id, map_style, updated_at) \
+         VALUES ($1, $2, now()) \
+         ON CONFLICT (user_id) DO UPDATE SET map_style = EXCLUDED.map_style, updated_at = now()",
+    )
+    .bind(auth.user_id)
+    .bind(&body.map_style)
+    .execute(&state.pool)
+    .await?;
+    Ok(Json(MapStyleResponse {
+        map_style: body.map_style,
+    }))
 }
 
 async fn get_chart_favorites(
@@ -882,6 +933,13 @@ fn normalize_units_payload(
         ));
     }
     Ok(input)
+}
+
+fn is_valid_map_style(value: &str) -> bool {
+    matches!(
+        value,
+        "follow-theme" | "positron" | "bright" | "liberty" | "dark" | "fiord" | "3d"
+    )
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -1113,6 +1171,23 @@ mod tests {
     }
 
     // ── pure unit tests (no DB needed) ───────────────────────────────────────
+
+    #[test]
+    fn map_style_validation_accepts_only_the_public_preference_union() {
+        for style in [
+            "follow-theme",
+            "positron",
+            "bright",
+            "liberty",
+            "dark",
+            "fiord",
+            "3d",
+        ] {
+            assert!(is_valid_map_style(style));
+        }
+        assert!(!is_valid_map_style("satellite"));
+        assert!(!is_valid_map_style(""));
+    }
 
     #[test]
     fn register_validation_rejects_empty_email() {

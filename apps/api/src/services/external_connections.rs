@@ -108,14 +108,14 @@ pub async fn ensure_defaults(pool: &PgPool) -> Result<(), AppError> {
         r#"INSERT INTO riviamigo.external_connection_settings
              (id, enabled, mode, weather_precision, forecast_url, archive_url, base_url,
               light_url_template, dark_url_template, attribution, attribution_url,
-              custom_autocomplete, allow_private_network)
+              custom_autocomplete, allow_private_network, basemap_provider)
            VALUES
-             ('rivian_account', TRUE, 'remote', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, FALSE, FALSE),
-             ('open_meteo', TRUE, 'remote', 'approximate', 'https://api.open-meteo.com/v1/forecast', 'https://archive-api.open-meteo.com/v1/archive', NULL, NULL, NULL, 'Weather data by Open-Meteo', 'https://open-meteo.com/', FALSE, FALSE),
-             ('nominatim', TRUE, 'remote', NULL, NULL, NULL, 'https://nominatim.openstreetmap.org', NULL, NULL, 'OpenStreetMap contributors', 'https://www.openstreetmap.org/copyright', FALSE, FALSE),
-             ('basemap', TRUE, 'remote', NULL, NULL, NULL, NULL, 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', 'OpenStreetMap contributors and CARTO', 'https://carto.com/attributions', FALSE, FALSE),
-             ('iconify', TRUE, 'remote', NULL, NULL, NULL, 'https://api.iconify.design', NULL, NULL, 'Iconify', 'https://iconify.design/', FALSE, FALSE),
-             ('s3_backup', FALSE, 'disabled', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, FALSE, FALSE)
+             ('rivian_account', TRUE, 'remote', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, FALSE, FALSE, 'auto'),
+             ('open_meteo', TRUE, 'remote', 'approximate', 'https://api.open-meteo.com/v1/forecast', 'https://archive-api.open-meteo.com/v1/archive', NULL, NULL, NULL, 'Weather data by Open-Meteo', 'https://open-meteo.com/', FALSE, FALSE, 'auto'),
+             ('nominatim', TRUE, 'remote', NULL, NULL, NULL, 'https://nominatim.openstreetmap.org', NULL, NULL, 'OpenStreetMap contributors', 'https://www.openstreetmap.org/copyright', FALSE, FALSE, 'auto'),
+             ('basemap', TRUE, 'remote', NULL, NULL, NULL, NULL, 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', 'OpenStreetMap contributors and CARTO', 'https://carto.com/attributions', FALSE, FALSE, 'auto'),
+             ('iconify', TRUE, 'remote', NULL, NULL, NULL, 'https://api.iconify.design', NULL, NULL, 'Iconify', 'https://iconify.design/', FALSE, FALSE, 'auto'),
+             ('s3_backup', FALSE, 'disabled', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, FALSE, FALSE, 'auto')
            ON CONFLICT (id) DO NOTHING"#,
     )
     .execute(pool)
@@ -128,6 +128,7 @@ pub struct ConnectionSettingsRow {
     pub id: String,
     pub enabled: bool,
     pub mode: String,
+    pub basemap_provider: String,
     pub weather_precision: Option<String>,
     pub forecast_url: Option<String>,
     pub archive_url: Option<String>,
@@ -168,7 +169,7 @@ pub struct ConnectionActivityRow {
 
 pub async fn load(pool: &PgPool, id: &str) -> Result<ConnectionSettingsRow, AppError> {
     sqlx::query_as::<_, ConnectionSettingsRow>(
-        r#"SELECT id, enabled, mode, weather_precision, forecast_url, archive_url,
+        r#"SELECT id, enabled, mode, basemap_provider, weather_precision, forecast_url, archive_url,
                   base_url, light_url_template, dark_url_template, attribution,
                   attribution_url, request_identifier, custom_autocomplete,
                   allow_private_network, private_network_allowlist::text[] AS private_network_allowlist,
@@ -191,6 +192,7 @@ pub async fn list(
         id: String,
         enabled: bool,
         mode: String,
+        basemap_provider: String,
         weather_precision: Option<String>,
         forecast_url: Option<String>,
         archive_url: Option<String>,
@@ -218,7 +220,7 @@ pub async fn list(
     }
 
     let rows = sqlx::query_as::<_, JoinedRow>(
-        r#"SELECT s.id, s.enabled, s.mode, s.weather_precision, s.forecast_url,
+        r#"SELECT s.id, s.enabled, s.mode, s.basemap_provider, s.weather_precision, s.forecast_url,
                   s.archive_url, s.base_url, s.light_url_template, s.dark_url_template,
                   s.attribution, s.attribution_url, s.request_identifier,
                   s.custom_autocomplete, s.allow_private_network,
@@ -247,6 +249,7 @@ pub async fn list(
                     id: row.id,
                     enabled: row.enabled,
                     mode: row.mode,
+                    basemap_provider: row.basemap_provider,
                     weather_precision: row.weather_precision,
                     forecast_url: row.forecast_url,
                     archive_url: row.archive_url,

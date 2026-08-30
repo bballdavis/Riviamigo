@@ -38,6 +38,8 @@ const settingsMocks = vi.hoisted(() => ({
       is_demo: false,
     },
   ],
+  basemapConfig: undefined as { resolved_provider: string } | undefined,
+  userPreferences: { units: {}, map_style: 'follow-theme' },
 }));
 
 const dashboardMocks = vi.hoisted(() => ({
@@ -52,6 +54,7 @@ const dashboardMocks = vi.hoisted(() => ({
 
 const hooksMocks = vi.hoisted(() => ({
   changePassword: vi.fn().mockResolvedValue(undefined),
+  updateMapStylePreference: vi.fn().mockResolvedValue({ map_style: 'follow-theme' }),
 }));
 
 const mockNavigate = vi.fn();
@@ -369,6 +372,13 @@ vi.mock('@riviamigo/hooks', () => ({
   useAuthReady: () => true,
   useMe: () => ({ data: settingsMocks.me }),
   useVehicles: () => ({ data: settingsMocks.vehicles }),
+  useBasemapConfig: () => ({ data: settingsMocks.basemapConfig, isLoading: false, isError: false }),
+  useUserPreferences: () => ({ data: settingsMocks.userPreferences, isLoading: false }),
+  useUpdateMapStyle: () => ({
+    mutate: hooksMocks.updateMapStylePreference,
+    isPending: false,
+    isError: false,
+  }),
   useChargingNetworkPreferences: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
   useUpdateChargingNetworkPreference: () => ({
     mutate: vi.fn(),
@@ -520,6 +530,8 @@ describe('Settings page', () => {
     settingsMocks.auth.setActiveVehicleId.mockReset();
     settingsMocks.auth.accessToken = undefined;
     settingsMocks.auth.defaultVehicleId = 'v1';
+    settingsMocks.basemapConfig = undefined;
+    settingsMocks.userPreferences = { units: {}, map_style: 'follow-theme' };
     dashboardMocks.dashboards = [];
     dashboardMocks.downloadDashboardYaml.mockReset();
     dashboardMocks.cloneMutateAsync.mockReset();
@@ -929,6 +941,33 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByText('Appearance'));
     expect(screen.getAllByText('Appearance').length).toBeGreaterThan(0);
     expect(screen.getByText('Theme')).toBeInTheDocument();
+  });
+
+  it('offers every OpenFreeMap style and saves the user selection', async () => {
+    settingsMocks.basemapConfig = { resolved_provider: 'openfreemap' };
+    renderSettings();
+    fireEvent.click(screen.getByText('Appearance'));
+
+    const style = screen.getByLabelText('Map style');
+    expect(style).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Follow appearance' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Positron' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Bright' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Liberty' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Dark' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Fiord' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '3D (Liberty)' })).toBeInTheDocument();
+
+    fireEvent.change(style, { target: { value: 'liberty' } });
+    await waitFor(() => expect(hooksMocks.updateMapStylePreference).toHaveBeenCalledWith('liberty'));
+  });
+
+  it('hides OpenFreeMap-only style controls for CARTO', () => {
+    settingsMocks.basemapConfig = { resolved_provider: 'carto' };
+    renderSettings();
+    fireEvent.click(screen.getByText('Appearance'));
+
+    expect(screen.queryByLabelText('Map style')).not.toBeInTheDocument();
   });
 
   it('renders the Places section', () => {

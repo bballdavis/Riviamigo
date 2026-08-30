@@ -14,7 +14,7 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock('@riviamigo/hooks', () => ({
   api: apiMocks,
-  BASEMAP_CONFIG_QUERY_KEY: ['external', 'basemap', 'config', 'v1'],
+  BASEMAP_CONFIG_QUERY_KEY: ['external', 'basemap', 'config', 'v2'],
 }));
 
 import { ExternalConnectionsSection } from '../ExternalConnectionsSection';
@@ -80,6 +80,7 @@ function basemapResponse(overrides: Partial<ExternalConnectionsResponse['connect
     id: 'basemap',
     name: 'Map basemap',
     mode: 'remote',
+    basemap_provider: 'auto',
     has_api_key: true,
     light_url_template: 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
     dark_url_template: 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
@@ -110,10 +111,12 @@ describe('ExternalConnectionsSection', () => {
     apiMocks.getExternalConnections.mockResolvedValue(initial);
     apiMocks.disableOptionalExternalConnections.mockResolvedValue(disabled);
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    renderSection();
+    const { client } = renderSection();
+    const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
 
     fireEvent.click(await screen.findByRole('button', { name: 'Disable optional' }));
     await waitFor(() => expect(apiMocks.disableOptionalExternalConnections).toHaveBeenCalledTimes(1));
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['external', 'basemap', 'config', 'v2'] });
   });
 
   it('shows persistent cache usage and lets administrators purge it', async () => {
@@ -141,7 +144,8 @@ describe('ExternalConnectionsSection', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('open_meteo', expect.any(Object)));
-    expect(invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ['external', 'basemap', 'config', 'v1'] });
+    expect(apiMocks.updateExternalConnection.mock.calls[0]?.[1]).not.toHaveProperty('basemap_provider');
+    expect(invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ['external', 'basemap', 'config', 'v2'] });
   });
 
   it('refreshes basemap config after administrators add a write-only CARTO Basemap key', async () => {
@@ -163,9 +167,57 @@ describe('ExternalConnectionsSection', () => {
 
     await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('basemap', expect.objectContaining({
       api_key: 'carto-secret',
+      basemap_provider: 'auto',
       mode: 'remote',
     })));
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['external', 'basemap', 'config', 'v1'] });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['external', 'basemap', 'config', 'v2'] });
+  });
+
+  it('lets administrators pin OpenFreeMap without exposing CARTO key controls', async () => {
+    const data = basemapResponse({ has_api_key: true, basemap_provider: 'auto' });
+    apiMocks.getExternalConnections.mockResolvedValue(data);
+    apiMocks.updateExternalConnection.mockResolvedValue(data);
+    apiMocks.testExternalConnection.mockResolvedValue({ checks: [{ label: 'Basemap', message: 'OK' }], preview_data_url: null });
+    renderSection();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Basemap provider' }));
+    expect(screen.getByRole('option', { name: 'Automatic (recommended)' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('option', { name: 'OpenFreeMap' }));
+
+    expect(screen.queryByLabelText('CARTO Basemap key')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Test with synthetic data' }));
+    await waitFor(() => expect(apiMocks.testExternalConnection).toHaveBeenCalledWith('basemap', expect.objectContaining({
+      basemap_provider: 'openfreemap',
+      mode: 'remote',
+    })));
+    expect(apiMocks.testExternalConnection.mock.calls[0]?.[1]).not.toHaveProperty('api_key');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('basemap', expect.objectContaining({
+      basemap_provider: 'openfreemap',
+      mode: 'remote',
+    })));
+    expect(apiMocks.updateExternalConnection.mock.calls[0]?.[1]).not.toHaveProperty('api_key');
+  });
+
+  it('requires an explicit write-only key entry when CARTO is pinned', async () => {
+    const data = basemapResponse({ has_api_key: false, basemap_provider: 'openfreemap' });
+    apiMocks.getExternalConnections.mockResolvedValue(data);
+    apiMocks.updateExternalConnection.mockResolvedValue(data);
+    renderSection();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Basemap provider' }));
+    fireEvent.click(screen.getByRole('option', { name: 'CARTO' }));
+    const apiKey = screen.getByLabelText('CARTO Basemap key');
+    expect(apiKey).toHaveAttribute('placeholder', 'Required for CARTO');
+    fireEvent.change(apiKey, { target: { value: 'carto-secret' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('basemap', expect.objectContaining({
+      api_key: 'carto-secret',
+      basemap_provider: 'carto',
+      mode: 'remote',
+    })));
   });
 
   it('shows a not-verified indicator when a saved key has no current test', async () => {
@@ -241,7 +293,10 @@ describe('ExternalConnectionsSection', () => {
     expect(apiMocks.updateExternalConnection).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Clear key' }));
 
-    await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('basemap', expect.objectContaining({ clear_api_key: true })));
+    await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('basemap', expect.objectContaining({
+      basemap_provider: 'auto',
+      clear_api_key: true,
+    })));
   });
 
   it('reveals a replacement field from the saved-key state without rendering the secret', async () => {

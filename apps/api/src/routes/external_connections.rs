@@ -24,6 +24,9 @@ use crate::{
     services::external_connections::{self as connections, ConnectionSettingsRow},
 };
 
+const BASEMAP_RASTER_ROUTE: &str = "/external/basemap/raster/{style}/{z}/{x}/{y}";
+const OPENFREEMAP_PROXY_ROUTE: &str = "/external/basemap/openfreemap/{*resource}";
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/settings/external-connections", get(list_connections))
@@ -43,11 +46,9 @@ pub fn router() -> Router<AppState> {
             "/settings/external-connections/{id}/cache/purge",
             post(purge_connection_cache),
         )
-        .route(
-            "/external/basemap/{style}/{z}/{x}/{y}",
-            get(proxy_basemap_tile),
-        )
+        .route(BASEMAP_RASTER_ROUTE, get(proxy_basemap_tile))
         .route("/external/basemap/config", get(basemap_config))
+        .route(OPENFREEMAP_PROXY_ROUTE, get(proxy_openfreemap_resource))
         .route("/external/iconify/search", get(proxy_iconify_search))
         .route("/external/iconify/{resource}", get(proxy_iconify_resource))
 }
@@ -71,6 +72,7 @@ struct ConnectionResponse {
     editable: bool,
     enabled: bool,
     mode: String,
+    basemap_provider: Option<String>,
     endpoint: Option<String>,
     endpoint_is_private: bool,
     weather_precision: Option<String>,
@@ -131,7 +133,7 @@ const DEFINITIONS: &[ConnectionDefinition] = &[
     ConnectionDefinition { id: connections::RIVIAN_ACCOUNT, name: "Rivian account", purpose: "Vehicle telemetry, history, remote operations, and locally mirrored vehicle artwork.", data_shared: &["Rivian account tokens", "Vehicle identifiers", "Telemetry, command, and artwork queries"], disabled_effect: "Disconnecting a vehicle stops telemetry, history import, remote operations, and future artwork retrieval. Existing local artwork remains.", execution: "Server", privacy_url: Some("https://rivian.com/legal/privacy"), terms_url: Some("https://rivian.com/legal/terms"), editable: false },
     ConnectionDefinition { id: connections::OPEN_METEO, name: "Open-Meteo weather", purpose: "Estimated outside temperature along completed drives.", data_shared: &["Rounded drive coordinates by default", "Drive date", "Temperature variable request"], disabled_effect: "New drives will not receive estimated outside temperatures or temperature-based efficiency data. Existing values remain.", execution: "Server", privacy_url: Some("https://open-meteo.com/en/terms"), terms_url: Some("https://open-meteo.com/en/terms"), editable: true },
     ConnectionDefinition { id: connections::NOMINATIM, name: "OpenStreetMap Nominatim", purpose: "Address search and readable trip endpoint labels.", data_shared: &["Exact coordinate for reverse geocoding", "Search text after explicit submit"], disabled_effect: "Address search and new automatic trip labels stop. Coordinates, saved places, and cached labels remain.", execution: "Server", privacy_url: Some("https://osmfoundation.org/wiki/Privacy_Policy"), terms_url: Some("https://operations.osmfoundation.org/policies/nominatim/"), editable: true },
-    ConnectionDefinition { id: connections::BASEMAP, name: "Map basemap", purpose: "Street and geographic context behind exact trip routes.", data_shared: &["Requested map tile coordinates", "Riviamigo server IP"], disabled_effect: "Routes remain visible on a neutral background, without streets or place context.", execution: "Server proxy", privacy_url: Some("https://carto.com/privacy/"), terms_url: Some("https://carto.com/legal/"), editable: true },
+    ConnectionDefinition { id: connections::BASEMAP, name: "Map basemap", purpose: "Street and geographic context behind exact trip routes.", data_shared: &["Requested map areas and resource paths", "Riviamigo server IP"], disabled_effect: "Routes remain visible on a neutral background, without streets or place context.", execution: "Server proxy", privacy_url: Some("https://carto.com/privacy/"), terms_url: Some("https://carto.com/legal/"), editable: true },
     ConnectionDefinition { id: connections::ICONIFY, name: "Iconify catalog", purpose: "Search and load dashboard icons not bundled locally.", data_shared: &["Icon names", "Explicit icon search text"], disabled_effect: "Remote icon search stops; bundled icons and local fallbacks remain.", execution: "Server proxy", privacy_url: Some("https://iconify.design/privacy/"), terms_url: Some("https://iconify.design/terms/"), editable: true },
     ConnectionDefinition { id: connections::S3_BACKUP, name: "S3-compatible backups", purpose: "Optional off-site backup storage managed in Backups.", data_shared: &["Backup artifact", "Configured object-store credentials"], disabled_effect: "New off-site backups stop; local backup behavior and existing objects remain.", execution: "Server", privacy_url: None, terms_url: None, editable: false },
 ];
@@ -171,6 +173,29 @@ async fn build_response(
                 active_endpoint(&settings),
             )
         };
+        let openfreemap_active = settings.id == connections::BASEMAP
+            && resolve_basemap_provider(&settings) == "openfreemap";
+        let privacy_url = if openfreemap_active {
+            Some("https://openfreemap.org/privacy/")
+        } else {
+            definition.privacy_url
+        };
+        let terms_url = if openfreemap_active {
+            Some("https://openfreemap.org/tos/")
+        } else {
+            definition.terms_url
+        };
+        let (attribution, attribution_url) = if openfreemap_active {
+            (
+                Some("OpenFreeMap © OpenMapTiles Data from OpenStreetMap".into()),
+                Some("https://openfreemap.org/".into()),
+            )
+        } else {
+            (
+                settings.attribution.clone(),
+                settings.attribution_url.clone(),
+            )
+        };
         let cache = cache_summary(state, &settings.id).await;
         result.push(ConnectionResponse {
             id: settings.id.clone(),
@@ -179,11 +204,13 @@ async fn build_response(
             data_shared: definition.data_shared,
             disabled_effect: definition.disabled_effect,
             execution: definition.execution,
-            privacy_url: definition.privacy_url,
-            terms_url: definition.terms_url,
+            privacy_url,
+            terms_url,
             editable: definition.editable && can_manage,
             enabled,
             mode,
+            basemap_provider: (settings.id == connections::BASEMAP)
+                .then_some(settings.basemap_provider.clone()),
             endpoint_is_private: settings.allow_private_network
                 || endpoint
                     .as_deref()
@@ -196,8 +223,8 @@ async fn build_response(
             base_url: settings.base_url,
             light_url_template: settings.light_url_template,
             dark_url_template: settings.dark_url_template,
-            attribution: settings.attribution,
-            attribution_url: settings.attribution_url,
+            attribution,
+            attribution_url,
             request_identifier: settings.request_identifier,
             custom_autocomplete: settings.custom_autocomplete,
             allow_private_network: settings.allow_private_network,
@@ -386,10 +413,11 @@ async fn purge_redis_cache(state: &AppState, pattern: &str) -> u64 {
     deleted
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct UpdateConnectionBody {
     enabled: bool,
     mode: String,
+    basemap_provider: Option<String>,
     weather_precision: Option<String>,
     forecast_url: Option<String>,
     archive_url: Option<String>,
@@ -423,6 +451,12 @@ async fn update_connection(
         return Err(AppError::Forbidden);
     }
     let private_network_allowlist = validate_update(&id, &body).await?;
+    let existing_basemap = if id == connections::BASEMAP {
+        Some(connections::load(&state.pool, connections::BASEMAP).await?)
+    } else {
+        None
+    };
+    let basemap_provider = resolve_basemap_provider_update(&id, &body, existing_basemap.as_ref())?;
 
     let api_key_encrypted = encrypt_secret(&state.age_key, body.api_key.as_deref())?;
     let bearer_token_encrypted = encrypt_secret(&state.age_key, body.bearer_token.as_deref())?;
@@ -488,9 +522,10 @@ async fn update_connection(
              allow_private_network = CASE WHEN $15 THEN cardinality(ARRAY(SELECT unnest($16::text[])::cidr)) > 0 ELSE COALESCE($14, allow_private_network) END,
              private_network_allowlist = CASE WHEN $15 THEN ARRAY(SELECT unnest($16::text[])::cidr) ELSE private_network_allowlist END,
              private_network_policy_state = CASE WHEN $15 THEN $17 WHEN $14 THEN 'migration_required' ELSE private_network_policy_state END,
-             api_key_encrypted = CASE WHEN $18 THEN NULL WHEN $19 IS NOT NULL THEN $19 ELSE api_key_encrypted END,
-             bearer_token_encrypted = CASE WHEN $20 THEN NULL WHEN $21 IS NOT NULL THEN $21 ELSE bearer_token_encrypted END,
-             updated_at = now(), updated_by = $22
+             basemap_provider = COALESCE($18, basemap_provider),
+             api_key_encrypted = CASE WHEN $19 THEN NULL WHEN $20 IS NOT NULL THEN $20 ELSE api_key_encrypted END,
+             bearer_token_encrypted = CASE WHEN $21 THEN NULL WHEN $22 IS NOT NULL THEN $22 ELSE bearer_token_encrypted END,
+             updated_at = now(), updated_by = $23
            WHERE id = $1"#,
     )
     .bind(&id)
@@ -519,6 +554,7 @@ async fn update_connection(
             "restricted"
         },
     )
+    .bind(basemap_provider)
     .bind(body.clear_api_key.unwrap_or(false))
     .bind(api_key_encrypted)
     .bind(body.clear_bearer_token.unwrap_or(false))
@@ -577,14 +613,29 @@ struct TestConnectionCheck {
 #[derive(Debug, Serialize)]
 struct BasemapConfigResponse {
     enabled: bool,
-    carto_api_key_missing: bool,
+    provider_preference: String,
+    resolved_provider: String,
     /// A non-secret revision of the persisted basemap setting. This gives the
     /// browser and MapLibre a new tile identity after any basemap save.
     revision: String,
+    styles: Vec<BasemapStyleDescriptor>,
+    attributions: Vec<BasemapAttributionLink>,
+}
+
+#[derive(Debug, Serialize)]
+struct BasemapStyleDescriptor {
+    id: &'static str,
+    label: &'static str,
+    kind: &'static str,
     light_url: String,
     dark_url: String,
-    attribution: Option<String>,
-    attribution_url: Option<String>,
+    perspective_3d: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct BasemapAttributionLink {
+    label: String,
+    url: Option<String>,
 }
 
 async fn basemap_config(
@@ -593,25 +644,137 @@ async fn basemap_config(
 ) -> Result<Json<BasemapConfigResponse>, AppError> {
     let settings = connections::load(&state.pool, connections::BASEMAP).await?;
     let revision = settings.updated_at.timestamp_millis().to_string();
-    let light_url = basemap_proxy_url("light", &revision);
-    let dark_url = basemap_proxy_url("dark", &revision);
+    let resolved_provider = resolve_basemap_provider(&settings);
+    let styles = basemap_styles(&resolved_provider, &revision);
+    let attributions = basemap_attributions(&settings, &resolved_provider);
     Ok(Json(BasemapConfigResponse {
         enabled: settings.is_active(),
-        carto_api_key_missing: carto_api_key_missing(
-            settings.is_active(),
-            &settings.mode,
-            settings.api_key_encrypted.is_some(),
-        ),
+        provider_preference: settings.basemap_provider,
+        resolved_provider: resolved_provider.to_string(),
         revision,
-        light_url,
-        dark_url,
-        attribution: settings.attribution,
-        attribution_url: settings.attribution_url,
+        styles,
+        attributions,
     }))
 }
 
 fn basemap_proxy_url(style: &str, revision: &str) -> String {
-    format!("/v1/external/basemap/{style}/{{z}}/{{x}}/{{y}}.png?v={revision}")
+    format!("/v1/external/basemap/raster/{style}/{{z}}/{{x}}/{{y}}.png?v={revision}")
+}
+
+fn openfreemap_style_proxy_url(style: &str, revision: &str) -> String {
+    format!("/v1/external/basemap/openfreemap/styles/{style}?v={revision}")
+}
+
+fn resolve_basemap_provider(settings: &ConnectionSettingsRow) -> &'static str {
+    if !settings.enabled || settings.mode == "disabled" {
+        "disabled"
+    } else if settings.mode == "custom" {
+        "custom"
+    } else if settings.basemap_provider == "carto" {
+        "carto"
+    } else if settings.basemap_provider == "openfreemap" {
+        "openfreemap"
+    } else if settings.api_key_encrypted.is_some() {
+        "carto"
+    } else {
+        "openfreemap"
+    }
+}
+
+fn basemap_styles(provider: &str, revision: &str) -> Vec<BasemapStyleDescriptor> {
+    match provider {
+        "disabled" => Vec::new(),
+        "carto" | "custom" => vec![BasemapStyleDescriptor {
+            id: "follow-theme",
+            label: "Follow appearance",
+            kind: "raster",
+            light_url: basemap_proxy_url("light", revision),
+            dark_url: basemap_proxy_url("dark", revision),
+            perspective_3d: false,
+        }],
+        "openfreemap" => {
+            const STYLES: [(&str, &str); 5] = [
+                ("positron", "Positron"),
+                ("bright", "Bright"),
+                ("liberty", "Liberty"),
+                ("dark", "Dark"),
+                ("fiord", "Fiord"),
+            ];
+            let mut descriptors = vec![BasemapStyleDescriptor {
+                id: "follow-theme",
+                label: "Follow appearance",
+                kind: "style",
+                light_url: openfreemap_style_proxy_url("positron", revision),
+                dark_url: openfreemap_style_proxy_url("dark", revision),
+                perspective_3d: false,
+            }];
+            descriptors.extend(STYLES.into_iter().map(|(id, label)| {
+                let url = openfreemap_style_proxy_url(id, revision);
+                BasemapStyleDescriptor {
+                    id,
+                    label,
+                    kind: "style",
+                    light_url: url.clone(),
+                    dark_url: url,
+                    perspective_3d: false,
+                }
+            }));
+            let liberty = openfreemap_style_proxy_url("liberty", revision);
+            descriptors.push(BasemapStyleDescriptor {
+                id: "3d",
+                label: "3D",
+                kind: "style",
+                light_url: liberty.clone(),
+                dark_url: liberty,
+                perspective_3d: true,
+            });
+            descriptors
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn basemap_attributions(
+    settings: &ConnectionSettingsRow,
+    provider: &str,
+) -> Vec<BasemapAttributionLink> {
+    match provider {
+        "openfreemap" => vec![
+            BasemapAttributionLink {
+                label: "OpenFreeMap".into(),
+                url: Some("https://openfreemap.org/".into()),
+            },
+            BasemapAttributionLink {
+                label: "© OpenMapTiles".into(),
+                url: Some("https://openmaptiles.org/".into()),
+            },
+            BasemapAttributionLink {
+                label: "Data from OpenStreetMap".into(),
+                url: Some("https://www.openstreetmap.org/copyright".into()),
+            },
+        ],
+        "carto" => vec![
+            BasemapAttributionLink {
+                label: "© OpenStreetMap contributors".into(),
+                url: Some("https://www.openstreetmap.org/copyright".into()),
+            },
+            BasemapAttributionLink {
+                label: "© CARTO".into(),
+                url: Some("https://carto.com/attributions".into()),
+            },
+        ],
+        "custom" => settings
+            .attribution
+            .as_ref()
+            .map(|label| {
+                vec![BasemapAttributionLink {
+                    label: label.clone(),
+                    url: settings.attribution_url.clone(),
+                }]
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
 }
 
 async fn test_connection(
@@ -687,7 +850,10 @@ async fn test_connection(
                 .await
         }
         connections::BASEMAP => {
-            let template = if body.mode == "custom" {
+            let provider = resolve_effective_basemap_provider_update(&id, &body, &settings)?;
+            let template = if provider == "openfreemap" {
+                Some("https://tiles.openfreemap.org/styles/positron")
+            } else if body.mode == "custom" {
                 body.light_url_template.as_deref()
             } else {
                 Some("https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png")
@@ -696,7 +862,8 @@ async fn test_connection(
             // z6/14/24 is a generic central-US tile and never uses trip data.
             let endpoint = Url::parse(&expand_tile_template(template, 6, 14, 24))
                 .map_err(|_| AppError::Validation("light tile template required".into()))?;
-            let forward_carto_api_key = should_forward_carto_api_key(&body.mode, &endpoint);
+            let forward_carto_api_key =
+                provider == "carto" && should_forward_carto_api_key(&body.mode, &endpoint);
             let mut request = outbound_client_for_url(&endpoint, &private_network_allowlist)
                 .await?
                 .get(endpoint);
@@ -757,7 +924,13 @@ async fn test_connection(
 
     match result {
         Ok(response) if response.status().is_success() => {
-            let preview_data_url = if id == connections::BASEMAP {
+            let preview_data_url = if id == connections::BASEMAP
+                && response
+                    .headers()
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .is_some_and(|value| value.starts_with("image/"))
+            {
                 let content_type = response
                     .headers()
                     .get(header::CONTENT_TYPE)
@@ -821,6 +994,11 @@ async fn proxy_basemap_tile(
     Path((style, z, x, y)): Path<(String, u8, u32, String)>,
 ) -> Result<Response<Body>, AppError> {
     let settings = connections::require_enabled(&state.pool, connections::BASEMAP).await?;
+    if !matches!(resolve_basemap_provider(&settings), "carto" | "custom") {
+        return Err(AppError::Validation(
+            "raster tiles are not active for this basemap provider".into(),
+        ));
+    }
     let y = y
         .trim_end_matches(".png")
         .parse::<u32>()
@@ -868,7 +1046,8 @@ async fn proxy_basemap_tile(
     connections::record_attempt(&state.pool, connections::BASEMAP).await;
     let url = Url::parse(&url).map_err(|_| AppError::Validation("invalid tile endpoint".into()))?;
     let allowlist = configured_private_network_allowlist(&settings)?;
-    let forward_carto_api_key = should_forward_carto_api_key(&settings.mode, &url);
+    let forward_carto_api_key = resolve_basemap_provider(&settings) == "carto"
+        && should_forward_carto_api_key(&settings.mode, &url);
     let mut request = outbound_client_for_url(&url, &allowlist).await?.get(url);
     if forward_carto_api_key {
         if let Some(api_key) =
@@ -932,15 +1111,7 @@ async fn proxy_basemap_tile(
     tile_response(bytes, &content_type, cache_ttl)
 }
 
-fn carto_api_key_missing(enabled: bool, mode: &str, has_api_key: bool) -> bool {
-    enabled && mode == "remote" && !has_api_key
-}
-
-fn should_forward_carto_api_key(mode: &str, endpoint: &Url) -> bool {
-    if mode == "remote" {
-        return true;
-    }
-
+fn should_forward_carto_api_key(_mode: &str, endpoint: &Url) -> bool {
     endpoint.host_str().is_some_and(|host| {
         host == "carto.com" || host.ends_with(".carto.com") || host.ends_with(".cartocdn.com")
     })
@@ -950,6 +1121,198 @@ fn should_forward_carto_api_key(mode: &str, endpoint: &Url) -> bool {
 /// Open-Meteo's `apikey` query parameter and CARTO API access tokens.
 fn carto_basemap_key_query(key: &str) -> (&'static str, &str) {
     ("key", key)
+}
+
+async fn proxy_openfreemap_resource(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    Path(resource): Path<String>,
+) -> Result<Response<Body>, AppError> {
+    if !openfreemap_resource_is_allowed(&resource) {
+        return Err(AppError::Validation("invalid OpenFreeMap resource".into()));
+    }
+    let settings = connections::require_enabled(&state.pool, connections::BASEMAP).await?;
+    if resolve_basemap_provider(&settings) != "openfreemap" {
+        return Err(AppError::ExternalConnectionDisabled(
+            connections::BASEMAP.into(),
+        ));
+    }
+    let revision = settings.updated_at.timestamp_millis();
+    let cache_key = format!("external:basemap:openfreemap:{revision}:{resource}");
+    let content_type_key = format!("{cache_key}:content-type");
+    let max_age_key = format!("{cache_key}:max-age");
+    if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
+        if let Ok(Some(bytes)) = redis.get::<_, Option<Vec<u8>>>(&cache_key).await {
+            let content_type = redis
+                .get::<_, Option<String>>(&content_type_key)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "application/octet-stream".into());
+            let max_age = redis
+                .get::<_, Option<u64>>(&max_age_key)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(86_400);
+            return tile_response(bytes, &content_type, max_age);
+        }
+    }
+
+    let endpoint = Url::parse(&format!("https://tiles.openfreemap.org/{resource}"))
+        .map_err(|_| AppError::Validation("invalid OpenFreeMap resource".into()))?;
+    connections::record_attempt(&state.pool, connections::BASEMAP).await;
+    let response = outbound_client_for_url(&endpoint, &[])
+        .await?
+        .get(endpoint)
+        .send()
+        .await
+        .map_err(|_| AppError::DependencyUnavailable("OpenFreeMap request failed".into()))?;
+    if !response.status().is_success() {
+        connections::record_failure(
+            &state.pool,
+            connections::BASEMAP,
+            &format!("HTTP {}", response.status()),
+        )
+        .await;
+        return Err(AppError::DependencyUnavailable(
+            "OpenFreeMap provider returned an error".into(),
+        ));
+    }
+    let cache_ttl = upstream_cache_ttl(response.headers());
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let bytes = read_response_limited(response, 10 * 1024 * 1024, "OpenFreeMap resource").await?;
+    let bytes = if is_json_content_type(&content_type) {
+        rewrite_openfreemap_json(&bytes)?
+    } else {
+        bytes
+    };
+    if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
+        let _: Result<(), _> = redis.set(&cache_key, &bytes).await;
+        let _: Result<(), _> = redis.set(&content_type_key, &content_type).await;
+        let _: Result<(), _> = redis.set(&max_age_key, cache_ttl).await;
+    }
+    connections::record_success(&state.pool, connections::BASEMAP).await;
+    // reqwest may transparently decode an upstream response. Do not copy its
+    // Content-Encoding header unless the body is known to retain that encoding.
+    tile_response(bytes, &content_type, cache_ttl)
+}
+
+fn openfreemap_resource_is_allowed(resource: &str) -> bool {
+    if resource.is_empty()
+        || resource.len() > 1024
+        || resource.contains("..")
+        || resource.contains('\\')
+        || resource.contains('?')
+        || resource.contains('#')
+        || resource.contains("//")
+        || resource.chars().any(char::is_control)
+    {
+        return false;
+    }
+    let parts = resource.split('/').collect::<Vec<_>>();
+    if parts.iter().any(|part| part.is_empty()) {
+        return false;
+    }
+    match parts.as_slice() {
+        ["styles", style] => openfreemap_style_name(style),
+        ["planet"] => true,
+        ["planet", snapshot, z, x, y] => {
+            openfreemap_planet_snapshot(snapshot)
+                && is_ascii_decimal(z)
+                && is_ascii_decimal(x)
+                && numeric_resource_with_suffix(y, ".pbf")
+        }
+        ["natural_earth", "ne2sr", z, x, y] => {
+            is_ascii_decimal(z) && is_ascii_decimal(x) && numeric_resource_with_suffix(y, ".png")
+        }
+        ["sprites", version, asset] => {
+            openfreemap_sprite_version(version) && openfreemap_sprite_asset(asset)
+        }
+        ["fonts", font_stack, range] => {
+            !font_stack.is_empty()
+                && font_stack.len() <= 512
+                && range.strip_suffix(".pbf").is_some_and(|value| {
+                    !value.is_empty()
+                        && value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || byte == b'-')
+                })
+        }
+        _ => false,
+    }
+}
+
+fn openfreemap_style_name(style: &str) -> bool {
+    matches!(style, "positron" | "bright" | "liberty" | "dark" | "fiord")
+}
+
+fn openfreemap_planet_snapshot(snapshot: &str) -> bool {
+    snapshot.strip_suffix("_pt").is_some_and(|value| {
+        !value.is_empty()
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || byte == b'_')
+    })
+}
+
+fn openfreemap_sprite_version(version: &str) -> bool {
+    version.strip_prefix("ofm_").is_some_and(|value| {
+        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    })
+}
+
+fn openfreemap_sprite_asset(asset: &str) -> bool {
+    matches!(asset, "ofm.json" | "ofm.png" | "ofm@2x.png")
+}
+
+fn is_ascii_decimal(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn numeric_resource_with_suffix(value: &str, suffix: &str) -> bool {
+    value.strip_suffix(suffix).is_some_and(is_ascii_decimal)
+}
+
+fn is_json_content_type(content_type: &str) -> bool {
+    content_type.split(';').next().is_some_and(|value| {
+        let value = value.trim().to_ascii_lowercase();
+        value == "application/json" || value.ends_with("+json")
+    })
+}
+
+fn rewrite_openfreemap_json(bytes: &[u8]) -> Result<Vec<u8>, AppError> {
+    let mut value: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|_| AppError::DependencyUnavailable("OpenFreeMap returned invalid JSON".into()))?;
+    rewrite_openfreemap_value(&mut value);
+    serde_json::to_vec(&value).map_err(|error| AppError::Internal(error.into()))
+}
+
+fn rewrite_openfreemap_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(value) => {
+            *value = value.replace(
+                "https://tiles.openfreemap.org/",
+                "/v1/external/basemap/openfreemap/",
+            );
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                rewrite_openfreemap_value(value);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values_mut() {
+                rewrite_openfreemap_value(value);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1161,6 +1524,80 @@ async fn validate_update(
         _ => {}
     }
     Ok(parsed_allowlist.map(canonical_allowlist))
+}
+
+fn resolve_basemap_provider_update(
+    id: &str,
+    body: &UpdateConnectionBody,
+    existing: Option<&ConnectionSettingsRow>,
+) -> Result<Option<String>, AppError> {
+    if id != connections::BASEMAP {
+        if body.basemap_provider.is_some() {
+            return Err(AppError::Validation(
+                "basemap_provider is only supported for the map basemap connection".into(),
+            ));
+        }
+        return Ok(None);
+    }
+    let requested = body.basemap_provider.as_deref().unwrap_or_else(|| {
+        existing
+            .map(|row| row.basemap_provider.as_str())
+            .unwrap_or("auto")
+    });
+    if !matches!(requested, "auto" | "openfreemap" | "carto") {
+        return Err(AppError::Validation(
+            "basemap_provider must be auto, openfreemap, or carto".into(),
+        ));
+    }
+    // Clearing a key cannot leave an explicitly pinned CARTO configuration.
+    let provider = if requested == "carto" && body.clear_api_key.unwrap_or(false) {
+        "auto"
+    } else {
+        requested
+    };
+    let submitted_key = body
+        .api_key
+        .as_deref()
+        .is_some_and(|key| !key.trim().is_empty());
+    let stored_key = existing.is_some_and(|row| row.api_key_encrypted.is_some());
+    if body.enabled
+        && matches!(body.mode.as_str(), "remote" | "hosted")
+        && provider == "carto"
+        && !(submitted_key || (stored_key && !body.clear_api_key.unwrap_or(false)))
+    {
+        return Err(AppError::Validation(
+            "a CARTO basemap key is required when CARTO is pinned".into(),
+        ));
+    }
+    Ok(Some(provider.to_string()))
+}
+
+fn resolve_effective_basemap_provider_update(
+    id: &str,
+    body: &UpdateConnectionBody,
+    existing: &ConnectionSettingsRow,
+) -> Result<String, AppError> {
+    if !body.enabled || body.mode == "disabled" {
+        return Ok("disabled".into());
+    }
+    if body.mode == "custom" {
+        return Ok("custom".into());
+    }
+    let preference = resolve_basemap_provider_update(id, body, Some(existing))?
+        .expect("basemap provider is always present for the basemap connection");
+    if preference != "auto" {
+        return Ok(preference);
+    }
+    let submitted_key = body
+        .api_key
+        .as_deref()
+        .is_some_and(|key| !key.trim().is_empty());
+    let stored_key = existing.api_key_encrypted.is_some() && !body.clear_api_key.unwrap_or(false);
+    Ok(if submitted_key || stored_key {
+        "carto".into()
+    } else {
+        "openfreemap".into()
+    })
 }
 
 async fn validate_tile_template(value: &str, allowlist: &[IpNet]) -> Result<(), AppError> {
@@ -1375,6 +1812,9 @@ fn is_ipv6_unicast_link_local(ip: std::net::Ipv6Addr) -> bool {
 fn active_endpoint(settings: &ConnectionSettingsRow) -> Option<String> {
     match settings.id.as_str() {
         connections::OPEN_METEO => settings.forecast_url.clone(),
+        connections::BASEMAP if resolve_basemap_provider(settings) == "openfreemap" => {
+            Some("https://tiles.openfreemap.org".into())
+        }
         connections::BASEMAP => settings.light_url_template.clone(),
         _ => settings.base_url.clone(),
     }
@@ -1495,11 +1935,23 @@ fn decrypt_secret(age_key: &str, encrypted: Option<&[u8]>) -> Result<Option<Stri
 #[cfg(test)]
 mod tests {
     use super::{
-        basemap_proxy_url, carto_api_key_missing, carto_basemap_key_query, endpoint_is_private,
-        is_forbidden_ip, is_private_ip, parse_private_network_allowlist,
-        should_forward_carto_api_key, validate_tile_template,
+        active_endpoint, basemap_proxy_url, basemap_styles, carto_basemap_key_query,
+        endpoint_is_private, is_forbidden_ip, is_private_ip, openfreemap_resource_is_allowed,
+        parse_private_network_allowlist, resolve_basemap_provider,
+        resolve_effective_basemap_provider_update, rewrite_openfreemap_json,
+        should_forward_carto_api_key, validate_tile_template, UpdateConnectionBody,
+        BASEMAP_RASTER_ROUTE, OPENFREEMAP_PROXY_ROUTE,
     };
+    use crate::services::external_connections::ConnectionSettingsRow;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+        routing::get,
+        Router,
+    };
+    use chrono::Utc;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use tower::ServiceExt;
     use url::Url;
 
     #[tokio::test]
@@ -1551,11 +2003,135 @@ mod tests {
     }
 
     #[test]
-    fn reports_missing_carto_key_only_for_active_remote_basemap() {
-        assert!(carto_api_key_missing(true, "remote", false));
-        assert!(!carto_api_key_missing(true, "remote", true));
-        assert!(!carto_api_key_missing(false, "remote", false));
-        assert!(!carto_api_key_missing(true, "custom", false));
+    fn openfreemap_proxy_allowlist_is_bounded_and_style_json_is_rewritten() {
+        assert!(openfreemap_resource_is_allowed("styles/positron"));
+        assert!(openfreemap_resource_is_allowed(
+            "planet/20260823_080002_pt/1/2/3.pbf"
+        ));
+        assert!(openfreemap_resource_is_allowed(
+            "natural_earth/ne2sr/1/2/3.png"
+        ));
+        assert!(openfreemap_resource_is_allowed("sprites/ofm_f384/ofm.json"));
+        assert!(openfreemap_resource_is_allowed(
+            "sprites/ofm_f384/ofm@2x.png"
+        ));
+        assert!(openfreemap_resource_is_allowed(
+            "fonts/Noto%20Sans%20Regular/0-255.pbf"
+        ));
+        assert!(!openfreemap_resource_is_allowed("styles/unknown"));
+        assert!(!openfreemap_resource_is_allowed(
+            "planet/20260823_080002_pt/1/2/3.pbf/extra"
+        ));
+        assert!(!openfreemap_resource_is_allowed(
+            "sprites/positron/ofm.json"
+        ));
+        assert!(!openfreemap_resource_is_allowed(
+            "sprites/ofm_f384/other.png"
+        ));
+        assert!(!openfreemap_resource_is_allowed("../planet"));
+        assert!(!openfreemap_resource_is_allowed(
+            "styles/positron?url=https://evil.test"
+        ));
+        let rewritten = rewrite_openfreemap_json(
+            br#"{"sources":{"planet":{"url":"https://tiles.openfreemap.org/planet"}}}"#,
+        )
+        .expect("valid JSON");
+        assert_eq!(
+            String::from_utf8(rewritten).unwrap(),
+            r#"{"sources":{"planet":{"url":"/v1/external/basemap/openfreemap/planet"}}}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn openfreemap_assets_do_not_collide_with_the_raster_route() {
+        let app = Router::new()
+            .route(
+                BASEMAP_RASTER_ROUTE,
+                get(|| async { StatusCode::IM_A_TEAPOT }),
+            )
+            .route(
+                OPENFREEMAP_PROXY_ROUTE,
+                get(|| async { StatusCode::NO_CONTENT }),
+            );
+
+        for uri in [
+            "/external/basemap/openfreemap/sprites/ofm_f384/ofm.json",
+            "/external/basemap/openfreemap/fonts/Noto%20Sans%20Regular/0-255.pbf",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NO_CONTENT, "{uri}");
+        }
+    }
+
+    #[test]
+    fn openfreemap_exposes_all_style_descriptors() {
+        let styles = basemap_styles("openfreemap", "123");
+        assert_eq!(styles.len(), 7);
+        assert_eq!(styles[0].id, "follow-theme");
+        assert!(styles
+            .iter()
+            .any(|style| style.id == "3d" && style.perspective_3d));
+        assert_eq!(
+            styles[0].light_url,
+            "/v1/external/basemap/openfreemap/styles/positron?v=123"
+        );
+        assert_eq!(
+            styles[0].dark_url,
+            "/v1/external/basemap/openfreemap/styles/dark?v=123"
+        );
+    }
+
+    #[test]
+    fn resolves_basemap_provider_with_mode_precedence() {
+        let mut settings = basemap_settings("remote", "auto", false, true);
+        assert_eq!(resolve_basemap_provider(&settings), "openfreemap");
+        assert_eq!(
+            active_endpoint(&settings).as_deref(),
+            Some("https://tiles.openfreemap.org")
+        );
+        settings.api_key_encrypted = Some(vec![1]);
+        assert_eq!(resolve_basemap_provider(&settings), "carto");
+        settings.basemap_provider = "openfreemap".into();
+        assert_eq!(resolve_basemap_provider(&settings), "openfreemap");
+        settings.mode = "custom".into();
+        assert_eq!(resolve_basemap_provider(&settings), "custom");
+        settings.enabled = false;
+        assert_eq!(resolve_basemap_provider(&settings), "disabled");
+    }
+
+    #[test]
+    fn resolves_automatic_provider_for_unsaved_and_stored_keys() {
+        let mut settings = basemap_settings("remote", "auto", false, true);
+        let mut body = UpdateConnectionBody {
+            enabled: true,
+            mode: "remote".into(),
+            basemap_provider: Some("auto".into()),
+            api_key: Some("new-key".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_effective_basemap_provider_update("basemap", &body, &settings).unwrap(),
+            "carto"
+        );
+        body.api_key = None;
+        assert_eq!(
+            resolve_effective_basemap_provider_update("basemap", &body, &settings).unwrap(),
+            "openfreemap"
+        );
+        settings.api_key_encrypted = Some(vec![1]);
+        assert_eq!(
+            resolve_effective_basemap_provider_update("basemap", &body, &settings).unwrap(),
+            "carto"
+        );
+        body.clear_api_key = Some(true);
+        assert_eq!(
+            resolve_effective_basemap_provider_update("basemap", &body, &settings).unwrap(),
+            "openfreemap"
+        );
     }
 
     #[test]
@@ -1575,7 +2151,37 @@ mod tests {
         );
         assert_eq!(
             basemap_proxy_url("light", "1724889600123"),
-            "/v1/external/basemap/light/{z}/{x}/{y}.png?v=1724889600123"
+            "/v1/external/basemap/raster/light/{z}/{x}/{y}.png?v=1724889600123"
         );
+    }
+
+    fn basemap_settings(
+        mode: &str,
+        provider: &str,
+        has_key: bool,
+        enabled: bool,
+    ) -> ConnectionSettingsRow {
+        ConnectionSettingsRow {
+            id: "basemap".into(),
+            enabled,
+            mode: mode.into(),
+            basemap_provider: provider.into(),
+            weather_precision: None,
+            forecast_url: None,
+            archive_url: None,
+            base_url: None,
+            light_url_template: None,
+            dark_url_template: None,
+            attribution: None,
+            attribution_url: None,
+            request_identifier: None,
+            custom_autocomplete: false,
+            allow_private_network: false,
+            private_network_allowlist: Vec::new(),
+            private_network_policy_state: "restricted".into(),
+            api_key_encrypted: has_key.then_some(vec![1]),
+            bearer_token_encrypted: None,
+            updated_at: Utc::now(),
+        }
     }
 }

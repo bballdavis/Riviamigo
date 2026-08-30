@@ -1,20 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
 import { useAuthReady } from './useAuthState';
+import type { BasemapConfigPayload } from '@riviamigo/types';
 
-export interface BasemapConfigPayload {
-  enabled: boolean;
-  /** Remote CARTO remains usable without a key, but its tiles will be watermarked. */
-  carto_api_key_missing: boolean;
-  /** Non-secret setting revision used to give map tiles a fresh cache identity. */
-  revision: string;
-  light_url: string;
-  dark_url: string;
-  attribution: string | null;
-  attribution_url: string | null;
-}
+export type { BasemapConfigPayload } from '@riviamigo/types';
 
-export const BASEMAP_CONFIG_QUERY_KEY = ['external', 'basemap', 'config', 'v1'] as const;
+export const BASEMAP_CONFIG_QUERY_KEY = ['external', 'basemap', 'config', 'v2'] as const;
 
 /**
  * Resolves the authenticated first-party basemap configuration for connected

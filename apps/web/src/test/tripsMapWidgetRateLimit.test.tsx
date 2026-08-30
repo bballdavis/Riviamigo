@@ -23,6 +23,7 @@ vi.mock('@riviamigo/hooks', () => ({
   useTrips: vi.fn(() => ({ data: { items: [], total: 0, per_page: 15 } })),
   useTripMapRoutes: (...args: unknown[]) => mockUseTripMapRoutes(...args),
   useBasemapConfig: () => ({ data: undefined, isError: false }),
+  useUserPreferences: () => ({ data: { map_style: 'follow-theme' } }),
   useDocumentTheme: () => false,
 }));
 

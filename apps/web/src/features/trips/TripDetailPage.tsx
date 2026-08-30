@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import {
-  useAuth, useBasemapConfig, useResolvedVehicleSelection, useTripDetailData, useUpdateTripTagAssignments,
+  useAuth, useBasemapConfig, useResolvedVehicleSelection, useTripDetailData, useUpdateTripTagAssignments, useUserPreferences,
 } from '@riviamigo/hooks';
 import { useDocumentTheme } from '@riviamigo/ui/hooks';
 import { Button, PageLayout } from '@riviamigo/ui/primitives';
@@ -46,6 +46,7 @@ export function TripDetailContent() {
   const activeIndexFrameRef = React.useRef<number | null>(null);
   const isDark = useDocumentTheme();
   const basemap = useBasemapConfig();
+  const userPreferences = useUserPreferences();
 
   const setActiveIndexThrottled = React.useCallback((value: number | null) => {
     if (pendingActiveIndexRef.current === value) return;
@@ -353,6 +354,7 @@ export function TripDetailContent() {
                       activePoint={activeMapPoint}
                       height={TRIP_PRIMARY_CHART_HEIGHT}
                       mapStyle={mapStyle}
+                      mapStylePreference={userPreferences.data?.map_style ?? 'follow-theme'}
                       accessToken={accessToken}
                       basemapConfig={basemap.data}
                       basemapError={basemap.isError ? 'Map tiles unavailable' : null}

@@ -335,6 +335,32 @@ export interface OutsideTemperatureSeries {
 
 export type ExternalConnectionMode = 'remote' | 'custom' | 'disabled';
 export type WeatherLocationPrecision = 'approximate' | 'exact';
+export type BasemapProviderPreference = 'auto' | 'openfreemap' | 'carto';
+export type ResolvedBasemapProvider = 'openfreemap' | 'carto' | 'custom' | 'disabled';
+export type MapStylePreference = 'follow-theme' | 'positron' | 'bright' | 'liberty' | 'dark' | 'fiord' | '3d';
+
+export interface BasemapStyleDescriptor {
+  id: MapStylePreference;
+  label: string;
+  kind: 'raster' | 'style';
+  light_url: string;
+  dark_url: string;
+  perspective_3d: boolean;
+}
+
+export interface BasemapAttributionLink {
+  label: string;
+  url: string | null;
+}
+
+export interface BasemapConfigPayload {
+  enabled: boolean;
+  provider_preference: BasemapProviderPreference;
+  resolved_provider: ResolvedBasemapProvider;
+  revision: string;
+  styles: BasemapStyleDescriptor[];
+  attributions: BasemapAttributionLink[];
+}
 
 export interface ExternalConnectionCacheSummary {
   entries: number;
@@ -356,6 +382,8 @@ export interface ExternalConnectionRecord {
   editable: boolean;
   enabled: boolean;
   mode: ExternalConnectionMode;
+  /** Omitted by older API servers; null for non-basemap connections. */
+  basemap_provider?: BasemapProviderPreference | null;
   endpoint: string | null;
   endpoint_is_private: boolean;
   weather_precision: WeatherLocationPrecision | null;
@@ -395,6 +423,7 @@ export interface ExternalConnectionsResponse {
 export interface UpdateExternalConnectionBody {
   enabled: boolean;
   mode: ExternalConnectionMode;
+  basemap_provider?: BasemapProviderPreference;
   weather_precision?: WeatherLocationPrecision | null;
   forecast_url?: string | null;
   archive_url?: string | null;
@@ -1221,6 +1250,11 @@ export interface UnitPreferences {
   altitude_unit: AltitudeUnit;
   place_radius_unit: PlaceRadiusUnit;
   efficiency_display: EfficiencyDisplay;
+}
+
+export interface UserPreferencesResponse {
+  units: UnitPreferences;
+  map_style: MapStylePreference;
 }
 
 export type DashboardChartFavorites = Record<string, string>;

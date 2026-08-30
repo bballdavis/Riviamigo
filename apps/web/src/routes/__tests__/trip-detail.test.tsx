@@ -37,6 +37,7 @@ vi.mock('@riviamigo/ui/charts', () => ({
 
 vi.mock('@riviamigo/hooks', () => ({
   useBasemapConfig: () => ({ data: undefined, isLoading: false }),
+  useUserPreferences: () => ({ data: { map_style: 'follow-theme' } }),
   useAuth: () => ({ defaultVehicleId: null }),
   useResolvedVehicleSelection: () => ({ authReady: true, effectiveVehicleId: 'vehicle-1', vehicleSelectionReady: true, vehicles: [{ id: 'vehicle-1', membership_role: 'owner' }] }),
   useUpdateTripTagAssignments: () => ({ isPending: false, mutateAsync: mockUpdateAssignments }),

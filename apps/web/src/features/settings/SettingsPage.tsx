@@ -31,7 +31,7 @@ import {
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI } from '@riviamigo/ui/lib/vehicleTires';
 import {
   PageLayout, Card, CardHeader, CardTitle, CardContent,
-  Button, Badge, Input, SelectPicker, ThemeToggle, Tooltip,
+  Button, Badge, Input, SelectPicker, Tooltip,
 } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../../components/layout/AppLayout';
 import { BackupSection } from '../../components/settings/BackupSection';
@@ -41,6 +41,7 @@ import { PlacesSection } from '../../components/settings/PlacesSection';
 import { ChargingSection } from '../../components/settings/ChargingSection';
 import { RawTelemetryExplorer } from '../../components/settings/RawTelemetryExplorer';
 import { ChartManagerSection } from './charts/ChartManagerSection';
+import { AppearanceSettings } from './AppearanceSettings';
 import { canManageSystemDashboards } from '../../components/dashboard/DashboardPage';
 import { useDashboardEditButtonPreference } from '../../components/dashboard/useDashboardEditButtonPreference';
 import { PASSWORD_MIN_LENGTH, PasswordRequirements } from '../../components/auth/PasswordRequirements';
@@ -1829,13 +1830,7 @@ export function SettingsContent({ initialSection }: { initialSection?: SettingsS
                   <CardTitle>Appearance</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-fg">Theme</p>
-                      <p className="mt-0.5 text-xs text-fg-tertiary">Toggle between dark, light, and system appearance</p>
-                    </div>
-                    <ThemeToggle />
-                  </div>
+                  <AppearanceSettings />
                 </CardContent>
               </Card>
             )}

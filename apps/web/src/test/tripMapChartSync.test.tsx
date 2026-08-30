@@ -29,6 +29,9 @@ class MockMap {
   setPaintProperty = vi.fn();
   getCanvas = vi.fn(() => ({ style: {} as CSSStyleDeclaration }));
   setStyle = vi.fn();
+  setPitch = vi.fn();
+  setBearing = vi.fn();
+  dragRotate = { enable: vi.fn(), disable: vi.fn() };
 
   on = vi.fn((event: string, layerIdOrHandler: string | MapHandler, maybeHandler?: MapHandler) => {
     if (typeof layerIdOrHandler === 'function') {
@@ -64,6 +67,122 @@ function buildRoutes(count: number): TripMapRoute[] {
 }
 
 describe('TripMapChart', () => {
+  it('maps Follow appearance to Positron in light mode and Dark in dark mode', async () => {
+    const mockMap = new MockMap();
+    const mapConstructor = vi.fn(function Map(_options: unknown) { return mockMap; });
+    const mapLoader = vi.fn(async () => ({ Map: mapConstructor }));
+    const config = {
+      enabled: true,
+      provider_preference: 'openfreemap' as const,
+      resolved_provider: 'openfreemap' as const,
+      revision: 'vector-theme-1',
+      attributions: [],
+      styles: [{
+        id: 'follow-theme' as const,
+        label: 'Follow appearance',
+        kind: 'style' as const,
+        light_url: '/v1/external/basemap/openfreemap/styles/positron?v=1',
+        dark_url: '/v1/external/basemap/openfreemap/styles/dark?v=1',
+        perspective_3d: false,
+      }],
+    };
+    const { rerender } = render(
+      <TripMapChart
+        routes={buildRoutes(1)}
+        track={[]}
+        basemapConfig={config}
+        mapStyle="light"
+        mapStylePreference="follow-theme"
+        mapLoader={mapLoader as never}
+      />,
+    );
+
+    await waitFor(() => expect(mapConstructor).toHaveBeenCalledTimes(1));
+    expect(mapConstructor.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      style: '/v1/external/basemap/openfreemap/styles/positron?v=1',
+    }));
+    await act(async () => mockMap.emit('load'));
+
+    rerender(
+      <TripMapChart
+        routes={buildRoutes(1)}
+        track={[]}
+        basemapConfig={config}
+        mapStyle="dark"
+        mapStylePreference="follow-theme"
+        mapLoader={mapLoader as never}
+      />,
+    );
+
+    await waitFor(() => expect(mockMap.setStyle).toHaveBeenCalledWith(
+      '/v1/external/basemap/openfreemap/styles/dark?v=1',
+    ));
+    expect(mapConstructor).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads OpenFreeMap vector styles and applies then resets the 3D camera', async () => {
+    const mockMap = new MockMap();
+    const mapConstructor = vi.fn(function Map(_options: unknown) { return mockMap; });
+    const mapLoader = vi.fn(async () => ({ Map: mapConstructor }));
+    const config = {
+      enabled: true,
+      provider_preference: 'openfreemap' as const,
+      resolved_provider: 'openfreemap' as const,
+      revision: 'vector-1',
+      attributions: [],
+      styles: [
+        { id: 'follow-theme' as const, label: 'Follow appearance', kind: 'style' as const, light_url: '/v1/external/basemap/styles/positron.json', dark_url: '/v1/external/basemap/styles/dark.json', perspective_3d: false },
+        { id: '3d' as const, label: '3D', kind: 'style' as const, light_url: '/v1/external/basemap/styles/liberty.json', dark_url: '/v1/external/basemap/styles/liberty.json', perspective_3d: true },
+      ],
+    };
+    const { rerender } = render(<TripMapChart routes={buildRoutes(1)} track={[]} basemapConfig={config} mapStylePreference="3d" mapLoader={mapLoader as never} />);
+    await waitFor(() => expect(mapConstructor).toHaveBeenCalledTimes(1));
+    expect(mapConstructor.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ style: '/v1/external/basemap/styles/liberty.json' }));
+    await act(async () => mockMap.emit('load'));
+    expect(mockMap.setPitch).toHaveBeenCalledWith(45);
+    expect(mockMap.dragRotate.enable).toHaveBeenCalled();
+
+    rerender(<TripMapChart routes={buildRoutes(1)} track={[]} basemapConfig={config} mapStylePreference="follow-theme" mapLoader={mapLoader as never} />);
+    await act(async () => mockMap.emit('style.load'));
+    expect(mockMap.setPitch).toHaveBeenCalledWith(0);
+    expect(mockMap.dragRotate.disable).toHaveBeenCalled();
+  });
+
+  it('restores an unchanged active point after a style swap clears map sources', async () => {
+    const mockMap = new MockMap();
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
+    const activePoint = { lat: 39.7392, lng: -104.9903 };
+    const { rerender } = render(
+      <TripMapChart
+        routes={buildRoutes(1)}
+        track={[]}
+        activePoint={activePoint}
+        mapStyle="dark"
+        mapLoader={mapLoader as never}
+      />,
+    );
+
+    await waitFor(() => expect(mapLoader).toHaveBeenCalledTimes(1));
+    await act(async () => mockMap.emit('load'));
+    expect(mockMap.addSource.mock.calls.filter(([id]) => id === 'trip-active-point')).toHaveLength(1);
+
+    rerender(
+      <TripMapChart
+        routes={buildRoutes(1)}
+        track={[]}
+        activePoint={activePoint}
+        mapStyle="light"
+        mapLoader={mapLoader as never}
+      />,
+    );
+    mockMap.sources.clear();
+    mockMap.layers.clear();
+    await act(async () => mockMap.emit('style.load'));
+
+    expect(mockMap.addSource.mock.calls.filter(([id]) => id === 'trip-active-point')).toHaveLength(2);
+    expect(mockMap.addLayer.mock.calls.filter(([layer]) => layer.id === 'trip-active-point-layer')).toHaveLength(2);
+  });
+
   it('syncs the latest routes when the map load event fires after routes changed', async () => {
     const mockMap = new MockMap();
     const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
@@ -151,8 +270,8 @@ describe('TripMapChart', () => {
         enabled: true,
         carto_api_key_missing: false,
         revision: 'first',
-        light_url: '/v1/external/basemap/light/{z}/{x}/{y}.png',
-        dark_url: '/v1/external/basemap/dark/{z}/{x}/{y}.png',
+        light_url: '/v1/external/basemap/raster/light/{z}/{x}/{y}.png',
+        dark_url: '/v1/external/basemap/raster/dark/{z}/{x}/{y}.png',
         attribution: null,
         attribution_url: null,
       }}
@@ -163,16 +282,16 @@ describe('TripMapChart', () => {
     expect(fetchMock).not.toHaveBeenCalled();
 
     const mapOptions = mapConstructor.mock.calls[0]?.[0] as unknown as { transformRequest: (url: string) => { headers?: Record<string, string> } };
-    expect(mapOptions.transformRequest('/v1/external/basemap/light/1/2/3.png').headers).toEqual({ Authorization: 'Bearer first-party-token' });
+    expect(mapOptions.transformRequest('/v1/external/basemap/raster/light/1/2/3.png').headers).toEqual({ Authorization: 'Bearer first-party-token' });
     expect(mapOptions.transformRequest('https://provider.invalid/1/2/3.png').headers).toBeUndefined();
     fetchMock.mockRestore();
   });
 
-  it('keeps the map interactive while explaining that a remote CARTO key is missing', async () => {
+  it('keeps the map interactive without a CARTO missing-key warning', async () => {
     const mockMap = new MockMap();
     const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
 
-    const { getByRole, getByText } = render(
+    const { queryByRole, queryByText } = render(
       <TripMapChart
         routes={buildRoutes(1)}
         track={[]}
@@ -180,8 +299,8 @@ describe('TripMapChart', () => {
           enabled: true,
           carto_api_key_missing: true,
           revision: 'first',
-          light_url: '/v1/external/basemap/light/{z}/{x}/{y}.png',
-          dark_url: '/v1/external/basemap/dark/{z}/{x}/{y}.png',
+          light_url: '/v1/external/basemap/raster/light/{z}/{x}/{y}.png',
+          dark_url: '/v1/external/basemap/raster/dark/{z}/{x}/{y}.png',
           attribution: null,
           attribution_url: null,
         }}
@@ -190,8 +309,8 @@ describe('TripMapChart', () => {
     );
 
     await waitFor(() => expect(mapLoader).toHaveBeenCalledTimes(1));
-    expect(getByRole('status')).toHaveTextContent('CARTO Basemap key required');
-    expect(getByText(/The map remains available with CARTO watermarking/)).toBeInTheDocument();
+    expect(queryByRole('status')).not.toBeInTheDocument();
+    expect(queryByText(/CARTO Basemap key required/)).not.toBeInTheDocument();
     await act(async () => {
       mockMap.emit('load');
     });
@@ -210,8 +329,8 @@ describe('TripMapChart', () => {
           enabled: true,
           carto_api_key_missing: false,
           revision: 'first',
-          light_url: '/v1/external/basemap/light/{z}/{x}/{y}.png',
-          dark_url: '/v1/external/basemap/dark/{z}/{x}/{y}.png',
+          light_url: '/v1/external/basemap/raster/light/{z}/{x}/{y}.png',
+          dark_url: '/v1/external/basemap/raster/dark/{z}/{x}/{y}.png',
           attribution: null,
           attribution_url: null,
         }}
@@ -250,8 +369,8 @@ describe('TripMapChart', () => {
       enabled: true,
       carto_api_key_missing: false,
       revision: '1710000000000',
-      light_url: '/v1/external/basemap/light/{z}/{x}/{y}.png?v=1710000000000',
-      dark_url: '/v1/external/basemap/dark/{z}/{x}/{y}.png?v=1710000000000',
+      light_url: '/v1/external/basemap/raster/light/{z}/{x}/{y}.png?v=1710000000000',
+      dark_url: '/v1/external/basemap/raster/dark/{z}/{x}/{y}.png?v=1710000000000',
       attribution: null,
       attribution_url: null,
     };
@@ -266,13 +385,13 @@ describe('TripMapChart', () => {
     rerender(<TripMapChart routes={buildRoutes(1)} track={[]} basemapConfig={{
       ...baseConfig,
       revision: '1710000000001',
-      light_url: '/v1/external/basemap/light/{z}/{x}/{y}.png?v=1710000000001',
-      dark_url: '/v1/external/basemap/dark/{z}/{x}/{y}.png?v=1710000000001',
+      light_url: '/v1/external/basemap/raster/light/{z}/{x}/{y}.png?v=1710000000001',
+      dark_url: '/v1/external/basemap/raster/dark/{z}/{x}/{y}.png?v=1710000000001',
     }} mapLoader={mapLoader as never} />);
 
     await waitFor(() => expect(mockMap.setStyle).toHaveBeenCalledWith(expect.objectContaining({
       sources: expect.objectContaining({
-        'carto-base': expect.objectContaining({ tiles: ['/v1/external/basemap/dark/{z}/{x}/{y}.png?v=1710000000001'] }),
+        'carto-base': expect.objectContaining({ tiles: ['/v1/external/basemap/raster/dark/{z}/{x}/{y}.png?v=1710000000001'] }),
       }),
     })));
   });

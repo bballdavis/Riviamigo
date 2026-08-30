@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Eraser, Moon, Plus, Save, Sun } from 'lucide-react';
 import { LuBadgeInfo } from 'react-icons/lu';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
-import { api, useAuth, useBasemapConfig, useTrips, useTripMapRoutes, useUpdateTripTagAssignments } from '@riviamigo/hooks';
+import { api, useAuth, useBasemapConfig, useTrips, useTripMapRoutes, useUpdateTripTagAssignments, useUserPreferences } from '@riviamigo/hooks';
 import { useDocumentTheme } from '@riviamigo/ui/hooks';
 import { DataTable, createTripColumns, type TripRow } from '@riviamigo/ui/tables';
 import { Badge, Button, SelectPicker, Tooltip } from '@riviamigo/ui/primitives';
@@ -138,6 +138,7 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
   const routeIds = React.useMemo(() => new Set(routes.map((route) => route.id)), [routes]);
   const { ref, height } = useMeasuredWidgetHeight(360, 180);
   const basemap = useBasemapConfig();
+  const userPreferences = useUserPreferences();
 
   React.useEffect(() => {
     resetTripSelection(`${ctx.vehicleId}::${ctx.from}::${ctx.to}`, { force: true });
@@ -162,6 +163,7 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
               onRouteClick={toggleTripSelection}
               height={height}
               mapStyle={effectiveMapStyle}
+              mapStylePreference={userPreferences.data?.map_style ?? 'follow-theme'}
               className="h-full w-full"
               accessToken={accessToken}
               basemapConfig={basemap.data}
