@@ -1,0 +1,197 @@
+name: Candidate image
+
+on:
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Commit, tag, or branch to build
+        required: true
+        default: dev
+        type: string
+      platform:
+        description: Native platform candidate to build
+        required: true
+        default: amd64
+        type: choice
+        options: [amd64, arm64, both]
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: bballdavis
+
+concurrency:
+  group: candidate-image-${{ github.ref }}-${{ inputs.platform || 'amd64' }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    name: Resolve source
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      platform: ${{ steps.source.outputs.platform }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          fetch-depth: 0
+      - id: source
+        env:
+          REQUESTED_PLATFORM: ${{ inputs.platform || 'amd64' }}
+        run: |
+          set -euo pipefail
+          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "platform=$REQUESTED_PLATFORM" >> "$GITHUB_OUTPUT"
+
+  build-amd64:
+    name: Build candidate (amd64)
+    needs: resolve
+    if: needs.resolve.outputs.platform == 'amd64' || needs.resolve.outputs.platform == 'both'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Start timing
+        run: echo "BUILD_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+      - id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: ./compose/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:candidate-${{ needs.resolve.outputs.source_sha }}-amd64
+          provenance: false
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:buildcache-amd64-v2
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:buildcache-amd64-v2,mode=max,compression=zstd,oci-mediatypes=true,image-manifest=true,ignore-error=true
+          labels: |
+            org.opencontainers.image.source=https://github.com/bballdavis/Riviamigo
+            org.opencontainers.image.revision=${{ needs.resolve.outputs.source_sha }}
+            org.opencontainers.image.version=candidate-${{ needs.resolve.outputs.source_sha }}
+      - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      - name: Summarize candidate
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          finished=$(date +%s)
+          duration=$((finished - BUILD_STARTED_AT))
+          echo "### Candidate image" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Source: \`${{ needs.resolve.outputs.source_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Platform: \`linux/amd64\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Digest: \`$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Build and cache export: ${duration}s" >> "$GITHUB_STEP_SUMMARY"
+
+  build-arm64:
+    name: Build candidate (arm64, manual)
+    needs: resolve
+    if: github.event_name == 'workflow_dispatch' && (needs.resolve.outputs.platform == 'arm64' || needs.resolve.outputs.platform == 'both')
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Start timing
+        run: echo "BUILD_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+      - id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: ./compose/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:candidate-${{ needs.resolve.outputs.source_sha }}-arm64
+          provenance: false
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:buildcache-arm64-v2
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:buildcache-arm64-v2,mode=max,compression=zstd,oci-mediatypes=true,image-manifest=true,ignore-error=true
+          labels: |
+            org.opencontainers.image.source=https://github.com/bballdavis/Riviamigo
+            org.opencontainers.image.revision=${{ needs.resolve.outputs.source_sha }}
+            org.opencontainers.image.version=candidate-${{ needs.resolve.outputs.source_sha }}
+      - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      - name: Summarize candidate
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          finished=$(date +%s)
+          duration=$((finished - BUILD_STARTED_AT))
+          echo "### Candidate image" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Source: \`${{ needs.resolve.outputs.source_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Platform: \`linux/arm64\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Digest: \`$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Build and cache export: ${duration}s" >> "$GITHUB_STEP_SUMMARY"
+
+  prune-candidates:
+    name: Prune stale candidates
+    needs: [resolve, build-amd64, build-arm64]
+    if: always() && !cancelled() && (needs.build-amd64.result == 'success' || needs.build-arm64.result == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Retain recent commit candidates
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          versions=$(mktemp)
+          gh api --paginate "/users/${GITHUB_REPOSITORY_OWNER}/packages/container/riviamigo/versions?per_page=100" \
+            --jq '.[] | [.created_at, .id, (.metadata.container.tags | join(","))] | @tsv' > "$versions"
+          deleted=0
+          for platform in amd64 arm64; do
+            keep=10
+            [[ "$platform" == "arm64" ]] && keep=3
+            mapfile -t stale_ids < <(
+              awk -F '\t' -v suffix="-$platform" '$3 ~ /^candidate-[0-9a-f]{40}-(amd64|arm64)$/ && $3 ~ suffix "$" { print $1 "\t" $2 }' "$versions" \
+                | sort -r \
+                | tail -n "+$((keep + 1))" \
+                | cut -f2
+            )
+            for id in "${stale_ids[@]}"; do
+              gh api --method DELETE "/users/${GITHUB_REPOSITORY_OWNER}/packages/container/riviamigo/versions/$id"
+              deleted=$((deleted + 1))
+            done
+          done
+          mapfile -t legacy_ids < <(awk -F '\t' '$3 ~ /^[0-9a-f]{7}-dev$/ { print $2 }' "$versions")
+          for id in "${legacy_ids[@]}"; do
+            gh api --method DELETE "/users/${GITHUB_REPOSITORY_OWNER}/packages/container/riviamigo/versions/$id"
+            deleted=$((deleted + 1))
+          done
+          echo "- Stale candidates deleted: $deleted" >> "$GITHUB_STEP_SUMMARY"

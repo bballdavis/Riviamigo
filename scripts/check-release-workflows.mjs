@@ -44,61 +44,59 @@ function checkPins(workflow, name) {
   }
 }
 
-function checkWorkflow(relativePath, mode) {
+function checkPromotionWorkflow(relativePath, mode) {
   const workflow = read(relativePath);
   const name = path.basename(relativePath);
-  const build = jobBlock(workflow, 'build-image', 'merge-image');
-  const merge = jobBlock(workflow, 'merge-image', 'release-smoke');
+  const promote = jobBlock(workflow, 'promote-image', 'release-smoke');
 
   checkPins(workflow, name);
-  requireText(build, /strategy:\s*\n\s+fail-fast:\s*false\s*\n\s+matrix:\s*\n\s+include:/, `${name} must use an included platform matrix`);
-  requireText(build, /platform:\s+linux\/amd64[\s\S]*?pair:\s+amd64[\s\S]*?runner:\s+ubuntu-24\.04(?:\s|$)/, `${name} is missing the native amd64 matrix entry`);
-  requireText(build, /platform:\s+linux\/arm64[\s\S]*?pair:\s+arm64[\s\S]*?runner:\s+ubuntu-24\.04-arm(?:\s|$)/, `${name} is missing the native arm64 matrix entry`);
-  requireText(build, /runs-on:\s+\$\{\{ matrix\.runner \}\}/, `${name} platform builds must use the matrix runner`);
-  requireText(build, /timeout-minutes:\s*45/, `${name} platform builds must retain the 45-minute timeout`);
-  if (/setup-qemu-action/.test(build)) fail(`${name} must not use QEMU in native platform build jobs`);
-  requireText(build, /platforms:\s+\$\{\{ matrix\.platform \}\}/, `${name} must build one matrix platform per job`);
-  requireText(build, /outputs:\s+type=image,name=\$\{\{ env\.REGISTRY \}\}\/\$\{\{ env\.OWNER \}\}\/riviamigo,push-by-digest=true,name-canonical=true,push=true/, `${name} must publish digest-only platform outputs`);
-  requireText(build, /provenance:\s*false/, `${name} platform builds must disable per-platform provenance`);
-  requireCount(build, /type=registry,ref=\$\{\{ env\.REGISTRY \}\}\/\$\{\{ env\.OWNER \}\}\/riviamigo:buildcache-\$\{\{ matrix\.pair \}\}/g, 2, `${name} must configure one registry cache source and destination`);
-  requireText(build, /type=gha,scope=riviamigo-container-image-\$\{\{ matrix\.pair \}\}/, `${name} must retain a per-platform GHA cache`);
-  requireText(build, /mode=max,compression=zstd,oci-mediatypes=true,image-manifest=true,ignore-error=true/, `${name} registry cache must use the required export settings`);
-  requireText(build, /mode=min,ignore-error=true/, `${name} GHA cache must be a minimal fallback`);
-  requireText(build, /actions\/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f/, `${name} must use the pinned upload-artifact action`);
-  requireText(build, /retention-days:\s*1/, `${name} platform artifacts must retain for one day`);
-  requireText(build, /GITHUB_STEP_SUMMARY/, `${name} must summarize platform timing`);
-
-  requireText(merge, /needs:\s*\[validate(?:-tag)?,\s*build-image\]/, `${name} merge job must wait for validation and both platform builds`);
-  requireText(merge, /actions\/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131/, `${name} must use the pinned download-artifact action`);
-  requireText(merge, /merge-multiple:\s*true/, `${name} merge job must combine platform artifacts`);
-  requireText(merge, /test "\$\{#digest_files\[@\]\}" -eq 2/, `${name} merge must require exactly two digest markers`);
-  requireText(merge, /test "\$\{#timing_files\[@\]\}" -eq 2/, `${name} merge must require exactly two timing files`);
-  requireText(merge, /imagetools create --metadata-file/, `${name} merge must write manifest metadata`);
-  requireText(merge, /containerimage\.descriptor.*containerimage\.digest/s, `${name} merge must support both manifest digest metadata fields`);
-  requireText(merge, /attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373/, `${name} must attest the merged digest`);
-  if (/attest-build-provenance/.test(build)) fail(`${name} provenance attestation must live in merge-image`);
+  if (/docker\/build-push-action/.test(workflow)) fail(`${name} must promote a candidate instead of rebuilding the image`);
+  requireText(workflow, /include_arm64:[\s\S]*?default:\s*false/, `${name} must keep ARM64 opt-in`);
+  requireText(promote, /candidate-\$SOURCE_SHA-amd64/, `${name} must require the exact AMD64 commit candidate`);
+  requireText(promote, /candidate-\$SOURCE_SHA-arm64/, `${name} must support an optional exact ARM64 candidate`);
+  requireText(promote, /imagetools create --metadata-file/, `${name} must promote candidates by immutable manifest`);
+  requireText(promote, /containerimage\.descriptor.*containerimage\.digest/s, `${name} must capture the promoted digest`);
+  requireText(promote, /attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373/, `${name} must attest the promoted digest`);
 
   if (mode === 'stable') {
-    requireText(merge, /--tag "\$IMAGE:\$VERSION" --tag "\$IMAGE:latest"/, `${name} stable merge must publish version and latest tags`);
+    requireText(promote, /--tag "\$IMAGE:\$VERSION" --tag "\$IMAGE:latest"/, `${name} stable promotion must publish version and latest tags`);
     requireText(workflow, /git merge-base --is-ancestor "\$GITHUB_SHA" origin\/main/, `${name} must retain main ancestry validation`);
   } else {
-    requireText(merge, /--tag "\$IMAGE:\$VERSION" "\$\{digests\[@\]\}"/, `${name} pre-release merge must publish only the version tag`);
+    requireText(promote, /--tag "\$IMAGE:\$VERSION" "\$\{sources\[@\]\}"/, `${name} preview promotion must publish only the version tag`);
     requireText(workflow, /ref: dev/, `${name} must retain dev source semantics`);
     requireText(workflow, /source_sha:/, `${name} must retain source SHA semantics`);
   }
 
-  requireText(workflow, /needs:\s*\[validate(?:-tag)?,\s*merge-image\]/, `${name} downstream smoke gate must depend on merge-image`);
-  requireText(workflow, /needs:\s*\[validate(?:-tag)?,\s*merge-image,\s*release-smoke,\s*populated-upgrade\]/, `${name} release gate must depend on merge-image`);
-  requireText(workflow, /needs\.merge-image\.outputs\.digest/, `${name} downstream jobs must consume the merged digest`);
+  requireText(workflow, /needs:\s*\[validate(?:-tag)?,\s*promote-image\]/, `${name} downstream gates must depend on promotion`);
+  requireText(workflow, /needs:\s*\[validate(?:-tag)?,\s*promote-image,\s*release-smoke,\s*populated-upgrade\]/, `${name} release creation must wait for promoted-image verification`);
+  requireText(workflow, /needs\.promote-image\.outputs\.digest/, `${name} downstream jobs must consume the promoted digest`);
   requireText(
     workflow,
-    /verify-fresh-install\.mjs[^\n]*--image-ref "\$\{\{ env\.REGISTRY \}\}\/\$\{\{ env\.OWNER \}\}\/riviamigo@\$\{\{ needs\.merge-image\.outputs\.digest \}\}"/,
-    `${name} smoke test must verify the merged digest instead of a mutable tag`
+    /verify-fresh-install\.mjs[^\n]*--image-ref "\$\{\{ env\.REGISTRY \}\}\/\$\{\{ env\.OWNER \}\}\/riviamigo@\$\{\{ needs\.promote-image\.outputs\.digest \}\}"/,
+    `${name} smoke test must verify the promoted digest instead of a mutable tag`
   );
 }
 
-checkWorkflow('.github/workflows/publish-release-images.yml', 'stable');
-checkWorkflow('.github/workflows/publish-prerelease-images.yml', 'prerelease');
+function checkCandidateWorkflow() {
+  const workflow = read('.github/workflows/publish-candidate-image.yml');
+  checkPins(workflow, 'publish-candidate-image.yml');
+  requireText(workflow, /branches:\s*\[main, dev\]/, 'candidate workflow must build every main and dev commit');
+  requireText(workflow, /runs-on:\s*ubuntu-24\.04(?:\s|$)/, 'AMD64 candidates must use the native AMD64 runner');
+  requireText(workflow, /runs-on:\s*ubuntu-24\.04-arm(?:\s|$)/, 'ARM64 candidates must use the native ARM64 runner');
+  requireText(workflow, /Build candidate \(arm64, manual\)/, 'ARM64 candidate builds must remain manual');
+  requireCount(workflow, /cache-from:\s*type=registry,ref=.*buildcache-(?:amd64|arm64)-v2/g, 2, 'candidate workflow must import one GHCR cache per platform');
+  requireCount(workflow, /cache-to:\s*type=registry,ref=.*buildcache-(?:amd64|arm64)-v2/g, 2, 'candidate workflow must export one GHCR cache per platform');
+  if (/type=gha/.test(workflow)) fail('candidate workflow must not consume GitHub Actions cache storage for BuildKit');
+  requireText(workflow, /candidate-\$\{\{ needs\.resolve\.outputs\.source_sha \}\}-amd64/, 'candidate workflow must publish an exact AMD64 commit tag');
+  requireText(workflow, /candidate-\$\{\{ needs\.resolve\.outputs\.source_sha \}\}-arm64/, 'candidate workflow must publish an exact ARM64 commit tag');
+  requireText(workflow, /prune-candidates:[\s\S]*?keep=10[\s\S]*?keep=3/, 'candidate workflow must bound AMD64 and ARM64 candidate retention');
+  requireText(workflow, /gh api --method DELETE[^\n]*packages\/container\/riviamigo\/versions\/\$id/, 'candidate workflow must delete stale candidate versions by exact package version ID');
+  requireText(workflow, /\^\[0-9a-f\]\{7\}-dev\$/, 'candidate workflow must remove orphaned legacy dev candidates without matching the moving dev tag');
+}
+
+checkCandidateWorkflow();
+checkPromotionWorkflow('.github/workflows/publish-release-images.yml', 'stable');
+checkPromotionWorkflow('.github/workflows/publish-prerelease-images.yml', 'prerelease');
 
 const quality = read('.github/workflows/quality.yml');
 requireText(quality, /run:\s*pnpm release-workflows:check/, 'quality workflow must invoke the release workflow checker');
@@ -126,6 +124,14 @@ requireText(
   runtime,
   /cargo run --bin riviamigo-api/,
   'runtime workflow must select the API binary explicitly',
+);
+if (/docker compose[^\n]*\sbuild(?:\s|$)/.test(runtime)) {
+  fail('runtime workflow must reuse the commit candidate instead of rebuilding the production image');
+}
+requireText(
+  runtime,
+  /imagetools inspect "ghcr\.io\/bballdavis\/riviamigo:candidate-\$\{GITHUB_SHA\}-amd64"/,
+  'runtime workflow must verify the exact AMD64 commit candidate',
 );
 const freshInstallWorkflow = read('.github/workflows/fresh-install.yml');
 requireText(

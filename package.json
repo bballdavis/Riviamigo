@@ -41,6 +41,7 @@
     "verify:backup-restore-s3": "node ./scripts/verify-backup-restore-s3.mjs",
     "verify:restore-compatibility": "node ./tools/restore-lab/run.mjs",
     "verify:migration-integrity": "node ./tools/migration-integrity.mjs",
+    "verify:image": "node ./scripts/verify-release-image.mjs --platforms linux/amd64",
     "verify:release-image": "node ./scripts/verify-release-image.mjs",
     "compose:check": "node ./scripts/check-compose-contracts.mjs",
     "release-workflows:check": "node ./scripts/check-release-workflows.mjs",

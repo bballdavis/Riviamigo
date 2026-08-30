@@ -96,3 +96,11 @@ opt-level     = 3
 lto           = true
 codegen-units = 1
 strip         = true
+
+# Production containers favor a materially faster build while retaining
+# optimized code and ThinLTO. The ordinary release profile remains available
+# for explicit maximum-optimization builds outside the container pipeline.
+[profile.container]
+inherits      = "release"
+lto           = "thin"
+codegen-units = 8

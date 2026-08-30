@@ -110,7 +110,7 @@ precise vehicle locations in public issues.
 
 - Standard Compose pulls one public unified image from GitHub Container Registry; source builds use the explicit build overlay only.
 - Stable images use immutable Calendar Version tags and provenance attestations; `latest` is a moving convenience tag, not a reproducible deployment identifier.
-- Container images are published only by intentional release workflows from validated `main` tags or the current `dev` pre-release candidate. Stable and pre-release image tags and digests must be treated as release artifacts.
+- Versioned container images are published only by intentional release workflows from validated `main` tags or the current `dev` pre-release candidate. Pushes to `main` and `dev` may publish unversioned, commit-addressed build candidates; these are cache/release inputs, not releases. Stable and pre-release image tags and digests must be treated as release artifacts.
 - See the [release images runbook](./runbooks/release-images.md) for package visibility, tag protection, and recovery requirements.
 
 ## Production Checklist
