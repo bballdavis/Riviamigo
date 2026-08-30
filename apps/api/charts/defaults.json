@@ -658,7 +658,7 @@
     "enabled": true,
     "definition": {
       "schemaVersion": 1,
-      "placements": [{ "dashboardSlug": "overview" }, { "dashboardSlug": "trips" }],
+      "placements": [{ "dashboardSlug": "overview" }],
       "timeframe": { "mode": "dashboard" },
       "sources": [
         {
