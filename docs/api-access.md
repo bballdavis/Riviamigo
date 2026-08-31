@@ -96,6 +96,14 @@ newer snapshots may also include `charge_rate_kph`, `time_elapsed_seconds`,
 `started_at`. Missing upstream values remain `null` rather than being replaced
 with zeroes.
 
+Charging-session list and detail responses also expose a live projection while
+`ended_at` is `null`: current SoC, power, charger state/status, elapsed and
+remaining time, accumulated energy/range, and the latest charge estimate are
+returned alongside the canonical row. The session curve is readable during an
+open session and is bounded through the latest observed time. `cost_usd` remains
+`null` until canonical session finalization; `live_current_price` is the
+optional in-progress estimate.
+
 Trip detail responses include a `power` metadata object. Its `source` is
 `direct`, `estimated_soc`, or `unavailable`; estimated samples are signed net
 pack power in kW (positive discharge, negative net regeneration) and include

@@ -24,6 +24,7 @@ export interface WidgetCtx {
   chargeSessionDayLocal?: string | null;
   setChargeSessionDayLocal?: (dayLocal: string | null) => void;
   chargeSessionId?: string | null;
+  chargeSessionActive?: boolean;
   chargeSessionEnergyKwh?: number | null;
   updateWidgetOptions?: (widgetId: string, patch: Record<string, unknown>) => void;
   updateWidgetLayout?: (widgetId: string, nextHeight: number) => void;

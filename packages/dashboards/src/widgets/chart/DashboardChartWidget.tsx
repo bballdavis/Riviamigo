@@ -1097,7 +1097,11 @@ function ChargeSessionCurveSource({
   settings,
   presentation,
 }: ActiveDashboardChartSourceProps) {
-  const { data = [], isLoading } = useChargeCurve(ctx.chargeSessionId ?? null, ctx.vehicleId);
+  const { data = [], isLoading } = useChargeCurve(
+    ctx.chargeSessionId ?? null,
+    ctx.vehicleId,
+    ctx.chargeSessionActive === true,
+  );
   const { yRange, yRightRange } = sourceAxisRanges(settings);
   return (
     <ChargeSessionCurveChart

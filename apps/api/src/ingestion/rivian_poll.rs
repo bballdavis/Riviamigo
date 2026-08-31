@@ -1612,7 +1612,7 @@ pub async fn persist_live_session_data(
         return Ok(());
     };
 
-    let updated = sqlx::query(
+    sqlx::query(
         "UPDATE riviamigo.charge_sessions SET
              live_current_price       = COALESCE($2, live_current_price),
              live_current_currency    = COALESCE($3, live_current_currency),
@@ -1622,16 +1622,21 @@ pub async fn persist_live_session_data(
              live_charge_rate_kph     = COALESCE($7, live_charge_rate_kph),
              live_time_elapsed_seconds = COALESCE($8, live_time_elapsed_seconds),
              live_session_started_at  = COALESCE($9, live_session_started_at),
+             live_time_remaining_minutes = COALESCE($11, live_time_remaining_minutes),
              is_free_session          = COALESCE($10, is_free_session),
-             kwh_added                = COALESCE(kwh_added, $4),
-             range_added_km           = COALESCE(range_added_km, $5),
+             kwh_added                = COALESCE($4, kwh_added),
+             range_added_km           = COALESCE($5, range_added_km),
+             max_charge_rate_kw      = CASE WHEN $6 IS NOT NULL
+                                            THEN GREATEST(COALESCE(max_charge_rate_kw, 0), $6)
+                                            ELSE max_charge_rate_kw END,
+             duration_minutes        = COALESCE($12, duration_minutes),
              source = CASE WHEN source = 'rivian_api'
                            THEN 'telemetry+rivian_api'
                            ELSE COALESCE(source, 'telemetry') END,
              data_confidence = CASE WHEN source = 'rivian_api'
                                     THEN 'telemetry_enriched'
                                     ELSE COALESCE(data_confidence, 'telemetry') END
-         WHERE id = $1",
+         WHERE id = $1 AND ended_at IS NULL",
     )
     .bind(session_id)
     .bind(live.price)
@@ -1646,12 +1651,20 @@ pub async fn persist_live_session_data(
     )
     .bind(live.started_at)
     .bind(live.is_free_session)
+    .bind(
+        live.time_remaining_min
+            .map(|minutes| minutes.round() as i32),
+    )
+    .bind(
+        live.time_elapsed_seconds
+            .map(|seconds| (seconds / 60.0).round() as i32),
+    )
     .execute(pool)
     .await?;
 
-    if updated.rows_affected() > 0 {
-        let _ = crate::services::cost::recompute_charge_session_cost(pool, session_id).await?;
-    }
+    // Do not compute a final billing amount while the session is open.  The
+    // live price is retained above for an estimate; final cost is recomputed
+    // by the canonical session-finalization path once ended_at is known.
     Ok(())
 }
 

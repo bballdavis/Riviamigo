@@ -460,6 +460,12 @@ export interface ChargeSession {
   live_range_added_km?: number | null;
   live_power_kw?: number | null;
   live_charge_rate_kph?: number | null;
+  live_soc_pct?: number | null;
+  live_time_elapsed_seconds?: number | null;
+  live_time_remaining_min?: number | null;
+  live_charger_state?: string | null;
+  live_charger_status?: string | null;
+  live_started_at?: string | null;
   /** Effective coordinates after a user location correction. */
   location_lat?: number | null;
   location_lng?: number | null;
