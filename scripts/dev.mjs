@@ -257,9 +257,14 @@ async function clearRepoOwnedDevProcesses() {
   await sleep(500);
 }
 
-async function findAvailablePort(start, label, maxTries = 50) {
+async function findAvailablePort(start, label, maxTries = 50, reservedPorts = new Set()) {
   for (let attempt = 0; attempt < maxTries; attempt += 1) {
     const candidate = start + attempt;
+    if (reservedPorts.has(candidate)) {
+      log(`[dev] ${label} port ${candidate} is already reserved; trying ${candidate + 1}`);
+      continue;
+    }
+
     const pids = await getListeningPids(candidate);
     if (pids.length === 0) {
       if (attempt > 0) {
@@ -274,16 +279,33 @@ async function findAvailablePort(start, label, maxTries = 50) {
   throw new Error(`[dev] Could not find an available ${label} port after ${maxTries} attempts from ${start}.`);
 }
 
+export async function allocateDistinctRuntimePorts(definitions, findPort = findAvailablePort) {
+  const reservedPorts = new Set();
+  const allocated = {};
+
+  for (const { key, start, label } of definitions) {
+    const port = await findPort(start, label, 50, reservedPorts);
+    reservedPorts.add(port);
+    allocated[key] = port;
+  }
+
+  return allocated;
+}
+
 async function allocateRuntimePorts() {
-  const [api, web, postgres, redis, garageApi, garageAdmin, restoreAgent] = await Promise.all([
-    findAvailablePort(requestedPorts.api, 'API'),
-    findAvailablePort(requestedPorts.web, 'Web'),
-    findAvailablePort(requestedPorts.postgres, 'PostgreSQL'),
-    findAvailablePort(requestedPorts.redis, 'Redis'),
-    findAvailablePort(requestedPorts.garageApi, 'Garage API'),
-    findAvailablePort(requestedPorts.garageAdmin, 'Garage admin'),
-    findAvailablePort(requestedPorts.restoreAgent, 'Restore agent'),
+  // Probe ports serially and reserve each result. Parallel probes can all see
+  // the same free requested port when users override multiple services to one
+  // value (for example API and restore agent both set to 3003).
+  const allocated = await allocateDistinctRuntimePorts([
+    { key: 'api', start: requestedPorts.api, label: 'API' },
+    { key: 'web', start: requestedPorts.web, label: 'Web' },
+    { key: 'postgres', start: requestedPorts.postgres, label: 'PostgreSQL' },
+    { key: 'redis', start: requestedPorts.redis, label: 'Redis' },
+    { key: 'garageApi', start: requestedPorts.garageApi, label: 'Garage API' },
+    { key: 'garageAdmin', start: requestedPorts.garageAdmin, label: 'Garage admin' },
+    { key: 'restoreAgent', start: requestedPorts.restoreAgent, label: 'Restore agent' },
   ]);
+  const { api, web, postgres, redis, garageApi, garageAdmin, restoreAgent } = allocated;
 
   ports = { api, web, postgres, redis, garageApi, garageAdmin, restoreAgent };
 
@@ -701,13 +723,17 @@ function onceExit(child, label) {
   });
 }
 
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => {
-    shutdown(signal === 'SIGINT' ? 130 : 143);
+const isDirectExecution = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectExecution) {
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => {
+      shutdown(signal === 'SIGINT' ? 130 : 143);
+    });
+  }
+
+  main().catch(async (error) => {
+    console.error(error.message);
+    await shutdown(1);
   });
 }
-
-main().catch(async (error) => {
-  console.error(error.message);
-  await shutdown(1);
-});
