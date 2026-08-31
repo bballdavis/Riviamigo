@@ -135,7 +135,7 @@ function ChargingConnectionWidget({
       data-image-dark={displaySideDark}
       data-fallback-image={fallbackChargingSource ?? undefined}
       data-artwork-variant={isDemoVehicle ? 'demo-charging-fallback' : 'rivian-charging'}
-      className="relative h-full min-h-0 overflow-hidden rounded-2xl border border-border bg-[linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] shadow-lg shadow-black/10"
+      className="relative h-full min-h-0 overflow-hidden rounded-2xl border border-border bg-[linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] shadow-lg"
     >
       <div className="absolute inset-0 flex items-stretch justify-end">
         {displaySideLight ? <VehicleSideImage source={chargingSideLight} fallbackSource={fallbackChargingSource} darkClassName="dark:hidden" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} /> : null}

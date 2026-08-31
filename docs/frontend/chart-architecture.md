@@ -45,6 +45,15 @@ The normal rich/custom editor is curve-first. It combines series-capable metric 
 
 The precedence for display behavior is transient preview state, dashboard/widget overrides keyed by stable slug, chart-definition defaults, then renderer fallbacks. Dashboard-specific settings do not mutate the chart definition.
 
+Chart color tokens are palette-independent persisted names. The shared registry
+contains a classic and RAD value for every saved token, while the active CSS
+variables resolve the account's selected palette at render time. Recharts and
+SVG consumers use those variables directly. Canvas, uPlot, and MapLibre
+consumers resolve the variables against the document immediately before
+drawing, and observe appearance/palette changes so existing charts refresh
+without changing saved definitions, chart defaults, slugs, or bundled renderer
+assignments.
+
 ## Compatibility and verification
 
 The production renderer contract is tested against a hand-authored oracle from

@@ -172,7 +172,7 @@ function DashboardVisibilityPreview({
                   onClick={() => onChange(type, option.value)}
                   className={`min-h-8 rounded-md px-2.5 text-[11px] font-medium transition-colors ${
                     state[type] === option.value
-                      ? 'bg-accent text-white'
+                      ? 'bg-accent text-fg-on-accent'
                       : 'text-fg-secondary hover:bg-bg-elevated hover:text-fg'
                   }`}
                 >

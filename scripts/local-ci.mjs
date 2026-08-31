@@ -63,8 +63,8 @@ function trackedFiles(directory) {
 
 function colorTokenGuard() {
   const roots = ['apps/web/src', 'packages/ui/src', 'packages/dashboards/src', 'packages/hooks/src'];
-  const pattern = /#[0-9a-f]{3,8}\b|rgba?\(|(?:text|bg)-(?:blue|indigo|sky|green|red|orange|yellow|slate|zinc|stone)-\d+/i;
-  const allowed = /tokens[\\/]colors\.ts|globals\.css|\.test\.|\.spec\.|getPropertyValue|CHART_COLORS|rm-map-route|\/\/.*#/;
+  const pattern = /#[0-9a-f]{3,8}\b|rgba?\(|(?:text|bg|border|shadow|fill|stroke|ring|outline|divide|placeholder|decoration|accent|caret|from|via|to)-(?:white|black|slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)(?:-\d+)?(?:\/\d+)?\b/i;
+  const allowed = /tokens[\\/]colors\.ts|globals\.css|charts[\\/]ChartProvider\.tsx|\.test\.|\.spec\.|getPropertyValue|CHART_COLORS|CLASSIC_CHART_COLORS|RAD_CHART_COLORS|CHART_PALETTES|rm-map-route|\/\/.*#/;
   const violations = roots.flatMap((path) => trackedFiles(join(root, path)))
     .filter((path) => /\.(tsx?|css)$/.test(path))
     .flatMap((path) => readFileSync(path, 'utf8').split(/\r?\n/).map((line, index) => ({ path, line, index }))

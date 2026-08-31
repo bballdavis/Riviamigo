@@ -88,6 +88,7 @@ function installSessionClearedHandler(client: QueryClient) {
   if (typeof window === 'undefined') return;
   window.addEventListener('riviamigo:session-cleared', () => {
     client.cancelQueries();
+    client.clear();
   });
 }
 

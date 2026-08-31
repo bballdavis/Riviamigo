@@ -36,8 +36,21 @@ const settingsMocks = vi.hoisted(() => ({
       target_tire_pressure_psi: 48,
       membership_role: 'owner',
       is_demo: false,
-    },
+      },
   ],
+  preferences: {
+    units: {
+      mode: 'imperial',
+      distance_unit: 'miles',
+      speed_unit: 'mph',
+      temperature_unit: 'fahrenheit',
+      pressure_unit: 'psi',
+      altitude_unit: 'feet',
+      place_radius_unit: 'feet',
+      efficiency_display: 'distance_per_energy',
+    },
+    theme: { mode: 'dark', palette: 'classic' },
+  },
 }));
 
 const dashboardMocks = vi.hoisted(() => ({
@@ -86,8 +99,13 @@ vi.mock('@riviamigo/hooks', () => ({
       status: (vehicleId: string) => ['vehicles', 'status', vehicleId],
     },
   },
-  api: {
+    api: {
     me: vi.fn().mockResolvedValue({ role: 'user' }),
+    getUnitPreferences: vi.fn().mockImplementation(() => Promise.resolve(settingsMocks.preferences)),
+    updateThemePreferences: vi.fn().mockImplementation(async (theme) => {
+      settingsMocks.preferences.theme = theme;
+      return settingsMocks.preferences;
+    }),
     changePassword: hooksMocks.changePassword,
     listApiKeys: vi.fn().mockResolvedValue([]),
     getApiCatalog: vi.fn().mockResolvedValue({
@@ -520,6 +538,19 @@ describe('Settings page', () => {
     settingsMocks.auth.setActiveVehicleId.mockReset();
     settingsMocks.auth.accessToken = undefined;
     settingsMocks.auth.defaultVehicleId = 'v1';
+    settingsMocks.preferences = {
+      units: {
+        mode: 'imperial',
+        distance_unit: 'miles',
+        speed_unit: 'mph',
+        temperature_unit: 'fahrenheit',
+        pressure_unit: 'psi',
+        altitude_unit: 'feet',
+        place_radius_unit: 'feet',
+        efficiency_display: 'distance_per_energy',
+      },
+      theme: { mode: 'dark', palette: 'classic' },
+    };
     dashboardMocks.dashboards = [];
     dashboardMocks.downloadDashboardYaml.mockReset();
     dashboardMocks.cloneMutateAsync.mockReset();
@@ -534,6 +565,8 @@ describe('Settings page', () => {
       role: 'user',
       default_vehicle_id: 'v1',
     };
+    document.documentElement.className = 'dark';
+    document.documentElement.removeAttribute('data-rm-palette');
     settingsMocks.vehicles = [
       {
         id: 'v1',
@@ -928,7 +961,7 @@ describe('Settings page', () => {
     renderSettings();
     fireEvent.click(screen.getByText('Appearance'));
     expect(screen.getAllByText('Appearance').length).toBeGreaterThan(0);
-    expect(screen.getByText('Theme')).toBeInTheDocument();
+    expect(screen.getByText('Appearance mode')).toBeInTheDocument();
   });
 
   it('renders the Places section', () => {
@@ -1075,10 +1108,41 @@ describe('Settings page', () => {
   it('renders the theme chooser', () => {
     renderSettings();
     fireEvent.click(screen.getByText('Appearance'));
-    expect(
-      screen.getByText('Toggle between dark, light, and system appearance')
-    ).toBeInTheDocument();
-    expect(screen.getByTestId('theme-toggle')).toBeInTheDocument();
+    expect(screen.getByText('Appearance mode')).toBeInTheDocument();
+    expect(screen.getByLabelText('Appearance mode')).toBeInTheDocument();
+    expect(screen.getByText('Color palette')).toBeInTheDocument();
+    expect(screen.getByLabelText('Color palette')).toBeInTheDocument();
+  });
+
+  it('persists account-backed appearance and palette changes', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.auth.accessToken = 'test-access-token';
+    renderSettings();
+    fireEvent.click(screen.getByText('Appearance'));
+
+    await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
+    fireEvent.change(screen.getByLabelText('Color palette'), { target: { value: 'rad' } });
+
+    await waitFor(() => {
+      expect(hooks.api.updateThemePreferences).toHaveBeenCalledWith({ mode: 'dark', palette: 'rad' });
+    });
+    expect(document.documentElement.dataset.rmPalette).toBe('rad');
+    expect(localStorage.getItem('rm-theme')).toBeNull();
+  });
+
+  it('rolls back appearance changes when the account update fails', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.auth.accessToken = 'test-access-token';
+    vi.mocked(hooks.api.updateThemePreferences).mockRejectedValueOnce(new Error('save failed'));
+    renderSettings();
+    fireEvent.click(screen.getByText('Appearance'));
+
+    await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
+    fireEvent.change(screen.getByLabelText('Appearance mode'), { target: { value: 'light' } });
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/previous selection has been restored/i));
+    expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark');
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
   });
 
   it('renders the Account section with Sign Out', () => {

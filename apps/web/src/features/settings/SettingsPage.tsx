@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, AuthenticatedVehicleArtwork, queryKeys, resolveVehicleArtwork, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
-import type { UnitPreferences, VehicleImages, VehicleMember } from '@riviamigo/types';
+import { type UnitPreferences, type VehicleImages, type VehicleMember } from '@riviamigo/types';
 import {
   downloadDashboardYaml,
   materializeUserDashboardDraft,
@@ -31,7 +31,7 @@ import {
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI } from '@riviamigo/ui/lib/vehicleTires';
 import {
   PageLayout, Card, CardHeader, CardTitle, CardContent,
-  Button, Badge, Input, SelectPicker, ThemeToggle, Tooltip,
+  Button, Badge, Input, SelectPicker, Tooltip,
 } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../../components/layout/AppLayout';
 import { BackupSection } from '../../components/settings/BackupSection';
@@ -39,6 +39,7 @@ import { ExternalConnectionsSection } from '../../components/settings/ExternalCo
 import { JobsSection } from '../../components/settings/JobsSection';
 import { PlacesSection } from '../../components/settings/PlacesSection';
 import { ChargingSection } from '../../components/settings/ChargingSection';
+import { AppearanceSection } from './AppearanceSection';
 import { RawTelemetryExplorer } from '../../components/settings/RawTelemetryExplorer';
 import { ChartManagerSection } from './charts/ChartManagerSection';
 import { canManageSystemDashboards } from '../../components/dashboard/DashboardPage';
@@ -1823,22 +1824,7 @@ export function SettingsContent({ initialSection }: { initialSection?: SettingsS
 
             {activeSection === 'raw' && <RawTelemetryExplorer vehicles={vehicles ?? []} isAdmin={isAdmin} />}
 
-            {activeSection === 'appearance' && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Appearance</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-fg">Theme</p>
-                      <p className="mt-0.5 text-xs text-fg-tertiary">Toggle between dark, light, and system appearance</p>
-                    </div>
-                    <ThemeToggle />
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+            {activeSection === 'appearance' && <AppearanceSection preferencesQuery={unitPreferencesQuery} />}
 
             {activeSection === 'account' && (
               <Card>

@@ -223,7 +223,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
     expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-x-time', 'true');
     expect(screen.getByTestId('rich-chart')).toHaveAttribute(
       'data-series-colors',
-      'Usable Capacity:#A78BFA|Mileage:#10b981'
+      'Usable Capacity:var(--rm-chart-violet)|Mileage:#10b981'
     );
   });
   it('normalizes the incomplete persisted projected-range baseline in the same runtime', () => {
@@ -438,7 +438,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
     );
     expect(screen.getByTestId('rich-chart')).toHaveAttribute(
       'data-series-colors',
-      'Usable Capacity:#60A5FA|Mileage:#10b981'
+      'Usable Capacity:var(--rm-chart-sky)|Mileage:#10b981'
     );
     expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-y-range', '0|132');
   });
@@ -1758,7 +1758,7 @@ describe('DashboardChartWidget — charging_sessions_energy', () => {
     );
     expect(screen.getByTestId('daily-charge-sessions-chart')).toHaveAttribute(
       'data-series-color',
-      '#10B981'
+      'var(--rm-chart-emerald)'
     );
     expect(screen.getByTestId('daily-charge-sessions-chart')).toHaveAttribute(
       'data-y-range',
@@ -1787,7 +1787,7 @@ describe('DashboardChartWidget — charging_weekly_energy', () => {
       />
     );
     const bars = screen.getAllByTestId('daily-energy-bar');
-    expect(bars[0]).toHaveAttribute('data-series-color', '#10B981');
+    expect(bars[0]).toHaveAttribute('data-series-color', 'var(--rm-chart-emerald)');
     expect(bars[0]).toHaveAttribute('data-y-range', '1|81');
   });
 

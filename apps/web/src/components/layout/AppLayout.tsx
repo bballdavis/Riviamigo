@@ -4,7 +4,6 @@ import {
   Sidebar,
   StatusBar,
   AmbientOrbs,
-  ThemeToggle,
   DEFAULT_NAV_ITEMS,
   type NavItem,
   type VehicleOnlineState,
@@ -288,7 +287,6 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
         activeKey={activeKey}
         onNavigate={(href) => navigate({ to: href })}
         items={sidebarItems}
-        mobileHeaderSlot={<ThemeToggle variant="ghost" ariaLabel="Theme options" />}
         collapsed={sidebarCollapsed}
         onCollapsedChange={setPersistedSidebarCollapsed}
         bottomSlot={({ collapsed, mobile, closeMobileNavigation }) =>
@@ -411,7 +409,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 <Settings className="h-4 w-4 shrink-0" />
               </button>
 
-              <div className={collapsedFooterRow}>
+              <div className="flex justify-end">
                 <button
                   type="button"
                   onClick={handleLogout}
@@ -421,7 +419,6 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 >
                   <LogOut className="h-4 w-4 shrink-0" />
                 </button>
-                <ThemeToggle variant="ghost" className="h-8 w-6" ariaLabel="Theme options" />
               </div>
             </div>
           ) : (
@@ -463,7 +460,6 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                   <span className="text-xs font-medium">Sign out</span>
                 </button>
 
-                <ThemeToggle variant="ghost" className="h-8 w-8" ariaLabel="Theme options" />
               </div>
             </div>
           )

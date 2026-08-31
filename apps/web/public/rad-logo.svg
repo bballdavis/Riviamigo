@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 257 257" role="img" aria-labelledby="title">
+  <title id="title">Riviamigo RAD logo</title>
+  <rect x="34" y="14" width="189" height="189" rx="34" fill="#d6a928"/>
+  <rect x="34" y="14" width="189" height="189" rx="34" fill="#d95a4f" opacity=".82" transform="translate(0 18)"/>
+  <rect x="34" y="14" width="189" height="189" rx="34" fill="#2cafa5" opacity=".74" transform="translate(0 36)"/>
+  <image href="/logo_color_lighter.svg" x="20" y="20" width="217" height="217" preserveAspectRatio="xMidYMid meet"/>
+</svg>

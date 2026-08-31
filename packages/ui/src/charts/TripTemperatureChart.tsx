@@ -172,7 +172,7 @@ export function TripTemperatureChart({
           stroke={CHART_COLORS.emerald}
           strokeWidth={1.8}
           dot={outsideTempDot}
-          activeDot={{ r: 3.8, fill: CHART_COLORS.emerald, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
+          activeDot={{ r: 3.8, fill: CHART_COLORS.emerald, stroke: 'var(--rm-bg-surface)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
         />
@@ -183,7 +183,7 @@ export function TripTemperatureChart({
           stroke={CHART_COLORS.orange}
           strokeWidth={1.8}
           dot={cabinTempDot}
-          activeDot={{ r: 3.8, fill: CHART_COLORS.orange, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
+          activeDot={{ r: 3.8, fill: CHART_COLORS.orange, stroke: 'var(--rm-bg-surface)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
         />
@@ -195,7 +195,7 @@ export function TripTemperatureChart({
           strokeWidth={1.6}
           strokeDasharray="4 4"
           dot={driverSetpointDot}
-          activeDot={{ r: 3.8, fill: CHART_COLORS.yellow, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
+          activeDot={{ r: 3.8, fill: CHART_COLORS.yellow, stroke: 'var(--rm-bg-surface)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
         />

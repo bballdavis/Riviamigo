@@ -36,7 +36,7 @@ const DEFAULT_WINDOW_DAYS = 30;
 
 /** Drawer background color — matches EditorDrawer's --rm-bg. Fields stack on top. */
 const FIELD_BG = 'bg-bg-elevated';
-const SECTION_BG = 'bg-white/[0.03]';
+const SECTION_BG = 'bg-bg-surface/30';
 
 interface WidgetEditFormProps {
   widget: WidgetInstance;
@@ -198,7 +198,7 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
             type="button"
             onClick={onClose}
             title="Save component"
-            className="flex items-center justify-center rounded-lg bg-accent p-2 text-white transition-colors hover:bg-accent/90"
+            className="flex items-center justify-center rounded-lg bg-accent p-2 text-fg-on-accent transition-colors hover:bg-accent/90"
           >
             <Save className="h-4 w-4" />
           </button>
@@ -589,7 +589,7 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                 {chartDefinitions.map((d) => (
                   <label
                     key={d.id}
-                    className="flex cursor-pointer items-start gap-2 rounded-md px-1.5 py-1.5 text-xs text-fg-secondary hover:bg-white/5"
+                    className="flex cursor-pointer items-start gap-2 rounded-md px-1.5 py-1.5 text-xs text-fg-secondary hover:bg-bg-surface/30"
                   >
                     <input
                       type="checkbox"
@@ -659,7 +659,7 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                   setConfirmRemoveOpen(false);
                   onRemove?.();
                 }}
-                className="rounded-lg border border-status-danger/60 bg-status-danger px-3 py-1.5 text-xs font-medium text-white transition-colors hover:brightness-110"
+                className="rounded-lg border border-status-danger/60 bg-status-danger px-3 py-1.5 text-xs font-medium text-fg-on-accent transition-colors hover:brightness-110"
               >
                 Delete Widget
               </button>
@@ -724,7 +724,7 @@ function ToggleSwitch({
       >
         {/* Thumb */}
         <span
-          className={`h-4 w-4 rounded-full border bg-white shadow-sm ${
+          className={`h-4 w-4 rounded-full border bg-bg-surface shadow-sm ${
             checked ? 'border-accent' : 'border-border-strong'
           }`}
           style={{ transition: 'transform 150ms', transform: checked ? 'translateX(20px)' : 'translateX(0px)' }}

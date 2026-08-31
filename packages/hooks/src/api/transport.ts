@@ -61,6 +61,7 @@ import type {
   UpdateBackupSettingsBody,
   RunBackupResponse,
   UnitPreferences,
+  ThemePreferences,
   DashboardChartFavorites,
   AppTimezone,
   CreateBackupRestoreRequestBody,
@@ -98,6 +99,8 @@ import type {
   ChargeSessionUpdate,
   ChargingNetworkPreference,
 } from '@riviamigo/types';
+
+type PreferencesResponse = { units: UnitPreferences; theme: ThemePreferences };
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
 
@@ -582,13 +585,11 @@ export class AuthenticatedTransport {
     return this.request('GET', '/v1/auth/me');
   }
 
-  async getUnitPreferences(): Promise<{ units: UnitPreferences }> {
-    return this.request('GET', '/v1/auth/preferences');
-  }
+  async getUnitPreferences(): Promise<PreferencesResponse> { return this.request('GET', '/v1/auth/preferences'); }
 
-  async updateUnitPreferences(units: UnitPreferences): Promise<{ units: UnitPreferences }> {
-    return this.request('PUT', '/v1/auth/preferences', { units });
-  }
+  async updateUnitPreferences(units: UnitPreferences, theme?: ThemePreferences): Promise<PreferencesResponse> { return this.request('PUT', '/v1/auth/preferences', { units, ...(theme ? { theme } : {}) }); }
+
+  async updateThemePreferences(theme: ThemePreferences): Promise<PreferencesResponse> { return this.request('PUT', '/v1/auth/preferences', { theme }); }
 
   async getDashboardChartFavorites(): Promise<{ chart_favorites: DashboardChartFavorites }> {
     return this.request('GET', '/v1/auth/preferences/chart-favorites');

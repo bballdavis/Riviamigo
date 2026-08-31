@@ -133,7 +133,7 @@ export function createDefaultDashboardEditActions({ updateDashboard, updateAdmin
           disabled={isPending}
           title="Save changes"
           aria-label="Save dashboard changes"
-          className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-white transition-colors hover:bg-accent/90 disabled:opacity-40"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-fg-on-accent transition-colors hover:bg-accent/90 disabled:opacity-40"
         >
           <Save className="h-4 w-4" />
         </button>

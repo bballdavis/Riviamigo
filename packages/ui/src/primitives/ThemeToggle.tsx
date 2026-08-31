@@ -4,7 +4,6 @@ import { Check, Laptop, Moon, Sun, type LucideIcon } from 'lucide-react';
 import { cn } from '../lib/utils';
 import {
   applyThemeMode,
-  getStoredThemeMode,
   resolveThemeMode,
   type ThemeMode,
 } from '../lib/theme';
@@ -16,6 +15,8 @@ export interface ThemeToggleProps {
   ariaLabel?: string;
   align?: 'start' | 'end';
   variant?: 'solid' | 'ghost';
+  mode?: ThemeMode;
+  onModeChange?: (mode: ThemeMode) => void;
 }
 
 type Position = {
@@ -68,8 +69,11 @@ export function ThemeToggle({
   ariaLabel,
   align = 'end',
   variant = 'solid',
+  mode: controlledMode,
+  onModeChange,
 }: ThemeToggleProps) {
-  const [mode, setMode] = React.useState<ThemeMode>(() => getStoredThemeMode());
+  const [uncontrolledMode, setUncontrolledMode] = React.useState<ThemeMode>('dark');
+  const mode = controlledMode ?? uncontrolledMode;
   const [open, setOpen] = React.useState(false);
   const [isMobile, setIsMobile] = React.useState(isMobileViewport);
   const [position, setPosition] = React.useState<Position>({
@@ -84,26 +88,15 @@ export function ThemeToggle({
   const triggerAriaLabel = ariaLabel ?? (showLabel ? undefined : 'Theme options');
 
   React.useEffect(() => {
-    const syncMode = () => setMode(getStoredThemeMode());
-    syncMode();
-
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === 'rm-theme' || event.key === null) {
-        syncMode();
-      }
-    };
-
     const mediaQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
       ? window.matchMedia('(max-width: 639px)')
       : null;
     const handleViewportChange = () => setIsMobile(mediaQuery ? mediaQuery.matches : false);
 
-    window.addEventListener('storage', handleStorage);
     mediaQuery?.addEventListener?.('change', handleViewportChange);
     mediaQuery?.addListener?.(handleViewportChange);
 
     return () => {
-      window.removeEventListener('storage', handleStorage);
       mediaQuery?.removeEventListener?.('change', handleViewportChange);
       mediaQuery?.removeListener?.(handleViewportChange);
     };
@@ -188,8 +181,12 @@ export function ThemeToggle({
   }, [align, isMobile, open]);
 
   function setThemeMode(next: ThemeMode) {
-    applyThemeMode(next);
-    setMode(next);
+    if (onModeChange) {
+      onModeChange(next);
+    } else {
+      applyThemeMode(next);
+      setUncontrolledMode(next);
+    }
     setOpen(false);
   }
 

@@ -9,7 +9,7 @@ use axum::{
     body::{to_bytes, Body},
     extract::ConnectInfo,
     http::{
-        header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, SET_COOKIE},
+        header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, ETAG, IF_MATCH, SET_COOKIE},
         HeaderMap, Method, Request, StatusCode,
     },
     Router,
@@ -237,6 +237,54 @@ impl TestApp {
                 .unwrap_or_else(|_| json!({ "raw": String::from_utf8_lossy(&bytes).to_string() }))
         };
 
+        TestResponse {
+            status,
+            headers,
+            body,
+        }
+    }
+
+    async fn request_with_if_match(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        bearer_token: &str,
+        if_match: &str,
+    ) -> TestResponse {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(AUTHORIZATION, format!("Bearer {bearer_token}"))
+            .header(IF_MATCH, if_match);
+        let mut request = if let Some(json_body) = body {
+            req = req.header(CONTENT_TYPE, "application/json");
+            req.body(Body::from(json_body.to_string()))
+                .expect("request body")
+        } else {
+            req.body(Body::empty()).expect("empty request")
+        };
+        request.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            12345,
+        )));
+        let response = self
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router response");
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let body = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes)
+                .unwrap_or_else(|_| json!({ "raw": String::from_utf8_lossy(&bytes).to_string() }))
+        };
         TestResponse {
             status,
             headers,
@@ -585,6 +633,162 @@ async fn me_returns_401_without_token() {
         .request(Method::GET, "/v1/auth/me", None, None, None)
         .await;
     assert_eq!(res.status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn v2_themes_are_account_scoped_revision_pinned_and_v1_compatible() {
+    let app = TestApp::new().await;
+    let owner_token = register_and_login(&app, "theme-owner@example.com").await;
+    let other_token =
+        insert_user_and_login(&app, "theme-other@example.com", "correctpassword123").await;
+
+    let defaults = app
+        .request(
+            Method::GET,
+            "/v2/auth/preferences/theme",
+            None,
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(defaults.status, StatusCode::OK);
+    assert_eq!(defaults.body["mode"], "dark");
+    assert_eq!(defaults.body["selection"]["themeId"], "classic");
+    assert!(defaults.headers.get(ETAG).is_some());
+
+    let created = app
+        .request(
+            Method::POST,
+            "/v2/themes",
+            Some(json!({ "name": "My telemetry theme", "baseThemeId": "classic" })),
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::OK, "{}", created.body);
+    let theme_id = created.body["themeId"].as_str().expect("theme id");
+    let create_etag = created
+        .headers
+        .get(ETAG)
+        .and_then(|value| value.to_str().ok())
+        .expect("create ETag");
+
+    let saved = app
+        .request_with_if_match(
+            Method::POST,
+            &format!("/v2/themes/{theme_id}/revisions"),
+            Some(json!({
+                "definition": {
+                    "theme": "classic",
+                    "tokens": { "accent": { "light": "#123456", "dark": "#abcdef" } },
+                    "series": { "series-16": { "light": "#224466", "dark": "#6688aa" } }
+                }
+            })),
+            &owner_token,
+            create_etag,
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+    assert_eq!(saved.body["revision"], 1);
+    let saved_etag = saved
+        .headers
+        .get(ETAG)
+        .and_then(|value| value.to_str().ok())
+        .expect("revision ETag");
+
+    let stale_write = app
+        .request_with_if_match(
+            Method::POST,
+            &format!("/v2/themes/{theme_id}/revisions"),
+            Some(json!({ "definition": { "theme": "classic" } })),
+            &owner_token,
+            create_etag,
+        )
+        .await;
+    assert_eq!(stale_write.status, StatusCode::CONFLICT);
+
+    let published = app
+        .request_with_if_match(
+            Method::POST,
+            &format!("/v2/themes/{theme_id}/revisions/1/publish"),
+            Some(json!({ "apply": true })),
+            &owner_token,
+            saved_etag,
+        )
+        .await;
+    assert_eq!(published.status, StatusCode::OK, "{}", published.body);
+    assert_eq!(published.body["applied"], true);
+
+    let selected = app
+        .request(
+            Method::GET,
+            "/v2/auth/preferences/theme",
+            None,
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(selected.body["selection"]["kind"], "custom");
+    assert_eq!(selected.body["selection"]["revision"], 1);
+    assert_eq!(
+        selected.body["selection"]["definition"]["tokens"]["accent"]["dark"],
+        "#abcdef"
+    );
+
+    let legacy_mode_only = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences",
+            Some(json!({ "theme": { "mode": "system", "palette": "classic" } })),
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(legacy_mode_only.status, StatusCode::OK);
+    let preserved = app
+        .request(
+            Method::GET,
+            "/v2/auth/preferences/theme",
+            None,
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(preserved.body["mode"], "system");
+    assert_eq!(preserved.body["selection"]["kind"], "custom");
+
+    let forbidden = app
+        .request(
+            Method::GET,
+            &format!("/v2/themes/{theme_id}"),
+            None,
+            Some(&other_token),
+            None,
+        )
+        .await;
+    assert_eq!(forbidden.status, StatusCode::NOT_FOUND);
+
+    let switched = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences",
+            Some(json!({ "theme": { "mode": "dark", "palette": "rad" } })),
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(switched.status, StatusCode::OK);
+    let builtin = app
+        .request(
+            Method::GET,
+            "/v2/auth/preferences/theme",
+            None,
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(builtin.body["selection"]["kind"], "builtin");
+    assert_eq!(builtin.body["selection"]["themeId"], "rad");
 }
 
 // ── Logout + Refresh ──────────────────────────────────────────────────────────

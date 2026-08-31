@@ -32,6 +32,47 @@ Rules:
 - Use semantic tokens only.
 - Do not add raw hex, named colors, `rgb()`, or arbitrary Tailwind palette colors.
 - If a needed color does not exist, add a token first and then use it semantically.
+- `scripts/local-ci.mjs` enforces this rule across production web, UI, dashboard,
+  and hook code. Its allowlist is limited to token definitions, approved palette
+  tables, CSS variable reads, chart token seams, and test fixtures.
+
+## Account-backed appearance and palettes
+
+Appearance is persisted per account through `GET`/`PUT /v1/auth/preferences`.
+The preference has two independent values:
+
+- `mode`: `light`, `dark`, or `system`
+- `palette`: `classic` or `rad`
+
+Settings → Appearance is the only write surface. The shell does not provide a
+quick chooser, and `localStorage` is not authoritative for either value. A
+classic-dark state is applied before authenticated preferences load and after
+logout, preventing one account's visual state from leaking into another. The
+`system` value remains persisted as `system`; the operating system is consulted
+only to resolve the current display mode.
+
+The classic palette remains the default for existing and new accounts. The RAD
+palette is app-specific visual direction inspired by Rivian's RAD identity:
+white lettering with gold, red, and teal bars. It has separate accessible light
+and dark semantic token overrides for surfaces, text, borders, status states,
+charging and drive modes, overlays, shadows, focus/selection, and chart
+presentation. RAD values are not treated as a claim about Rivian's exact brand
+hex values.
+
+Chart definitions store stable token names, never palette-specific values. The
+shared chart registry supplies classic and RAD values for every persisted token,
+including `accent`, `emerald`, `amber`, `sky`, `violet`, `rose`, `teal`,
+`indigo`, `success`, `warning`, `danger`, and `muted`. CSS renderers consume
+semantic variables; Canvas, uPlot, MapLibre, and other non-CSS renderers resolve
+the active variables immediately before drawing. Bundled renderer ownership,
+chart slugs, defaults, and saved definitions remain unchanged.
+
+Application brand assets use the shared `getBrandAsset` resolver. RAD variants
+are deterministic wrappers around the approved existing geometry/source assets,
+with the RAD bar treatment and light/dark contrast variants. Sidebar, login, and
+activation surfaces must use the resolver rather than selecting files directly.
+The documentation site and its static favicon remain classic unless a separate
+documentation rebrand is approved.
 
 ## Typography
 
@@ -71,7 +112,11 @@ Common usage:
 - Chart-assignment badges use the shared tag icon and deterministic token colors. Keep the assignment editor icon-only, chip-height, and immediately adjacent to the badge group; enabled state belongs at the bottom-right of the chart card, apart from ordinary actions.
 - Dashboard edit mode uses compact icon controls directly on each widget. Keep edit and move controls visibly present with subdued default contrast, strengthen them on hover/focus/selection, and never make pointer hover the only way to discover or activate them.
 - Resizable dashboard widgets use a persistent subtle corner handle in edit mode. Fixed-size widgets use a lock indicator and must not expose a resize hit target.
-- Theme selection is a shared shell interaction, not a route-local toggle. Support `light`, `dark`, and `system`, and make the chooser responsive so desktop can anchor to the trigger while mobile renders a viewport-aware sheet or modal that fits on screen.
+- Theme selection is an account-backed Settings → Appearance interaction, not a
+  shell/sidebar toggle. Keep mode and palette as separate responsive controls,
+  show loading/saving/error states, and roll back an optimistic selection when
+  the account update fails. Support `light`, `dark`, and `system` mode plus
+  `classic` and `rad` palette values.
 
 ## Responsive Control Surfaces
 
