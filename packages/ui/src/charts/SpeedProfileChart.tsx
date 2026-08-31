@@ -68,7 +68,7 @@ export function SpeedProfileChart({
           strokeWidth={2}
           fill="url(#speedGradient)"
           dot={false}
-          activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--rm-bg)' }}
+          activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--rm-bg-surface)' }}
           isAnimationActive={false}
         />
       </AreaChart>

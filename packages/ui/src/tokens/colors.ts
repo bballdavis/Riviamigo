@@ -10,9 +10,9 @@ export const colors = {
     800: '#27272A', 850: '#1A1A24', 900: '#12121A', 950: '#0A0A0F',
   },
   soc: {
-    high: '#10B981',
-    mid:  '#FD8304',
-    low:  '#F87171',
+    high: 'var(--rm-chart-success)',
+    mid:  'var(--rm-chart-warning)',
+    low:  'var(--rm-chart-danger)',
   },
   charging: {
     active:  'var(--rm-charging-active)',
@@ -23,15 +23,15 @@ export const colors = {
     dcfc:    'var(--rm-charging-dcfc)',
   },
   dataViz: {
-    amber:   '#FD8304',
-    yellow:  '#FACC15',
-    sky:     '#60A5FA',
-    emerald: '#10B981',
-    violet:  '#A78BFA',
-    rose:    '#F87171',
-    teal:    '#34D399',
-    orange:  '#FB923C',
-    indigo:  '#818CF8',
+    amber:   'var(--rm-chart-amber)',
+    yellow:  'var(--rm-chart-yellow)',
+    sky:     'var(--rm-chart-sky)',
+    emerald: 'var(--rm-chart-emerald)',
+    violet:  'var(--rm-chart-violet)',
+    rose:    'var(--rm-chart-rose)',
+    teal:    'var(--rm-chart-teal)',
+    orange:  'var(--rm-chart-orange)',
+    indigo:  'var(--rm-chart-indigo)',
   },
   bg: {
     page:     'var(--rm-bg-page)',
@@ -51,7 +51,7 @@ export const colors = {
     default: 'var(--rm-border-default)',
     strong:  'var(--rm-border-strong)',
     accent:  'var(--rm-border-accent)',
-    focus:   '#FD8304',
+    focus:   'var(--rm-accent)',
   },
 } as const;
 

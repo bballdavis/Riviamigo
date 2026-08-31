@@ -11,7 +11,6 @@ import {
 } from 'recharts';
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, CHART_X_AXIS_DEFAULTS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
-import { colors } from '../tokens/colors';
 import { getActiveElapsedSFromChartState, type TripChartMouseState } from './TripChartSync';
 import { createSampleDotRenderer, getVisibleSampleElapsedSet } from './TripChartRendering';
 
@@ -54,7 +53,7 @@ export function TripElevationChart({
   const elevationDot = React.useMemo(
     () => createSampleDotRenderer(
       getVisibleSampleElapsedSet(data, (point) => point.altitude_m != null),
-      { r: 2, strokeWidth: 0, fill: colors.dataViz.teal },
+      { r: 2, strokeWidth: 0, fill: CHART_COLORS.teal },
     ),
     [data],
   );
@@ -95,8 +94,8 @@ export function TripElevationChart({
       >
         <defs>
           <linearGradient id="tripElevationGradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor={colors.dataViz.teal} stopOpacity={0.35} />
-            <stop offset="95%" stopColor={colors.dataViz.teal} stopOpacity={0.03} />
+            <stop offset="5%" stopColor={CHART_COLORS.teal} stopOpacity={0.35} />
+            <stop offset="95%" stopColor={CHART_COLORS.teal} stopOpacity={0.03} />
           </linearGradient>
         </defs>
         <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} vertical={false} />
@@ -134,11 +133,11 @@ export function TripElevationChart({
           type="monotone"
           dataKey="altitude_ft"
           name="Elevation"
-          stroke={colors.dataViz.teal}
+          stroke={CHART_COLORS.teal}
           strokeWidth={1.8}
           fill="url(#tripElevationGradient)"
           dot={elevationDot}
-          activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--rm-bg)', fill: colors.dataViz.teal }}
+          activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--rm-bg-surface)', fill: CHART_COLORS.teal }}
           isAnimationActive={false}
           connectNulls
         />

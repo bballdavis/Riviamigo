@@ -376,10 +376,44 @@ async fn delete_user(
         }
     }
 
+    let mut tx = state.pool.begin().await?;
+    // user_preferences has historically not had an account FK. Clear it
+    // before the custom-theme revisions so its deferred revision reference
+    // cannot prevent the owner cleanup.
+    sqlx::query("DELETE FROM riviamigo.user_preferences WHERE user_id = $1")
+        .bind(target_user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SELECT set_config('riviamigo.allow_theme_revision_delete', 'on', true)")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "DELETE FROM riviamigo.user_theme_publications
+         WHERE theme_id IN (
+             SELECT id FROM riviamigo.user_themes WHERE owner_id = $1
+         )",
+    )
+    .bind(target_user_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM riviamigo.user_theme_revisions
+         WHERE theme_id IN (
+             SELECT id FROM riviamigo.user_themes WHERE owner_id = $1
+         )",
+    )
+    .bind(target_user_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM riviamigo.user_themes WHERE owner_id = $1")
+        .bind(target_user_id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM riviamigo.users WHERE id = $1")
         .bind(target_user_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     support_audit(
         state.pool.clone(),
         "admin_user_delete",

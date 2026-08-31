@@ -9,7 +9,7 @@
     "apps/api/src/routes/trips.rs": { "maxLines": 1833, "maxBytes": 65504 },
     "apps/api/src/services/backups.rs": { "maxLines": 2673, "maxBytes": 98764 },
     "apps/api/src/services/charge_sessions.rs": { "maxLines": 1949, "maxBytes": 73563 },
-    "packages/hooks/src/api/transport.ts": { "maxLines": 2268, "maxBytes": 77421 }
+    "packages/hooks/src/api/transport.ts": { "maxLines": 2277, "maxBytes": 77959 }
   },
   "orchestration": {
     "maxLines": 500,
@@ -37,6 +37,7 @@
       "packages/types/src/api.ts": "Existing wire-contract catalog; split with D1.",
       "apps/api/src/routes/external_connections.rs": "Existing route hotspot; split with route ownership work.",
       "apps/api/src/routes/auth.rs": "Existing auth route hotspot; split only with auth contract coverage.",
+      "apps/api/src/routes/themes.rs": "Cohesive v2 owner-scoped theme lifecycle; split catalog, revisions, and selection at a later stable boundary.",
       "apps/api/src/routes/metrics.rs": "Existing analytics route hotspot; split with query ownership work.",
       "apps/web/src/features/health/VehicleHealthPage.tsx": "Existing custom health surface; migrate onto the vehicle shell in F2.",
       "packages/ui/src/charts/RichTimeSeriesChart.tsx": "Existing specialized renderer; split only after F7 regression coverage.",

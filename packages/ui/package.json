@@ -16,7 +16,8 @@
     "./lib/utils": "./src/lib/utils.ts",
     "./lib/dateTime": "./src/lib/dateTime.ts",
     "./lib/vehicleStatus": "./src/lib/vehicleStatus.ts",
-    "./lib/vehicleTires": "./src/lib/vehicleTires.ts"
+    "./lib/vehicleTires": "./src/lib/vehicleTires.ts",
+    "./lib/brandAssets": "./src/lib/brandAssets.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -26,6 +27,7 @@
     "build-storybook": "storybook build"
   },
   "dependencies": {
+    "@riviamigo/themes": "workspace:*",
     "@riviamigo/types": "workspace:*",
     "@tanstack/react-table": "catalog:",
     "clsx": "^2.1.1",

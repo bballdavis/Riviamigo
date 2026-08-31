@@ -163,7 +163,7 @@ export function TripTirePressureChart({
           stroke={CHART_COLORS.accent}
           strokeWidth={1.8}
           dot={flDot}
-          activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg)', fill: CHART_COLORS.accent }}
+      activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg-surface)', fill: CHART_COLORS.accent }}
           isAnimationActive={false}
           connectNulls
         />
@@ -174,7 +174,7 @@ export function TripTirePressureChart({
           stroke={CHART_COLORS.sky}
           strokeWidth={1.8}
           dot={frDot}
-          activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg)', fill: CHART_COLORS.sky }}
+      activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg-surface)', fill: CHART_COLORS.sky }}
           isAnimationActive={false}
           connectNulls
         />
@@ -185,7 +185,7 @@ export function TripTirePressureChart({
           stroke={CHART_COLORS.success}
           strokeWidth={1.8}
           dot={rlDot}
-          activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg)', fill: CHART_COLORS.success }}
+      activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg-surface)', fill: CHART_COLORS.success }}
           isAnimationActive={false}
           connectNulls
         />
@@ -196,7 +196,7 @@ export function TripTirePressureChart({
           stroke={CHART_COLORS.warning}
           strokeWidth={1.8}
           dot={rrDot}
-          activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg)', fill: CHART_COLORS.warning }}
+      activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg-surface)', fill: CHART_COLORS.warning }}
           isAnimationActive={false}
           connectNulls
         />

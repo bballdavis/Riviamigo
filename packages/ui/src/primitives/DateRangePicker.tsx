@@ -368,7 +368,7 @@ export function DateRangePicker({
                 <button
                   type="button"
                   onClick={applyCustomRange}
-                  className="h-8 w-full rounded-lg bg-accent px-3 text-sm font-medium text-white hover:bg-accent/90"
+                  className="h-8 w-full rounded-lg bg-accent px-3 text-sm font-medium text-fg-on-accent hover:bg-accent/90"
                 >
                   Apply custom range
                 </button>

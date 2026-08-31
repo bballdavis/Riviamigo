@@ -16,7 +16,7 @@ function client<const Keys extends readonly MethodName[]>(...keys: Keys) {
 export const authClient = client(
   'login', 'register', 'logout', 'changePassword', 'refresh', 'setup',
   'previewAccountInvitation', 'acceptAccountInvitation', 'resumeSession', 'me',
-  'getUnitPreferences', 'updateUnitPreferences', 'getDashboardChartFavorites',
+  'getUnitPreferences', 'updateUnitPreferences', 'updateThemePreferences', 'getThemePreferences', 'getDashboardChartFavorites',
   'updateDashboardChartFavorite', 'getAppTimezone', 'updateAppTimezone',
 );
 

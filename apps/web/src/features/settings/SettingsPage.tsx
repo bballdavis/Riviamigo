@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, AuthenticatedVehicleArtwork, queryKeys, resolveVehicleArtwork, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
-import type { UnitPreferences, VehicleImages, VehicleMember } from '@riviamigo/types';
+import { type UnitPreferences, type VehicleImages, type VehicleMember } from '@riviamigo/types';
 import {
   downloadDashboardYaml,
   materializeUserDashboardDraft,
@@ -39,9 +39,9 @@ import { ExternalConnectionsSection } from '../../components/settings/ExternalCo
 import { JobsSection } from '../../components/settings/JobsSection';
 import { PlacesSection } from '../../components/settings/PlacesSection';
 import { ChargingSection } from '../../components/settings/ChargingSection';
+import { AppearanceSection } from './AppearanceSection';
 import { RawTelemetryExplorer } from '../../components/settings/RawTelemetryExplorer';
 import { ChartManagerSection } from './charts/ChartManagerSection';
-import { AppearanceSettings } from './AppearanceSettings';
 import { canManageSystemDashboards } from '../../components/dashboard/DashboardPage';
 import { useDashboardEditButtonPreference } from '../../components/dashboard/useDashboardEditButtonPreference';
 import { PASSWORD_MIN_LENGTH, PasswordRequirements } from '../../components/auth/PasswordRequirements';
@@ -1824,16 +1824,7 @@ export function SettingsContent({ initialSection }: { initialSection?: SettingsS
 
             {activeSection === 'raw' && <RawTelemetryExplorer vehicles={vehicles ?? []} isAdmin={isAdmin} />}
 
-            {activeSection === 'appearance' && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Appearance</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <AppearanceSettings />
-                </CardContent>
-              </Card>
-            )}
+            {activeSection === 'appearance' && <AppearanceSection preferencesQuery={unitPreferencesQuery} />}
 
             {activeSection === 'account' && (
               <Card>

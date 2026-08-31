@@ -1,4 +1,5 @@
 import type { ChargerType, DriveMode, VehicleMember } from './vehicle';
+import type { ThemePreferences } from './theme';
 
 export interface DateRange {
   from: Date;
@@ -1254,6 +1255,7 @@ export interface UnitPreferences {
 
 export interface UserPreferencesResponse {
   units: UnitPreferences;
+  theme: ThemePreferences;
   map_style: MapStylePreference;
 }
 

@@ -18,6 +18,7 @@ export const queryKeys = {
     byVehicle: (vehicleId: string | null) => ['vehicle-invites', vehicleId] as const,
   },
   unitPreferences: { current: ['unit-preferences'] as const },
+  themePreferences: { current: ['theme-preferences', 'v2'] as const },
   appTimezone: { current: ['app-timezone'] as const },
   backups: {
     all: ['backup-overview'] as const,

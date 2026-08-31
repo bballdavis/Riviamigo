@@ -126,15 +126,23 @@ struct UnitPreferencesPayload {
     efficiency_display: String,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+struct ThemePreferencesPayload {
+    mode: String,
+    palette: String,
+}
+
 #[derive(Serialize)]
 struct PreferencesResponse {
     units: UnitPreferencesPayload,
+    theme: ThemePreferencesPayload,
     map_style: String,
 }
 
 #[derive(Deserialize)]
 struct PreferencesUpdateBody {
-    units: UnitPreferencesPayload,
+    units: Option<UnitPreferencesPayload>,
+    theme: Option<ThemePreferencesPayload>,
 }
 
 #[derive(Deserialize)]
@@ -626,12 +634,12 @@ async fn me(State(state): State<AppState>, auth: AuthUser) -> Result<impl IntoRe
 async fn get_preferences(
     State(state): State<AppState>,
     auth: AuthUser,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Json<PreferencesResponse>, AppError> {
     let row = sqlx::query(
         "SELECT unit_mode, distance_unit, temperature_unit, \
                 custom_distance_unit, custom_speed_unit, custom_temperature_unit, \
                 custom_pressure_unit, custom_altitude_unit, custom_place_radius_unit, \
-                custom_efficiency_display, map_style \
+                custom_efficiency_display, theme_mode, theme_palette, map_style \
          FROM riviamigo.user_preferences WHERE user_id = $1",
     )
     .bind(auth.user_id)
@@ -643,6 +651,19 @@ async fn get_preferences(
         .and_then(|row| row.try_get::<String, _>("map_style").ok())
         .filter(|value| is_valid_map_style(value))
         .unwrap_or_else(|| "follow-theme".to_string());
+
+    let theme = row
+        .as_ref()
+        .map(|row| ThemePreferencesPayload {
+            mode: row
+                .try_get::<String, _>("theme_mode")
+                .unwrap_or_else(|_| "dark".to_string()),
+            palette: row
+                .try_get::<String, _>("theme_palette")
+                .unwrap_or_else(|_| "classic".to_string()),
+        })
+        .and_then(|theme| normalize_theme_payload(theme).ok())
+        .unwrap_or_else(default_theme_preferences);
 
     let units = if let Some(row) = row {
         let mode = row
@@ -702,69 +723,116 @@ async fn get_preferences(
         )
     };
 
-    Ok(Json(PreferencesResponse { units, map_style }))
+    Ok(Json(PreferencesResponse {
+        units,
+        theme,
+        map_style,
+    }))
 }
 
 async fn update_preferences(
     State(state): State<AppState>,
     auth: AuthUser,
     Json(body): Json<PreferencesUpdateBody>,
-) -> Result<impl IntoResponse, AppError> {
-    let units = normalize_units_payload(body.units)?;
-    let (distance_unit, temperature_unit) = match units.mode.as_str() {
-        "metric" => ("kilometers".to_string(), "celsius".to_string()),
-        "custom" => (units.distance_unit.clone(), units.temperature_unit.clone()),
-        _ => ("miles".to_string(), "fahrenheit".to_string()),
-    };
+) -> Result<Json<PreferencesResponse>, AppError> {
+    if body.units.is_none() && body.theme.is_none() {
+        return Err(AppError::Validation(
+            "at least one preference group is required".to_string(),
+        ));
+    }
 
-    sqlx::query(
-        "INSERT INTO riviamigo.user_preferences (
-            user_id, unit_mode, distance_unit, temperature_unit,
-            custom_distance_unit, custom_speed_unit, custom_temperature_unit,
-            custom_pressure_unit, custom_altitude_unit, custom_place_radius_unit,
-            custom_efficiency_display, updated_at
-         ) VALUES (
-            $1, $2, $3, $4,
-            $5, $6, $7,
-            $8, $9, $10,
-            $11, now()
-         )
-         ON CONFLICT (user_id) DO UPDATE SET
-            unit_mode = EXCLUDED.unit_mode,
-            distance_unit = EXCLUDED.distance_unit,
-            temperature_unit = EXCLUDED.temperature_unit,
-            custom_distance_unit = EXCLUDED.custom_distance_unit,
-            custom_speed_unit = EXCLUDED.custom_speed_unit,
-            custom_temperature_unit = EXCLUDED.custom_temperature_unit,
-            custom_pressure_unit = EXCLUDED.custom_pressure_unit,
-            custom_altitude_unit = EXCLUDED.custom_altitude_unit,
-            custom_place_radius_unit = EXCLUDED.custom_place_radius_unit,
-            custom_efficiency_display = EXCLUDED.custom_efficiency_display,
-            updated_at = now()",
-    )
-    .bind(auth.user_id)
-    .bind(&units.mode)
-    .bind(distance_unit)
-    .bind(temperature_unit)
-    .bind(&units.distance_unit)
-    .bind(&units.speed_unit)
-    .bind(&units.temperature_unit)
-    .bind(&units.pressure_unit)
-    .bind(&units.altitude_unit)
-    .bind(&units.place_radius_unit)
-    .bind(&units.efficiency_display)
-    .execute(&state.pool)
-    .await?;
+    let theme = body.theme.map(normalize_theme_payload).transpose()?;
 
-    let map_style = sqlx::query_scalar::<_, String>(
-        "SELECT map_style FROM riviamigo.user_preferences WHERE user_id = $1",
-    )
-    .bind(auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .filter(|value| is_valid_map_style(value))
-    .unwrap_or_else(|| "follow-theme".to_string());
-    Ok(Json(PreferencesResponse { units, map_style }))
+    if let Some(units) = body.units {
+        let units = normalize_units_payload(units)?;
+        let (distance_unit, temperature_unit) = match units.mode.as_str() {
+            "metric" => ("kilometers".to_string(), "celsius".to_string()),
+            "custom" => (units.distance_unit.clone(), units.temperature_unit.clone()),
+            _ => ("miles".to_string(), "fahrenheit".to_string()),
+        };
+
+        sqlx::query(
+            "INSERT INTO riviamigo.user_preferences (
+                user_id, unit_mode, distance_unit, temperature_unit,
+                custom_distance_unit, custom_speed_unit, custom_temperature_unit,
+                custom_pressure_unit, custom_altitude_unit, custom_place_radius_unit,
+                custom_efficiency_display, updated_at
+             ) VALUES (
+                $1, $2, $3, $4,
+                $5, $6, $7,
+                $8, $9, $10,
+                $11, now()
+             )
+             ON CONFLICT (user_id) DO UPDATE SET
+                unit_mode = EXCLUDED.unit_mode,
+                distance_unit = EXCLUDED.distance_unit,
+                temperature_unit = EXCLUDED.temperature_unit,
+                custom_distance_unit = EXCLUDED.custom_distance_unit,
+                custom_speed_unit = EXCLUDED.custom_speed_unit,
+                custom_temperature_unit = EXCLUDED.custom_temperature_unit,
+                custom_pressure_unit = EXCLUDED.custom_pressure_unit,
+                custom_altitude_unit = EXCLUDED.custom_altitude_unit,
+                custom_place_radius_unit = EXCLUDED.custom_place_radius_unit,
+                custom_efficiency_display = EXCLUDED.custom_efficiency_display,
+                updated_at = now()",
+        )
+        .bind(auth.user_id)
+        .bind(&units.mode)
+        .bind(distance_unit)
+        .bind(temperature_unit)
+        .bind(&units.distance_unit)
+        .bind(&units.speed_unit)
+        .bind(&units.temperature_unit)
+        .bind(&units.pressure_unit)
+        .bind(&units.altitude_unit)
+        .bind(&units.place_radius_unit)
+        .bind(&units.efficiency_display)
+        .execute(&state.pool)
+        .await?;
+    }
+
+    if let Some(theme) = theme.as_ref() {
+        sqlx::query(
+            "INSERT INTO riviamigo.user_preferences (
+                user_id, theme_mode, theme_palette,
+                theme_selection_kind, theme_builtin_id,
+                theme_custom_id, theme_custom_revision, theme_etag_version, updated_at
+             )
+             VALUES ($1, $2, $3, 'builtin', $3, NULL, NULL, 1, now())
+             ON CONFLICT (user_id) DO UPDATE SET
+                theme_mode = EXCLUDED.theme_mode,
+                theme_palette = EXCLUDED.theme_palette,
+                theme_selection_kind = CASE
+                    WHEN riviamigo.user_preferences.theme_palette = EXCLUDED.theme_palette
+                    THEN riviamigo.user_preferences.theme_selection_kind
+                    ELSE 'builtin'
+                END,
+                theme_builtin_id = CASE
+                    WHEN riviamigo.user_preferences.theme_palette = EXCLUDED.theme_palette
+                    THEN riviamigo.user_preferences.theme_builtin_id
+                    ELSE EXCLUDED.theme_palette
+                END,
+                theme_custom_id = CASE
+                    WHEN riviamigo.user_preferences.theme_palette = EXCLUDED.theme_palette
+                    THEN riviamigo.user_preferences.theme_custom_id
+                    ELSE NULL
+                END,
+                theme_custom_revision = CASE
+                    WHEN riviamigo.user_preferences.theme_palette = EXCLUDED.theme_palette
+                    THEN riviamigo.user_preferences.theme_custom_revision
+                    ELSE NULL
+                END,
+                theme_etag_version = riviamigo.user_preferences.theme_etag_version + 1,
+                updated_at = now()",
+        )
+        .bind(auth.user_id)
+        .bind(&theme.mode)
+        .bind(&theme.palette)
+        .execute(&state.pool)
+        .await?;
+    }
+
+    get_preferences(State(state), auth).await
 }
 
 async fn update_map_style(
@@ -838,6 +906,25 @@ async fn update_chart_favorite(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn default_theme_preferences() -> ThemePreferencesPayload {
+    ThemePreferencesPayload {
+        mode: "dark".to_string(),
+        palette: "classic".to_string(),
+    }
+}
+
+fn normalize_theme_payload(
+    input: ThemePreferencesPayload,
+) -> Result<ThemePreferencesPayload, AppError> {
+    if !matches!(input.mode.as_str(), "light" | "dark" | "system") {
+        return Err(AppError::Validation("invalid theme mode".to_string()));
+    }
+    if !matches!(input.palette.as_str(), "classic" | "rad") {
+        return Err(AppError::Validation("invalid theme palette".to_string()));
+    }
+    Ok(input)
+}
+
 fn resolved_units_payload(
     mode: &str,
     custom_distance: Option<&str>,
@@ -1038,6 +1125,35 @@ mod tests {
         assert_eq!(value["setup_proof_available"], false);
     }
 
+    #[test]
+    fn theme_preferences_default_to_classic_dark() {
+        let value = serde_json::to_value(default_theme_preferences()).expect("theme defaults");
+        assert_eq!(value["mode"], "dark");
+        assert_eq!(value["palette"], "classic");
+    }
+
+    #[test]
+    fn theme_preferences_validate_mode_and_palette_independently() {
+        let valid = normalize_theme_payload(ThemePreferencesPayload {
+            mode: "system".into(),
+            palette: "rad".into(),
+        })
+        .expect("valid theme preference");
+        assert_eq!(valid.mode, "system");
+        assert_eq!(valid.palette, "rad");
+
+        assert!(normalize_theme_payload(ThemePreferencesPayload {
+            mode: "sepia".into(),
+            palette: "classic".into(),
+        })
+        .is_err());
+        assert!(normalize_theme_payload(ThemePreferencesPayload {
+            mode: "dark".into(),
+            palette: "neon".into(),
+        })
+        .is_err());
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /// Build a full router backed by a real database.
@@ -1138,6 +1254,63 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         app.oneshot(req).await.unwrap()
+    }
+
+    async fn login_access_token(app: axum::Router, email: &str) -> String {
+        let resp = post_json(
+            app,
+            "/v1/auth/login",
+            serde_json::json!({ "email": email, "password": "correctpassword123" }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["access_token"]
+            .as_str()
+            .expect("login should return an access token")
+            .to_string()
+    }
+
+    async fn get_authenticated(
+        app: axum::Router,
+        uri: &str,
+        access_token: &str,
+    ) -> serde_json::Value {
+        let req = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header("authorization", format!("Bearer {access_token}"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    async fn put_authenticated(
+        app: axum::Router,
+        uri: &str,
+        access_token: &str,
+        payload: serde_json::Value,
+    ) -> serde_json::Value {
+        let req = Request::builder()
+            .method("PUT")
+            .uri(uri)
+            .header("authorization", format!("Bearer {access_token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).unwrap()
     }
 
     async fn seed_test_user(email: &str, password: &str) {
@@ -1506,5 +1679,59 @@ mod tests {
             "bootstrap after logout should quietly return 204"
         );
         delete_test_user(&unique_email).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn theme_preferences_round_trip_preserves_units_and_scopes_to_account() {
+        let first_email = format!("theme_first_{}@example.com", uuid::Uuid::new_v4());
+        let second_email = format!("theme_second_{}@example.com", uuid::Uuid::new_v4());
+        seed_test_user(&first_email, "correctpassword123").await;
+        seed_test_user(&second_email, "correctpassword123").await;
+        let app = make_app().await;
+
+        let first_token = login_access_token(app.clone(), &first_email).await;
+        let defaults = get_authenticated(app.clone(), "/v1/auth/preferences", &first_token).await;
+        assert_eq!(
+            defaults["theme"],
+            serde_json::json!({ "mode": "dark", "palette": "classic" })
+        );
+
+        let units = serde_json::json!({
+            "units": {
+                "mode": "metric",
+                "distance_unit": "kilometers",
+                "speed_unit": "kmh",
+                "temperature_unit": "celsius",
+                "pressure_unit": "kpa",
+                "altitude_unit": "meters",
+                "place_radius_unit": "meters",
+                "efficiency_display": "distance_per_energy"
+            }
+        });
+        put_authenticated(app.clone(), "/v1/auth/preferences", &first_token, units).await;
+        let theme_only = put_authenticated(
+            app.clone(),
+            "/v1/auth/preferences",
+            &first_token,
+            serde_json::json!({ "theme": { "mode": "system", "palette": "rad" } }),
+        )
+        .await;
+        assert_eq!(theme_only["units"]["mode"], "metric");
+        assert_eq!(
+            theme_only["theme"],
+            serde_json::json!({ "mode": "system", "palette": "rad" })
+        );
+
+        let second_token = login_access_token(app.clone(), &second_email).await;
+        let second_defaults = get_authenticated(app, "/v1/auth/preferences", &second_token).await;
+        assert_eq!(
+            second_defaults["theme"],
+            serde_json::json!({ "mode": "dark", "palette": "classic" })
+        );
+        assert_eq!(second_defaults["units"]["mode"], "imperial");
+
+        delete_test_user(&first_email).await;
+        delete_test_user(&second_email).await;
     }
 }

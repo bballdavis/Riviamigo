@@ -65,6 +65,10 @@ export default defineConfig({
           });
         },
       },
+      '/v2': {
+        target: process.env.VITE_API_URL ?? process.env.VITE_RIVIAMIGO_API_BASE_URL ?? 'http://localhost:3001',
+        changeOrigin: true,
+      },
     },
   },
   build: {

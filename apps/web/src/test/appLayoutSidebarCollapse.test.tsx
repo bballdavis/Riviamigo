@@ -107,6 +107,18 @@ describe('AppLayout sidebar collapse', () => {
     expect(batteryButton.querySelector('[data-nav-icon="battery-full"]')).toBeInTheDocument();
   });
 
+  it('navigates to the vehicle health dashboard from the Health nav item', () => {
+    render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Health' }));
+
+    expect(navigate).toHaveBeenCalledWith({ to: '/vehicle-health' });
+  });
+
   it('centers the collapsed vehicle status when the battery indicator is unavailable', () => {
     render(
       <AppLayout activeKey="dashboard">

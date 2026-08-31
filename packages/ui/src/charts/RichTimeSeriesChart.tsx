@@ -5,11 +5,14 @@ import type { AlignedData, Options, Series } from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import { cn } from '../lib/utils';
 import { ChartSkeleton } from '../primitives/Skeleton';
-import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT } from './ChartProvider';
+import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT, resolveChartColor } from './ChartProvider';
 import { formatNumber, formatSmartNumber } from '../lib/utils';
 import { formatAppDate, formatAppDateTime, formatAppTime } from '../lib/dateTime';
 import { filterTimeSeriesValues, type TimeFilterWindow } from './timeFilter';
 import { DEFAULT_CURVE_SMOOTHNESS, normalizeCurveSmoothness, type CurveSmoothness } from './curveSmoothness';
+import { useDocumentPalette } from '../hooks/useDocumentPalette';
+import { useDocumentTheme } from '../hooks/useDocumentTheme';
+import { useThemeRevision } from '../lib/themeRuntime';
 
 const NATIVE_SPLINE_PATH = uPlot.paths.spline!();
 
@@ -537,6 +540,7 @@ export function buildRichTimeSeriesUPlotSeries(
     stepInterpolation = false,
     smoothness = DEFAULT_CURVE_SMOOTHNESS,
     showPoints = false,
+    resolveColor,
   }: {
     mode?: RichTimeSeriesChartProps['mode'];
     barCount?: number;
@@ -546,12 +550,15 @@ export function buildRichTimeSeriesUPlotSeries(
     smoothness?: CurveSmoothness;
     showPoints?: boolean;
     timeFilter?: TimeFilterWindow;
+    resolveColor?: (color: string) => string;
   } = {},
 ): Series[] {
   return [
     {},
     ...items.map((item, index) => {
-      const color = item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.emerald);
+      const color = (resolveColor ?? ((value: string) => value))(
+        item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.emerald),
+      );
       const seriesMode = item.mode ?? mode;
       const hidden = hiddenKeys.has(item.key) || item.tooltipOnly === true;
       const next: Series = {
@@ -694,6 +701,9 @@ export function RichTimeSeriesChart({
   }>({ bars: [], lines: [], intervalBand: null });
   const [hiddenKeys, setHiddenKeys] = React.useState<Set<string>>(() => new Set());
   const [isZoomed, setIsZoomed] = React.useState(false);
+  const palette = useDocumentPalette();
+  const isDark = useDocumentTheme();
+  const themeRevision = useThemeRevision();
 
   const seriesRef = React.useRef(series);
   const yUnitRef = React.useRef(yUnit);
@@ -761,8 +771,8 @@ export function RichTimeSeriesChart({
       `${packedIntervals.map((item) => `${item.id}:${item.start}:${item.end}:${item.lane}`).join('|')}|` +
       `${referenceLines.map((line) => `${line.value}:${line.color ?? ''}`).join('|')}|` +
       series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.strokeWidth ?? ''}:${s.yScale ?? ''}:${s.stackId ?? ''}:${s.tooltipOnly ? 'tooltip' : ''}`).join('|') +
-      `|${hiddenKeySignature}`,
-    [chartHeight, xTime, xUnit, mode, timeFilter, smoothness, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, xAxisLabel, yAxisLabel, yRightAxisLabel, showLegend, showGrid, showTooltip, showPoints, cursorSyncKey, connectGaps, interactionMode, intervalBandRatio, series, hiddenKeySignature, packedIntervals, referenceLines],
+      `|${hiddenKeySignature}|${isDark ? 'dark' : 'light'}|${palette}|${themeRevision}`,
+    [chartHeight, xTime, xUnit, mode, timeFilter, smoothness, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, xAxisLabel, yAxisLabel, yRightAxisLabel, showLegend, showGrid, showTooltip, showPoints, cursorSyncKey, connectGaps, interactionMode, intervalBandRatio, series, hiddenKeySignature, packedIntervals, referenceLines, isDark, palette, themeRevision],
   );
 
   React.useEffect(() => {
@@ -777,6 +787,9 @@ export function RichTimeSeriesChart({
     const root = rootRef.current;
     if (!root || loading || !hasData) return undefined;
 
+    const resolveColor = (value: string) => resolveChartColor(value, root);
+    const chartMuted = resolveColor(CHART_COLORS.muted);
+    const chartGrid = resolveColor(CHART_COLORS.grid);
     const width = Math.max(320, root.clientWidth || 320);
 
     const xValues = alignedDataRef.current[0] as number[];
@@ -801,8 +814,8 @@ export function RichTimeSeriesChart({
       : undefined;
 
     const xAxisConfig: uPlot.Axis = {
-      stroke: CHART_COLORS.muted,
-      grid: showGrid ? { stroke: CHART_COLORS.grid, width: 1 } : { show: false },
+      stroke: chartMuted,
+      grid: showGrid ? { stroke: chartGrid, width: 1 } : { show: false },
       font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
       size: isBarChart ? 54 : 44,
       gap: 6,
@@ -839,7 +852,7 @@ export function RichTimeSeriesChart({
       ? {
           scale: 'x', // share the primary X scale
           side: 0,    // top
-          stroke: CHART_COLORS.muted,
+          stroke: chartMuted,
           grid: { show: false }, // avoid duplicate grid lines
           font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
           size: 40,
@@ -857,8 +870,8 @@ export function RichTimeSeriesChart({
       : null;
 
     const yAxisConfig: uPlot.Axis = {
-      stroke: CHART_COLORS.muted,
-      grid: showGrid ? { stroke: CHART_COLORS.grid, width: 1 } : { show: false },
+      stroke: chartMuted,
+      grid: showGrid ? { stroke: chartGrid, width: 1 } : { show: false },
       font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
       size: (_self, values) => {
         if (!values || values.length === 0) return 50;
@@ -886,7 +899,7 @@ export function RichTimeSeriesChart({
       ? {
           scale: 'y2',
           side: 1, // right
-          stroke: CHART_COLORS.muted,
+          stroke: chartMuted,
           grid: { show: false },
           font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
           // uPlot supplies raw numeric splits here rather than our formatted
@@ -991,6 +1004,7 @@ export function RichTimeSeriesChart({
         smoothness: normalizeCurveSmoothness(smoothness),
         showPoints,
         timeFilter,
+        resolveColor,
       }),
       hooks: {
         setScale: [

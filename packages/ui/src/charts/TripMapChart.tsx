@@ -1,6 +1,9 @@
 import * as React from 'react';
 import type { BasemapStyleDescriptor, MapStylePreference } from '@riviamigo/types';
 import { CHART_COLORS } from './ChartProvider';
+import { useDocumentPalette } from '../hooks/useDocumentPalette';
+import { useDocumentTheme } from '../hooks/useDocumentTheme';
+import { useThemeRevision } from '../lib/themeRuntime';
 
 export interface LatLng { lat: number; lng: number; }
 
@@ -185,6 +188,9 @@ export function TripMapChart({
   const mapStylePreferenceRef = React.useRef<MapStylePreference>(mapStylePreference);
   const appliedBasemapSignatureRef = React.useRef('');
   const [mapError, setMapError] = React.useState<string | null>(null);
+  const palette = useDocumentPalette();
+  const isDark = useDocumentTheme();
+  const themeRevision = useThemeRevision();
 
   React.useEffect(() => {
     accessTokenRef.current = accessToken;
@@ -388,10 +394,15 @@ export function TripMapChart({
 
   // Sync routes whenever routes or selection changes
   React.useEffect(() => {
-    if (!isLoadedRef.current || !mapRef.current || routeList.length === 0) return;
+    if (!isLoadedRef.current || !mapRef.current) return;
 
-    syncRoutes(mapRef.current, visibleRoutes, selectedRouteIds, onRouteClickRef, visibleRouteSignature);
-  }, [selectedRouteIds, visibleRouteSignature, visibleRoutes]);
+    const map = mapRef.current;
+    if (map.getLayer('neutral-background')) {
+      map.setPaintProperty('neutral-background', 'background-color', getCssColor('--rm-bg-elevated', CHART_COLORS.muted));
+    }
+    if (routeList.length === 0) return;
+    syncRoutes(map, visibleRoutes, selectedRouteIds, onRouteClickRef, visibleRouteSignature);
+  }, [palette, themeRevision, selectedRouteIds, visibleRouteSignature, visibleRoutes]);
 
   React.useEffect(() => {
     if (!isLoadedRef.current || !mapRef.current) return;
@@ -411,7 +422,7 @@ export function TripMapChart({
         cancelAnimationFrame(activePointFrameRef.current);
       }
     };
-  }, [activePoint]);
+  }, [activePoint, isDark, palette, themeRevision]);
 
   function syncRoutes(
     map: MapApi,
@@ -549,7 +560,10 @@ function syncActivePoint(
     previousPoint
     && previousPoint.lat === point.lat
     && previousPoint.lng === point.lng
+    && map.getLayer(ACTIVE_POINT_LAYER_ID)
   ) {
+    map.setPaintProperty(ACTIVE_POINT_LAYER_ID, 'circle-color', getCssColor('--rm-accent', FALLBACK_ACTIVE_POINT_COLOR));
+    map.setPaintProperty(ACTIVE_POINT_LAYER_ID, 'circle-stroke-color', getCssColor('--rm-bg-surface', CHART_COLORS.muted));
     return;
   }
 
@@ -580,7 +594,7 @@ function syncActivePoint(
         'circle-radius': 6,
         'circle-color': getCssColor('--rm-accent', FALLBACK_ACTIVE_POINT_COLOR),
         'circle-stroke-width': 2,
-        'circle-stroke-color': getCssColor('--rm-bg', CHART_COLORS.muted),
+        'circle-stroke-color': getCssColor('--rm-bg-surface', CHART_COLORS.muted),
       },
     });
   }

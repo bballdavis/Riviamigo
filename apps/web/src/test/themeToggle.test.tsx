@@ -1,8 +1,8 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, afterEach, describe, expect, it } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { ThemeToggle } from '@riviamigo/ui/primitives';
-import { ThemeModeSync } from '@riviamigo/ui/lib/theme';
+import { applyThemePreferences, ThemeModeSync } from '@riviamigo/ui/lib/theme';
 
 const originalMatchMedia = window.matchMedia;
 
@@ -38,26 +38,21 @@ describe('theme chooser', () => {
     });
   });
 
-  it.each([
-    { dark: true, expected: 'dark' },
-    { dark: false, expected: 'light' },
-  ])('applies system theme from prefers-color-scheme=$dark', async ({ dark, expected }) => {
-    localStorage.setItem('rm-theme', 'system');
-    setMatchMedia({ dark });
-
+  it('resets to the safe classic-dark state before account preferences load', async () => {
     render(<ThemeModeSync />);
 
     await waitFor(() => {
-      expect(document.documentElement).toHaveClass(expected);
-      expect(document.documentElement.style.colorScheme).toBe(expected);
+      expect(document.documentElement).toHaveClass('dark');
+      expect(document.documentElement.dataset.rmPalette).toBe('classic');
+      expect(document.documentElement.style.colorScheme).toBe('dark');
     });
   });
 
-  it('opens a mobile-safe chooser and stores the system mode', async () => {
-    localStorage.setItem('rm-theme', 'dark');
+  it('opens a mobile-safe chooser and reports the selected mode without browser persistence', async () => {
     setMatchMedia({ dark: false, mobile: true });
+    const onModeChange = vi.fn();
 
-    render(<ThemeToggle />);
+    render(<ThemeToggle mode="dark" onModeChange={onModeChange} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Theme options' }));
 
@@ -69,9 +64,28 @@ describe('theme chooser', () => {
     fireEvent.click(screen.getByRole('menuitemradio', { name: /system/i }));
 
     await waitFor(() => {
-      expect(localStorage.getItem('rm-theme')).toBe('system');
-      expect(document.documentElement).toHaveClass('light');
-      expect(document.documentElement.style.colorScheme).toBe('light');
+      expect(onModeChange).toHaveBeenCalledWith('system');
+      expect(localStorage.getItem('rm-theme')).toBeNull();
     });
+  });
+
+  it('applies the account preference to the document without using localStorage', () => {
+    applyThemePreferences({ mode: 'light', palette: 'rad' });
+
+    expect(document.documentElement).toHaveClass('light');
+    expect(document.documentElement.dataset.rmPalette).toBe('rad');
+    expect(document.documentElement.style.colorScheme).toBe('light');
+    expect(localStorage.getItem('rm-theme')).toBeNull();
+  });
+
+  it.each([
+    { dark: true, expected: 'dark' },
+    { dark: false, expected: 'light' },
+  ])('resolves persisted system mode from prefers-color-scheme=$dark', ({ dark, expected }) => {
+    setMatchMedia({ dark });
+    applyThemePreferences({ mode: 'system', palette: 'classic' });
+
+    expect(document.documentElement).toHaveClass(expected);
+    expect(document.documentElement.style.colorScheme).toBe(expected);
   });
 });

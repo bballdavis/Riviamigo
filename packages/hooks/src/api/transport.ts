@@ -61,6 +61,9 @@ import type {
   UpdateBackupSettingsBody,
   RunBackupResponse,
   UnitPreferences,
+  ThemePreferences,
+  UserPreferencesResponse,
+  ThemePreferencesResponse,
   DashboardChartFavorites,
   AppTimezone,
   CreateBackupRestoreRequestBody,
@@ -582,12 +585,18 @@ export class AuthenticatedTransport {
     return this.request('GET', '/v1/auth/me');
   }
 
-  async getUnitPreferences(): Promise<{ units: UnitPreferences }> {
-    return this.request('GET', '/v1/auth/preferences');
-  }
+  async getUnitPreferences(): Promise<UserPreferencesResponse> { return this.request('GET', '/v1/auth/preferences'); }
 
-  async updateUnitPreferences(units: UnitPreferences): Promise<{ units: UnitPreferences }> {
-    return this.request('PUT', '/v1/auth/preferences', { units });
+  async updateUnitPreferences(units: UnitPreferences, theme?: ThemePreferences): Promise<UserPreferencesResponse> { return this.request('PUT', '/v1/auth/preferences', { units, ...(theme ? { theme } : {}) }); }
+
+  async updateThemePreferences(theme: ThemePreferences): Promise<UserPreferencesResponse> { return this.request('PUT', '/v1/auth/preferences', { theme }); }
+
+  async getThemePreferences(): Promise<ThemePreferencesResponse> {
+    const response = await this.requestResponse('GET', '/v2/auth/preferences/theme');
+    return {
+      preferences: await response.json(),
+      etag: response.headers.get('etag') ?? '',
+    };
   }
 
   async getDashboardChartFavorites(): Promise<{ chart_favorites: DashboardChartFavorites }> {

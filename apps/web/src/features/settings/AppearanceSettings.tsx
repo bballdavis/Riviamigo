@@ -1,30 +1,19 @@
-import { useBasemapConfig, useUpdateMapStyle, useUserPreferences } from '@riviamigo/hooks';
-import { SelectPicker, ThemeToggle } from '@riviamigo/ui/primitives';
+import { useUpdateMapStyle } from '@riviamigo/hooks';
+import type { MapStylePreference } from '@riviamigo/types';
+import { SelectPicker } from '@riviamigo/ui/primitives';
 
-export function AppearanceSettings() {
-  const basemapConfig = useBasemapConfig();
-  const userPreferences = useUserPreferences();
+export function AppearanceSettings({ mapStyle }: { mapStyle: MapStylePreference }) {
   const updateMapStyle = useUpdateMapStyle();
-  const openFreeMap = basemapConfig.data?.resolved_provider === 'openfreemap';
 
   return (
-    <div className="grid gap-5">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <p className="text-sm font-medium text-fg">Theme</p>
-          <p className="mt-0.5 text-xs text-fg-tertiary">Toggle between dark, light, and system appearance</p>
-        </div>
-        <ThemeToggle />
-      </div>
-      {openFreeMap ? (
-        <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+    <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
           <div>
             <p className="text-sm font-medium text-fg">Map style</p>
             <p className="mt-0.5 text-xs text-fg-tertiary">Choose the basemap used across trip maps.</p>
           </div>
           <SelectPicker
-            value={userPreferences.data?.map_style ?? 'follow-theme'}
-            onChange={(value) => updateMapStyle.mutate(value)}
+            value={mapStyle}
+            onChange={(value) => updateMapStyle.mutate(value as MapStylePreference)}
             disabled={updateMapStyle.isPending}
             aria-label="Map style"
             size="sm"
@@ -40,8 +29,6 @@ export function AppearanceSettings() {
             ]}
           />
           {updateMapStyle.isError ? <p role="alert" className="text-xs text-status-danger sm:col-span-2">Unable to save map style.</p> : null}
-        </div>
-      ) : null}
     </div>
   );
 }

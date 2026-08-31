@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -36,10 +36,24 @@ const settingsMocks = vi.hoisted(() => ({
       target_tire_pressure_psi: 48,
       membership_role: 'owner',
       is_demo: false,
-    },
+      },
   ],
   basemapConfig: undefined as { resolved_provider: string } | undefined,
-  userPreferences: { units: {}, map_style: 'follow-theme' },
+  userPreferences: { units: {}, theme: { mode: 'dark', palette: 'classic' }, map_style: 'follow-theme' },
+  preferences: {
+    units: {
+      mode: 'imperial',
+      distance_unit: 'miles',
+      speed_unit: 'mph',
+      temperature_unit: 'fahrenheit',
+      pressure_unit: 'psi',
+      altitude_unit: 'feet',
+      place_radius_unit: 'feet',
+      efficiency_display: 'distance_per_energy',
+    },
+    theme: { mode: 'dark', palette: 'classic' },
+    map_style: 'follow-theme',
+  },
 }));
 
 const dashboardMocks = vi.hoisted(() => ({
@@ -89,8 +103,13 @@ vi.mock('@riviamigo/hooks', () => ({
       status: (vehicleId: string) => ['vehicles', 'status', vehicleId],
     },
   },
-  api: {
+    api: {
     me: vi.fn().mockResolvedValue({ role: 'user' }),
+    getUnitPreferences: vi.fn().mockImplementation(() => Promise.resolve(settingsMocks.preferences)),
+    updateThemePreferences: vi.fn().mockImplementation(async (theme) => {
+      settingsMocks.preferences.theme = theme;
+      return settingsMocks.preferences;
+    }),
     changePassword: hooksMocks.changePassword,
     listApiKeys: vi.fn().mockResolvedValue([]),
     getApiCatalog: vi.fn().mockResolvedValue({
@@ -531,7 +550,21 @@ describe('Settings page', () => {
     settingsMocks.auth.accessToken = undefined;
     settingsMocks.auth.defaultVehicleId = 'v1';
     settingsMocks.basemapConfig = undefined;
-    settingsMocks.userPreferences = { units: {}, map_style: 'follow-theme' };
+    settingsMocks.userPreferences = { units: {}, theme: { mode: 'dark', palette: 'classic' }, map_style: 'follow-theme' };
+    settingsMocks.preferences = {
+      units: {
+        mode: 'imperial',
+        distance_unit: 'miles',
+        speed_unit: 'mph',
+        temperature_unit: 'fahrenheit',
+        pressure_unit: 'psi',
+        altitude_unit: 'feet',
+        place_radius_unit: 'feet',
+        efficiency_display: 'distance_per_energy',
+      },
+      theme: { mode: 'dark', palette: 'classic' },
+      map_style: 'follow-theme',
+    };
     dashboardMocks.dashboards = [];
     dashboardMocks.downloadDashboardYaml.mockReset();
     dashboardMocks.cloneMutateAsync.mockReset();
@@ -546,6 +579,8 @@ describe('Settings page', () => {
       role: 'user',
       default_vehicle_id: 'v1',
     };
+    document.documentElement.className = 'dark';
+    document.documentElement.removeAttribute('data-rm-palette');
     settingsMocks.vehicles = [
       {
         id: 'v1',
@@ -940,7 +975,7 @@ describe('Settings page', () => {
     renderSettings();
     fireEvent.click(screen.getByText('Appearance'));
     expect(screen.getAllByText('Appearance').length).toBeGreaterThan(0);
-    expect(screen.getByText('Theme')).toBeInTheDocument();
+    expect(screen.getByText('Appearance mode')).toBeInTheDocument();
   });
 
   it('offers every OpenFreeMap style and saves the user selection', async () => {
@@ -950,13 +985,9 @@ describe('Settings page', () => {
 
     const style = screen.getByLabelText('Map style');
     expect(style).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Follow appearance' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Positron' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Bright' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Liberty' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Dark' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Fiord' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: '3D (Liberty)' })).toBeInTheDocument();
+    for (const value of ['follow-theme', 'positron', 'bright', 'liberty', 'dark', 'fiord', '3d']) {
+      expect(style.querySelector(`option[value="${value}"]`)).toBeInTheDocument();
+    }
 
     fireEvent.change(style, { target: { value: 'liberty' } });
     await waitFor(() => expect(hooksMocks.updateMapStylePreference).toHaveBeenCalledWith('liberty'));
@@ -1114,10 +1145,66 @@ describe('Settings page', () => {
   it('renders the theme chooser', () => {
     renderSettings();
     fireEvent.click(screen.getByText('Appearance'));
-    expect(
-      screen.getByText('Toggle between dark, light, and system appearance')
-    ).toBeInTheDocument();
-    expect(screen.getByTestId('theme-toggle')).toBeInTheDocument();
+    expect(screen.getByText('Appearance mode')).toBeInTheDocument();
+    expect(screen.getByLabelText('Appearance mode')).toBeInTheDocument();
+    expect(screen.getByText('Color palette')).toBeInTheDocument();
+    expect(screen.getByLabelText('Color palette')).toBeInTheDocument();
+  });
+
+  it('persists account-backed appearance and palette changes', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.auth.accessToken = 'test-access-token';
+    renderSettings();
+    fireEvent.click(screen.getByText('Appearance'));
+
+    await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
+    fireEvent.change(screen.getByLabelText('Color palette'), { target: { value: 'rad' } });
+
+    await waitFor(() => {
+      expect(hooks.api.updateThemePreferences).toHaveBeenCalledWith({ mode: 'dark', palette: 'rad' });
+    });
+    expect(document.documentElement.dataset.rmPalette).toBe('rad');
+    expect(localStorage.getItem('rm-theme')).toBeNull();
+  });
+
+  it('keeps the saved map style in the combined preference cache across theme updates and provider changes', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.auth.accessToken = 'test-access-token';
+    settingsMocks.preferences.map_style = 'liberty';
+    settingsMocks.basemapConfig = { resolved_provider: 'openfreemap' };
+    const view = renderSettings();
+    fireEvent.click(screen.getByText('Appearance'));
+
+    await waitFor(() => expect(screen.getByLabelText('Map style')).toHaveValue('liberty'));
+    fireEvent.change(screen.getByLabelText('Color palette'), { target: { value: 'rad' } });
+    await waitFor(() => expect(hooks.api.updateThemePreferences).toHaveBeenCalledWith({ mode: 'dark', palette: 'rad' }));
+    expect(screen.getByLabelText('Map style')).toHaveValue('liberty');
+
+    settingsMocks.basemapConfig = { resolved_provider: 'carto' };
+    view.unmount();
+    renderSettings();
+    fireEvent.click(screen.getByText('Appearance'));
+    expect(screen.queryByLabelText('Map style')).not.toBeInTheDocument();
+    settingsMocks.basemapConfig = { resolved_provider: 'openfreemap' };
+    cleanup();
+    renderSettings();
+    fireEvent.click(screen.getByText('Appearance'));
+    await waitFor(() => expect(screen.getByLabelText('Map style')).toHaveValue('liberty'));
+  });
+
+  it('rolls back appearance changes when the account update fails', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.auth.accessToken = 'test-access-token';
+    vi.mocked(hooks.api.updateThemePreferences).mockRejectedValueOnce(new Error('save failed'));
+    renderSettings();
+    fireEvent.click(screen.getByText('Appearance'));
+
+    await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
+    fireEvent.change(screen.getByLabelText('Appearance mode'), { target: { value: 'light' } });
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/previous selection has been restored/i));
+    expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark');
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
   });
 
   it('renders the Account section with Sign Out', () => {

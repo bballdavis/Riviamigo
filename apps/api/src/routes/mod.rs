@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use axum::{middleware, routing::get, Router};
 use http::{
     header::{
-        CONTENT_SECURITY_POLICY, REFERRER_POLICY, STRICT_TRANSPORT_SECURITY,
+        CACHE_CONTROL, CONTENT_SECURITY_POLICY, REFERRER_POLICY, STRICT_TRANSPORT_SECURITY, VARY,
         X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
     },
     HeaderValue, StatusCode,
@@ -50,6 +50,7 @@ pub mod rivian_stewardship;
 pub mod schedules;
 pub mod settings;
 pub mod state_timeline;
+pub mod themes;
 pub mod trip_tag_filter;
 pub mod trip_tags;
 pub mod trips;
@@ -69,7 +70,7 @@ async fn log_server_errors(
     let authenticated = key_type != "ip_fallback";
     let mut response = next.run(req).await;
 
-    if path.starts_with("/v1/") {
+    if path.starts_with("/v1/") || path.starts_with("/v2/") {
         response.headers_mut().insert(
             "x-riviamigo-ratelimit-class",
             HeaderValue::from_static(limiter_class),
@@ -161,7 +162,9 @@ pub fn build_router(state: AppState) -> Router {
             http::header::AUTHORIZATION,
             http::header::CONTENT_TYPE,
             http::header::ACCEPT,
+            http::header::IF_MATCH,
         ]))
+        .expose_headers([http::header::ETAG])
         .allow_credentials(true);
 
     let auth_ip_config = Arc::new({
@@ -244,6 +247,7 @@ pub fn build_router(state: AppState) -> Router {
 
     // Inject decoding key into request extensions so AuthUser extractor can find it.
     let decoding_key = state.jwt_keys.decoding.clone();
+    let v2_decoding_key = decoding_key.clone();
 
     let protected_common = Router::new()
         .merge(api_keys::router())
@@ -292,8 +296,8 @@ pub fn build_router(state: AppState) -> Router {
         .merge(protected_metadata)
         .merge(
             protected_common
-                .layer(GovernorLayer::new(auth_read_identity_config))
-                .layer(GovernorLayer::new(auth_write_identity_config))
+                .layer(GovernorLayer::new(auth_read_identity_config.clone()))
+                .layer(GovernorLayer::new(auth_write_identity_config.clone()))
                 .layer(RequestBodyLimitLayer::new(64 * 1024)),
         )
         .merge(protected_upload)
@@ -301,6 +305,32 @@ pub fn build_router(state: AppState) -> Router {
         .layer(middleware::from_fn(
             move |mut req: axum::extract::Request, next: axum::middleware::Next| {
                 let key = decoding_key.clone();
+                async move {
+                    req.extensions_mut().insert(key);
+                    next.run(req).await
+                }
+            },
+        ));
+
+    let protected_v2 = Router::new()
+        .merge(themes::router())
+        // Every v2 theme response is account-scoped, including catalog metadata
+        // and embedded custom definitions. Never let an HTTP cache replay one
+        // account's response after an authentication change.
+        .layer(SetResponseHeaderLayer::overriding(
+            CACHE_CONTROL,
+            HeaderValue::from_static("private, no-store"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            VARY,
+            HeaderValue::from_static("Authorization, Cookie"),
+        ))
+        .layer(GovernorLayer::new(auth_read_identity_config))
+        .layer(GovernorLayer::new(auth_write_identity_config))
+        .layer(RequestBodyLimitLayer::new(96 * 1024))
+        .layer(middleware::from_fn(
+            move |mut req: axum::extract::Request, next: axum::middleware::Next| {
+                let key = v2_decoding_key.clone();
                 async move {
                     req.extensions_mut().insert(key);
                     next.run(req).await
@@ -316,6 +346,7 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .nest("/v1", Router::new().merge(auth_public).merge(protected))
+        .nest("/v2", protected_v2)
         .layer(middleware::from_fn_with_state(
             state.jwt_keys.decoding.clone(),
             log_server_errors,
@@ -384,6 +415,8 @@ fn classify_rate_limit_class(method: &http::Method, path: &str) -> RateLimitClas
 
     if path.starts_with("/v1/auth/me")
         || path.starts_with("/v1/auth/preferences")
+        || path.starts_with("/v2/auth/preferences")
+        || path.starts_with("/v2/themes")
         || path == "/v1/settings/timezone"
         || path.starts_with("/v1/dashboards/by-slug/")
     {

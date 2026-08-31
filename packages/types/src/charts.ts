@@ -74,7 +74,23 @@ export type ChartColorToken =
   | 'success'
   | 'warning'
   | 'danger'
-  | 'muted';
+  | 'muted'
+  | 'series-01'
+  | 'series-02'
+  | 'series-03'
+  | 'series-04'
+  | 'series-05'
+  | 'series-06'
+  | 'series-07'
+  | 'series-08'
+  | 'series-09'
+  | 'series-10'
+  | 'series-11'
+  | 'series-12'
+  | 'series-13'
+  | 'series-14'
+  | 'series-15'
+  | 'series-16';
 
 export type ChartColorDefinition =
   | { mode: 'token'; token: ChartColorToken }
