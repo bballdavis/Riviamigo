@@ -34,6 +34,12 @@ The development and production Compose stacks both use PostgreSQL 18 with
 TimescaleDB 2.28.3, but they use separate volumes and data layouts. Keep the
 development volume separate from production data.
 
+The development launcher also derives a stable Compose project name from the
+checkout path. Each worktree therefore receives separate TimescaleDB, Redis,
+Garage, backup, and cache volumes, preventing a branch with newer migrations
+from advancing the database used by an older release branch. Override
+`DEV_COMPOSE_PROJECT_NAME` only when sharing a development stack is deliberate.
+
 `pnpm dev:stack` also starts the local restore supervisor alongside the
 host-run API. Its capability key is generated under the ignored `data/`
 directory, while backup artifacts continue to use the local `/backups` path.

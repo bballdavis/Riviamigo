@@ -24,6 +24,11 @@ launched from `apps/web`. It does not terminate unrelated applications that
 happen to use the usual development ports; those still trigger fallback-port
 allocation.
 
+The launcher derives a stable Docker Compose project name from the checkout
+path, so separate worktrees do not share migration ledgers or other development
+volumes. Set `DEV_COMPOSE_PROJECT_NAME` only when an intentional shared or
+pre-existing development stack is required.
+
 ### Workspace
 
 ```bash

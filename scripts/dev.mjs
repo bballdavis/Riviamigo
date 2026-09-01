@@ -1,7 +1,7 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -40,7 +40,23 @@ const requestedPorts = {
 };
 
 let ports = { ...requestedPorts };
-const composeProjectName = process.env.DEV_COMPOSE_PROJECT_NAME || process.env.COMPOSE_PROJECT_NAME || 'riviamigo';
+
+export function deriveDevComposeProjectName(checkoutRoot, env = process.env) {
+  const override = env.DEV_COMPOSE_PROJECT_NAME || env.COMPOSE_PROJECT_NAME;
+  if (override) return override;
+
+  const resolvedRoot = resolve(checkoutRoot);
+  const pathIdentity = process.platform === 'win32' ? resolvedRoot.toLowerCase() : resolvedRoot;
+  const checkoutName = basename(resolvedRoot)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^[-_]+|[-_]+$/g, '')
+    .slice(0, 32) || 'checkout';
+  const checkoutHash = createHash('sha256').update(pathIdentity).digest('hex').slice(0, 8);
+  return `riviamigo-${checkoutName}-${checkoutHash}`;
+}
+
+const composeProjectName = deriveDevComposeProjectName(rootDir);
 const databaseReadyTimeoutMs = parseSeconds(process.env.DEV_DATABASE_READY_TIMEOUT_SECONDS, 600) * 1000;
 // Keep a Windows host responsive during cold Rust builds. Other platforms retain
 // Cargo's normal concurrency.
@@ -699,7 +715,7 @@ log('Starting local dev servers...');
   const api = await startApi();
   const apiSupervisor = superviseApi(api);
   log('To view infra logs in another terminal, run:');
-  log(`   docker compose -f "${composeFile}" logs -f`);
+  log(`   docker compose -p "${composeProjectName}" -f "${composeFile}" logs -f`);
   log('');
   const web = await startWeb();
 
