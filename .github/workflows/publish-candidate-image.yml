@@ -60,6 +60,30 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ needs.resolve.outputs.source_sha }}
+      - name: Apply pnpm patch compatibility overlay
+        run: |
+          set -euo pipefail
+          dockerfile=compose/Dockerfile
+          compatibility='RUN pnpm config set allowUnusedPatches true --location project'
+          if grep -Fq "$compatibility" "$dockerfile"; then
+            exit 0
+          fi
+          grep -Fq 'RUN pnpm install --frozen-lockfile' "$dockerfile" || {
+            echo "Expected pnpm install seam is missing from $dockerfile" >&2
+            exit 1
+          }
+          python3 - "$dockerfile" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          contents = path.read_text()
+          old = 'RUN pnpm install --frozen-lockfile'
+          new = 'RUN pnpm config set allowUnusedPatches true --location project \\\n              && pnpm install --frozen-lockfile'
+          if contents.count(old) != 1:
+              raise SystemExit(f'Expected exactly one install seam in {path}')
+          path.write_text(contents.replace(old, new))
+          PY
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
@@ -116,6 +140,30 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ needs.resolve.outputs.source_sha }}
+      - name: Apply pnpm patch compatibility overlay
+        run: |
+          set -euo pipefail
+          dockerfile=compose/Dockerfile
+          compatibility='RUN pnpm config set allowUnusedPatches true --location project'
+          if grep -Fq "$compatibility" "$dockerfile"; then
+            exit 0
+          fi
+          grep -Fq 'RUN pnpm install --frozen-lockfile' "$dockerfile" || {
+            echo "Expected pnpm install seam is missing from $dockerfile" >&2
+            exit 1
+          }
+          python3 - "$dockerfile" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          contents = path.read_text()
+          old = 'RUN pnpm install --frozen-lockfile'
+          new = 'RUN pnpm config set allowUnusedPatches true --location project \\\n              && pnpm install --frozen-lockfile'
+          if contents.count(old) != 1:
+              raise SystemExit(f'Expected exactly one install seam in {path}')
+          path.write_text(contents.replace(old, new))
+          PY
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
