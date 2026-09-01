@@ -18,6 +18,15 @@ export const queryKeys = {
     byVehicle: (vehicleId: string | null) => ['vehicle-invites', vehicleId] as const,
   },
   unitPreferences: { current: ['unit-preferences'] as const },
+  themePreferences: {
+    all: ['theme-preferences', 'v2'] as const,
+    forUser: (userId: string) => ['theme-preferences', 'v2', userId] as const,
+  },
+  themes: {
+    all: ['themes'] as const,
+    catalog: (userId: string) => ['themes', userId, 'catalog'] as const,
+    resource: (userId: string, themeId: string) => ['themes', userId, 'resource', themeId] as const,
+  },
   appTimezone: { current: ['app-timezone'] as const },
   backups: {
     all: ['backup-overview'] as const,

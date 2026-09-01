@@ -30,10 +30,12 @@ Riviamigo's repository documentation is the source of truth for the application,
 | Understand privacy and external requests | [Privacy](./privacy.md) |
 | Review deployment security | [Security](./security.md) |
 | Customize an installed dashboard | [Using Riviamigo](./using-riviamigo.md) |
+| Choose or create an account theme | [Appearance and custom themes](./guides/themes.md) |
 | Update or recover an installation | [Operations](./operations.md) |
 | Understand the repository structure | [Architecture overview](./architecture/overview.md) |
 | Build or change dashboards | [Dashboard architecture](./frontend/dashboard-architecture.md) |
 | Build or manage charts | [Chart architecture](./frontend/chart-architecture.md) |
+| Extend app themes or color authoring | [Theme architecture](./architecture/theming.md) |
 | Verify chart migration and editor preview compatibility | [Chart compatibility testing](./frontend/chart-compatibility-testing.md) |
 | Look up APIs, metrics, or dashboard data | [Reference](./reference.md) |
 

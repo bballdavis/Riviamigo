@@ -6,10 +6,11 @@ import {
   type ThemePreferences,
   type ThemePreferencesV2,
 } from '@riviamigo/types';
-import { applyThemeRuntime, resetThemeRuntime, ThemeRuntimeProvider } from './themeRuntime';
+import { applyLegacyThemePreferences, applyThemeRuntime, resetThemeRuntime } from './themeRuntime';
 
 export type { ThemeMode, ThemePalette, ThemePreferences } from '@riviamigo/types';
 export type { ThemePreferencesV2 } from '@riviamigo/types';
+export { resolveTheme } from '@riviamigo/themes';
 
 const THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)';
 
@@ -49,7 +50,7 @@ export function resolveThemeMode(mode: ThemeMode): Exclude<ThemeMode, 'system'> 
 /** Apply the account-backed visual preference to the document root. */
 export function applyThemePreferences(preferences: ThemePreferences | ThemePreferencesV2, resolvedTheme?: import('@riviamigo/themes').ResolvedTheme | null) {
   if ('selection' in preferences) return applyThemeRuntime(preferences, resolvedTheme);
-  return applyThemeRuntime(normalizeThemePreferences(preferences));
+  return applyLegacyThemePreferences(normalizeThemePreferences(preferences));
 }
 
 /** Compatibility helper for callers that only need to apply an appearance mode. */
@@ -67,7 +68,7 @@ export function resetThemePreferences() {
  * Account-aware app roots should apply their server response instead.
  */
 export { ThemeRuntimeProvider } from './themeRuntime';
-export { getThemeRuntimeSnapshot, subscribeThemeRuntime, useThemeRuntime, useThemeRevision, applyThemeRuntime } from './themeRuntime';
+export { getThemeRuntimeSnapshot, subscribeThemeRuntime, useThemeRuntime, useThemeRevision, applyThemeRuntime, resolveThemeRuntimeResponse } from './themeRuntime';
 export type { ThemeRuntimeSnapshot, ThemeRuntimeProviderProps } from './themeRuntime';
 
 export function ThemeModeSync() { React.useEffect(() => { resetThemePreferences(); }, []); return null; }

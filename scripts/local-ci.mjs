@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { existsSync, mkdirSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { colorTokenViolations } from './check-color-tokens.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-process.env.CARGO_TARGET_DIR = join(root, 'apps/api/target-ci-local');
+process.env.CARGO_TARGET_DIR ??= join(root, 'apps/api/target-ci-local');
 const hookPath = join(root, '.githooks');
 const ciProject = 'riviamigo-ci-local';
 const ciCompose = ['-p', ciProject, '-f', 'compose/docker-compose.dev.yml'];
@@ -53,25 +54,11 @@ function git(args) {
   return result.status === 0 ? result.stdout.trim() : '';
 }
 
-function trackedFiles(directory) {
-  if (!existsSync(directory)) return [];
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const path = join(directory, entry.name);
-    return entry.isDirectory() ? trackedFiles(path) : [path];
-  });
-}
-
 function colorTokenGuard() {
-  const roots = ['apps/web/src', 'packages/ui/src', 'packages/dashboards/src', 'packages/hooks/src'];
-  const pattern = /#[0-9a-f]{3,8}\b|rgba?\(|(?:text|bg|border|shadow|fill|stroke|ring|outline|divide|placeholder|decoration|accent|caret|from|via|to)-(?:white|black|slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)(?:-\d+)?(?:\/\d+)?\b/i;
-  const allowed = /tokens[\\/]colors\.ts|globals\.css|charts[\\/]ChartProvider\.tsx|\.test\.|\.spec\.|getPropertyValue|CHART_COLORS|CLASSIC_CHART_COLORS|RAD_CHART_COLORS|CHART_PALETTES|rm-map-route|\/\/.*#/;
-  const violations = roots.flatMap((path) => trackedFiles(join(root, path)))
-    .filter((path) => /\.(tsx?|css)$/.test(path))
-    .flatMap((path) => readFileSync(path, 'utf8').split(/\r?\n/).map((line, index) => ({ path, line, index }))
-      .filter(({ path, line }) => pattern.test(line) && !allowed.test(`${relative(root, path)} ${line}`)));
+  const violations = colorTokenViolations(root);
   if (violations.length) {
     console.error('Color-token violations found:');
-    for (const violation of violations) console.error(`${relative(root, violation.path)}:${violation.index + 1}: ${violation.line}`);
+    for (const violation of violations) console.error(violation);
     throw new Error('Use design tokens instead of raw colors.');
   }
 }

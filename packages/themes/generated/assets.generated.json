@@ -1,0 +1,195 @@
+{
+  "schemaVersion": 1,
+  "assets": [
+    {
+      "publicPath": "/favicon.svg",
+      "sha256": "ee3bf1fb417a882c6d24fbb2a277d4932c880158adbe1ae8243d8b9683a57dfc",
+      "bytes": 81771,
+      "status": "raster-backed-fallback",
+      "selfContained": true,
+      "externalReferences": [],
+      "owners": [
+        {
+          "themeId": "classic",
+          "kind": "favicon",
+          "mode": "dark"
+        },
+        {
+          "themeId": "classic",
+          "kind": "favicon",
+          "mode": "light"
+        }
+      ]
+    },
+    {
+      "publicPath": "/icon_color_lighter.svg",
+      "sha256": "ee3bf1fb417a882c6d24fbb2a277d4932c880158adbe1ae8243d8b9683a57dfc",
+      "bytes": 81771,
+      "status": "raster-backed-fallback",
+      "selfContained": true,
+      "externalReferences": [],
+      "owners": [
+        {
+          "themeId": "classic",
+          "kind": "icon",
+          "mode": "dark"
+        },
+        {
+          "themeId": "classic",
+          "kind": "icon",
+          "mode": "light"
+        }
+      ]
+    },
+    {
+      "publicPath": "/logo_color_lighter.svg",
+      "sha256": "b2cd7f9002ef8b9b2138039a2be1b95874ab36c7ed790ec538066e2d89fcbe4b",
+      "bytes": 90712,
+      "status": "raster-backed-fallback",
+      "selfContained": true,
+      "externalReferences": [],
+      "owners": [
+        {
+          "themeId": "classic",
+          "kind": "logo",
+          "mode": "dark"
+        },
+        {
+          "themeId": "classic",
+          "kind": "logo",
+          "mode": "light"
+        }
+      ]
+    },
+    {
+      "publicPath": "/rad-favicon.svg",
+      "sha256": "2faff30f4f213e286ae09635619c33302931e3a670d6906b82c8672fccec22e3",
+      "bytes": 568,
+      "status": "raster-backed-fallback",
+      "selfContained": false,
+      "externalReferences": [
+        "/favicon.svg"
+      ],
+      "owners": [
+        {
+          "themeId": "rad",
+          "kind": "favicon",
+          "mode": "dark"
+        },
+        {
+          "themeId": "rad",
+          "kind": "favicon",
+          "mode": "light"
+        }
+      ]
+    },
+    {
+      "publicPath": "/rad-icon.svg",
+      "sha256": "55af3f1bc406f3415cfc32228d2e1915a5db569001be66179455c903a4d25479",
+      "bytes": 576,
+      "status": "raster-backed-fallback",
+      "selfContained": false,
+      "externalReferences": [
+        "/icon_color_lighter.svg"
+      ],
+      "owners": [
+        {
+          "themeId": "rad",
+          "kind": "icon",
+          "mode": "dark"
+        },
+        {
+          "themeId": "rad",
+          "kind": "icon",
+          "mode": "light"
+        }
+      ]
+    },
+    {
+      "publicPath": "/rad-logo.svg",
+      "sha256": "8a7658b388d1415b365ca6024c34faef5292838473bf617478783947e24d4e57",
+      "bytes": 576,
+      "status": "raster-backed-fallback",
+      "selfContained": false,
+      "externalReferences": [
+        "/logo_color_lighter.svg"
+      ],
+      "owners": [
+        {
+          "themeId": "rad",
+          "kind": "logo",
+          "mode": "dark"
+        },
+        {
+          "themeId": "rad",
+          "kind": "logo",
+          "mode": "light"
+        }
+      ]
+    },
+    {
+      "publicPath": "/rad-text_black.svg",
+      "sha256": "b633b47da8386c3ed2b057abed486e74a1ce12fb32083d6ce90f235805471591",
+      "bytes": 484,
+      "status": "raster-backed-fallback",
+      "selfContained": false,
+      "externalReferences": [
+        "/text_black.svg"
+      ],
+      "owners": [
+        {
+          "themeId": "rad",
+          "kind": "wordmark",
+          "mode": "light"
+        }
+      ]
+    },
+    {
+      "publicPath": "/rad-text_white.svg",
+      "sha256": "bdc90c3cbfa2ddae47f1c4889f7526ca5186d124dbe9866ec6a50eb264179be7",
+      "bytes": 484,
+      "status": "raster-backed-fallback",
+      "selfContained": false,
+      "externalReferences": [
+        "/text_white.svg"
+      ],
+      "owners": [
+        {
+          "themeId": "rad",
+          "kind": "wordmark",
+          "mode": "dark"
+        }
+      ]
+    },
+    {
+      "publicPath": "/text_black.svg",
+      "sha256": "3297405741862232a43edc4a8b8e59fb05088cb8e1a3f5c0f7c6be0292d9b840",
+      "bytes": 317932,
+      "status": "raster-backed-fallback",
+      "selfContained": true,
+      "externalReferences": [],
+      "owners": [
+        {
+          "themeId": "classic",
+          "kind": "wordmark",
+          "mode": "light"
+        }
+      ]
+    },
+    {
+      "publicPath": "/text_white.svg",
+      "sha256": "f113660df0a02c9a8999b413c1f075944d657685f3ce36e9abaf0c23702a6a00",
+      "bytes": 330426,
+      "status": "raster-backed-fallback",
+      "selfContained": true,
+      "externalReferences": [],
+      "owners": [
+        {
+          "themeId": "classic",
+          "kind": "wordmark",
+          "mode": "dark"
+        }
+      ]
+    }
+  ]
+}

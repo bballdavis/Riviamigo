@@ -84,7 +84,7 @@ describe('ChartEditorPage preview data flow', () => {
     expect(screen.queryByText('Plotted over')).not.toBeInTheDocument();
     expect(screen.getByRole('switch', { name: 'Fill under curve' })).toBeChecked();
 
-    fireEvent.change(screen.getByLabelText('Color'), { target: { value: 'emerald' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Emerald' }));
     fireEvent.click(screen.getByRole('switch', { name: 'Fill under curve' }));
 
     const series = JSON.parse(screen.getByTestId('managed-chart-runtime').getAttribute('data-series') ?? '[]');

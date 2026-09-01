@@ -376,10 +376,16 @@ async fn delete_user(
         }
     }
 
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("DELETE FROM riviamigo.user_preferences WHERE user_id = $1")
+        .bind(target_user_id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM riviamigo.users WHERE id = $1")
         .bind(target_user_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     support_audit(
         state.pool.clone(),
         "admin_user_delete",

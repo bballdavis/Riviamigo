@@ -7,9 +7,7 @@ import { TbCarSuv } from 'react-icons/tb';
 import { FaChargingStation } from 'react-icons/fa6';
 import { BiTrip } from 'react-icons/bi';
 import { cn } from '../lib/utils';
-import { getBrandAsset } from '../lib/brandAssets';
-import { useDocumentPalette } from '../hooks/useDocumentPalette';
-import { useDocumentTheme } from '../hooks/useDocumentTheme';
+import { useThemeRuntime } from '../lib/themeRuntime';
 
 export interface NavItem {
   key: string;
@@ -77,8 +75,7 @@ export function Sidebar({
   const mobileCloseButtonRef = React.useRef<HTMLButtonElement>(null);
   const lastMobileFocusRef = React.useRef<HTMLElement | null>(null);
   const restoreFocusOnCloseRef = React.useRef(true);
-  const isDark = useDocumentTheme();
-  const palette = useDocumentPalette();
+  const { brandAssets } = useThemeRuntime();
 
   const closeMobileNavigation = React.useCallback((restoreFocus = true) => {
     restoreFocusOnCloseRef.current = restoreFocus;
@@ -216,7 +213,7 @@ export function Sidebar({
           aria-label="Go to home"
         >
           <img
-            src={getBrandAsset('wordmark', { dark: isDark, palette })}
+            src={brandAssets.wordmark}
             alt="Riviamigo"
             className="h-[1.5625rem] w-auto"
             style={{ transform: 'translateY(10%)' }}
@@ -257,7 +254,7 @@ export function Sidebar({
               aria-label="Go to home"
             >
               <img
-                src={getBrandAsset('wordmark', { dark: isDark, palette })}
+                src={brandAssets.wordmark}
                 alt="Riviamigo"
                 className="h-[1.5625rem] w-auto"
                 style={{ transform: 'translateY(10%)' }}
@@ -315,7 +312,7 @@ export function Sidebar({
               title="Expand sidebar"
             >
               <img
-                src={getBrandAsset('logo', { dark: isDark, palette })}
+                src={brandAssets.logo}
                 alt="Riviamigo logo"
                 className="h-[80%] w-auto"
               />
@@ -325,7 +322,7 @@ export function Sidebar({
               {logo ?? (
                 <div className="flex h-full min-w-0 items-center justify-start pl-1 overflow-hidden">
                   <img
-                    src={getBrandAsset('wordmark', { dark: isDark, palette })}
+                    src={brandAssets.wordmark}
                     alt="Riviamigo"
                     className="block h-[62%] w-auto max-w-[calc(100%-2.25rem)] object-contain"
                     style={{ transform: 'translateY(15%)' }}

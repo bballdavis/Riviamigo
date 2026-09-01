@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, queryKeys } from '@riviamigo/hooks';
-import { DEFAULT_THEME_PREFERENCES, type ThemeMode, type ThemePalette, type ThemePreferences } from '@riviamigo/types';
+import { DEFAULT_THEME_PREFERENCES, type ThemeMode, type ThemePreferences } from '@riviamigo/types';
 import { applyThemePreferences } from '@riviamigo/ui/lib/theme';
 import { Card, CardContent, CardHeader, CardTitle, SelectPicker } from '@riviamigo/ui/primitives';
+import { ThemeGallery } from './ThemeGallery';
 
 interface PreferencesQuery {
   data: { theme?: ThemePreferences } | undefined;
@@ -33,6 +34,7 @@ export function AppearanceSection({ preferencesQuery }: { preferencesQuery: Pref
       setThemePreferences(result.theme);
       applyThemePreferences(result.theme);
       queryClient.setQueryData(queryKeys.unitPreferences.current, result);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.themePreferences.all });
     },
     onError: (_error, _next, context) => {
       const previous = context?.previous?.theme ?? DEFAULT_THEME_PREFERENCES;
@@ -63,24 +65,12 @@ export function AppearanceSection({ preferencesQuery }: { preferencesQuery: Pref
           />
         </div>
 
-        <div className="grid gap-3 rounded-xl border border-border bg-bg-elevated/35 p-4 sm:grid-cols-[minmax(0,1fr)_14rem] sm:items-center">
+        <div className="grid gap-3 rounded-xl border border-border bg-bg-elevated/35 p-4">
           <div>
-            <p className="text-sm font-medium text-fg">Color palette</p>
-            <p className="mt-0.5 text-xs text-fg-tertiary">Riviamigo keeps the classic palette. RAD adds a warm gold, red, and teal visual treatment across the app and charts.</p>
-            <div className="mt-3 flex items-center gap-1.5" aria-label="RAD palette colors">
-              <span className="h-2 w-8 rounded-full bg-accent" />
-              <span className="h-2 w-8 rounded-full bg-status-danger" />
-              <span className="h-2 w-8 rounded-full bg-status-info" />
-            </div>
+            <p className="text-sm font-medium text-fg">Theme</p>
+            <p className="mt-0.5 text-xs text-fg-tertiary">Choose a built-in theme or create a private theme with its own interface, chart, and brand colors.</p>
           </div>
-          <SelectPicker
-            className="w-full"
-            value={themePreferences.palette}
-            onChange={(value) => updateThemePreferences.mutate({ ...themePreferences, palette: value as ThemePalette })}
-            aria-label="Color palette"
-            disabled={preferencesQuery.isLoading || updateThemePreferences.isPending}
-            options={[{ value: 'classic', label: 'Classic' }, { value: 'rad', label: 'RAD' }]}
-          />
+          <ThemeGallery />
         </div>
 
         {updateThemePreferences.isPending ? <p className="text-xs text-fg-tertiary" role="status">Saving appearance preferences...</p> : null}

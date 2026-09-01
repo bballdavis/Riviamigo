@@ -50,6 +50,7 @@
     "charts:sync-defaults": "node ./scripts/sync-chart-defaults.mjs",
     "themes:generate": "pnpm --filter @riviamigo/themes generate",
     "themes:check": "pnpm --filter @riviamigo/themes check",
+    "colors:check": "node ./scripts/check-color-tokens.mjs",
     "storybook": "turbo storybook",
     "clean": "turbo clean && rm -rf node_modules",
     "db:migrate": "node ./scripts/database.mjs migrate",

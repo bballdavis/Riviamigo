@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveTheme } from '../../../../packages/themes/src/index';
+import { queryKeys } from '@riviamigo/hooks';
 import {
   applyThemePreferences,
   getThemeRuntimeSnapshot,
   resetThemePreferences,
+  resolveThemeRuntimeResponse,
   subscribeThemeRuntime,
 } from '@riviamigo/ui/lib/theme';
 
@@ -40,11 +42,62 @@ describe('theme runtime', () => {
     unsubscribe();
   });
 
+  it('publishes every ordered series slot to CSS and concrete renderer colors', () => {
+    applyThemePreferences({ mode: 'dark', palette: 'rad' });
+    const snapshot = getThemeRuntimeSnapshot();
+    for (let index = 1; index <= 16; index += 1) {
+      const token = `series-${String(index).padStart(2, '0')}`;
+      expect(snapshot.cssVariables[`--rm-${token}`]).toMatch(/^#[0-9A-Fa-f]{6}$/);
+      expect(snapshot.chartColors[token]).toBe(snapshot.cssVariables[`--rm-${token}`]);
+      expect(document.documentElement.style.getPropertyValue(`--rm-${token}`)).toBe(snapshot.chartColors[token]);
+    }
+  });
+
+  it('preserves an active custom selection for a legacy mode-only write', () => {
+    const custom = resolveTheme({ theme: 'classic', tokens: { accent: { light: '#654321', dark: '#123456' } } });
+    applyThemePreferences({ schemaVersion: 2, mode: 'dark', selection: { kind: 'custom', themeId: 'custom', revision: 3 } }, custom);
+    applyThemePreferences({ mode: 'light', palette: 'classic' });
+    const snapshot = getThemeRuntimeSnapshot();
+    expect(snapshot.themeRef).toEqual({ kind: 'custom', themeId: 'custom', revision: 3 });
+    expect(snapshot.selectedMode).toBe('light');
+    expect(snapshot.cssVariables['--rm-accent']).toBe('#654321');
+  });
+
+  it('resolves the V2 response definition and keeps its pinned revision after refetch', () => {
+    const response = {
+      preferences: {
+        schemaVersion: 2 as const,
+        mode: 'dark' as const,
+        selection: {
+          kind: 'custom' as const,
+          themeId: 'custom-1',
+          revision: 9,
+          baseThemeId: 'classic' as const,
+          definition: { theme: 'classic' as const, tokens: { accent: { dark: '#123456', light: '#654321' } } },
+          definitionHash: 'a'.repeat(64),
+        },
+      },
+      etag: '"preferences-9"',
+    };
+    const initial = resolveThemeRuntimeResponse(response);
+    applyThemePreferences(initial.preferences!, initial.resolvedTheme);
+    const refetched = resolveThemeRuntimeResponse({ ...response, preferences: { ...response.preferences, mode: 'light' } });
+    applyThemePreferences(refetched.preferences!, refetched.resolvedTheme);
+    expect(getThemeRuntimeSnapshot().themeRef).toEqual(expect.objectContaining({ kind: 'custom', themeId: 'custom-1', revision: 9 }));
+    expect(getThemeRuntimeSnapshot().selectedMode).toBe('light');
+    expect(getThemeRuntimeSnapshot().cssVariables['--rm-accent']).toBe('#654321');
+  });
+
   it('resets account visual state to classic dark on logout', () => {
     applyThemePreferences({ mode: 'light', palette: 'rad' });
     resetThemePreferences();
     expect(document.documentElement).toHaveClass('dark');
     expect(document.documentElement.dataset.rmPalette).toBe('classic');
     expect(document.documentElement.dataset.rmThemeRevision).toBe('0');
+  });
+
+  it('isolates cached V2 preferences by authenticated account identity', () => {
+    expect(queryKeys.themePreferences.forUser('account-a')).toEqual(['theme-preferences', 'v2', 'account-a']);
+    expect(queryKeys.themePreferences.forUser('account-b')).not.toEqual(queryKeys.themePreferences.forUser('account-a'));
   });
 });

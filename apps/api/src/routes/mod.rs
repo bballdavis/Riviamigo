@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use axum::{middleware, routing::get, Router};
 use http::{
     header::{
-        CONTENT_SECURITY_POLICY, REFERRER_POLICY, STRICT_TRANSPORT_SECURITY,
+        CACHE_CONTROL, CONTENT_SECURITY_POLICY, REFERRER_POLICY, STRICT_TRANSPORT_SECURITY, VARY,
         X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
     },
     HeaderValue, StatusCode,
@@ -163,6 +163,7 @@ pub fn build_router(state: AppState) -> Router {
             http::header::CONTENT_TYPE,
             http::header::ACCEPT,
             http::header::IF_MATCH,
+            http::HeaderName::from_static("x-theme-preferences-if-match"),
         ]))
         .expose_headers([http::header::ETAG])
         .allow_credentials(true);
@@ -312,7 +313,16 @@ pub fn build_router(state: AppState) -> Router {
             },
         ));
 
-    let protected_v2 = themes::router()
+    let protected_v2 = Router::new()
+        .merge(themes::router())
+        .layer(SetResponseHeaderLayer::overriding(
+            CACHE_CONTROL,
+            HeaderValue::from_static("private, no-store"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            VARY,
+            HeaderValue::from_static("Authorization, Cookie"),
+        ))
         .layer(GovernorLayer::new(auth_read_identity_config))
         .layer(GovernorLayer::new(auth_write_identity_config))
         .layer(RequestBodyLimitLayer::new(96 * 1024))

@@ -8,7 +8,7 @@
  */
 
 import { BUILT_IN_THEMES } from '@riviamigo/themes';
-import type { ThemePalette } from '@riviamigo/types';
+import type { ChartColorToken, ThemePalette } from '@riviamigo/types';
 import { colors } from '../tokens/colors';
 
 export type ChartPaletteKey =
@@ -41,6 +41,11 @@ export const CHART_COLOR_TOKENS = [
   'danger',
   'muted',
 ] as const satisfies readonly ChartPaletteKey[];
+
+export const CHART_SERIES_TOKENS = Array.from(
+  { length: 16 },
+  (_, index) => `series-${String(index + 1).padStart(2, '0')}` as Extract<ChartColorToken, `series-${string}`>,
+);
 
 function chartPalette(palette: ThemePalette): Record<ChartPaletteKey, string> {
   const definition = BUILT_IN_THEMES[palette];
@@ -89,6 +94,9 @@ export function getChartColor(
   palette?: ThemePalette,
 ) {
   const key = value as ChartPaletteKey;
+  if (typeof value === 'string' && /^series-(0[1-9]|1[0-6])$/.test(value)) {
+    return `var(--rm-${value})`;
+  }
   if (palette && key in CHART_PALETTES[palette]) {
     return CHART_PALETTES[palette][key];
   }

@@ -1,5 +1,5 @@
 /**
- * Thin typed wrapper around the Riviamigo REST API.
+ * Typed wrapper around the Riviamigo REST API.
  * Base URL is read from VITE_API_URL or VITE_RIVIAMIGO_API_BASE_URL.
  */
 
@@ -99,8 +99,6 @@ import type {
   ChargeSessionUpdate,
   ChargingNetworkPreference,
 } from '@riviamigo/types';
-
-type PreferencesResponse = { units: UnitPreferences; theme: ThemePreferences };
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
 
@@ -424,13 +422,13 @@ export class AuthenticatedTransport {
     return res.json() as Promise<T>;
   }
 
-  private async requestResponse(
+  async requestResponse(
     method: string,
     path: string,
     body?: unknown,
     params?: Record<string, string | number>,
     retryOnUnauthorized = true,
-    reportErrors = true
+    reportErrors = true, extraHeaders?: Record<string, string>
   ): Promise<Response> {
     this.assertRateLimitCooldown(method, path);
 
@@ -446,7 +444,7 @@ export class AuthenticatedTransport {
 
     const res = await fetch(url, {
       method,
-      headers: this.headers(path),
+      headers: { ...(this.headers(path) as Record<string, string>), ...extraHeaders },
       credentials: 'include',
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
@@ -463,7 +461,7 @@ export class AuthenticatedTransport {
         try {
           const tokens = await this.refreshAccessToken();
           this.applyTokens(tokens);
-          return this.requestResponse(method, path, body, params, false, reportErrors);
+          return this.requestResponse(method, path, body, params, false, reportErrors, extraHeaders);
         } catch {
           this.clearTokens();
           const detail: ApiFailureDetail = {
@@ -2267,3 +2265,4 @@ function truncate(value: string, maxLength: number) {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength - 1)}…`;
 }
+type PreferencesResponse = { units: UnitPreferences; theme: ThemePreferences };

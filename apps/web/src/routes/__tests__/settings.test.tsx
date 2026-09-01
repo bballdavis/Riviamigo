@@ -13,6 +13,7 @@ const settingsMocks = vi.hoisted(() => ({
     logout: vi.fn(),
     clearSession: vi.fn(),
     accessToken: undefined as string | undefined,
+    userId: 'u1',
     defaultVehicleId: 'v1',
     setDefaultVehicleId: vi.fn(),
     setActiveVehicleId: vi.fn(),
@@ -51,6 +52,14 @@ const settingsMocks = vi.hoisted(() => ({
     },
     theme: { mode: 'dark', palette: 'classic' },
   },
+  themePreferences: {
+    preferences: {
+      schemaVersion: 2 as const,
+      mode: 'dark' as const,
+      selection: { kind: 'builtin' as const, themeId: 'classic' },
+    },
+    etag: '"theme-preferences-u1-1"',
+  },
 }));
 
 const dashboardMocks = vi.hoisted(() => ({
@@ -83,6 +92,14 @@ vi.mock('@riviamigo/hooks', () => ({
       overview: (page: number, perPage: number) => ['backup-overview', page, perPage],
     },
     me: { all: ['me'] },
+    themePreferences: {
+      all: ['theme-preferences'],
+      forUser: (userId: string) => ['theme-preferences', userId],
+    },
+    themes: {
+      catalog: (userId: string) => ['themes', userId, 'catalog'],
+      resource: (userId: string, themeId: string) => ['themes', userId, 'resource', themeId],
+    },
     unitPreferences: { current: ['unit-preferences'] },
     vehicle: {
       health: (vehicleId: string) => ['vehicles', 'health', vehicleId],
@@ -98,6 +115,18 @@ vi.mock('@riviamigo/hooks', () => ({
       all: ['vehicles'],
       status: (vehicleId: string) => ['vehicles', 'status', vehicleId],
     },
+  },
+  themeClient: {
+    getCatalog: vi.fn().mockResolvedValue({ builtInThemes: ['classic', 'rad'], customThemes: [] }),
+    getPreferences: vi.fn().mockImplementation(() => Promise.resolve(settingsMocks.themePreferences)),
+    updatePreferences: vi.fn().mockImplementation(async (preferences) => {
+      settingsMocks.themePreferences = {
+        preferences,
+        etag: '"theme-preferences-u1-2"',
+      };
+      return settingsMocks.themePreferences;
+    }),
+    create: vi.fn(),
   },
     api: {
     me: vi.fn().mockResolvedValue({ role: 'user' }),
@@ -383,7 +412,7 @@ vi.mock('@riviamigo/hooks', () => ({
     updateVehicleName: vi.fn().mockResolvedValue({}),
     refreshVehicleArtwork: vi.fn().mockResolvedValue({ ok: true, vehicle_id: 'v1' }),
   },
-  useAuth: () => settingsMocks.auth,
+  useAuth: (selector?: (state: typeof settingsMocks.auth) => unknown) => selector ? selector(settingsMocks.auth) : settingsMocks.auth,
   useAuthReady: () => true,
   useMe: () => ({ data: settingsMocks.me }),
   useVehicles: () => ({ data: settingsMocks.vehicles }),
@@ -550,6 +579,14 @@ describe('Settings page', () => {
         efficiency_display: 'distance_per_energy',
       },
       theme: { mode: 'dark', palette: 'classic' },
+    };
+    settingsMocks.themePreferences = {
+      preferences: {
+        schemaVersion: 2,
+        mode: 'dark',
+        selection: { kind: 'builtin', themeId: 'classic' },
+      },
+      etag: '"theme-preferences-u1-1"',
     };
     dashboardMocks.dashboards = [];
     dashboardMocks.downloadDashboardYaml.mockReset();
@@ -1105,13 +1142,14 @@ describe('Settings page', () => {
     });
   });
 
-  it('renders the theme chooser', () => {
+  it('renders the theme chooser', async () => {
     renderSettings();
     fireEvent.click(screen.getByText('Appearance'));
     expect(screen.getByText('Appearance mode')).toBeInTheDocument();
     expect(screen.getByLabelText('Appearance mode')).toBeInTheDocument();
-    expect(screen.getByText('Color palette')).toBeInTheDocument();
-    expect(screen.getByLabelText('Color palette')).toBeInTheDocument();
+    expect(await screen.findByRole('radiogroup', { name: 'Themes' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^Classic/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^RAD/ })).toBeInTheDocument();
   });
 
   it('persists account-backed appearance and palette changes', async () => {
@@ -1121,12 +1159,14 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByText('Appearance'));
 
     await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
-    fireEvent.change(screen.getByLabelText('Color palette'), { target: { value: 'rad' } });
+    fireEvent.click(await screen.findByRole('radio', { name: /^RAD/ }));
 
     await waitFor(() => {
-      expect(hooks.api.updateThemePreferences).toHaveBeenCalledWith({ mode: 'dark', palette: 'rad' });
+      expect(hooks.themeClient.updatePreferences).toHaveBeenCalledWith(
+        { schemaVersion: 2, mode: 'dark', selection: { kind: 'builtin', themeId: 'rad' } },
+        '"theme-preferences-u1-1"',
+      );
     });
-    expect(document.documentElement.dataset.rmPalette).toBe('rad');
     expect(localStorage.getItem('rm-theme')).toBeNull();
   });
 

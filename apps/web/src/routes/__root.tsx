@@ -2,8 +2,8 @@ import React from 'react';
 import { createRootRouteWithContext, Outlet } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import { api, queryKeys, useAuth, useAuthReady } from '@riviamigo/hooks';
-import { ThemeRuntimeProvider } from '@riviamigo/ui/lib/theme';
+import { api, queryKeys, themeClient, useAuth, useAuthReady } from '@riviamigo/hooks';
+import { resolveThemeRuntimeResponse, ThemeRuntimeProvider } from '@riviamigo/ui/lib/theme';
 import { APP_TIMEZONE_CHANGE_EVENT, setAppTimezone } from '@riviamigo/ui/lib/dateTime';
 
 interface RouterContext {
@@ -20,11 +20,11 @@ function Root() {
   const accessToken = useAuth((state) => state.accessToken);
   const userId = useAuth((state) => state.userId);
   const queryClient = useQueryClient();
-  const [themeIdentityEpoch, setThemeIdentityEpoch] = React.useState(() => Date.now());
   const previousUserId = React.useRef(userId);
-  const themePreferences = useQuery({
-    queryKey: queryKeys.unitPreferences.current,
-    queryFn: () => api.getUnitPreferences(),
+  const themePreferenceKey = queryKeys.themePreferences.forUser(userId ?? 'signed-out');
+  const themeRuntime = useQuery({
+    queryKey: themePreferenceKey,
+    queryFn: () => themeClient.getPreferences(),
     enabled: authReady && !!accessToken && !!userId,
   });
   const appTimezone = useQuery({
@@ -46,16 +46,14 @@ function Root() {
   React.useEffect(() => {
     if (previousUserId.current === userId) return;
     previousUserId.current = userId;
-    setThemeIdentityEpoch(Date.now());
-    queryClient.invalidateQueries({ queryKey: queryKeys.unitPreferences.current });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.unitPreferences.current });
   }, [queryClient, userId]);
 
-  const themeBelongsToCurrentAccount = Boolean(
-    authReady && accessToken && userId && themePreferences.dataUpdatedAt >= themeIdentityEpoch,
-  );
+  const themeBelongsToCurrentAccount = Boolean(authReady && accessToken && userId);
+  const { preferences: runtimePreferences, resolvedTheme } = resolveThemeRuntimeResponse(themeRuntime.data);
 
   return (
-    <ThemeRuntimeProvider preferences={themeBelongsToCurrentAccount ? themePreferences.data?.theme ?? null : null}>
+    <ThemeRuntimeProvider preferences={themeBelongsToCurrentAccount ? runtimePreferences ?? null : null} resolvedTheme={resolvedTheme}>
       <Outlet />
     </ThemeRuntimeProvider>
   );
