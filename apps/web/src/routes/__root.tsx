@@ -2,7 +2,7 @@ import React from 'react';
 import { createRootRouteWithContext, Outlet } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import { api, queryKeys, useAuth, useAuthReady } from '@riviamigo/hooks';
+import { api, queryKeys, themeClient, useAuth, useAuthReady } from '@riviamigo/hooks';
 import { resolveThemeRuntimeResponse, ThemeRuntimeProvider } from '@riviamigo/ui/lib/theme';
 import { APP_TIMEZONE_CHANGE_EVENT, setAppTimezone } from '@riviamigo/ui/lib/dateTime';
 
@@ -20,11 +20,11 @@ function Root() {
   const accessToken = useAuth((state) => state.accessToken);
   const userId = useAuth((state) => state.userId);
   const queryClient = useQueryClient();
-  const [themeIdentityEpoch, setThemeIdentityEpoch] = React.useState(() => Date.now());
   const previousUserId = React.useRef(userId);
+  const themePreferenceKey = queryKeys.themePreferences.forUser(userId ?? 'signed-out');
   const themeRuntime = useQuery({
-    queryKey: queryKeys.themePreferences.current,
-    queryFn: () => api.getThemePreferences(),
+    queryKey: themePreferenceKey,
+    queryFn: () => themeClient.getPreferences(),
     enabled: authReady && !!accessToken && !!userId,
   });
   const appTimezone = useQuery({
@@ -46,12 +46,10 @@ function Root() {
   React.useEffect(() => {
     if (previousUserId.current === userId) return;
     previousUserId.current = userId;
-    setThemeIdentityEpoch(Date.now());
-    queryClient.invalidateQueries({ queryKey: queryKeys.unitPreferences.current });
-    queryClient.invalidateQueries({ queryKey: queryKeys.themePreferences.current });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.unitPreferences.current });
   }, [queryClient, userId]);
 
-  const themeBelongsToCurrentAccount = Boolean(authReady && accessToken && userId && themeRuntime.dataUpdatedAt >= themeIdentityEpoch);
+  const themeBelongsToCurrentAccount = Boolean(authReady && accessToken && userId);
   const { preferences: runtimePreferences, resolvedTheme } = resolveThemeRuntimeResponse(themeRuntime.data);
 
   return (

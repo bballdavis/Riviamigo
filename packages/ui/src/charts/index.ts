@@ -3,6 +3,7 @@ export {
   CHART_PALETTES,
   CHART_COLOR_TOKENS,
   CHART_COLOR_OPTIONS,
+  CHART_SERIES_TOKENS,
   CHART_MARGINS,
   CHART_FONT,
   CHART_BAR_STYLE,
@@ -12,6 +13,8 @@ export {
   resolveChartColor,
 } from './ChartProvider';
 export type { ChartColorKey, ChartPaletteKey } from './ChartProvider';
+export { ChartColorField } from './ChartColorField';
+export type { ChartColorFieldProps } from './ChartColorField';
 export { ChartTooltip } from './ChartTooltip';
 export type { ChartTooltipProps } from './ChartTooltip';
 export { RichTimeSeriesChart } from './RichTimeSeriesChart';

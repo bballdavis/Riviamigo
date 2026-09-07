@@ -2,19 +2,20 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Save, Trash2 } from 'lucide-react';
 import { useMetricCatalog } from '@riviamigo/hooks';
 import {
-  CHART_COLOR_OPTIONS,
+  ChartColorField,
+  CHART_COLOR_TOKENS,
+  CHART_SERIES_TOKENS,
   CURVE_SMOOTHNESS_OPTIONS,
   DEFAULT_SPRITE_TIME_FILTER,
   curveSmoothnessLabel,
-  getChartColor,
   normalizeCurveSmoothness,
   normalizeTimeFilter,
   TIME_FILTER_OPTIONS,
   timeFilterLabel,
-  type ChartColorKey,
   type CurveSmoothness,
   type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
+import type { ChartColorDefinition, ChartColorToken } from '@riviamigo/types';
 import { SelectPicker } from '@riviamigo/ui/primitives';
 import { getWidgetForInstance } from '../registry';
 import type { WidgetInstance } from '../schema';
@@ -64,7 +65,7 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
     : sensorDefinition?.dataSource ?? 'metric';
   const metric = typeof options.metric === 'string' ? options.metric : sensorDefinition?.metric ?? 'total_miles';
   const chartType = typeof options.chartType === 'string' ? options.chartType : sensorDefinition?.chartType ?? 'line';
-  const curveColor = isChartColorKey(options.curveColor) ? options.curveColor : 'accent';
+  const curveColor = normalizeChartColor(options.curveColor);
   const timeFilterSupported = supportsSpriteTimeFilter(chartType);
   const timeFilter = normalizeTimeFilter(
     options.timeFilter,
@@ -511,22 +512,10 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                     />
                   </Field>
                 ) : null}
-                <Field label="Color">
-                  <div className="flex items-center gap-2">
-                    <span
-                      aria-hidden
-                      className="h-4 w-4 shrink-0 rounded border border-border"
-                      style={{ backgroundColor: getChartColor(curveColor) }}
-                    />
-                    <SelectPicker
-                      className="min-w-0 flex-1"
-                      value={curveColor}
-                      onChange={(value) => patch({ curveColor: value })}
-                      aria-label="Chart color"
-                      options={CHART_COLOR_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
-                    />
-                  </div>
-                </Field>
+                <ChartColorField
+                  value={curveColor}
+                  onChange={(color) => patch({ curveColor: color.mode === 'token' ? color.token : color })}
+                />
               </div>
             ) : null}
           </Section>
@@ -746,8 +735,20 @@ function isDashboardChartPage(value: unknown): value is DashboardChartPage {
   );
 }
 
-function isChartColorKey(value: unknown): value is ChartColorKey {
-  return typeof value === 'string' && CHART_COLOR_OPTIONS.some((opt) => opt.value === value);
+function normalizeChartColor(value: unknown): ChartColorDefinition {
+  if (isChartColorToken(value)) return { mode: 'token', token: value };
+  if (value && typeof value === 'object') {
+    const color = value as Partial<ChartColorDefinition>;
+    if (color.mode === 'custom' && typeof color.light === 'string' && typeof color.dark === 'string') {
+      return { mode: 'custom', light: color.light, dark: color.dark };
+    }
+    if (color.mode === 'token' && isChartColorToken(color.token)) return { mode: 'token', token: color.token };
+  }
+  return { mode: 'token', token: 'accent' };
+}
+
+function isChartColorToken(value: unknown): value is ChartColorToken {
+  return typeof value === 'string' && ([...CHART_COLOR_TOKENS, ...CHART_SERIES_TOKENS] as readonly string[]).includes(value);
 }
 
 function legacySmoothingToTimeFilter(value: unknown, chartType: string): TimeFilterWindow {

@@ -105,7 +105,25 @@ export const CUSTOMIZABLE_SEMANTIC_TOKENS = [
   'map-route-0','map-route-1','map-route-2','map-route-3','map-route-4','map-route-5',
 ] as const satisfies readonly SemanticToken[];
 const customizableTokens = new Set<SemanticToken>(CUSTOMIZABLE_SEMANTIC_TOKENS);
-export function validateThemeOverride(override: ThemeOverride): string[] { const errors: string[] = []; for (const [key, value] of Object.entries(override.tokens ?? {})) { if (!customizableTokens.has(key as SemanticToken)) errors.push(`Token is not customizable: ${key}`); for (const [mode, color] of Object.entries(value ?? {})) if (color && !colorPattern.test(color)) errors.push(`Invalid custom color for ${key}.${mode}`); } for (const [key, value] of Object.entries(override.series ?? {})) { if (!/^series-(0[1-9]|1[0-6])$/.test(key)) errors.push(`Unknown series slot: ${key}`); for (const color of Object.values(value ?? {})) if (color && !colorPattern.test(color)) errors.push(`Invalid custom color for ${key}`); } return errors; }
+export function validateThemeOverride(override: ThemeOverride): string[] {
+  const errors: string[] = [];
+  const root = override as Record<string, unknown>;
+  for (const key of Object.keys(root)) if (!['theme', 'tokens', 'series', 'brandPaints'].includes(key)) errors.push(`Unsupported theme property: ${key}`);
+  if (override.theme && !(override.theme in BUILT_IN_THEMES)) errors.push(`Unknown built-in theme: ${override.theme}`);
+  for (const [key, value] of Object.entries(override.tokens ?? {})) {
+    if (!customizableTokens.has(key as SemanticToken)) errors.push(`Token is not customizable: ${key}`);
+    for (const [mode, color] of Object.entries(value ?? {})) if (!['light', 'dark'].includes(mode) || (color && !colorPattern.test(color))) errors.push(`Invalid custom color for ${key}.${mode}`);
+  }
+  for (const [key, value] of Object.entries(override.series ?? {})) {
+    if (!/^series-(0[1-9]|1[0-6])$/.test(key)) errors.push(`Unknown series slot: ${key}`);
+    for (const [mode, color] of Object.entries(value ?? {})) if (!['light', 'dark'].includes(mode) || (color && !colorPattern.test(color))) errors.push(`Invalid custom color for ${key}.${mode}`);
+  }
+  for (const [key, value] of Object.entries(override.brandPaints ?? {})) {
+    if (!['accent', 'accentMuted', 'mark'].includes(key)) errors.push(`Unknown brand paint: ${key}`);
+    for (const [mode, color] of Object.entries(value ?? {})) if (!['light', 'dark'].includes(mode) || (color && !colorPattern.test(color))) errors.push(`Invalid custom color for brandPaints.${key}.${mode}`);
+  }
+  return errors;
+}
 export function resolveTheme(override: ThemeOverride = {}): ResolvedTheme { const base = BUILT_IN_THEMES[override.theme ?? 'classic']; const errors = validateThemeOverride(override); if (errors.length) throw new Error(errors.join('; ')); const tokens = { light: { ...base.tokens.light }, dark: { ...base.tokens.dark } }; for (const [key, value] of Object.entries(override.tokens ?? {})) for (const mode of ['light', 'dark'] as const) if (value?.[mode]) tokens[mode][key as SemanticToken] = value[mode]!; const series = { ...base.series }; for (const [key, value] of Object.entries(override.series ?? {})) series[key as keyof typeof series] = { ...series[key as keyof typeof series], ...value }; const brandPaints = { ...base.brandPaints }; for (const [key, value] of Object.entries(override.brandPaints ?? {})) brandPaints[key as keyof typeof brandPaints] = { ...brandPaints[key as keyof typeof brandPaints], ...value }; return { ...base, tokens, series, brandPaints, sourceTheme: base.legacyPalette }; }
 export function createThemeRegistry(definitions: readonly ThemeDefinition[]): ReadonlyMap<string, ThemeDefinition> { const registry = new Map<string, ThemeDefinition>(); for (const definition of definitions) { if (registry.has(definition.id)) throw new Error(`Duplicate theme id: ${definition.id}`); registry.set(definition.id, definition); } return registry; }
 export const THEME_REGISTRY = createThemeRegistry([CLASSIC_THEME, RAD_THEME]);

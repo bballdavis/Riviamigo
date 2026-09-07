@@ -271,6 +271,39 @@ fn finite(value: f64) -> bool {
     value.is_finite()
 }
 
+fn valid_chart_color_token(token: &str) -> bool {
+    matches!(
+        token,
+        "accent"
+            | "emerald"
+            | "amber"
+            | "sky"
+            | "violet"
+            | "rose"
+            | "teal"
+            | "indigo"
+            | "success"
+            | "warning"
+            | "danger"
+            | "muted"
+    ) || token
+        .strip_prefix("series-")
+        .and_then(|slot| slot.parse::<u8>().ok())
+        .is_some_and(|slot| token.len() == 9 && (1..=16).contains(&slot))
+}
+
+fn valid_custom_color(color: &str) -> bool {
+    let color = color.trim();
+    let lowercase = color.to_ascii_lowercase();
+    let hex = color.strip_prefix('#').is_some_and(|value| {
+        [3, 4, 6, 8].contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    });
+    let functional = ["rgb(", "rgba(", "hsl(", "hsla("]
+        .iter()
+        .any(|prefix| lowercase.starts_with(prefix) && color.ends_with(')') && color.len() <= 86);
+    hex || functional
+}
+
 pub fn parse_and_validate(value: &Value) -> Result<ChartDefinitionV1, Vec<ChartValidationError>> {
     let mut errors = Vec::new();
     find_forbidden(value, "config", &mut errors);
@@ -308,10 +341,10 @@ pub fn parse_and_validate(value: &Value) -> Result<ChartDefinitionV1, Vec<ChartV
             "Between 1 and 4 source bindings are required",
         ));
     }
-    if definition.series.is_empty() || definition.series.len() > 12 {
+    if definition.series.is_empty() || definition.series.len() > 32 {
         errors.push(error(
             "config.series",
-            "Between 1 and 12 series are required",
+            "Between 1 and 32 series are required",
         ));
     }
     if let ChartTimeframePolicy::Relative { preset } = &definition.timeframe {
@@ -422,6 +455,22 @@ pub fn parse_and_validate(value: &Value) -> Result<ChartDefinitionV1, Vec<ChartV
         &mut errors,
     );
     for (index, series) in definition.series.iter().enumerate() {
+        match &series.color {
+            ChartColorDefinition::Token { token } if !valid_chart_color_token(token) => errors
+                .push(error(
+                    &format!("config.series.{index}.color.token"),
+                    "Unknown chart color token",
+                )),
+            ChartColorDefinition::Custom { light, dark }
+                if !valid_custom_color(light) || !valid_custom_color(dark) =>
+            {
+                errors.push(error(
+                    &format!("config.series.{index}.color"),
+                    "Custom chart colors must be hex, rgb, rgba, hsl, or hsla values",
+                ))
+            }
+            _ => {}
+        }
         validate_ref(
             &series.y,
             &source_ids,
@@ -1024,6 +1073,25 @@ mod tests {
         value["sources"][0]["sourceId"] = "unknown.source".into();
         value["axes"]["y"]["domain"] = serde_json::json!({"mode":"fixed","min":2,"max":1});
         assert!(parse_and_validate(&value).is_err());
+    }
+    #[test]
+    fn validates_legacy_and_series_color_tokens_and_custom_literals() {
+        let mut slot = valid();
+        slot["series"][0]["color"] = serde_json::json!({"mode":"token","token":"series-16"});
+        assert!(parse_and_validate(&slot).is_ok());
+
+        let mut unknown = valid();
+        unknown["series"][0]["color"] = serde_json::json!({"mode":"token","token":"series-17"});
+        assert!(parse_and_validate(&unknown).is_err());
+
+        let mut legacy_custom = valid();
+        legacy_custom["series"][0]["color"] =
+            serde_json::json!({"mode":"custom","light":"rgb(1, 2, 3)","dark":"hsl(10, 20%, 30%)"});
+        assert!(parse_and_validate(&legacy_custom).is_ok());
+
+        let mut unsafe_custom = valid();
+        unsafe_custom["series"][0]["color"] = serde_json::json!({"mode":"custom","light":"url(https://example.test)","dark":"#123456"});
+        assert!(parse_and_validate(&unsafe_custom).is_err());
     }
     #[test]
     fn rejects_unknown_or_mismatched_metric_series_bindings() {

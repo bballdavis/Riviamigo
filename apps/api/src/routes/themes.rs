@@ -21,6 +21,7 @@ use crate::{
 const MAX_CUSTOM_THEMES: i64 = 20;
 const MAX_DEFINITION_BYTES: usize = 64 * 1024;
 const BUILTIN_MANIFEST: &str = include_str!("../themes/builtins.generated.json");
+const PREFERENCES_IF_MATCH_HEADER: &str = "x-theme-preferences-if-match";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -46,6 +47,7 @@ struct ThemeSummary {
     name: String,
     base_theme_id: String,
     published_revision: Option<i32>,
+    published_definition: Option<Value>,
     retired_at: Option<chrono::DateTime<chrono::Utc>>,
     etag: String,
 }
@@ -168,6 +170,44 @@ fn validate_color_pair(value: &Value, context: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+fn relative_luminance(color: &str) -> Option<f64> {
+    let channel = |range: std::ops::Range<usize>| {
+        u8::from_str_radix(color.get(range)?, 16).ok().map(|value| {
+            let value = f64::from(value) / 255.0;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        })
+    };
+    let red = channel(1..3)?;
+    let green = channel(3..5)?;
+    let blue = channel(5..7)?;
+    Some(0.2126 * red + 0.7152 * green + 0.0722 * blue)
+}
+
+fn contrast_ratio(first: &str, second: &str) -> Option<f64> {
+    let first = relative_luminance(first)?;
+    let second = relative_luminance(second)?;
+    Some((first.max(second) + 0.05) / (first.min(second) + 0.05))
+}
+
+fn resolved_token<'a>(
+    base: &'a Value,
+    root: &'a Map<String, Value>,
+    token: &str,
+    mode: &str,
+) -> Option<&'a str> {
+    root.get("tokens")
+        .and_then(Value::as_object)
+        .and_then(|tokens| tokens.get(token))
+        .and_then(Value::as_object)
+        .and_then(|pair| pair.get(mode))
+        .and_then(Value::as_str)
+        .or_else(|| base["tokens"][mode][token].as_str())
+}
+
 fn validate_theme_definition(base_theme_id: &str, definition: &Value) -> Result<Vec<u8>, AppError> {
     let bytes = serde_json::to_vec(definition)
         .map_err(|_| AppError::Validation("theme definition is not valid JSON".into()))?;
@@ -251,6 +291,24 @@ fn validate_theme_definition(base_theme_id: &str, definition: &Value) -> Result<
             validate_color_pair(pair, &format!("brandPaints.{paint}"))?;
         }
     }
+    for mode in ["light", "dark"] {
+        for (foreground, background, minimum) in [
+            ("text-primary", "bg-page", 4.5),
+            ("text-primary", "bg-surface", 4.5),
+        ] {
+            let foreground_value = resolved_token(base, root, foreground, mode)
+                .ok_or_else(|| AppError::Validation(format!("missing {foreground}.{mode}")))?;
+            let background_value = resolved_token(base, root, background, mode)
+                .ok_or_else(|| AppError::Validation(format!("missing {background}.{mode}")))?;
+            if contrast_ratio(foreground_value, background_value)
+                .is_none_or(|ratio| ratio < minimum)
+            {
+                return Err(AppError::Validation(format!(
+                    "critical contrast failure for {foreground} on {background} in {mode} mode"
+                )));
+            }
+        }
+    }
     Ok(bytes)
 }
 
@@ -279,6 +337,30 @@ fn require_etag(headers: &HeaderMap, expected: &str) -> Result<(), AppError> {
     }
 }
 
+async fn require_preference_etag(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    headers: &HeaderMap,
+) -> Result<(), AppError> {
+    ensure_preferences_row(tx, user_id).await?;
+    let version: i64 = sqlx::query_scalar(
+        "SELECT theme_etag_version FROM riviamigo.user_preferences WHERE user_id = $1 FOR UPDATE",
+    )
+    .bind(user_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    let supplied = headers
+        .get(PREFERENCES_IF_MATCH_HEADER)
+        .and_then(|value| value.to_str().ok());
+    if supplied == Some(preferences_etag(version).as_str()) {
+        Ok(())
+    } else {
+        Err(AppError::Conflict(
+            "appearance preferences changed since they were loaded; refresh and try again".into(),
+        ))
+    }
+}
+
 fn etag_json(etag: &str, payload: Value) -> Result<Response, AppError> {
     let value = HeaderValue::from_str(etag)
         .map_err(|_| AppError::Internal(anyhow::anyhow!("invalid generated ETag")))?;
@@ -291,10 +373,13 @@ async fn list_owned_themes(
     include_retired: bool,
 ) -> Result<Vec<ThemeSummary>, AppError> {
     let rows = sqlx::query(
-        "SELECT id, name, base_theme_id, published_revision, retired_at, etag_version
-         FROM riviamigo.user_themes
-         WHERE owner_id = $1 AND ($2 OR retired_at IS NULL)
-         ORDER BY updated_at DESC, id",
+        "SELECT t.id, t.name, t.base_theme_id, t.published_revision, t.retired_at, t.etag_version,
+                (SELECT r.definition
+                 FROM riviamigo.user_theme_revisions r
+                 WHERE r.theme_id = t.id AND r.revision = t.published_revision) AS published_definition
+         FROM riviamigo.user_themes t
+         WHERE t.owner_id = $1 AND ($2 OR t.retired_at IS NULL)
+         ORDER BY t.updated_at DESC, t.id",
     )
     .bind(user_id)
     .bind(include_retired)
@@ -310,6 +395,7 @@ async fn list_owned_themes(
                 name: row.get("name"),
                 base_theme_id: row.get("base_theme_id"),
                 published_revision: row.get("published_revision"),
+                published_definition: row.get("published_definition"),
                 retired_at: row.get("retired_at"),
                 etag: theme_etag(id, version),
             }
@@ -567,6 +653,7 @@ async fn publish_revision(
     .fetch_one(&mut *tx)
     .await?;
     if body.apply {
+        require_preference_etag(&mut tx, auth.user_id, &headers).await?;
         apply_custom_selection_tx(&mut tx, auth.user_id, None, theme_id, revision, &base).await?;
     }
     tx.commit().await?;
@@ -605,14 +692,13 @@ async fn rollback_theme(
             "only published revisions can be selected".into(),
         ));
     }
-    let preference_version =
+    require_preference_etag(&mut tx, auth.user_id, &headers).await?;
+    let _preference_version =
         apply_custom_selection_tx(&mut tx, auth.user_id, None, theme_id, body.revision, &base)
             .await?;
     tx.commit().await?;
-    etag_json(
-        &preferences_etag(preference_version),
-        json!({ "schemaVersion": 2, "selection": { "kind": "custom", "themeId": theme_id, "revision": body.revision } }),
-    )
+    let (payload, etag) = theme_preferences_payload(&state, auth.user_id).await?;
+    etag_json(&etag, payload)
 }
 
 async fn retire_theme(
@@ -827,6 +913,7 @@ mod tests {
             json!({ "theme": "classic", "series": { "series-17": { "light": "#123456" } } }),
             json!({ "theme": "classic", "tokens": { "accent": { "light": "url(https://example.test)" } } }),
             json!({ "theme": "rad", "tokens": {} }),
+            json!({ "theme": "classic", "tokens": { "text-primary": { "dark": "#111111" }, "bg-page": { "dark": "#111111" } } }),
         ] {
             assert!(validate_theme_definition("classic", &invalid).is_err());
         }

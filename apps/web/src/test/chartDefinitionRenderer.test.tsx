@@ -1,10 +1,10 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChartDataset, ChartDefinitionV1 } from '@riviamigo/types';
+import type { ChartColorToken, ChartDataset, ChartDefinitionV1 } from '@riviamigo/types';
 
 const richChart = vi.hoisted(() => vi.fn((_props: Record<string, unknown>) => <div data-testid="rich-chart" />));
-type CapturedProps = Record<string, unknown> & { points: Array<{ ts: string | number }>; series: Array<{ values: Array<number | null>; color: string; mode?: string; interpolation?: string }> };
+type CapturedProps = Record<string, unknown> & { points: Array<{ ts: string | number }>; series: Array<{ values: Array<number | null>; color: string; mode?: string; interpolation?: string; dash?: number[] }> };
 vi.mock('@riviamigo/ui/charts', () => ({
   getChartColor: (token: string) => `token:${token}`,
   RichTimeSeriesChart: richChart,
@@ -80,5 +80,18 @@ describe('ChartDefinitionRenderer', () => {
     const filledStep = { ...definition.series[0]!, mark: 'step' as const, fill: true };
     render(<ChartDefinitionRenderer definition={{ ...definition, series: [filledStep] }} datasets={[datasets[0]!]} height={280} />);
     expect((richChart.mock.calls[0]![0] as CapturedProps).series[0]).toMatchObject({ mode: 'area', interpolation: 'step' });
+  });
+
+  it('adds a non-color line pattern after the sixteen theme slots are exhausted', () => {
+    const manySeries = Array.from({ length: 17 }, (_, index) => ({
+      ...definition.series[0]!,
+      id: `series-${index + 1}`,
+      label: `Series ${index + 1}`,
+      color: { mode: 'token' as const, token: `series-${String(index % 16 + 1).padStart(2, '0')}` as ChartColorToken },
+    }));
+    render(<ChartDefinitionRenderer definition={{ ...definition, series: manySeries }} datasets={[datasets[0]!]} height={280} />);
+    const props = richChart.mock.calls[0]![0] as CapturedProps;
+    expect(props.series[0]!.dash).toBeUndefined();
+    expect(props.series[16]!.dash).toEqual([8, 4]);
   });
 });

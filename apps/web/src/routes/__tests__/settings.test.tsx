@@ -1,5 +1,5 @@
 import React from 'react';
-import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -13,6 +13,7 @@ const settingsMocks = vi.hoisted(() => ({
     logout: vi.fn(),
     clearSession: vi.fn(),
     accessToken: undefined as string | undefined,
+    userId: 'u1',
     defaultVehicleId: 'v1',
     setDefaultVehicleId: vi.fn(),
     setActiveVehicleId: vi.fn(),
@@ -39,7 +40,6 @@ const settingsMocks = vi.hoisted(() => ({
       },
   ],
   basemapConfig: undefined as { resolved_provider: string } | undefined,
-  userPreferences: { units: {}, theme: { mode: 'dark', palette: 'classic' }, map_style: 'follow-theme' },
   preferences: {
     units: {
       mode: 'imperial',
@@ -53,6 +53,14 @@ const settingsMocks = vi.hoisted(() => ({
     },
     theme: { mode: 'dark', palette: 'classic' },
     map_style: 'follow-theme',
+  },
+  themePreferences: {
+    preferences: {
+      schemaVersion: 2 as const,
+      mode: 'dark' as const,
+      selection: { kind: 'builtin' as const, themeId: 'classic' },
+    },
+    etag: '"theme-preferences-u1-1"',
   },
 }));
 
@@ -87,6 +95,14 @@ vi.mock('@riviamigo/hooks', () => ({
       overview: (page: number, perPage: number) => ['backup-overview', page, perPage],
     },
     me: { all: ['me'] },
+    themePreferences: {
+      all: ['theme-preferences'],
+      forUser: (userId: string) => ['theme-preferences', userId],
+    },
+    themes: {
+      catalog: (userId: string) => ['themes', userId, 'catalog'],
+      resource: (userId: string, themeId: string) => ['themes', userId, 'resource', themeId],
+    },
     unitPreferences: { current: ['unit-preferences'] },
     vehicle: {
       health: (vehicleId: string) => ['vehicles', 'health', vehicleId],
@@ -102,6 +118,18 @@ vi.mock('@riviamigo/hooks', () => ({
       all: ['vehicles'],
       status: (vehicleId: string) => ['vehicles', 'status', vehicleId],
     },
+  },
+  themeClient: {
+    getCatalog: vi.fn().mockResolvedValue({ builtInThemes: ['classic', 'rad'], customThemes: [] }),
+    getPreferences: vi.fn().mockImplementation(() => Promise.resolve(settingsMocks.themePreferences)),
+    updatePreferences: vi.fn().mockImplementation(async (preferences) => {
+      settingsMocks.themePreferences = {
+        preferences,
+        etag: '"theme-preferences-u1-2"',
+      };
+      return settingsMocks.themePreferences;
+    }),
+    create: vi.fn(),
   },
     api: {
     me: vi.fn().mockResolvedValue({ role: 'user' }),
@@ -387,18 +415,17 @@ vi.mock('@riviamigo/hooks', () => ({
     updateVehicleName: vi.fn().mockResolvedValue({}),
     refreshVehicleArtwork: vi.fn().mockResolvedValue({ ok: true, vehicle_id: 'v1' }),
   },
-  useAuth: () => settingsMocks.auth,
+  useAuth: (selector?: (state: typeof settingsMocks.auth) => unknown) => selector ? selector(settingsMocks.auth) : settingsMocks.auth,
   useAuthReady: () => true,
   useMe: () => ({ data: settingsMocks.me }),
   useVehicles: () => ({ data: settingsMocks.vehicles }),
+  useChargingNetworkPreferences: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
   useBasemapConfig: () => ({ data: settingsMocks.basemapConfig, isLoading: false, isError: false }),
-  useUserPreferences: () => ({ data: settingsMocks.userPreferences, isLoading: false }),
   useUpdateMapStyle: () => ({
     mutate: hooksMocks.updateMapStylePreference,
     isPending: false,
     isError: false,
   }),
-  useChargingNetworkPreferences: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
   useUpdateChargingNetworkPreference: () => ({
     mutate: vi.fn(),
     isPending: false,
@@ -550,7 +577,6 @@ describe('Settings page', () => {
     settingsMocks.auth.accessToken = undefined;
     settingsMocks.auth.defaultVehicleId = 'v1';
     settingsMocks.basemapConfig = undefined;
-    settingsMocks.userPreferences = { units: {}, theme: { mode: 'dark', palette: 'classic' }, map_style: 'follow-theme' };
     settingsMocks.preferences = {
       units: {
         mode: 'imperial',
@@ -564,6 +590,14 @@ describe('Settings page', () => {
       },
       theme: { mode: 'dark', palette: 'classic' },
       map_style: 'follow-theme',
+    };
+    settingsMocks.themePreferences = {
+      preferences: {
+        schemaVersion: 2,
+        mode: 'dark',
+        selection: { kind: 'builtin', themeId: 'classic' },
+      },
+      etag: '"theme-preferences-u1-1"',
     };
     dashboardMocks.dashboards = [];
     dashboardMocks.downloadDashboardYaml.mockReset();
@@ -984,7 +1018,6 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByText('Appearance'));
 
     const style = screen.getByLabelText('Map style');
-    expect(style).toBeInTheDocument();
     for (const value of ['follow-theme', 'positron', 'bright', 'liberty', 'dark', 'fiord', '3d']) {
       expect(style.querySelector(`option[value="${value}"]`)).toBeInTheDocument();
     }
@@ -997,7 +1030,6 @@ describe('Settings page', () => {
     settingsMocks.basemapConfig = { resolved_provider: 'carto' };
     renderSettings();
     fireEvent.click(screen.getByText('Appearance'));
-
     expect(screen.queryByLabelText('Map style')).not.toBeInTheDocument();
   });
 
@@ -1142,13 +1174,14 @@ describe('Settings page', () => {
     });
   });
 
-  it('renders the theme chooser', () => {
+  it('renders the theme chooser', async () => {
     renderSettings();
     fireEvent.click(screen.getByText('Appearance'));
     expect(screen.getByText('Appearance mode')).toBeInTheDocument();
     expect(screen.getByLabelText('Appearance mode')).toBeInTheDocument();
-    expect(screen.getByText('Color palette')).toBeInTheDocument();
-    expect(screen.getByLabelText('Color palette')).toBeInTheDocument();
+    expect(await screen.findByRole('radiogroup', { name: 'Themes' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^Classic/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^RAD/ })).toBeInTheDocument();
   });
 
   it('persists account-backed appearance and palette changes', async () => {
@@ -1158,38 +1191,15 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByText('Appearance'));
 
     await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
-    fireEvent.change(screen.getByLabelText('Color palette'), { target: { value: 'rad' } });
+    fireEvent.click(await screen.findByRole('radio', { name: /^RAD/ }));
 
     await waitFor(() => {
-      expect(hooks.api.updateThemePreferences).toHaveBeenCalledWith({ mode: 'dark', palette: 'rad' });
+      expect(hooks.themeClient.updatePreferences).toHaveBeenCalledWith(
+        { schemaVersion: 2, mode: 'dark', selection: { kind: 'builtin', themeId: 'rad' } },
+        '"theme-preferences-u1-1"',
+      );
     });
-    expect(document.documentElement.dataset.rmPalette).toBe('rad');
     expect(localStorage.getItem('rm-theme')).toBeNull();
-  });
-
-  it('keeps the saved map style in the combined preference cache across theme updates and provider changes', async () => {
-    const hooks = await import('@riviamigo/hooks');
-    settingsMocks.auth.accessToken = 'test-access-token';
-    settingsMocks.preferences.map_style = 'liberty';
-    settingsMocks.basemapConfig = { resolved_provider: 'openfreemap' };
-    const view = renderSettings();
-    fireEvent.click(screen.getByText('Appearance'));
-
-    await waitFor(() => expect(screen.getByLabelText('Map style')).toHaveValue('liberty'));
-    fireEvent.change(screen.getByLabelText('Color palette'), { target: { value: 'rad' } });
-    await waitFor(() => expect(hooks.api.updateThemePreferences).toHaveBeenCalledWith({ mode: 'dark', palette: 'rad' }));
-    expect(screen.getByLabelText('Map style')).toHaveValue('liberty');
-
-    settingsMocks.basemapConfig = { resolved_provider: 'carto' };
-    view.unmount();
-    renderSettings();
-    fireEvent.click(screen.getByText('Appearance'));
-    expect(screen.queryByLabelText('Map style')).not.toBeInTheDocument();
-    settingsMocks.basemapConfig = { resolved_provider: 'openfreemap' };
-    cleanup();
-    renderSettings();
-    fireEvent.click(screen.getByText('Appearance'));
-    await waitFor(() => expect(screen.getByLabelText('Map style')).toHaveValue('liberty'));
   });
 
   it('rolls back appearance changes when the account update fails', async () => {

@@ -36,43 +36,51 @@ Rules:
   and hook code. Its allowlist is limited to token definitions, approved palette
   tables, CSS variable reads, chart token seams, and test fixtures.
 
-## Account-backed appearance and palettes
+## Account-backed appearance and themes
 
-Appearance is persisted per account through `GET`/`PUT /v1/auth/preferences`.
-The preference has two independent values:
+Appearance mode and theme selection are independent account settings. V2 reads
+and writes use `/v2/auth/preferences/theme` with an ETag; `/v1/auth/preferences`
+continues to project `theme_mode` and the classic/RAD base for compatibility.
+The selected value is either a built-in theme ID or an exact, published custom
+revision. Publishing a newer revision never silently changes an account's
+selection.
 
-- `mode`: `light`, `dark`, or `system`
-- `palette`: `classic` or `rad`
+Settings → Appearance is the only selection surface. It contains the
+Light/Dark/System control and a gallery of built-in and owned custom themes.
+Theme Studio owns custom interface and chart overrides plus the brand-asset
+status surface. Trusted brand-paint editing remains locked while the current
+masters are classified as raster-backed fallbacks.
+Draft previews are scoped unless the user explicitly enters the visibly labeled,
+memory-only full-app preview. No theme state is stored in `localStorage`.
+Classic-dark is applied before authentication and after logout/account changes.
 
-Settings → Appearance is the only write surface. The shell does not provide a
-quick chooser, and `localStorage` is not authoritative for either value. A
-classic-dark state is applied before authenticated preferences load and after
-logout, preventing one account's visual state from leaking into another. The
-`system` value remains persisted as `system`; the operating system is consulted
-only to resolve the current display mode.
+`packages/themes` owns the semantic catalog, Classic and RAD definitions,
+inheritance validation, all sixteen ordered chart-series slots, legacy aliases,
+brand manifests, deterministic generated artifacts, and registry hash. Run
+`pnpm themes:generate` after source changes and `pnpm themes:check` in review.
+Production components consume semantic tokens; raw colors and named utility
+colors are rejected by `pnpm colors:check` outside the documented owner files.
 
-The classic palette remains the default for existing and new accounts. The RAD
-palette is app-specific visual direction inspired by Rivian's RAD identity:
-white lettering with gold, red, and teal bars. It has separate accessible light
-and dark semantic token overrides for surfaces, text, borders, status states,
-charging and drive modes, overlays, shadows, focus/selection, and chart
-presentation. RAD values are not treated as a claim about Rivian's exact brand
-hex values.
+The RAD built-in is app-specific visual direction inspired by Rivian's white,
+gold, red, and teal RAD identity. Its values are accessible Riviamigo choices,
+not a claim about exact Rivian brand colors. Both modes cover surfaces, text,
+borders, states, charging and drive modes, overlays, shadows, focus treatments,
+charts, and maps.
 
-Chart definitions store stable token names, never palette-specific values. The
-shared chart registry supplies classic and RAD values for every persisted token,
-including `accent`, `emerald`, `amber`, `sky`, `violet`, `rose`, `teal`,
-`indigo`, `success`, `warning`, `danger`, and `muted`. CSS renderers consume
-semantic variables; Canvas, uPlot, MapLibre, and other non-CSS renderers resolve
-the active variables immediately before drawing. Bundled renderer ownership,
-chart slugs, defaults, and saved definitions remain unchanged.
+Chart definitions persist theme-independent tokens or literal light/dark custom
+colors. New categorical series use `series-01` through `series-16`; legacy names
+remain valid. The shared color field groups series and semantic colors and opens
+the controlled ColorPicker for visual OKLCH authoring plus Hex, RGB, HSL, and
+OKLCH inputs. Edited colors persist as deterministic sRGB hex. After sixteen
+series, renderers cycle colors and add distinct line/point patterns.
 
-Application brand assets use the shared `getBrandAsset` resolver. RAD variants
-are deterministic wrappers around the approved existing geometry/source assets,
-with the RAD bar treatment and light/dark contrast variants. Sidebar, login, and
-activation surfaces must use the resolver rather than selecting files directly.
-The documentation site and its static favicon remain classic unless a separate
-documentation rebrand is approved.
+Application brand consumers resolve through the runtime asset snapshot backed by
+the theme registry. The generated asset manifest records every variant and its
+checksum. Current source artwork contains embedded raster or raster-backed RAD
+wrappers, so it is explicitly classified as a fallback and is not represented as
+completed vector reconstruction. Replacement with self-contained vector masters
+requires visual approval at favicon, sidebar, login, and high-resolution sizes.
+The documentation site remains static Classic and account-independent.
 
 ## Typography
 
@@ -113,10 +121,9 @@ Common usage:
 - Dashboard edit mode uses compact icon controls directly on each widget. Keep edit and move controls visibly present with subdued default contrast, strengthen them on hover/focus/selection, and never make pointer hover the only way to discover or activate them.
 - Resizable dashboard widgets use a persistent subtle corner handle in edit mode. Fixed-size widgets use a lock indicator and must not expose a resize hit target.
 - Theme selection is an account-backed Settings → Appearance interaction, not a
-  shell/sidebar toggle. Keep mode and palette as separate responsive controls,
-  show loading/saving/error states, and roll back an optimistic selection when
-  the account update fails. Support `light`, `dark`, and `system` mode plus
-  `classic` and `rad` palette values.
+  shell/sidebar toggle. Keep mode and theme as separate responsive controls,
+  show loading/conflict/rollback/error states, and pin custom selections to an
+  immutable published revision.
 
 ## Responsive Control Surfaces
 

@@ -35,6 +35,7 @@ import type {
   ChartSourceManifest,
   MetricCatalogEntry,
 } from '@riviamigo/types';
+import { ChartColorField, CHART_SERIES_TOKENS } from '@riviamigo/ui/charts';
 import {
   Badge,
   Button,
@@ -57,14 +58,6 @@ import {
 } from 'lucide-react';
 
 type EditorSection = 'basics' | 'curves' | 'display' | 'advanced';
-
-const TOKEN_COLORS: Array<{ token: ChartColorToken; label: string }> = [
-  { token: 'accent', label: 'Accent' },
-  { token: 'emerald', label: 'Emerald' },
-  { token: 'sky', label: 'Sky' },
-  { token: 'violet', label: 'Violet' },
-  { token: 'amber', label: 'Amber' },
-];
 
 const MARKS: ChartMark[] = ['line', 'step', 'bar', 'scatter', 'histogram'];
 
@@ -847,23 +840,11 @@ function CurvesListSection({
                   <option value="y2">Right axis</option>
                 </select>
               </EditorField> : null}
-              <EditorField label="Color">
-                <select
-                  value={series.color.mode === 'token' ? series.color.token : 'accent'}
-                  onChange={(event) =>
-                    patchSeries(onChange, index, {
-                      color: { mode: 'token', token: event.target.value as ChartColorToken },
-                    })
-                  }
-                  className="editor-input"
-                >
-                  {TOKEN_COLORS.map((color) => (
-                    <option key={color.token} value={color.token}>
-                      {color.label}
-                    </option>
-                  ))}
-                </select>
-              </EditorField>
+              <ChartColorField
+                className="sm:col-span-2"
+                value={series.color}
+                onChange={(color) => patchSeries(onChange, index, { color })}
+              />
             </div>
             {series.mark === 'line' || series.mark === 'step' || series.mark === 'area' ? (
               <ToggleRow
@@ -1577,8 +1558,14 @@ function newSeries(
     mark: 'line',
     fill: false,
     yAxis: 'y',
-    color: { mode: 'token', token: TOKEN_COLORS[index % TOKEN_COLORS.length]!.token },
+    color: { mode: 'token', token: nextSeriesColor(definition, index) },
     transforms: [],
     visibleInLegend: true,
   };
+}
+
+function nextSeriesColor(definition: ChartDefinitionV1, index: number): ChartColorToken {
+  const used = new Set(definition.series.flatMap((series) => series.color.mode === 'token' ? [series.color.token] : []));
+  return CHART_SERIES_TOKENS.find((token) => !used.has(token))
+    ?? CHART_SERIES_TOKENS[index % CHART_SERIES_TOKENS.length]!;
 }

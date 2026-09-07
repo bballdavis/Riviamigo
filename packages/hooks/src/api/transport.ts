@@ -1,5 +1,5 @@
 /**
- * Thin typed wrapper around the Riviamigo REST API.
+ * Typed wrapper around the Riviamigo REST API.
  * Base URL is read from VITE_API_URL or VITE_RIVIAMIGO_API_BASE_URL.
  */
 
@@ -63,7 +63,6 @@ import type {
   UnitPreferences,
   ThemePreferences,
   UserPreferencesResponse,
-  ThemePreferencesResponse,
   DashboardChartFavorites,
   AppTimezone,
   CreateBackupRestoreRequestBody,
@@ -424,13 +423,13 @@ export class AuthenticatedTransport {
     return res.json() as Promise<T>;
   }
 
-  private async requestResponse(
+  async requestResponse(
     method: string,
     path: string,
     body?: unknown,
     params?: Record<string, string | number>,
     retryOnUnauthorized = true,
-    reportErrors = true
+    reportErrors = true, extraHeaders?: Record<string, string>
   ): Promise<Response> {
     this.assertRateLimitCooldown(method, path);
 
@@ -446,7 +445,7 @@ export class AuthenticatedTransport {
 
     const res = await fetch(url, {
       method,
-      headers: this.headers(path),
+      headers: { ...(this.headers(path) as Record<string, string>), ...extraHeaders },
       credentials: 'include',
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
@@ -463,7 +462,7 @@ export class AuthenticatedTransport {
         try {
           const tokens = await this.refreshAccessToken();
           this.applyTokens(tokens);
-          return this.requestResponse(method, path, body, params, false, reportErrors);
+          return this.requestResponse(method, path, body, params, false, reportErrors, extraHeaders);
         } catch {
           this.clearTokens();
           const detail: ApiFailureDetail = {
@@ -590,14 +589,6 @@ export class AuthenticatedTransport {
   async updateUnitPreferences(units: UnitPreferences, theme?: ThemePreferences): Promise<UserPreferencesResponse> { return this.request('PUT', '/v1/auth/preferences', { units, ...(theme ? { theme } : {}) }); }
 
   async updateThemePreferences(theme: ThemePreferences): Promise<UserPreferencesResponse> { return this.request('PUT', '/v1/auth/preferences', { theme }); }
-
-  async getThemePreferences(): Promise<ThemePreferencesResponse> {
-    const response = await this.requestResponse('GET', '/v2/auth/preferences/theme');
-    return {
-      preferences: await response.json(),
-      etag: response.headers.get('etag') ?? '',
-    };
-  }
 
   async getDashboardChartFavorites(): Promise<{ chart_favorites: DashboardChartFavorites }> {
     return this.request('GET', '/v1/auth/preferences/chart-favorites');

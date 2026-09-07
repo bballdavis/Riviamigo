@@ -28,6 +28,9 @@ describe('theme registry', () => {
     expect(validateThemeOverride({ tokens: { 'glow-sm': { dark: '#FFFFFF' } } })).toContain('Token is not customizable: glow-sm');
     expect(CUSTOMIZABLE_SEMANTIC_TOKENS.every((token) => !['glow-sm','glow-md','glow-lg','glow-button','shadow-sm','shadow-md','shadow-lg','shadow-xl','value-halo'].includes(token))).toBe(true);
     expect(validateThemeOverride({ series: { 'series-17': { dark: '#FFFFFF' } } as never })).toContain('Unknown series slot: series-17');
+    expect(validateThemeOverride({ brandPaints: { unsafe: { dark: '#FFFFFF' } } as never })).toContain('Unknown brand paint: unsafe');
+    expect(validateThemeOverride({ brandPaints: { mark: { dark: 'url(https://example.test)' } } })).toContain('Invalid custom color for brandPaints.mark.dark');
+    expect(validateThemeOverride({ script: 'alert(1)' } as never)).toContain('Unsupported theme property: script');
   });
   it('resolves deterministically and retains legacy aliases', () => {
     const a = resolveTheme({ theme: 'rad', series: { 'series-01': { dark: '#112233' } } });

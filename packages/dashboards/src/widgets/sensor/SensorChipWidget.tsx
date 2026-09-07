@@ -1,4 +1,5 @@
 import React from 'react';
+import type { ChartColorDefinition, ChartColorToken } from '@riviamigo/types';
 import { Icon } from '@iconify/react';
 import { CircleHelp } from 'lucide-react';
 import {
@@ -16,12 +17,12 @@ import {
   MiniSparkline,
   normalizeCurveSmoothness,
   normalizeTimeFilter,
-  type ChartColorKey,
   type CurveSmoothness,
   type MiniSparklineType,
   type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
 import { Badge, Card, Tooltip } from '@riviamigo/ui/primitives';
+import { useDocumentTheme } from '@riviamigo/ui/hooks';
 import {
   cn,
   formatCurrency,
@@ -89,7 +90,7 @@ interface SensorChipOptions {
   timeFilter?: TimeFilterWindow;
   smoothness?: CurveSmoothness;
   curveSmoothing?: number | boolean;
-  curveColor?: ChartColorKey;
+  curveColor?: ChartColorToken | ChartColorDefinition;
   windowDays?: number;
   timeframeScope?: 'range' | 'current' | 'lifetime';
   tripSelectionAware?: boolean;
@@ -144,6 +145,7 @@ function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
 export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const definition = getSensorDefinition(instance.definitionId);
   const options = readOptions(instance);
+  const isDark = useDocumentTheme();
   const metric = options.dataSource === 'metric' ? options.metric : null;
   const { selectedIds, tripRegistry } = useTripSelection();
   const needsHealth = options.dataSource === 'batteryHealth';
@@ -295,7 +297,11 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
             data={spriteData}
             type={sparklineType}
             height={36}
-            color={getChartColor(options.curveColor)}
+            color={typeof options.curveColor === 'string'
+              ? getChartColor(options.curveColor)
+              : options.curveColor.mode === 'token'
+                ? getChartColor(options.curveColor.token)
+                : isDark ? options.curveColor.dark : options.curveColor.light}
             showFallback
             timeFilter={options.timeFilter}
             smoothness={options.smoothness}

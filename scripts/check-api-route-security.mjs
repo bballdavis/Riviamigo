@@ -46,6 +46,7 @@ const authorizationMatrix = new Map([
   ['schedules', 'session_vehicle_manager'],
   ['settings', 'session_admin'],
   ['state_timeline', 'vehicle_read'],
+  ['themes', 'session_account_owner'],
   ['trips', 'vehicle_read'],
   ['trip_tags', 'vehicle_read_and_manager_mutation'],
   ['themes', 'session_authenticated_owner_scoped'],

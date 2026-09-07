@@ -163,6 +163,7 @@ pub fn build_router(state: AppState) -> Router {
             http::header::CONTENT_TYPE,
             http::header::ACCEPT,
             http::header::IF_MATCH,
+            http::HeaderName::from_static("x-theme-preferences-if-match"),
         ]))
         .expose_headers([http::header::ETAG])
         .allow_credentials(true);
@@ -314,9 +315,6 @@ pub fn build_router(state: AppState) -> Router {
 
     let protected_v2 = Router::new()
         .merge(themes::router())
-        // Every v2 theme response is account-scoped, including catalog metadata
-        // and embedded custom definitions. Never let an HTTP cache replay one
-        // account's response after an authentication change.
         .layer(SetResponseHeaderLayer::overriding(
             CACHE_CONTROL,
             HeaderValue::from_static("private, no-store"),

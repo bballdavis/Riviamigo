@@ -3,6 +3,7 @@ import {
   BUILT_IN_THEMES,
   resolveTheme,
   type ResolvedTheme,
+  type ThemeColorPair,
   type ThemeDefinition,
 } from '@riviamigo/themes';
 import {
@@ -18,7 +19,6 @@ import { getBrandAsset, type BrandAssetKind } from './brandAssets';
 
 export type ThemeSelection = ThemePreferences | ThemePreferencesV2;
 export type ResolvedCustomTheme = ResolvedTheme;
-
 export function resolveThemeRuntimeResponse(response: ThemePreferencesResponse | null | undefined) {
   const preferences = response?.preferences;
   const selection = preferences?.selection;
@@ -35,6 +35,7 @@ export interface ThemeRuntimeSnapshot {
   legacyPalette: ThemePalette;
   cssVariables: Readonly<Record<string, string>>;
   chartColors: Readonly<Record<string, string>>;
+  chartColorPairs: Readonly<Record<string, ThemeColorPair>>;
   brandAssets: Readonly<Record<BrandAssetKind, string>>;
 }
 
@@ -83,13 +84,32 @@ function makeSnapshot(input: ThemeSelection, custom?: ResolvedTheme | null): The
     const alias = definition.chartAliases[key];
     cssVariables[`--rm-chart-${key}`] = typeof alias === 'string' ? definition.tokens[effectiveMode][alias as keyof typeof values] ?? definition.series['series-01']![effectiveMode] : alias?.[effectiveMode] ?? definition.series['series-01']![effectiveMode];
   }
+  for (let i = 1; i <= 16; i += 1) {
+    const seriesKey = `series-${String(i).padStart(2, '0')}` as keyof typeof definition.series;
+    cssVariables[`--rm-${seriesKey}`] = definition.series[seriesKey]![effectiveMode];
+  }
   for (let i = 0; i < 6; i += 1) {
     const seriesKey = `series-${String(i + 1).padStart(2, '0')}` as keyof typeof definition.series;
     cssVariables[`--rm-map-route-${i}`] = definition.tokens[effectiveMode][`map-route-${i}` as keyof typeof values] ?? definition.series[seriesKey]![effectiveMode];
   }
-  const chartColors = Object.fromEntries(CHART_KEYS.map((key) => [key, cssVariables[`--rm-chart-${key}`]!])) as Record<string, string>;
+  const chartColors = Object.fromEntries([
+    ...CHART_KEYS.map((key) => [key, cssVariables[`--rm-chart-${key}`]!] as const),
+    ...Array.from({ length: 16 }, (_, index) => {
+      const key = `series-${String(index + 1).padStart(2, '0')}`;
+      return [key, cssVariables[`--rm-${key}`]!] as const;
+    }),
+  ]) as Record<string, string>;
+  const chartColorPairs = Object.fromEntries([
+    ...Object.entries(definition.series),
+    ...CHART_KEYS.map((key) => {
+      const alias = definition.chartAliases[key];
+      if (alias && typeof alias !== 'string') return [key, alias] as const;
+      const fallback = definition.series['series-01']!;
+      return [key, fallback] as const;
+    }),
+  ]) as Record<string, ThemeColorPair>;
   const brandAssets = Object.fromEntries((['wordmark','logo','icon','favicon'] as const).map((kind) => [kind, definition.brandAssets[kind][effectiveMode]])) as Record<BrandAssetKind, string>;
-  return { selectedMode: mode, effectiveMode, themeRef: ref, revision: ref.kind === 'custom' ? ref.revision : 0, legacyPalette: palette, cssVariables, chartColors, brandAssets };
+  return { selectedMode: mode, effectiveMode, themeRef: ref, revision: ref.kind === 'custom' ? ref.revision : 0, legacyPalette: palette, cssVariables, chartColors, chartColorPairs, brandAssets };
 }
 
 function applySnapshot(next: ThemeRuntimeSnapshot) {
@@ -121,11 +141,7 @@ export function getThemeRuntimeSnapshot() { return snapshot; }
 export function subscribeThemeRuntime(listener: () => void) { listeners.add(listener); watchSystem(); return () => listeners.delete(listener); }
 export function applyThemeRuntime(selection: ThemeSelection, custom?: ResolvedTheme | null) { activeSelection = selection; activeCustom = custom; applySnapshot(makeSnapshot(selection, custom)); watchSystem(); return snapshot; }
 export function applyLegacyThemePreferences(preferences: ThemePreferences) {
-  if (
-    isV2(activeSelection)
-    && activeSelection.selection?.kind === 'custom'
-    && preferences.palette === activeCustom?.sourceTheme
-  ) {
+  if (isV2(activeSelection) && activeSelection.selection?.kind === 'custom' && preferences.palette === activeCustom?.sourceTheme) {
     return applyThemeRuntime({ ...activeSelection, mode: preferences.mode }, activeCustom);
   }
   return applyThemeRuntime(preferences);
@@ -136,6 +152,7 @@ export function useThemeRevision() { return useThemeRuntime().revision; }
 
 export interface ThemeRuntimeProviderProps { preferences?: ThemeSelection | null; resolvedTheme?: ResolvedTheme | null; children: React.ReactNode; }
 export function ThemeRuntimeProvider({ preferences, resolvedTheme, children }: ThemeRuntimeProviderProps) {
-  React.useEffect(() => { if (preferences) applyThemeRuntime(preferences, resolvedTheme); else resetThemeRuntime(); }, [preferences, resolvedTheme]);
+  const useBeforePaint = typeof window === 'undefined' ? React.useEffect : React.useLayoutEffect;
+  useBeforePaint(() => { if (preferences) applyThemeRuntime(preferences, resolvedTheme); else resetThemeRuntime(); }, [preferences, resolvedTheme]);
   return React.createElement(React.Fragment, null, children);
 }

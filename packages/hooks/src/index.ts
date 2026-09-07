@@ -1,4 +1,4 @@
-export { api, setApiBaseUrl, resolveApiBaseUrl } from './api';
+export { api, themeClient, setApiBaseUrl, resolveApiBaseUrl } from './api';
 export { authClient, vehicleClient, tripClient, chargingClient, telemetryClient, analyticsClient, systemClient } from './api';
 export { queryKeys } from './queryKeys';
 export type { ChargingSchedule, ChargingScheduleInput, DepartureSchedule, DepartureScheduleInput, DepartureOccurrence, DepartureComfortSettings, LiveSession, BackfillStatus } from './api';

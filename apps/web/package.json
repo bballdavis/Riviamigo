@@ -17,6 +17,7 @@
   "dependencies": {
     "@riviamigo/dashboards": "workspace:*",
     "@riviamigo/hooks": "workspace:*",
+    "@riviamigo/themes": "workspace:*",
     "@riviamigo/types": "workspace:*",
     "@riviamigo/ui": "workspace:*",
     "@tanstack/react-query": "catalog:",

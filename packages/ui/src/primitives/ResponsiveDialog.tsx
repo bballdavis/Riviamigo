@@ -12,6 +12,8 @@ export interface ResponsiveDialogProps {
 /** Opaque, focus-managed dialog that becomes a safe-area fullscreen surface on mobile. */
 export function ResponsiveDialog({ titleId, onClose, children, className }: ResponsiveDialogProps) {
   const dialogRef = React.useRef<HTMLDivElement>(null);
+  const onCloseRef = React.useRef(onClose);
+  React.useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   // Capture the trigger during render, before a descendant `autoFocus` runs
   // during the portal commit.
   const previousFocusRef = React.useRef<HTMLElement | null>(
@@ -23,7 +25,7 @@ export function ResponsiveDialog({ titleId, onClose, children, className }: Resp
     const focusable = () => [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? [])];
     focusable()[0]?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') onCloseRef.current();
       if (event.key !== 'Tab') return;
       const items = focusable();
       if (items.length === 0) return;
@@ -38,7 +40,7 @@ export function ResponsiveDialog({ titleId, onClose, children, className }: Resp
       document.removeEventListener('keydown', onKeyDown);
       previousFocusRef.current?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   if (typeof document === 'undefined') return null;
   return createPortal(

@@ -28,6 +28,8 @@ export interface RichSeries {
   pointSize?: number;
   /** Stroke width for line and area series. */
   strokeWidth?: number;
+  /** Dash pattern used to distinguish cycled colors in dense categorical charts. */
+  dash?: number[];
   /** Include values in the hover tooltip without drawing a series or legend item. */
   tooltipOnly?: boolean;
   /** Draw the series without adding another legend item. */
@@ -574,6 +576,7 @@ export function buildRichTimeSeriesUPlotSeries(
           fill: color,
         },
       };
+      if (item.dash) next.dash = item.dash;
       if (seriesMode === 'area') next.fill = `${color}22`;
       if (connectGaps && (seriesMode === 'line' || seriesMode === 'area')) next.spanGaps = true;
       if (seriesMode === 'bar') {

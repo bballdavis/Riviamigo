@@ -206,6 +206,9 @@ importers:
       '@riviamigo/hooks':
         specifier: workspace:*
         version: link:../../packages/hooks
+      '@riviamigo/themes':
+        specifier: workspace:*
+        version: link:../../packages/themes
       '@riviamigo/types':
         specifier: workspace:*
         version: link:../../packages/types
