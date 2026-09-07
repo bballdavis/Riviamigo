@@ -1,7 +1,4 @@
-/**
- * Typed wrapper around the Riviamigo REST API.
- * Base URL is read from VITE_API_URL or VITE_RIVIAMIGO_API_BASE_URL.
- */
+// Thin typed wrapper around the Riviamigo REST API.
 
 import type {
   Vehicle,
