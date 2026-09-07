@@ -92,6 +92,16 @@ function checkCandidateWorkflow() {
   requireText(workflow, /prune-candidates:[\s\S]*?keep=10[\s\S]*?keep=3/, 'candidate workflow must bound AMD64 and ARM64 candidate retention');
   requireText(workflow, /gh api --method DELETE[^\n]*packages\/container\/riviamigo\/versions\/\$id/, 'candidate workflow must delete stale candidate versions by exact package version ID');
   requireText(workflow, /\^\[0-9a-f\]\{7\}-dev\$/, 'candidate workflow must remove orphaned legacy dev candidates without matching the moving dev tag');
+  for (const [job, nextJob] of [['build-amd64', 'build-arm64'], ['build-arm64', 'prune-candidates']]) {
+    const block = jobBlock(workflow, job, nextJob);
+    requireCount(block, /Apply pnpm patch compatibility overlay/g, 1, `${job} must apply the pnpm patch compatibility overlay once`);
+    const compatibility = block.indexOf("if grep -Fq \"$compatibility\"");
+    const historical = block.indexOf("grep -Fq 'RUN pnpm install --frozen-lockfile'");
+    if (compatibility < 0 || historical < 0 || compatibility > historical) {
+      fail(`${job} must check compatibility before the historical install seam`);
+    }
+    requireCount(block, /contents\.count\(old\) != 1/g, 1, `${job} must require exactly one historical install seam`);
+  }
 }
 
 checkCandidateWorkflow();

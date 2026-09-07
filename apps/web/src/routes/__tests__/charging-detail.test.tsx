@@ -14,6 +14,14 @@ const mockSession = vi.hoisted(() => ({
   range_added_km: 88.4 as number | null,
   source: 'telemetry+rivian_api' as string,
   telemetry_sample_count: 12 as number,
+  active: false,
+  live_total_charged_kwh: null as number | null,
+  live_soc_pct: null as number | null,
+  live_time_elapsed_seconds: null as number | null,
+  live_time_remaining_min: null as number | null,
+  live_power_kw: null as number | null,
+  live_charge_rate_kph: null as number | null,
+  live_charger_state: null as string | null,
 }));
 const correctionMutation = vi.hoisted(() => ({
   mutate: vi.fn(),
@@ -51,7 +59,7 @@ vi.mock('@riviamigo/hooks', () => ({
       id: 'session-1',
       vehicle_id: 'vehicle-1',
       started_at: '2024-01-01T12:00:00Z',
-      ended_at: '2024-01-01T13:15:00Z',
+      ended_at: mockSession.active ? null : '2024-01-01T13:15:00Z',
       location_name: mockSession.location_name,
       charger_type: 'level2',
       energy_added_kwh: 28.5,
@@ -69,6 +77,13 @@ vi.mock('@riviamigo/hooks', () => ({
       range_added_km: mockSession.range_added_km,
       rivian_paid_total: 8.75,
       rivian_city: 'Austin',
+      live_total_charged_kwh: mockSession.live_total_charged_kwh,
+      live_soc_pct: mockSession.live_soc_pct,
+      live_time_elapsed_seconds: mockSession.live_time_elapsed_seconds,
+      live_time_remaining_min: mockSession.live_time_remaining_min,
+      live_power_kw: mockSession.live_power_kw,
+      live_charge_rate_kph: mockSession.live_charge_rate_kph,
+      live_charger_state: mockSession.live_charger_state,
     },
   }),
 }));
@@ -106,6 +121,14 @@ describe('ChargeSessionContent', () => {
     mockSession.range_added_km = 88.4;
     mockSession.source = 'telemetry+rivian_api';
     mockSession.telemetry_sample_count = 12;
+    mockSession.active = false;
+    mockSession.live_total_charged_kwh = null;
+    mockSession.live_soc_pct = null;
+    mockSession.live_time_elapsed_seconds = null;
+    mockSession.live_time_remaining_min = null;
+    mockSession.live_power_kw = null;
+    mockSession.live_charge_rate_kph = null;
+    mockSession.live_charger_state = null;
     correctionMutation.role = 'owner';
     correctionMutation.mutate.mockClear();
   });
@@ -142,6 +165,29 @@ describe('ChargeSessionContent', () => {
     expect(screen.getByTestId('charge-curve-chart')).toBeInTheDocument();
     expect(screen.queryByText('Corrections')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Edit charging session' })).toBeInTheDocument();
+  });
+
+  it('renders live values and pending semantics for an in-progress session', () => {
+    mockSession.active = true;
+    mockSession.cost_usd = null;
+    mockSession.live_total_charged_kwh = 12.4;
+    mockSession.live_soc_pct = 57;
+    mockSession.live_time_elapsed_seconds = 1800;
+    mockSession.live_time_remaining_min = 42;
+    mockSession.live_power_kw = 11.2;
+    mockSession.live_charge_rate_kph = 48;
+    mockSession.live_charger_state = 'charging';
+
+    render(<ChargeSessionContent />);
+
+    expect(screen.getByText('12.4 kWh')).toBeInTheDocument();
+    expect(screen.getByText('20% -> 57% · Live')).toBeInTheDocument();
+    expect(screen.getByText('30 min')).toBeInTheDocument();
+    expect(screen.getByText('Pending')).toBeInTheDocument();
+    expect(screen.getByText('11.2 kW')).toBeInTheDocument();
+    expect(screen.getByText('48 km/h')).toBeInTheDocument();
+    expect(screen.getByText('42 min')).toBeInTheDocument();
+    expect(screen.getByText('charging')).toBeInTheDocument();
   });
 
   it('opens the correction editor from the page header and separates location and cost summaries', () => {

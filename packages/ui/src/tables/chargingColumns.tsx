@@ -7,6 +7,7 @@ import { formatAppCalendarDate, formatAppDate, formatAppTime } from '../lib/date
 export interface ChargeSessionRow {
   id: string;
   started_at: string;
+  ended_at?: string | null;
   session_day_local?: string | null;
   duration_min: number | null;
   energy_added_kwh: number | null;
@@ -34,6 +35,12 @@ export interface ChargeSessionRow {
   live_range_added_km?: number | null;
   live_power_kw?: number | null;
   live_charge_rate_kph?: number | null;
+  live_soc_pct?: number | null;
+  live_time_elapsed_seconds?: number | null;
+  live_time_remaining_min?: number | null;
+  live_charger_state?: string | null;
+  live_charger_status?: string | null;
+  live_started_at?: string | null;
   source?: string | null;
   telemetry_sample_count?: number;
 }
@@ -61,8 +68,9 @@ function deriveAcDcType(row: ChargeSessionRow): 'ac' | 'dc' | null {
     return 'dc';
   }
 
-  if (row.peak_power_kw != null && Number.isFinite(row.peak_power_kw)) {
-    return row.peak_power_kw < 20 ? 'ac' : 'dc';
+  const observedPower = row.ended_at == null ? row.live_power_kw ?? row.peak_power_kw : row.peak_power_kw;
+  if (observedPower != null && Number.isFinite(observedPower)) {
+    return observedPower < 20 ? 'ac' : 'dc';
   }
 
   return null;
@@ -81,9 +89,11 @@ export const chargingColumns = [
     cell: (info) => {
       const row = info.row.original;
       const start = new Date(info.getValue());
+      const duration = row.ended_at == null && row.live_time_elapsed_seconds != null
+        ? row.live_time_elapsed_seconds / 60 : row.duration_min;
       const endDate =
-        row.duration_min != null
-          ? new Date(start.getTime() + row.duration_min * 60000)
+        duration != null
+          ? new Date(start.getTime() + duration * 60000)
           : null;
       return (
         <div className="flex flex-col gap-px">
@@ -139,9 +149,10 @@ export const chargingColumns = [
   col.accessor('energy_added_kwh', {
     header: 'Energy Added',
     cell: (info) => {
-      const v = info.getValue();
+      const row = info.row.original;
+      const v = row.ended_at == null ? row.live_total_charged_kwh ?? info.getValue() : info.getValue();
       return v !== null ? (
-        <span className="font-mono">{formatKwh(v)}</span>
+        <span className="font-mono">{formatKwh(v)}{row.ended_at == null && row.live_total_charged_kwh != null ? ' · Live' : ''}</span>
       ) : <span className="text-fg-tertiary">—</span>;
     },
   }),
@@ -151,11 +162,11 @@ export const chargingColumns = [
     cell: (info) => {
       const row = info.row.original;
       const start = row.soc_start;
-      const end = row.soc_end;
+      const end = row.ended_at == null ? row.live_soc_pct ?? row.soc_end : row.soc_end;
       if (start === null || end === null) return <span className="text-fg-tertiary">—</span>;
       return (
         <span className="font-mono text-fg">
-          {formatPercent(start, 0)} → {formatPercent(end, 0)}
+          {formatPercent(start, 0)} → {formatPercent(end, 0)}{row.ended_at == null && row.live_soc_pct != null ? ' · Live' : ''}
         </span>
       );
     },
@@ -163,7 +174,8 @@ export const chargingColumns = [
   col.accessor('peak_power_kw', {
     header: 'Peak',
     cell: (info) => {
-      const v = info.getValue();
+      const row = info.row.original;
+      const v = row.ended_at == null ? row.live_power_kw ?? info.getValue() : info.getValue();
       return v !== null ? (
         <span className="font-mono">{v.toFixed(1)} kW</span>
       ) : <span className="text-fg-tertiary">—</span>;
@@ -172,17 +184,19 @@ export const chargingColumns = [
   col.accessor('duration_min', {
     header: 'Duration',
     cell: (info) => {
-      const v = info.getValue();
-      return v !== null ? formatDuration(v) : <span className="text-fg-tertiary">—</span>;
+      const row = info.row.original;
+      const v = row.ended_at == null && row.live_time_elapsed_seconds != null ? row.live_time_elapsed_seconds / 60 : info.getValue();
+      return v !== null ? <>{formatDuration(v)}{row.ended_at == null && row.live_time_elapsed_seconds != null ? ' · Live' : ''}</> : <span className="text-fg-tertiary">—</span>;
     },
   }),
   col.accessor('cost_usd', {
     header: 'Cost',
     cell: (info) => {
+      const row = info.row.original;
       const v = info.getValue();
       return v !== null ? (
         <span className="font-mono text-accent">{formatCurrency(v)}</span>
-      ) : <span className="text-fg-tertiary">—</span>;
+      ) : row.ended_at == null ? <span className="text-fg-tertiary">Pending</span> : <span className="text-fg-tertiary">—</span>;
     },
   }),
 ];

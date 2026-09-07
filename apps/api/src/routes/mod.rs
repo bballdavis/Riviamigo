@@ -30,6 +30,7 @@ pub mod backfill;
 pub mod backups;
 pub mod battery;
 pub mod charging;
+mod charging_sql;
 pub mod charts;
 pub mod cost_profiles;
 pub mod dashboards;

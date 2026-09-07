@@ -586,19 +586,20 @@ pub async fn run_vehicle_worker(
             }
         }
 
-        if let Some(charging_session) = inbound.charging_session.as_ref() {
-            apply_charging_session_update(
-                &pool,
-                &mut redis_conn,
-                vehicle_id,
-                charging_session,
-                inbound.received_at,
-                charge_det.active_session_id(),
-            )
-            .await;
-        }
-
         let Some(event) = inbound.telemetry else {
+            // A chargingSession frame can arrive without a telemetry sample.
+            // Keep the live projection fresh when a canonical session is known.
+            if let Some(charging_session) = inbound.charging_session.as_ref() {
+                apply_charging_session_update(
+                    &pool,
+                    &mut redis_conn,
+                    vehicle_id,
+                    charging_session,
+                    inbound.received_at,
+                    charge_det.active_session_id(),
+                )
+                .await;
+            }
             continue;
         };
 
@@ -647,6 +648,21 @@ pub async fn run_vehicle_worker(
             {
                 tracing::warn!(vehicle_id=%vehicle_id, charge_session_id=%session_id, err=%error, "active charge session materialization failed");
             }
+        }
+
+        // Materialize the canonical row first.  The first useful legacy
+        // chargingSession frame often shares this inbound envelope with the
+        // telemetry sample that starts the detector session.
+        if let Some(charging_session) = inbound.charging_session.as_ref() {
+            apply_charging_session_update(
+                &pool,
+                &mut redis_conn,
+                vehicle_id,
+                charging_session,
+                inbound.received_at,
+                session_id,
+            )
+            .await;
         }
 
         // Publish live snapshot to Redis
@@ -889,11 +905,26 @@ async fn ensure_active_charge_session(
     session_id: Uuid,
     event: &TelemetryEvent,
 ) -> anyhow::Result<()> {
+    let location = match (event.latitude, event.longitude) {
+        (Some(latitude), Some(longitude))
+            if latitude.is_finite()
+                && longitude.is_finite()
+                && (-90.0..=90.0).contains(&latitude)
+                && (-180.0..=180.0).contains(&longitude)
+                && !(latitude == 0.0 && longitude == 0.0) =>
+        {
+            Some((latitude, longitude))
+        }
+        _ => None,
+    };
     sqlx::query(
         r#"INSERT INTO riviamigo.charge_sessions
-           (id, vehicle_id, started_at, soc_start, charge_limit, source, data_confidence)
+           (id, vehicle_id, started_at,
+            location_lat, location_lng, source_location_lat, source_location_lng,
+            soc_start, charge_limit, source, data_confidence)
            SELECT $1, $2,
                   COALESCE(MIN(t.ts), $3),
+                  $6, $7, $6, $7,
                   COALESCE(
                       (ARRAY_AGG(t.battery_level ORDER BY t.ts)
                        FILTER (WHERE t.battery_level IS NOT NULL))[1],
@@ -907,6 +938,10 @@ async fn ensure_active_charge_session(
              AND t.charge_session_id = $1
            ON CONFLICT (id) DO UPDATE SET
              started_at = COALESCE(riviamigo.charge_sessions.started_at, EXCLUDED.started_at),
+             location_lat = COALESCE(riviamigo.charge_sessions.location_lat, EXCLUDED.location_lat),
+             location_lng = COALESCE(riviamigo.charge_sessions.location_lng, EXCLUDED.location_lng),
+             source_location_lat = COALESCE(riviamigo.charge_sessions.source_location_lat, EXCLUDED.source_location_lat),
+             source_location_lng = COALESCE(riviamigo.charge_sessions.source_location_lng, EXCLUDED.source_location_lng),
              soc_start = COALESCE(riviamigo.charge_sessions.soc_start, EXCLUDED.soc_start),
              charge_limit = COALESCE(riviamigo.charge_sessions.charge_limit, EXCLUDED.charge_limit)"#,
     )
@@ -915,6 +950,8 @@ async fn ensure_active_charge_session(
     .bind(event.ts)
     .bind(event.battery_level)
     .bind(event.battery_limit)
+    .bind(location.map(|(latitude, _)| latitude))
+    .bind(location.map(|(_, longitude)| longitude))
     .execute(pool)
     .await?;
     Ok(())
@@ -954,7 +991,18 @@ async fn apply_charging_session_update(
                 tracing::debug!(vehicle_id=%vehicle_id, err=%error, "late live session Redis cleanup failed");
             }
         }
-        None => {}
+        None if should_clear_live_session(event) => {
+            // An explicit root null means the legacy projection is no longer
+            // meaningful. Never leave a stale Redis snapshot visible.
+            if let Err(error) = redis_conn.del::<_, ()>(&live_key).await {
+                tracing::debug!(vehicle_id=%vehicle_id, err=%error, "null live session Redis cleanup failed");
+            }
+        }
+        None => {
+            // An all-null object or liveData:null is only an empty partial
+            // update. Preserve the existing TTL snapshot; a later meaningful
+            // frame can refresh it, while natural expiry handles staleness.
+        }
     }
 
     if let Err(error) = rivian_poll::persist_charging_session_chart(
@@ -967,6 +1015,10 @@ async fn apply_charging_session_update(
     {
         tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live charge curve update failed");
     }
+}
+
+fn should_clear_live_session(event: &parser::ChargingSessionEvent) -> bool {
+    event.explicit_null
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3430,6 +3482,29 @@ async fn mark_persisted(pool: &PgPool, vehicle_id: Uuid, ts: DateTime<Utc>) {
     .bind(ts)
     .execute(pool)
     .await;
+}
+
+#[cfg(test)]
+mod live_session_tests {
+    use super::should_clear_live_session;
+    use crate::ingestion::parser::parse_charging_session_message;
+
+    #[test]
+    fn only_explicit_root_null_clears_live_snapshot() {
+        let explicit_null = parse_charging_session_message(
+            r#"{"type":"next","payload":{"data":{"chargingSession":null}}}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let empty_partial = parse_charging_session_message(
+            r#"{"type":"next","payload":{"data":{"chargingSession":{"liveData":null,"chartData":[]}}}}"#,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert!(should_clear_live_session(&explicit_null));
+        assert!(!should_clear_live_session(&empty_partial));
+    }
 }
 
 #[cfg(test)]

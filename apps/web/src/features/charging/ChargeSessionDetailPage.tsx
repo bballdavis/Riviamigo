@@ -49,14 +49,27 @@ function ChargeSessionContentInner() {
     })()
     : 'Charge Session';
 
-  const locationSubtitle = session?.location_name ? (
+  const locationLabel = session?.location_name ?? formatCoordinates(session?.location_lat, session?.location_lng);
+  const locationSubtitle = locationLabel ? (
     <span className="flex max-w-full min-w-0 items-start gap-1.5 text-sm text-fg">
       <MapPin className="h-3.5 w-3.5 text-accent" />
-      <span className="min-w-0 break-words whitespace-normal" title={session.location_name}>{session.location_name}</span>
+      <span className="min-w-0 break-words whitespace-normal" title={locationLabel}>{locationLabel}</span>
     </span>
   ) : null;
   const membershipRole = vehicles.find((vehicle) => vehicle.id === effectiveVehicleId)?.membership_role ?? 'viewer';
   const canManageSession = membershipRole === 'owner' || membershipRole === 'manager';
+  const isActiveSession = session?.ended_at == null;
+  const liveEnergy = session?.live_total_charged_kwh ?? null;
+  const liveDuration = session?.live_time_elapsed_seconds != null
+    ? session.live_time_elapsed_seconds / 60
+    : null;
+  const liveSoc = session?.live_soc_pct ?? null;
+  const livePower = session?.live_power_kw ?? null;
+  const liveRange = session?.live_range_added_km ?? null;
+  const liveRate = session?.live_charge_rate_kph ?? null;
+  const liveState = session?.live_charger_state ?? session?.live_charger_status ?? null;
+  const displayedEnergy = liveEnergy ?? session?.energy_added_kwh ?? null;
+  const displayedDuration = liveDuration ?? session?.duration_min ?? null;
 
   const backButton = (
     <button
@@ -133,31 +146,41 @@ function ChargeSessionContentInner() {
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <SensorChipSummary
                 title="Energy Added"
-                value={session ? formatKwh(session.energy_added_kwh ?? 0) : '-'}
-                secondary={session?.range_added_km != null ? `Range added: ${formatDistanceKm(session.range_added_km)}` : undefined}
+                value={session ? displayedEnergy != null ? formatKwh(displayedEnergy) : isActiveSession ? 'Pending' : '-' : '-'}
+                secondary={liveRange != null ? `Range added: ${formatDistanceKm(liveRange)} · Live` : session?.range_added_km != null ? `Range added: ${formatDistanceKm(session.range_added_km)}` : undefined}
                 icon="lucide:bolt"
                 accentBorder
               />
               <SensorChipSummary
                 title="SoC"
                 value={
-                  session?.soc_start != null && session?.soc_end != null
-                    ? `${formatPercent(session.soc_start, 0)} -> ${formatPercent(session.soc_end, 0)}`
+                  session?.soc_start != null && (liveSoc != null || session.soc_end != null)
+                    ? `${formatPercent(session.soc_start, 0)} -> ${formatPercent(liveSoc ?? session.soc_end!, 0)}${isActiveSession && liveSoc != null ? ' · Live' : ''}`
                     : '-'
                 }
                 icon="lucide:battery"
               />
               <SensorChipSummary
                 title="Duration"
-                value={session ? formatDuration((session as unknown as { duration_min?: number }).duration_min ?? 0) : '-'}
+                value={session ? displayedDuration != null ? formatDuration(displayedDuration) : isActiveSession ? 'Pending' : '-' : '-'}
                 icon="lucide:clock-3"
               />
               <SensorChipSummary
                 title="Cost"
-                value={session?.cost_usd != null ? formatCurrency(session.cost_usd) : '-'}
+                value={session?.cost_usd != null ? formatCurrency(session.cost_usd) : isActiveSession ? 'Pending' : '-'}
+                secondary={isActiveSession && session?.live_current_price != null ? `Current estimate: ${formatCurrency(session.live_current_price)}` : undefined}
                 icon="lucide:receipt"
               />
             </div>
+
+            {session && isActiveSession ? (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" role="status" aria-label="Live charging status">
+                {livePower != null ? <SensorChipSummary title="Power" value={`${livePower.toFixed(1)} kW`} icon="lucide:activity" /> : null}
+                {liveRate != null ? <SensorChipSummary title="Charge rate" value={`${liveRate.toFixed(0)} km/h`} icon="lucide:gauge" /> : null}
+                {session.live_time_remaining_min != null ? <SensorChipSummary title="Remaining" value={formatDuration(session.live_time_remaining_min)} icon="lucide:timer" /> : null}
+                {liveState ? <SensorChipSummary title="State" value={liveState.replaceAll('_', ' ')} icon="lucide:plug-zap" /> : null}
+              </div>
+            ) : null}
 
             <Card>
               <CardHeader>
@@ -178,12 +201,13 @@ function ChargeSessionContentInner() {
                         timeframe: {
                           kind: 'custom',
                           from: new Date(session.started_at),
-                          to: new Date(session.ended_at ?? session.started_at),
+                          to: new Date(session.ended_at ?? Date.now()),
                         },
                         from: session.started_at,
-                        to: session.ended_at ?? session.started_at,
+                        to: session.ended_at ?? new Date().toISOString(),
                         chargeSessionId: sessionId,
-                        chargeSessionEnergyKwh: session.energy_added_kwh ?? null,
+                        chargeSessionActive: isActiveSession,
+                        chargeSessionEnergyKwh: liveEnergy ?? session.energy_added_kwh ?? null,
                       }}
                     />
                   )}

@@ -1,3 +1,12 @@
+use super::charging_sql as c;
+use crate::{
+    db::vehicles::{
+        require_vehicle_manager_access, require_vehicle_membership, require_vehicle_read_access,
+    },
+    errors::AppError,
+    middleware::auth::{require_vehicle_access, AppState, AuthUser},
+    services::cost::recompute_charge_session_cost,
+};
 use axum::{
     extract::{Path, Query, State},
     routing::{get, patch},
@@ -7,16 +16,6 @@ use chrono::{DateTime, NaiveDate, Utc};
 use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-use crate::{
-    db::vehicles::{
-        require_vehicle_manager_access, require_vehicle_membership, require_vehicle_read_access,
-    },
-    errors::AppError,
-    middleware::auth::{require_vehicle_access, AppState, AuthUser},
-    services::cost::recompute_charge_session_cost,
-};
-
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/charging", get(list_sessions))
@@ -55,7 +54,6 @@ pub fn router() -> Router<AppState> {
         )
         .route("/vehicles/{vehicle_id}/costs", get(get_summary_path))
 }
-
 #[derive(Deserialize)]
 struct SessionListParams {
     vehicle_id: Option<Uuid>,
@@ -68,12 +66,10 @@ struct SessionListParams {
     per_page: Option<i64>,
     session_day_local: Option<String>,
 }
-
 #[derive(Deserialize)]
 struct VehicleParam {
     vehicle_id: Option<Uuid>,
 }
-
 #[derive(Deserialize)]
 struct SessionLocationUpdate {
     /// Legacy field. `null` retains its historical meaning: no location.
@@ -83,7 +79,6 @@ struct SessionLocationUpdate {
     cost_mode: Option<CostOverrideMode>,
     cost_usd: Option<f64>,
 }
-
 /// Distinguishes an omitted patch field from JSON `null`; this is required to
 /// preserve `{ "place_id": null }` behavior while allowing a cost-only patch.
 #[derive(Debug, Clone, Copy, Default)]
@@ -213,6 +208,12 @@ struct SessionRow {
     live_range_added_km: Option<f64>,
     live_power_kw: Option<f64>,
     live_charge_rate_kph: Option<f64>,
+    live_time_elapsed_seconds: Option<i32>,
+    live_time_remaining_min: Option<i32>,
+    live_started_at: Option<DateTime<Utc>>,
+    live_soc_pct: Option<f64>,
+    live_charger_state: Option<String>,
+    live_charger_status: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -952,7 +953,7 @@ async fn list_sessions_response(
         .execute(&mut *tx)
         .await?;
 
-    let rows = sqlx::query_as::<_, SessionRow>(
+    let rows = sqlx::query_as::<_, SessionRow>(sqlx::AssertSqlSafe(format!(
         "SELECT cs.id, cs.started_at, \
             TO_CHAR((cs.started_at AT TIME ZONE COALESCE((SELECT value FROM riviamigo.system_config WHERE key = 'app_timezone'), 'UTC'))::date, 'YYYY-MM-DD') AS session_day_local, \
             cs.ended_at, cs.location_lat, cs.location_lng, \
@@ -972,19 +973,19 @@ async fn list_sessions_response(
                 ) AS charger_type, \
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
                 COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, \
-                cs.cost_usd AS cost_usd, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
+                {}, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
                 cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
                 cs.rivian_charger_type, cs.currency_code, cs.rivian_city, cs.is_public, cs.charger_id, \
-                cs.live_current_price, cs.live_current_currency, cs.live_total_charged_kwh, \
-                cs.live_range_added_km, cs.live_power_kw, cs.live_charge_rate_kph, \
-                0::int8 AS telemetry_sample_count \
+                {} \
          FROM riviamigo.charge_sessions cs \
          LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
          LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
+         {} \
             WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
               AND ($6 IS NULL OR TO_CHAR((cs.started_at AT TIME ZONE COALESCE((SELECT value FROM riviamigo.system_config WHERE key = 'app_timezone'), 'UTC'))::date, 'YYYY-MM-DD') = $6) \
-            ORDER BY cs.started_at DESC, cs.id DESC LIMIT $4 OFFSET $5"
-    )
+            ORDER BY cs.started_at DESC, cs.id DESC LIMIT $4 OFFSET $5",
+        c::COST, c::LIST, c::LATEST,
+    )))
         .bind(vehicle_id)
         .bind(from)
         .bind(to)
@@ -1180,7 +1181,7 @@ async fn get_session_response(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
 
-    let session = sqlx::query_as::<_, SessionRow>(
+    let session = sqlx::query_as::<_, SessionRow>(sqlx::AssertSqlSafe(format!(
         "SELECT cs.id, cs.started_at, \
             TO_CHAR((cs.started_at AT TIME ZONE COALESCE((SELECT value FROM riviamigo.system_config WHERE key = 'app_timezone'), 'UTC'))::date, 'YYYY-MM-DD') AS session_day_local, \
             cs.ended_at, cs.location_lat, cs.location_lng, \
@@ -1199,13 +1200,11 @@ async fn get_session_response(
                     END \
                 ) AS charger_type, \
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
-                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, cs.cost_usd AS cost_usd, \
-                cs.network_vendor, cs.range_added_km, cs.is_free_session, \
+                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, \
+                {}, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
                 cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
                 cs.rivian_charger_type, cs.currency_code, cs.rivian_city, cs.is_public, cs.charger_id, \
-                cs.live_current_price, cs.live_current_currency, cs.live_total_charged_kwh, \
-                cs.live_range_added_km, cs.live_power_kw, cs.live_charge_rate_kph, \
-                COALESCE(telem.sample_count, 0)::int8 AS telemetry_sample_count \
+                {} \
          FROM riviamigo.charge_sessions cs \
          LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
          LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
@@ -1214,10 +1213,12 @@ async fn get_session_response(
              FROM timeseries.telemetry t \
              WHERE t.vehicle_id = cs.vehicle_id \
                AND t.ts BETWEEN cs.started_at \
-                            AND COALESCE(cs.ended_at, cs.started_at) \
+                            AND COALESCE(cs.ended_at, now()) \
          ) telem ON true \
-            WHERE cs.id=$1 AND cs.vehicle_id=$2"
-    )
+         {} \
+            WHERE cs.id=$1 AND cs.vehicle_id=$2",
+        c::COST, c::DETAIL, c::TELEM,
+    )))
         .bind(id)
         .bind(vehicle_id)
     .fetch_optional(&state.pool)
@@ -1756,9 +1757,8 @@ async fn load_curve(
     ended_at: Option<DateTime<Utc>>,
     charger_type: Option<&str>,
 ) -> Result<Vec<serde_json::Value>, AppError> {
-    let Some(ended_at) = ended_at else {
-        return Ok(vec![]);
-    };
+    // Open sessions use now; completed sessions keep their authoritative end.
+    let ended_at = ended_at.unwrap_or_else(Utc::now);
 
     // Context-aware cap: DC fast chargers can peak ~220 kW on a Rivian so we
     // allow up to 300 kW.  AC sessions (L1 or L2) are hard-limited by circuit

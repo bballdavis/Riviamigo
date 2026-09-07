@@ -20,6 +20,10 @@ pub enum ParseError {
 pub struct ChargingSessionEvent {
     pub live_data: Option<ChargingSessionLiveData>,
     pub live_data_present: bool,
+    /// True only when the subscription explicitly returns
+    /// `chargingSession: null`. An object with all nullable leaves is an
+    /// empty partial update and must not clear a still-fresh live snapshot.
+    pub explicit_null: bool,
     pub chart_data: Vec<ChargingSessionChartPoint>,
     pub ts: DateTime<Utc>,
 }
@@ -211,6 +215,7 @@ pub fn parse_charging_session_message(
         return Ok(Some(ChargingSessionEvent {
             live_data: None,
             live_data_present: true,
+            explicit_null: true,
             chart_data: Vec::new(),
             ts: Utc::now(),
         }));
@@ -289,6 +294,7 @@ pub(crate) fn parse_charging_session_value(session: &Value) -> ChargingSessionEv
     ChargingSessionEvent {
         live_data,
         live_data_present,
+        explicit_null: false,
         chart_data,
         ts,
     }
@@ -767,12 +773,14 @@ mod tests {
         let null_msg = r#"{"type":"next","payload":{"data":{"chargingSession":null}}}"#;
         let null_event = parse_charging_session_message(null_msg).unwrap().unwrap();
         assert!(null_event.live_data.is_none());
+        assert!(null_event.explicit_null);
         assert!(null_event.chart_data.is_empty());
 
         let empty_msg = r#"{"type":"next","payload":{"data":{"chargingSession":{"liveData":null,"chartData":[]}}}}"#;
         let event = parse_charging_session_message(empty_msg).unwrap().unwrap();
         assert!(event.live_data.is_none());
         assert!(event.live_data_present);
+        assert!(!event.explicit_null);
         assert!(event.chart_data.is_empty());
 
         let chart_only =

@@ -1,13 +1,14 @@
 import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import type { ChargeSessionRow } from '../../../../packages/ui/src/tables/chargingColumns';
 
 vi.mock('@riviamigo/ui/primitives', async () => {
   const m = await import('./mockPrimitives');
   return m;
 });
 
-const sessions = Array.from({ length: 39 }, (_, index) => ({
+const sessions: ChargeSessionRow[] = Array.from({ length: 39 }, (_, index) => ({
   id: `charge-${index + 1}`,
   started_at: `2024-01-${String((index % 28) + 1).padStart(2, '0')}T00:00:00Z`,
   session_day_local: null,
@@ -58,5 +59,30 @@ describe('ChargingTableWidget', () => {
     const table = screen.getByRole('table');
     expect(within(table).getAllByRole('row')).toHaveLength(40);
     expect(container.firstElementChild).toHaveClass('!h-auto');
+  });
+
+  it('uses live fallbacks and pending cost for an active desktop row', () => {
+    sessions[0] = {
+      ...sessions[0]!, ended_at: null, energy_added_kwh: null, duration_min: null, soc_end: null,
+      peak_power_kw: null, cost_usd: null, live_total_charged_kwh: 9.5, live_time_elapsed_seconds: 1200,
+      live_soc_pct: 44, live_power_kw: 7.2, live_range_added_km: 31.4,
+    };
+    render(<ChargingTableWidget instance={{} as never} ctx={{ vehicleId: 'vehicle-1', from: null, to: null }} />);
+
+    const table = screen.getByRole('table');
+    expect(within(table).getByText('9.5 kWh · Live')).toBeInTheDocument();
+    expect(within(table).getByText('20% → 44% · Live')).toBeInTheDocument();
+    expect(within(table).getByText('20m · Live')).toBeInTheDocument();
+    expect(within(table).getByText('Pending')).toBeInTheDocument();
+  });
+
+  it('uses live fallbacks on the mobile session card', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 375 });
+    vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as MediaQueryList);
+    sessions[0] = { ...sessions[0]!, ended_at: null, energy_added_kwh: null, duration_min: null, live_total_charged_kwh: 8.2, live_time_elapsed_seconds: 600, live_power_kw: 6.1, live_soc_pct: 35, soc_end: null, cost_usd: null };
+    render(<ChargingTableWidget instance={{} as never} ctx={{ vehicleId: 'vehicle-1', from: null, to: null }} />);
+    expect(screen.getByText('8.2 kWh · Live')).toBeInTheDocument();
+    expect(screen.getByText('10m · Live')).toBeInTheDocument();
+    expect(screen.getByText('Power 6.1 kW')).toBeInTheDocument();
   });
 });

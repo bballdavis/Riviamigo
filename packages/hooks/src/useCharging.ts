@@ -65,6 +65,10 @@ export function useChargeSessions(
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     refetchOnMount: 'always',
+    refetchInterval: (query) => {
+      const items = query.state.data?.items ?? [];
+      return items.some((session) => session.ended_at == null) ? 30 * 1000 : false;
+    },
     placeholderData: (previous) => previous,
   });
 }
@@ -79,6 +83,7 @@ export function useChargeSession(sessionId: string | null, vehicleId: string | n
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     refetchOnMount: 'always',
+    refetchInterval: (query) => query.state.data != null && query.state.data.ended_at == null ? 30 * 1000 : false,
     placeholderData: (previous) => previous,
   });
 }
@@ -166,7 +171,7 @@ export function useUpdateChargingNetworkPreference(vehicleId: string | null) {
   });
 }
 
-export function useChargeCurve(sessionId: string | null, vehicleId: string | null) {
+export function useChargeCurve(sessionId: string | null, vehicleId: string | null, active = false) {
   const authReady = useAuthReady();
   return useQuery({
     queryKey: ['charging', 'curve', sessionId, vehicleId],
@@ -176,6 +181,7 @@ export function useChargeCurve(sessionId: string | null, vehicleId: string | nul
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     refetchOnMount: 'always',
+    refetchInterval: active ? 30 * 1000 : false,
     placeholderData: (previous) => previous,
   });
 }

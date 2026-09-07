@@ -44,8 +44,9 @@ function deriveAcDcType(session: ChargeSessionRow): 'ac' | 'dc' | null {
     return 'dc';
   }
 
-  if (session.peak_power_kw != null && Number.isFinite(session.peak_power_kw)) {
-    return session.peak_power_kw < 20 ? 'ac' : 'dc';
+  const observedPower = session.ended_at == null ? session.live_power_kw ?? session.peak_power_kw : session.peak_power_kw;
+  if (observedPower != null && Number.isFinite(observedPower)) {
+    return observedPower < 20 ? 'ac' : 'dc';
   }
 
   return null;
@@ -60,6 +61,12 @@ function formatSessionDay(session: ChargeSessionRow): string {
 
 function ChargeSessionCard({ session, onClick }: { session: ChargeSessionRow; onClick: () => void }) {
   const type = deriveAcDcType(session);
+  const active = session.ended_at == null;
+  const energy = active ? session.live_total_charged_kwh ?? session.energy_added_kwh : session.energy_added_kwh;
+  const duration = active && session.live_time_elapsed_seconds != null ? session.live_time_elapsed_seconds / 60 : session.duration_min;
+  const power = active ? session.live_power_kw ?? session.peak_power_kw : session.peak_power_kw;
+  const socEnd = active ? session.live_soc_pct ?? session.soc_end : session.soc_end;
+  const range = active ? session.live_range_added_km ?? session.range_added_km : session.range_added_km;
 
   return (
     <button
@@ -74,8 +81,8 @@ function ChargeSessionCard({ session, onClick }: { session: ChargeSessionRow; on
           </span>
           <span className="text-xs text-fg-tertiary">
             {format(parseISO(session.started_at), 'h:mm a')}
-            {session.duration_min != null
-              ? ` – ${format(new Date(parseISO(session.started_at).getTime() + session.duration_min * 60000), 'h:mm a')}`
+            {duration != null
+              ? ` – ${format(new Date(parseISO(session.started_at).getTime() + duration * 60000), 'h:mm a')}`
               : null}
           </span>
         </div>
@@ -89,29 +96,32 @@ function ChargeSessionCard({ session, onClick }: { session: ChargeSessionRow; on
         <p className="mb-1 truncate text-xs text-fg-secondary">{session.location_name}</p>
       )}
       <div className="flex items-center gap-2 text-xs text-fg-secondary flex-wrap">
-        {session.energy_added_kwh != null && (
-          <span className="font-mono font-medium text-fg text-xs">{formatKwh(session.energy_added_kwh)}</span>
+        {energy != null && (
+          <span className="font-mono font-medium text-fg text-xs">{formatKwh(energy)}{active && session.live_total_charged_kwh != null ? ' · Live' : ''}</span>
         )}
-        {session.duration_min != null && (
+        {duration != null && (
           <>
             <span className="text-fg-tertiary">·</span>
-            <span className="text-xs">{formatDuration(session.duration_min)}</span>
+            <span className="text-xs">{formatDuration(duration)}{active && session.live_time_elapsed_seconds != null ? ' · Live' : ''}</span>
           </>
         )}
-        {session.peak_power_kw != null && (
+        {power != null && (
           <>
             <span className="text-fg-tertiary">·</span>
-            <span className="font-mono text-xs">Peak {session.peak_power_kw.toFixed(1)} kW</span>
+            <span className="font-mono text-xs">{active && session.live_power_kw != null ? 'Power' : 'Peak'} {power.toFixed(1)} kW</span>
           </>
         )}
-        {session.soc_start != null && session.soc_end != null && (
+        {session.soc_start != null && socEnd != null && (
           <span className="font-mono text-fg-tertiary text-xs">
-            {formatPercent(session.soc_start, 0)} → {formatPercent(session.soc_end, 0)}
+            {formatPercent(session.soc_start, 0)} → {formatPercent(socEnd, 0)}{active && session.live_soc_pct != null ? ' · Live' : ''}
           </span>
         )}
-        {session.cost_usd != null && (
-          <span className="ml-auto font-mono text-accent text-xs">{formatCurrency(session.cost_usd)}</span>
+        {range != null && (
+          <span className="font-mono text-fg-tertiary text-xs">+{range.toFixed(1)} km</span>
         )}
+        {session.cost_usd != null ? (
+          <span className="ml-auto font-mono text-accent text-xs">{formatCurrency(session.cost_usd)}</span>
+        ) : active ? <span className="ml-auto text-fg-tertiary text-xs">Pending</span> : null}
       </div>
     </button>
   );

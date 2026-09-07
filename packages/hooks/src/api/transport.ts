@@ -100,6 +100,7 @@ import type {
   ChargeSessionUpdate,
   ChargingNetworkPreference,
 } from '@riviamigo/types';
+import { liveFields } from './chargingSessionFields';
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
 
@@ -2062,6 +2063,7 @@ function normalizeChargeSession(raw: unknown): ChargeSession {
     live_range_added_km: finiteNumber(row.live_range_added_km) ?? null,
     live_power_kw: finiteNumber(row.live_power_kw) ?? null,
     live_charge_rate_kph: finiteNumber(row.live_charge_rate_kph) ?? null,
+    ...liveFields(row),
     location_lat: finiteNumber(row.location_lat) ?? null,
     location_lng: finiteNumber(row.location_lng) ?? null,
     source_location_lat: finiteNumber(row.source_location_lat) ?? null,
