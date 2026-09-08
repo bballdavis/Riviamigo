@@ -64,12 +64,31 @@ Install the repository hooks once in each checkout:
 pnpm hooks:install
 ```
 
-The hooks select the appropriate gate automatically:
+The hooks use the fast local gate by default on every branch. This keeps an
+ordinary commit or push from starting disposable services or querying GitHub.
+Run the full local parity gate explicitly when you want it before pushing:
 
-- Commits and pushes on `main` run `pnpm verify:ci`.
-- Pushes for an existing GitHub PR run `pnpm verify:ci`.
-- Other feature-branch commits and pushes run `pnpm verify:local`.
-- Use `pnpm pr:create -- --base dev --fill` to run the full gate before creating the first PR for a branch.
+```bash
+pnpm verify:ci
+```
+
+To make a specific commit or push run the full gate, set
+`RIVIAMIGO_FULL_LOCAL_CI=1` for that command. In PowerShell:
+
+```powershell
+$env:RIVIAMIGO_FULL_LOCAL_CI = '1'; git push origin dev
+```
+
+In POSIX shells:
+
+```bash
+RIVIAMIGO_FULL_LOCAL_CI=1 git push origin dev
+```
+
+Use `pnpm pr:create -- --base dev --fill` to run the full gate before creating
+the first PR for a branch. After `dev` is pushed, the upstream GitOps flow
+deploys it to the production-dev server for full-stack testing; that remote
+validation remains separate from the local hook.
 
 `verify:local` runs the static, dependency, frontend, backend, documentation,
 contract, and unit-test checks without starting disposable services.

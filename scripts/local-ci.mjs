@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { colorTokenViolations } from './check-color-tokens.mjs';
+import { selectHookGate } from './local-ci-policy.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 process.env.CARGO_TARGET_DIR ??= join(root, 'apps/api/target-ci-local');
@@ -136,26 +137,20 @@ function ciChecks() {
   }
 }
 
-function hasPullRequest() {
-  const result = spawnSync(commandName('gh'), ['pr', 'view', '--json', 'number'], { cwd: root, stdio: 'ignore', shell: process.platform === 'win32', windowsHide: true });
-  return result.status === 0;
-}
-
-function hookMode(kind) {
-  const branch = git(['branch', '--show-current']);
-  if (process.env.SKIP_LOCAL_CI === '1') {
+function hookMode() {
+  const gate = selectHookGate(process.env);
+  if (gate === 'bypass') {
     console.warn('SKIP_LOCAL_CI=1: local verification bypassed.');
     return;
   }
-  const full = branch === 'main' || (kind === 'pre-push' && hasPullRequest());
-  if (full) ciChecks();
+  if (gate === 'full') ciChecks();
   else commonChecks({ includeInstall: false, includeBuild: false });
 }
 
 function installHooks() {
   mkdirSync(hookPath, { recursive: true });
   run('git', ['config', 'core.hooksPath', '.githooks'], { label: 'Install repository Git hooks' });
-  console.log('Hooks installed. Commits on main and pushes for existing PRs use the full CI gate.');
+  console.log('Hooks installed. Commits and pushes use the fast local gate by default; set RIVIAMIGO_FULL_LOCAL_CI=1 for the full CI gate.');
 }
 
 function uninstallHooks() {
