@@ -55,8 +55,7 @@
     "clean": "turbo clean && rm -rf node_modules",
     "db:migrate": "node ./scripts/database.mjs migrate",
     "db:reset": "node ./scripts/database.mjs reset",
-    "db:rebaseline": "cd apps/api && cargo run --bin rebaseline_db --",
-    "graph:explore": "cargo run --manifest-path tools/graph-exploration/Cargo.toml --"
+    "db:rebaseline": "cd apps/api && cargo run --bin rebaseline_db --"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
