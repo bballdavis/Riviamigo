@@ -905,7 +905,6 @@ async fn update_chart_favorite(
     get_chart_favorites(State(state), auth).await
 }
 
-#[allow(clippy::too_many_arguments)]
 fn default_theme_preferences() -> ThemePreferencesPayload {
     ThemePreferencesPayload {
         mode: "dark".to_string(),
@@ -925,6 +924,7 @@ fn normalize_theme_payload(
     Ok(input)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolved_units_payload(
     mode: &str,
     custom_distance: Option<&str>,

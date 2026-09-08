@@ -645,8 +645,8 @@ async fn basemap_config(
     let settings = connections::load(&state.pool, connections::BASEMAP).await?;
     let revision = settings.updated_at.timestamp_millis().to_string();
     let resolved_provider = resolve_basemap_provider(&settings);
-    let styles = basemap_styles(&resolved_provider, &revision);
-    let attributions = basemap_attributions(&settings, &resolved_provider);
+    let styles = basemap_styles(resolved_provider, &revision);
+    let attributions = basemap_attributions(&settings, resolved_provider);
     Ok(Json(BasemapConfigResponse {
         enabled: settings.is_active(),
         provider_preference: settings.basemap_provider,
