@@ -1,5 +1,6 @@
 import type { MiniSparklineType } from '@riviamigo/ui/charts';
 import type { TimeframeScope } from '@riviamigo/types';
+import type { ChartColorToken, ThemePalette } from '@riviamigo/types';
 
 /** Iconify-style id (e.g. "lucide:battery") OR legacy short key (resolved at render time). */
 export type SensorIconKey = string;
@@ -7,7 +8,8 @@ export type SensorIconKey = string;
 /** Background-graph mode. `daily_delta` renders per-day activity or change. */
 export type SensorChartType = MiniSparklineType | 'daily_delta' | 'none';
 export type SensorDataSource = 'metric' | 'batteryHealth' | 'chargingSummary' | 'efficiencySummary' | 'vehicleStatus';
-export type SensorValueColor = 'accent' | 'default';
+export type SensorDataAccent = Extract<ChartColorToken, `series-${string}`>;
+export type SensorValueColor = 'accent' | 'data' | 'default';
 
 export interface SensorDefinition {
   id: string;
@@ -30,6 +32,8 @@ export interface SensorDefinition {
   helpText?: string;
   labelSuffix?: string;
   valueColor?: SensorValueColor;
+  /** Default data-category color. RAD resolves this through the active series slot. */
+  dataAccent?: SensorDataAccent;
   accent?: boolean;
   timeframeScope?: TimeframeScope;
   /** Cumulative metrics (always-rising) auto-default to daily-delta sprite. */
@@ -37,14 +41,14 @@ export interface SensorDefinition {
 }
 
 export const SENSOR_DEFINITIONS: SensorDefinition[] = [
-  { id: 'total_miles', title: 'Total Miles', metric: 'total_miles', icon: 'lucide:route', chartType: 'daily_delta', valueMode: 'latest', accent: true, cumulative: true },
-  { id: 'total_trips', title: 'Total Trips', metric: 'total_trips', icon: 'lucide:calendar-days', chartType: 'bar', valueMode: 'latest', cumulative: true },
-  { id: 'energy_charged', title: 'Energy Charged', metric: 'energy_charged', icon: 'lucide:bolt', chartType: 'daily_delta', valueMode: 'latest', cumulative: true },
-  { id: 'avg_efficiency', title: 'Avg Consumption', metric: 'avg_efficiency', icon: 'lucide:gauge', chartType: 'line', valueMode: 'latest', helpText: 'Total estimated battery energy used ÷ miles driven, distance-weighted for the selected range.' },
-  { id: 'avg_gross_efficiency', title: 'Avg Consumption (gross)', metric: 'avg_gross_efficiency', icon: 'lucide:zap', chartType: 'line', valueMode: 'latest' },
+  { id: 'total_miles', title: 'Total Miles', metric: 'total_miles', icon: 'lucide:route', chartType: 'daily_delta', valueMode: 'latest', valueColor: 'data', dataAccent: 'series-03', accent: true, cumulative: true },
+  { id: 'total_trips', title: 'Total Trips', metric: 'total_trips', icon: 'lucide:calendar-days', chartType: 'bar', valueMode: 'latest', valueColor: 'data', dataAccent: 'series-02', cumulative: true },
+  { id: 'energy_charged', title: 'Energy Charged', metric: 'energy_charged', icon: 'lucide:bolt', chartType: 'daily_delta', valueMode: 'latest', valueColor: 'data', dataAccent: 'series-01', cumulative: true },
+  { id: 'avg_efficiency', title: 'Avg Consumption', metric: 'avg_efficiency', icon: 'lucide:gauge', chartType: 'line', valueMode: 'latest', valueColor: 'data', dataAccent: 'series-04', helpText: 'Total estimated battery energy used ÷ miles driven, distance-weighted for the selected range.' },
+  { id: 'avg_gross_efficiency', title: 'Avg Consumption (gross)', metric: 'avg_gross_efficiency', icon: 'lucide:zap', chartType: 'line', valueMode: 'latest', valueColor: 'data', dataAccent: 'series-04' },
   { id: 'efficiency_coverage', title: 'Consumption Data Coverage', dataSource: 'efficiencySummary', valuePath: 'coverage_percent', unit: '%', inlineSecondaryTemplate: '[efficiency_miles:mi] / [total_miles:mi]', icon: 'lucide:database-zap', chartType: 'none', valueMode: 'latest', valueColor: 'default', helpText: 'Share of miles in this range with enough battery data to calculate average consumption. Trips without a consumption estimate are excluded from that average.' },
   { id: 'avg_outside_temp_c', title: 'Avg Outside (estimated)', metric: 'avg_outside_temp_c', icon: 'lucide:thermometer', chartType: 'line', valueMode: 'latest' },
-  { id: 'trip_miles', title: 'Miles Driven', metric: 'trip_miles', icon: 'lucide:map', chartType: 'line', valueMode: 'latest', accent: true },
+  { id: 'trip_miles', title: 'Miles Driven', metric: 'trip_miles', icon: 'lucide:map', chartType: 'line', valueMode: 'latest', valueColor: 'data', dataAccent: 'series-03', accent: true },
   { id: 'avg_trip_duration', title: 'Avg Duration', metric: 'avg_trip_duration', icon: 'lucide:clock-3', chartType: 'bar', valueMode: 'latest' },
   { id: 'battery_level', title: 'Current SOC', metric: 'battery_level', icon: 'lucide:battery', chartType: 'area', valueMode: 'latest', accent: true },
   { id: 'range_miles', title: 'Estimated Range', metric: 'range_miles', icon: 'lucide:route', chartType: 'area', valueMode: 'latest' },
@@ -177,6 +181,32 @@ export const SENSOR_DEFINITIONS: SensorDefinition[] = [
     valueColor: 'default',
   },
 ];
+
+const DATA_ACCENT_BY_METRIC: Readonly<Record<string, SensorDataAccent>> = {
+  total_miles: 'series-03',
+  trip_miles: 'series-03',
+  total_trips: 'series-02',
+  energy_charged: 'series-01',
+  avg_efficiency: 'series-04',
+  avg_gross_efficiency: 'series-04',
+};
+
+export function getSensorDataAccent(
+  metric: string | null | undefined,
+  definition?: Pick<SensorDefinition, 'dataAccent'> | null,
+) {
+  const metricAccent = metric ? DATA_ACCENT_BY_METRIC[metric] : undefined;
+  return metricAccent ?? definition?.dataAccent ?? null;
+}
+
+/** Classic intentionally stays monochrome; RAD and RAD-derived themes use data slots. */
+export function resolveSensorColorToken(
+  metric: string | null | undefined,
+  definition: Pick<SensorDefinition, 'dataAccent'> | null | undefined,
+  palette: ThemePalette,
+): ChartColorToken {
+  return palette === 'rad' ? getSensorDataAccent(metric, definition) ?? 'accent' : 'accent';
+}
 
 const definitionById = new Map(SENSOR_DEFINITIONS.map((definition) => [definition.id, definition]));
 

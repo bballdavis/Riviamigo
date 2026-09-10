@@ -325,11 +325,13 @@ export function TripDetailContent() {
         ) : (
           <>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <SensorChipSummary title="Distance Driven" value={trip ? formatMiles(trip.distance_mi) : '—'} icon="lucide:map-pin" />
+              <SensorChipSummary title="Distance Driven" value={trip ? formatMiles(trip.distance_mi) : '—'} icon="lucide:map-pin" dataAccent="series-03" valueColor="data" />
               <SensorChipSummary
                 title={`Avg. Effic. (${getEfficiencyUnitLabel()})`}
                 value={trip?.efficiency_wh_mi != null ? formatEfficiencyValue(trip.efficiency_wh_mi) : '—'}
                 icon="lucide:gauge"
+                dataAccent="series-04"
+                valueColor="data"
               />
               <SensorChipSummary title="Avg. Speed" value={avgSpeed != null ? formatMph(avgSpeed) : '—'} icon="lucide:car" />
               <SensorChipSummary title="Duration" value={durationMin !== undefined ? formatDuration(durationMin) : '—'} icon="lucide:clock-3" />

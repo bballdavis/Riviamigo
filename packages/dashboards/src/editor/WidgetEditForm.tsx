@@ -12,9 +12,11 @@ import {
   normalizeTimeFilter,
   TIME_FILTER_OPTIONS,
   timeFilterLabel,
+  getChartColor,
   type CurveSmoothness,
   type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
+import { useDocumentPalette } from '@riviamigo/ui/hooks';
 import type { ChartColorDefinition, ChartColorToken } from '@riviamigo/types';
 import { SelectPicker } from '@riviamigo/ui/primitives';
 import { getWidgetForInstance } from '../registry';
@@ -26,6 +28,8 @@ import {
 import { getChartDefinitions, type DashboardChartPage } from '../charts/catalog';
 import {
   getSensorDefinition,
+  getSensorDataAccent,
+  resolveSensorColorToken,
   SENSOR_DEFINITIONS,
   type SensorDataSource,
   type SensorValueColor,
@@ -64,6 +68,8 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
     ? options.dataSource
     : sensorDefinition?.dataSource ?? 'metric';
   const metric = typeof options.metric === 'string' ? options.metric : sensorDefinition?.metric ?? 'total_miles';
+  const palette = useDocumentPalette();
+  const automaticCurveColor = getChartColor(resolveSensorColorToken(metric, sensorDefinition, palette));
   const chartType = typeof options.chartType === 'string' ? options.chartType : sensorDefinition?.chartType ?? 'line';
   const curveColor = normalizeChartColor(options.curveColor);
   const timeFilterSupported = supportsSpriteTimeFilter(chartType);
@@ -139,6 +145,12 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
 
   function patch(patchOptions: Record<string, unknown>) {
     onChange({ ...widget, options: { ...options, ...patchOptions } });
+  }
+
+  function clearOption(key: string) {
+    const next = { ...options };
+    delete next[key];
+    onChange({ ...widget, options: next });
   }
 
   function patchTitle(next: string) {
@@ -378,7 +390,11 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                   value={valueColor}
                   onChange={(value) => patch({ valueColor: value as SensorValueColor })}
                   aria-label="Value color"
-                  options={[{ value: 'accent', label: 'Accent' }, { value: 'default', label: 'Default' }]}
+                  options={[
+                    ...(getSensorDataAccent(metric, sensorDefinition) ? [{ value: 'data', label: 'Automatic' }] : []),
+                    { value: 'accent', label: 'Accent' },
+                    { value: 'default', label: 'Default' },
+                  ]}
                 />
               </Field>
             </div>
@@ -514,6 +530,13 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                 ) : null}
                 <ChartColorField
                   value={curveColor}
+                  {...(sensorMode ? {
+                    automatic: {
+                      active: options.curveColor == null,
+                      color: automaticCurveColor,
+                      onSelect: () => clearOption('curveColor'),
+                    },
+                  } : {})}
                   onChange={(color) => patch({ curveColor: color.mode === 'token' ? color.token : color })}
                 />
               </div>
@@ -772,7 +795,7 @@ function isSensorDataSource(value: unknown): value is SensorDataSource {
 }
 
 function isSensorValueColor(value: unknown): value is SensorValueColor {
-  return value === 'accent' || value === 'default';
+  return value === 'accent' || value === 'data' || value === 'default';
 }
 
 function supportsSpriteTimeFilter(chartType: string) {

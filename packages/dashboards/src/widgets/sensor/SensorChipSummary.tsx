@@ -4,12 +4,14 @@ import { cn } from '@riviamigo/ui/lib/utils';
 import { Card } from '@riviamigo/ui/primitives';
 import {
   CHART_COLORS,
+  getChartColor,
   MiniSparkline,
   type MiniSparklineYDomain,
   type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
 import { resolveIconId } from '../../editor/iconMigration';
-import type { SensorIconKey, SensorValueColor } from './sensorDefinitions';
+import { useDocumentPalette } from '@riviamigo/ui/hooks';
+import type { SensorDataAccent, SensorIconKey, SensorValueColor } from './sensorDefinitions';
 
 type SensorChipHistoryPoint = { ts?: string; value: number | null | undefined };
 type SensorValueTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
@@ -22,6 +24,7 @@ export interface SensorChipSummaryProps {
   labelSuffix?: string;
   subtitle?: string;
   accentBorder?: boolean;
+  dataAccent?: SensorDataAccent;
   valueColor?: SensorValueColor;
   valueTone?: SensorValueTone;
   valueSize?: 'sm' | 'md' | 'lg';
@@ -39,23 +42,28 @@ export function SensorChipSummary({
   labelSuffix,
   subtitle,
   accentBorder = false,
+  dataAccent,
   valueColor = 'accent',
   valueTone,
   valueSize = 'md',
   history,
-  historyColor = CHART_COLORS.accent,
+  historyColor,
   historyDomain,
   historyTimeFilter,
 }: SensorChipSummaryProps) {
+  const palette = useDocumentPalette();
+  const metricColor = getChartColor(palette === 'rad' && dataAccent ? dataAccent : 'accent');
+  const resolvedHistoryColor = historyColor ?? metricColor ?? CHART_COLORS.accent;
   return (
     <Card
       padding="none"
       className={cn(
         'relative flex h-full min-h-[72px] flex-col overflow-hidden border p-3',
         accentBorder
-          ? 'border-accent/60 shadow-[inset_0_0_0_1px_var(--rm-border-accent)]'
+          ? 'shadow-[inset_0_0_0_1px_var(--rm-border-accent)]'
           : 'border-border'
       )}
+      style={accentBorder ? { borderColor: metricColor } : undefined}
       data-testid="sensor-chip"
     >
       {history?.length ? (
@@ -68,12 +76,16 @@ export function SensorChipSummary({
             data={history}
             type="line"
             height={36}
-            color={historyColor}
+            color={resolvedHistoryColor}
             showFallback
             {...(historyTimeFilter ? { timeFilter: historyTimeFilter } : {})}
             yDomain={historyDomain}
           />
-          <div className="absolute inset-x-0 bottom-[2px] h-px bg-accent/35" aria-hidden="true" />
+          <div
+            className="absolute inset-x-0 bottom-[2px] h-px"
+            style={{ backgroundColor: resolvedHistoryColor, opacity: 0.35 }}
+            aria-hidden="true"
+          />
         </div>
       ) : null}
       <div className="relative z-10 flex flex-col flex-1 justify-center">
@@ -101,8 +113,9 @@ export function SensorChipSummary({
                     ? 'text-status-danger'
                     : valueTone === 'info'
                       ? 'text-status-info'
-                      : 'text-accent'
+                      : dataAccent ? 'text-fg' : 'text-accent'
             )}
+            style={dataAccent ? { color: metricColor } : undefined}
           />
         </div>
 
@@ -118,12 +131,14 @@ export function SensorChipSummary({
                     ? 'text-status-danger'
                     : valueTone === 'info'
                       ? 'text-status-info'
-                      : valueColor === 'accent'
-                        ? 'text-accent'
-                        : 'text-fg',
+                      : valueColor === 'data'
+                        ? 'text-fg'
+                        : valueColor === 'accent'
+                          ? 'text-accent'
+                          : 'text-fg',
               valueSize === 'sm' ? 'text-xl' : valueSize === 'lg' ? 'text-3xl' : 'text-2xl'
             )}
-            style={{ textShadow: 'var(--rm-value-halo)' }}
+            style={{ textShadow: 'var(--rm-value-halo)', ...(valueColor === 'data' ? { color: metricColor } : {}) }}
           >
             {value}
           </span>

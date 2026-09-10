@@ -34,9 +34,15 @@ export interface ChartColorFieldProps {
   onChange: (value: ChartColorDefinition) => void;
   label?: string;
   className?: string;
+  automatic?: {
+    active: boolean;
+    color: string;
+    onSelect: () => void;
+    label?: string;
+  };
 }
 
-export function ChartColorField({ value, onChange, label = 'Color', className }: ChartColorFieldProps) {
+export function ChartColorField({ value, onChange, label = 'Color', className, automatic }: ChartColorFieldProps) {
   const runtime = useThemeRuntime();
   const isDark = runtime.effectiveMode === 'dark';
   const [pickerOpen, setPickerOpen] = React.useState(false);
@@ -48,6 +54,25 @@ export function ChartColorField({ value, onChange, label = 'Color', className }:
   return <div className={cn('grid gap-2', className)}>
     <span className="text-xs font-medium text-fg-secondary">{label}</span>
     <div className="grid gap-2 rounded-xl border border-border bg-bg-elevated/30 p-3">
+      {automatic ? (
+        <fieldset>
+          <legend className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-fg-tertiary">Default</legend>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={automatic.active}
+            aria-label={automatic.label ?? 'Automatic'}
+            onClick={automatic.onSelect}
+            className={cn(
+              'inline-flex min-h-9 items-center gap-2 rounded-lg border px-2.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent',
+              automatic.active ? 'border-accent bg-accent-muted text-fg' : 'border-border bg-bg-surface text-fg-secondary hover:border-border-strong',
+            )}
+          >
+            <span className="h-3 w-3 rounded-full border border-border" style={{ backgroundColor: automatic.color }} />
+            {automatic.label ?? 'Automatic'}
+          </button>
+        </fieldset>
+      ) : null}
       <fieldset>
         <legend className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-fg-tertiary">Theme series</legend>
         <div className="grid grid-cols-8 gap-1.5" role="radiogroup" aria-label="Theme series colors">
