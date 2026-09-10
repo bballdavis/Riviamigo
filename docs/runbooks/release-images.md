@@ -13,9 +13,10 @@ Enable immutable releases in repository settings. Add a tag ruleset for `YYYY.MM
 Stable releases use bare Calendar Versions: `YYYY.MM.PATCH`. The first release in July 2026 is `2026.07.0`; a later July release is `2026.07.1`.
 
 1. Ensure `main` is the intended, validated release commit.
-2. Run **Release prep** from Actions. It calculates the next UTC monthly patch number and pushes the protected tag.
-3. The **Candidate image** workflow has already built and cached an AMD64 image for that exact `main` commit. **Release image** promotes that commit-addressed candidate to the exact version plus `latest`, verifies the promoted digest, and creates the GitHub release with `images.lock`.
-4. Treat the `images.lock` digests as the immutable release identifiers. `latest` is a moving convenience tag; self-hosters who require exact repeatability should set `RIVIAMIGO_IMAGE` to the digest-qualified reference from `images.lock`. Pinning `IMAGE_TAG` to the Calendar Version is stable for normal use but is not as strong as a digest.
+2. Run **Candidate image** manually from Actions for that exact `main` commit with at least the `amd64` platform.
+3. Run **Release prep** from Actions. It calculates the next UTC monthly patch number and pushes the protected tag.
+4. **Release image** promotes that commit-addressed candidate to the exact version plus `latest`, verifies the promoted digest, and creates the GitHub release with `images.lock`.
+5. Treat the `images.lock` digests as the immutable release identifiers. `latest` is a moving convenience tag; self-hosters who require exact repeatability should set `RIVIAMIGO_IMAGE` to the digest-qualified reference from `images.lock`. Pinning `IMAGE_TAG` to the Calendar Version is stable for normal use but is not as strong as a digest.
 
 Before pushing a release tag, run `pnpm verify:image`. It builds the normal
 `linux/amd64` production image locally without pushing it and fails after 45
@@ -23,11 +24,12 @@ minutes instead of leaving a release check running indefinitely. Use
 `pnpm verify:release-image -- --all-platforms` only when explicitly qualifying
 ARM64, and add `--no-cache` only when measuring or diagnosing a cold build.
 
-In GitHub Actions, every push to `main` or `dev` builds one commit-addressed
-AMD64 candidate on a native runner. Stable and preview workflows do not compile
-the image again: they verify the exact candidate exists, promote its manifest
-to the release tag, record provenance, and run smoke and populated-upgrade
-checks against the promoted digest.
+The **Candidate image** workflow is manual-only. When dispatched, it builds one
+commit-addressed AMD64 candidate on a native runner, with ARM64 remaining an
+explicit platform choice. Stable and preview workflows do not compile the
+image again: they verify the exact candidate exists, promote its manifest to
+the release tag, record provenance, and run smoke and populated-upgrade checks
+against the promoted digest.
 The smoke and populated-upgrade gates both pull that exact digest rather than a
 mutable version tag, so release approval is bound to the manifest written to
 `images.lock`.
@@ -52,10 +54,9 @@ If image publication or manifest verification fails, no GitHub release is create
 
 ## Pre-release images from dev
 
-Pre-release promotion is manual. Ordinary commits and merges into `dev` build
-the reusable AMD64 candidate but do not publish a versioned preview. After the
-candidate has passed its pull-request checks,
-run **Preview image** from Actions and provide a version such as
+Pre-release promotion is manual. After the candidate source has passed its
+pull-request checks, run **Candidate image** from Actions for the exact `dev`
+commit, then run **Preview image** and provide a version such as
 `2026.07.0-rc.1`, `2026.07.0-beta.1`, or `2026.07.0-alpha.1`.
 
 The workflow promotes the exact current `dev` AMD64 candidate, pushes only the

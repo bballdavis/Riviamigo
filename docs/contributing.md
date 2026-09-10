@@ -64,9 +64,17 @@ Install the repository hooks once in each checkout:
 pnpm hooks:install
 ```
 
-The hooks use the fast local gate by default on every branch. This keeps an
-ordinary commit or push from starting disposable services or querying GitHub.
-Run the full local parity gate explicitly when you want it before pushing:
+The hooks use a small local sanity gate by default on every branch. It checks
+repository whitespace and migration integrity only; it does not run the PR
+quality suite, start disposable services, build images, or query GitHub. Run
+the broader local checks explicitly when you want them:
+
+```bash
+pnpm verify:local
+```
+
+Run the full local parity gate explicitly when you want the disposable-stack
+and database-backed checks:
 
 ```bash
 pnpm verify:ci
@@ -91,7 +99,8 @@ deploys it to the production-dev server for full-stack testing; that remote
 validation remains separate from the local hook.
 
 `verify:local` runs the static, dependency, frontend, backend, documentation,
-contract, and unit-test checks without starting disposable services.
+contract, and unit-test checks without starting disposable services. The
+default Git hooks intentionally run only the small sanity gate described above.
 `verify:ci` starts isolated digest-pinned TimescaleDB and Redis containers,
 then adds SQLx migration/metadata checks, Clippy, database-backed tests, the
 ignored migration-ledger repair test, and workspace/documentation builds. The
@@ -140,11 +149,11 @@ CI is organized into independently visible workflows so contributors can rerun
 the evidence closest to their change:
 
 The fast validation gate runs on pull requests targeting `dev` or `main`, not
-on every push to either protected branch. Pushes to `main` and `dev` build an
-unversioned, commit-addressed AMD64 candidate that feeds the shared GHCR layer
-cache. Versioned container images are published only by intentional release
-workflows: stable images from a validated `main` tag and pre-release images
-from an approved `dev` candidate.
+on every push to either protected branch. Candidate image builds are manual;
+run **Candidate image** from Actions with the desired source ref and platform
+when a dev or release-candidate image is needed. Versioned container images are
+published only by intentional release workflows: stable images from a
+validated `main` tag and pre-release images from an approved `dev` candidate.
 
 PRs run deterministic quality, typecheck, unit-test, SQLx, route-security, and
 source-scan checks. Coverage and Storybook run from the scheduled/manual

@@ -71,6 +71,11 @@ function hygiene() {
   run('git', ['diff', '--check', 'HEAD'], { label: 'Repository whitespace check' });
 }
 
+function fastHookChecks() {
+  hygiene();
+  run('node', ['tools/migration-integrity.mjs'], { label: 'Migration integrity' });
+}
+
 function commonChecks({ includeInstall = false, includeBuild = false, apiTests = 'lib', env = {} } = {}) {
   if (includeInstall) run('pnpm', ['install', '--frozen-lockfile'], { label: 'Install locked dependencies' });
   hygiene();
@@ -144,7 +149,7 @@ function hookMode() {
     return;
   }
   if (gate === 'full') ciChecks();
-  else commonChecks({ includeInstall: false, includeBuild: false });
+  else fastHookChecks();
 }
 
 function installHooks() {
