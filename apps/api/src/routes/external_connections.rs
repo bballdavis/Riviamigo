@@ -5,7 +5,7 @@ use std::time::Duration;
 use axum::{
     body::Body,
     extract::{OriginalUri, Path, Query, State},
-    http::{header, HeaderValue, Response, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Response, StatusCode},
     routing::{get, post, put},
     Json, Router,
 };
@@ -26,6 +26,10 @@ use crate::{
 
 const BASEMAP_RASTER_ROUTE: &str = "/external/basemap/raster/{style}/{z}/{x}/{y}";
 const OPENFREEMAP_PROXY_ROUTE: &str = "/external/basemap/openfreemap/{*resource}";
+// Bump when cached OpenFreeMap responses change representation. The first
+// cache format stored upstream style JSON before dependent URLs were rewritten
+// to the authenticated first-party proxy.
+const OPENFREEMAP_CACHE_FORMAT: &str = "v2";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -662,7 +666,9 @@ fn basemap_proxy_url(style: &str, revision: &str) -> String {
 }
 
 fn openfreemap_style_proxy_url(style: &str, revision: &str) -> String {
-    format!("/v1/external/basemap/openfreemap/styles/{style}?v={revision}")
+    format!(
+        "/v1/external/basemap/openfreemap/styles/{style}?v={revision}&cf={OPENFREEMAP_CACHE_FORMAT}"
+    )
 }
 
 fn resolve_basemap_provider(settings: &ConnectionSettingsRow) -> &'static str {
@@ -1126,9 +1132,22 @@ fn carto_basemap_key_query(key: &str) -> (&'static str, &str) {
 async fn proxy_openfreemap_resource(
     State(state): State<AppState>,
     _auth: AuthUser,
+    headers: HeaderMap,
     Path(resource): Path<String>,
 ) -> Result<Response<Body>, AppError> {
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok());
+    let resource_class = openfreemap_resource_class(&resource);
+    let started_at = std::time::Instant::now();
     if !openfreemap_resource_is_allowed(&resource) {
+        log_openfreemap_failure(
+            request_id,
+            resource_class,
+            None,
+            "invalid_resource",
+            started_at,
+        );
         return Err(AppError::Validation("invalid OpenFreeMap resource".into()));
     }
     let settings = connections::require_enabled(&state.pool, connections::BASEMAP).await?;
@@ -1138,7 +1157,7 @@ async fn proxy_openfreemap_resource(
         ));
     }
     let revision = settings.updated_at.timestamp_millis();
-    let cache_key = format!("external:basemap:openfreemap:{revision}:{resource}");
+    let cache_key = openfreemap_cache_key(revision, &resource);
     let content_type_key = format!("{cache_key}:content-type");
     let max_age_key = format!("{cache_key}:max-age");
     if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
@@ -1159,22 +1178,65 @@ async fn proxy_openfreemap_resource(
         }
     }
 
-    let endpoint = Url::parse(&format!("https://tiles.openfreemap.org/{resource}"))
-        .map_err(|_| AppError::Validation("invalid OpenFreeMap resource".into()))?;
+    let endpoint = match Url::parse(&format!("https://tiles.openfreemap.org/{resource}")) {
+        Ok(endpoint) => endpoint,
+        Err(_) => {
+            record_openfreemap_failure(
+                &state,
+                request_id,
+                resource_class,
+                None,
+                "endpoint_parse",
+                started_at,
+            )
+            .await;
+            return Err(AppError::Validation("invalid OpenFreeMap resource".into()));
+        }
+    };
     connections::record_attempt(&state.pool, connections::BASEMAP).await;
-    let response = outbound_client_for_url(&endpoint, &[])
-        .await?
-        .get(endpoint)
-        .send()
-        .await
-        .map_err(|_| AppError::DependencyUnavailable("OpenFreeMap request failed".into()))?;
+    let client = match outbound_client_for_url(&endpoint, &[]).await {
+        Ok(client) => client,
+        Err(error) => {
+            record_openfreemap_failure(
+                &state,
+                request_id,
+                resource_class,
+                None,
+                "client_setup",
+                started_at,
+            )
+            .await;
+            return Err(error);
+        }
+    };
+    let response = match client.get(endpoint).send().await {
+        Ok(response) => response,
+        Err(_) => {
+            record_openfreemap_failure(
+                &state,
+                request_id,
+                resource_class,
+                None,
+                "transport",
+                started_at,
+            )
+            .await;
+            return Err(AppError::DependencyUnavailable(
+                "OpenFreeMap request failed".into(),
+            ));
+        }
+    };
     if !response.status().is_success() {
-        connections::record_failure(
-            &state.pool,
-            connections::BASEMAP,
-            &format!("HTTP {}", response.status()),
-        )
-        .await;
+        let status = response.status();
+        connections::record_failure(&state.pool, connections::BASEMAP, &format!("HTTP {status}"))
+            .await;
+        log_openfreemap_failure(
+            request_id,
+            resource_class,
+            Some(status.as_u16()),
+            "upstream_status",
+            started_at,
+        );
         return Err(AppError::DependencyUnavailable(
             "OpenFreeMap provider returned an error".into(),
         ));
@@ -1186,9 +1248,41 @@ async fn proxy_openfreemap_resource(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_string();
-    let bytes = read_response_limited(response, 10 * 1024 * 1024, "OpenFreeMap resource").await?;
+    let bytes = match read_openfreemap_response_limited(response, 10 * 1024 * 1024).await {
+        Ok(bytes) => bytes,
+        Err(error_class) => {
+            record_openfreemap_failure(
+                &state,
+                request_id,
+                resource_class,
+                None,
+                error_class,
+                started_at,
+            )
+            .await;
+            let message = match error_class {
+                "response_size" => "OpenFreeMap resource response exceeded the limit",
+                _ => "OpenFreeMap resource response failed",
+            };
+            return Err(AppError::DependencyUnavailable(message.into()));
+        }
+    };
     let bytes = if is_json_content_type(&content_type) {
-        rewrite_openfreemap_json(&bytes)?
+        match rewrite_openfreemap_json(&bytes) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                record_openfreemap_failure(
+                    &state,
+                    request_id,
+                    resource_class,
+                    None,
+                    "invalid_json",
+                    started_at,
+                )
+                .await;
+                return Err(error);
+            }
+        }
     } else {
         bytes
     };
@@ -1201,6 +1295,84 @@ async fn proxy_openfreemap_resource(
     // reqwest may transparently decode an upstream response. Do not copy its
     // Content-Encoding header unless the body is known to retain that encoding.
     tile_response(bytes, &content_type, cache_ttl)
+}
+
+async fn record_openfreemap_failure(
+    state: &AppState,
+    request_id: Option<&str>,
+    resource_class: &'static str,
+    upstream_status: Option<u16>,
+    error_class: &'static str,
+    started_at: std::time::Instant,
+) {
+    connections::record_failure(
+        &state.pool,
+        connections::BASEMAP,
+        &format!("OpenFreeMap {error_class}"),
+    )
+    .await;
+    log_openfreemap_failure(
+        request_id,
+        resource_class,
+        upstream_status,
+        error_class,
+        started_at,
+    );
+}
+
+fn log_openfreemap_failure(
+    request_id: Option<&str>,
+    resource_class: &'static str,
+    upstream_status: Option<u16>,
+    error_class: &'static str,
+    started_at: std::time::Instant,
+) {
+    tracing::warn!(
+        event = "openfreemap.proxy_failed",
+        provider = "openfreemap",
+        resource_kind = resource_class,
+        style_or_resource_class = resource_class,
+        upstream_status = ?upstream_status,
+        error_class,
+        duration_ms = started_at.elapsed().as_millis() as u64,
+        cache_state = "miss",
+        request_id = ?request_id,
+        "OpenFreeMap provider request failed"
+    );
+}
+
+fn openfreemap_resource_class(resource: &str) -> &'static str {
+    match resource.split('/').next() {
+        Some("styles") => "style",
+        Some("planet") | Some("natural_earth") => "tile",
+        Some("sprites") => "sprite",
+        Some("fonts") => "font",
+        _ => "unknown",
+    }
+}
+
+fn openfreemap_cache_key(revision: i64, resource: &str) -> String {
+    format!("external:basemap:openfreemap:{OPENFREEMAP_CACHE_FORMAT}:{revision}:{resource}")
+}
+
+async fn read_openfreemap_response_limited(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>, &'static str> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err("response_size");
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "response_read")? {
+        if bytes.len().saturating_add(chunk.len()) > limit {
+            return Err("response_size");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 fn openfreemap_resource_is_allowed(resource: &str) -> bool {
@@ -1296,10 +1468,17 @@ fn rewrite_openfreemap_json(bytes: &[u8]) -> Result<Vec<u8>, AppError> {
 fn rewrite_openfreemap_value(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::String(value) => {
-            *value = value.replace(
+            for prefix in [
                 "https://tiles.openfreemap.org/",
-                "/v1/external/basemap/openfreemap/",
-            );
+                "https://__TILEJSON_DOMAIN__/",
+            ] {
+                if let Some(resource) = value.strip_prefix(prefix) {
+                    *value = format!(
+                        "/v1/external/basemap/openfreemap/{resource}?cf={OPENFREEMAP_CACHE_FORMAT}"
+                    );
+                    break;
+                }
+            }
         }
         serde_json::Value::Array(values) => {
             for value in values {
@@ -1936,8 +2115,8 @@ fn decrypt_secret(age_key: &str, encrypted: Option<&[u8]>) -> Result<Option<Stri
 mod tests {
     use super::{
         active_endpoint, basemap_proxy_url, basemap_styles, carto_basemap_key_query,
-        endpoint_is_private, is_forbidden_ip, is_private_ip, openfreemap_resource_is_allowed,
-        parse_private_network_allowlist, resolve_basemap_provider,
+        endpoint_is_private, is_forbidden_ip, is_private_ip, openfreemap_cache_key,
+        openfreemap_resource_is_allowed, parse_private_network_allowlist, resolve_basemap_provider,
         resolve_effective_basemap_provider_update, rewrite_openfreemap_json,
         should_forward_carto_api_key, validate_tile_template, UpdateConnectionBody,
         BASEMAP_RASTER_ROUTE, OPENFREEMAP_PROXY_ROUTE,
@@ -2033,12 +2212,16 @@ mod tests {
             "styles/positron?url=https://evil.test"
         ));
         let rewritten = rewrite_openfreemap_json(
-            br#"{"sources":{"planet":{"url":"https://tiles.openfreemap.org/planet"}}}"#,
+            br#"{"sprite":"https://tiles.openfreemap.org/sprites/ofm_f384/ofm","sources":{"planet":{"url":"https://tiles.openfreemap.org/planet"},"labels":{"url":"https://__TILEJSON_DOMAIN__/fonts"}}}"#,
         )
         .expect("valid JSON");
         assert_eq!(
             String::from_utf8(rewritten).unwrap(),
-            r#"{"sources":{"planet":{"url":"/v1/external/basemap/openfreemap/planet"}}}"#
+            r#"{"sources":{"labels":{"url":"/v1/external/basemap/openfreemap/fonts?cf=v2"},"planet":{"url":"/v1/external/basemap/openfreemap/planet?cf=v2"}},"sprite":"/v1/external/basemap/openfreemap/sprites/ofm_f384/ofm?cf=v2"}"#
+        );
+        assert_eq!(
+            openfreemap_cache_key(123, "styles/positron"),
+            "external:basemap:openfreemap:v2:123:styles/positron"
         );
     }
 
@@ -2077,11 +2260,11 @@ mod tests {
             .any(|style| style.id == "3d" && style.perspective_3d));
         assert_eq!(
             styles[0].light_url,
-            "/v1/external/basemap/openfreemap/styles/positron?v=123"
+            "/v1/external/basemap/openfreemap/styles/positron?v=123&cf=v2"
         );
         assert_eq!(
             styles[0].dark_url,
-            "/v1/external/basemap/openfreemap/styles/dark?v=123"
+            "/v1/external/basemap/openfreemap/styles/dark?v=123&cf=v2"
         );
     }
 

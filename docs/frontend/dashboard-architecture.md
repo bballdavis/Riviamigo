@@ -52,6 +52,9 @@ to use the stable chart slug.
   style swaps keep one MapLibre instance and restore route and active-point
   overlays after `style.load`. Follow appearance tracks the page theme, named
   styles stay pinned, and 3D is Liberty plus a camera treatment.
+  Map configuration failures and MapLibre resource failures remain distinct;
+  both are reported through the shared frontend diagnostics contract described
+  in [Frontend error observability](../architecture/frontend-error-observability.md).
 - `apps/web` owns route composition and page-specific integrations of these
   seams. A trip-detail route and the Trips widget may compose the shared map,
   but neither owns a second map client, theme source, or provider URL policy.

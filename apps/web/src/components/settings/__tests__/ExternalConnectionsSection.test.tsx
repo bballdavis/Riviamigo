@@ -175,16 +175,30 @@ describe('ExternalConnectionsSection', () => {
 
   it('lets administrators pin OpenFreeMap without exposing CARTO key controls', async () => {
     const data = basemapResponse({ has_api_key: true, basemap_provider: 'auto' });
+    const updated = basemapResponse({
+      has_api_key: true,
+      basemap_provider: 'openfreemap',
+      endpoint: 'https://tiles.openfreemap.org',
+    });
     apiMocks.getExternalConnections.mockResolvedValue(data);
-    apiMocks.updateExternalConnection.mockResolvedValue(data);
+    apiMocks.updateExternalConnection.mockResolvedValue(updated);
     apiMocks.testExternalConnection.mockResolvedValue({ checks: [{ label: 'Basemap', message: 'OK' }], preview_data_url: null });
     renderSection();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Basemap provider' }));
+    const mode = await screen.findByRole('button', { name: 'Map basemap mode' });
+    const provider = screen.getByRole('button', { name: 'Basemap provider' });
+    expect(mode).toHaveClass('h-9');
+    expect(provider).toHaveClass('h-9');
+    expect(mode.closest('label')).toHaveClass('content-start');
+    expect(provider.closest('label')).toHaveClass('content-start');
+    expect(mode.closest('label')?.parentElement).toHaveClass('items-start');
+
+    fireEvent.click(provider);
     expect(screen.getByRole('option', { name: 'Automatic (recommended)' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('option', { name: 'OpenFreeMap' }));
 
     expect(screen.queryByLabelText('CARTO Basemap key')).not.toBeInTheDocument();
+    expect(screen.getByText(/Save to apply this provider to maps/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Test with synthetic data' }));
     await waitFor(() => expect(apiMocks.testExternalConnection).toHaveBeenCalledWith('basemap', expect.objectContaining({
       basemap_provider: 'openfreemap',
@@ -198,6 +212,7 @@ describe('ExternalConnectionsSection', () => {
       mode: 'remote',
     })));
     expect(apiMocks.updateExternalConnection.mock.calls[0]?.[1]).not.toHaveProperty('api_key');
+    await waitFor(() => expect(screen.queryByText(/Save to apply this provider to maps/)).not.toBeInTheDocument());
   });
 
   it('requires an explicit write-only key entry when CARTO is pinned', async () => {

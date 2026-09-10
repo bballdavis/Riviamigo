@@ -3,6 +3,7 @@ import type { BasemapStyleDescriptor, MapStylePreference } from '@riviamigo/type
 import { CHART_COLORS } from './ChartProvider';
 import { useDocumentPalette } from '../hooks/useDocumentPalette';
 import { useDocumentTheme } from '../hooks/useDocumentTheme';
+import { isAbortError, reportClientError } from '../lib/clientDiagnostics';
 import { useThemeRevision } from '../lib/themeRuntime';
 
 export interface LatLng { lat: number; lng: number; }
@@ -188,6 +189,7 @@ export function TripMapChart({
   const mapStylePreferenceRef = React.useRef<MapStylePreference>(mapStylePreference);
   const appliedBasemapSignatureRef = React.useRef('');
   const [mapError, setMapError] = React.useState<string | null>(null);
+  const [mapRetryVersion, setMapRetryVersion] = React.useState(0);
   const palette = useDocumentPalette();
   const isDark = useDocumentTheme();
   const themeRevision = useThemeRevision();
@@ -255,94 +257,125 @@ export function TripMapChart({
     let cancelled = false;
 
     (async () => {
-      const maplibregl = await mapLoader();
+      try {
+        const maplibregl = await mapLoader();
 
-      if (cancelled || !containerRef.current) return;
+        if (cancelled || !containerRef.current) return;
 
-      const firstPoint = routeList[0]?.track[0];
-      if (!firstPoint) return;
+        const firstPoint = routeList[0]?.track[0];
+        if (!firstPoint) return;
 
-      const initialBasemap = basemapRef.current;
-      const initialMapStyle = mapStyleRef.current;
-      const initialMapStylePreference = mapStylePreferenceRef.current;
-      appliedBasemapSignatureRef.current = basemapSignature(initialBasemap, initialMapStyle, initialMapStylePreference);
-      const map = new maplibregl.Map({
-        container: containerRef.current!,
-        style: buildMapLibreStyle(initialMapStyle, initialBasemap, initialMapStylePreference),
-        center: [firstPoint.lng, firstPoint.lat],
-        zoom: 12,
-        attributionControl: false,
-        transformRequest: (url: string) => {
-          try {
-            const requestUrl = new URL(url, window.location.origin);
-            if (requestUrl.origin === window.location.origin && requestUrl.pathname.startsWith('/v1/external/basemap/')) {
-              const token = accessTokenRef.current;
-              return token ? { url, headers: { Authorization: `Bearer ${token}` }, credentials: 'same-origin' } : { url, credentials: 'same-origin' };
+        const initialBasemap = basemapRef.current;
+        const initialMapStyle = mapStyleRef.current;
+        const initialMapStylePreference = mapStylePreferenceRef.current;
+        appliedBasemapSignatureRef.current = basemapSignature(initialBasemap, initialMapStyle, initialMapStylePreference);
+        const map = new maplibregl.Map({
+          container: containerRef.current!,
+          style: buildMapLibreStyle(initialMapStyle, initialBasemap, initialMapStylePreference),
+          center: [firstPoint.lng, firstPoint.lat],
+          zoom: 12,
+          attributionControl: false,
+          transformRequest: (url: string) => {
+            try {
+              const requestUrl = new URL(url, window.location.origin);
+              if (requestUrl.origin === window.location.origin && requestUrl.pathname.startsWith('/v1/external/basemap/')) {
+                const token = accessTokenRef.current;
+                return token ? { url, headers: { Authorization: `Bearer ${token}` }, credentials: 'same-origin' } : { url, credentials: 'same-origin' };
+              }
+            } catch {
+              // MapLibre will surface malformed source URLs through its normal error event.
             }
-          } catch {
-            // MapLibre will surface malformed source URLs through its normal error event.
-          }
-          return { url };
-        },
-        // Keep more tiles in the GPU cache to survive style swaps.
-        maxTileCacheSize: 512,
-      }) as MapApi;
+            return { url };
+          },
+          // Keep more tiles in the GPU cache to survive style swaps.
+          maxTileCacheSize: 512,
+        }) as MapApi;
 
-      mapRef.current = map;
+        mapRef.current = map;
 
-      map.on('error', () => {
-        if (basemapRef.current.enabled) setMapError('Map tiles unavailable');
-      });
-
-      map.on('load', () => {
-        if (!mapRef.current) return;
-
-        isLoadedRef.current = true;
-        lastRouteSignatureRef.current = '';
-        syncRoutes(
-          mapRef.current,
-          latestRoutesRef.current,
-          latestSelectedRouteIdsRef.current,
-          onRouteClickRef,
-          latestVisibleRouteSignatureRef.current,
-        );
-        syncActivePoint(mapRef.current, latestActivePointRef.current, lastActivePointRef);
-        applyPerspective(map, basemapRef.current, mapStylePreferenceRef.current);
-        // Configuration can arrive after the map is constructed but before
-        // its initial style loads. Reapply it after route sync; the regular
-        // style-load handler below restores the route source after the swap.
-        const currentSignature = basemapSignature(
-          basemapRef.current,
-          mapStyleRef.current,
-          mapStylePreferenceRef.current,
-        );
-        if (currentSignature !== appliedBasemapSignatureRef.current) {
-          appliedBasemapSignatureRef.current = currentSignature;
-          const restoreAfterInitialSwap = () => {
-            map.off('style.load', restoreAfterInitialSwap);
-            lastRouteSignatureRef.current = '';
-            syncRoutes(
-              map,
-              latestRoutesRef.current,
-              latestSelectedRouteIdsRef.current,
-              onRouteClickRef,
-              latestVisibleRouteSignatureRef.current,
-            );
-            lastActivePointRef.current = null;
-            syncActivePoint(map, latestActivePointRef.current, lastActivePointRef);
-            applyPerspective(map, basemapRef.current, mapStylePreferenceRef.current);
-          };
-          map.on('style.load', restoreAfterInitialSwap);
-          map.setStyle(buildMapLibreStyle(
-            mapStyleRef.current,
-            basemapRef.current,
-            mapStylePreferenceRef.current,
-          ));
-        }
-        requestAnimationFrame(() => {
-          mapRef.current?.resize();
+        map.on('error', (event) => {
+          const details = mapLibreErrorDetails(event);
+          // MapLibre aborts in-flight resources during an intentional style
+          // replacement. Those requests must not leave a stale failure overlay.
+          if (isAbortError(details.error)) return;
+          reportClientError(details.error, {
+            event: 'maplibre.error',
+            area: 'map',
+            operation: 'map-resource-load',
+            status: details.status,
+            provider: basemapRef.current.resolved_provider,
+            style: mapStylePreferenceRef.current,
+            resourceKind: details.resourceKind,
+            sourceId: details.sourceId,
+            url: details.url,
+            severity: 'error',
+          });
+          if (basemapRef.current.enabled) setMapError('Map tiles unavailable');
         });
-      });
+
+        map.on('load', () => {
+          if (!mapRef.current) return;
+
+          setMapError(null);
+          isLoadedRef.current = true;
+          lastRouteSignatureRef.current = '';
+          syncRoutes(
+            mapRef.current,
+            latestRoutesRef.current,
+            latestSelectedRouteIdsRef.current,
+            onRouteClickRef,
+            latestVisibleRouteSignatureRef.current,
+          );
+          syncActivePoint(mapRef.current, latestActivePointRef.current, lastActivePointRef);
+          applyPerspective(map, basemapRef.current, mapStylePreferenceRef.current);
+          // Configuration can arrive after the map is constructed but before
+          // its initial style loads. Reapply it after route sync; the regular
+          // style-load handler below restores the route source after the swap.
+          const currentSignature = basemapSignature(
+            basemapRef.current,
+            mapStyleRef.current,
+            mapStylePreferenceRef.current,
+          );
+          if (currentSignature !== appliedBasemapSignatureRef.current) {
+            appliedBasemapSignatureRef.current = currentSignature;
+            const restoreAfterInitialSwap = () => {
+              map.off('style.load', restoreAfterInitialSwap);
+              setMapError(null);
+              lastRouteSignatureRef.current = '';
+              syncRoutes(
+                map,
+                latestRoutesRef.current,
+                latestSelectedRouteIdsRef.current,
+                onRouteClickRef,
+                latestVisibleRouteSignatureRef.current,
+              );
+              lastActivePointRef.current = null;
+              syncActivePoint(map, latestActivePointRef.current, lastActivePointRef);
+              applyPerspective(map, basemapRef.current, mapStylePreferenceRef.current);
+            };
+            map.on('style.load', restoreAfterInitialSwap);
+            map.setStyle(buildMapLibreStyle(
+              mapStyleRef.current,
+              basemapRef.current,
+              mapStylePreferenceRef.current,
+            ));
+          }
+          requestAnimationFrame(() => {
+            mapRef.current?.resize();
+          });
+        });
+      } catch (error) {
+        if (cancelled) return;
+        reportClientError(error, {
+          event: 'maplibre.initialization_failed',
+          area: 'map',
+          operation: 'map-initialize',
+          provider: basemapRef.current.resolved_provider,
+          style: mapStylePreferenceRef.current,
+          severity: 'error',
+        });
+        setMapError('Map tiles unavailable');
+      }
     })();
 
     return () => {
@@ -357,7 +390,7 @@ export function TripMapChart({
     // Only run when the first routes arrive — NOT on mapStyle change so that
     // toggling dark/light doesn't destroy the map instance.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapLoader, routeList.length === 0]);
+  }, [mapLoader, mapRetryVersion, routeList.length === 0]);
 
   // ── Style swap — update tiles in place without destroying the map ─────────
   // setStyle() clears all sources/layers, so we re-sync routes once the new
@@ -369,6 +402,7 @@ export function TripMapChart({
     const map = mapRef.current;
 
     function onStyleLoad() {
+      setMapError(null);
       isLoadedRef.current = true;
       lastRouteSignatureRef.current = '';
       syncRoutes(
@@ -391,6 +425,21 @@ export function TripMapChart({
       map.off('style.load', onStyleLoad);
     };
   }, [basemap, mapStyle, mapStylePreference]);
+
+  const retryMap = React.useCallback(() => {
+    setMapError(null);
+    const map = mapRef.current;
+    if (!map) {
+      setMapRetryVersion((version) => version + 1);
+      return;
+    }
+    appliedBasemapSignatureRef.current = '';
+    map.setStyle(buildMapLibreStyle(
+      mapStyleRef.current,
+      basemapRef.current,
+      mapStylePreferenceRef.current,
+    ));
+  }, []);
 
   // Sync routes whenever routes or selection changes
   React.useEffect(() => {
@@ -442,7 +491,7 @@ export function TripMapChart({
         },
         properties: {
           id: route.id,
-          color: route.color?.trim() || routeColors[stableColorIndex(route.id, index) % routeColors.length],
+          color: route.color?.trim() || routeColors[index % routeColors.length],
           selected: nextSelectedRouteIds.includes(route.id),
         },
       })),
@@ -532,8 +581,17 @@ export function TripMapChart({
           <div className="absolute inset-0 flex items-center justify-center bg-bg/70 p-4 text-center">
             <div className="rounded-lg border border-border bg-bg-elevated px-3 py-2 text-xs text-fg-secondary shadow-lg">
               <p>{basemapError ?? mapError}</p>
-              {onBasemapRetry ? (
-                <button type="button" onClick={() => { setMapError(null); onBasemapRetry(); }} className="mt-1 font-medium text-accent hover:underline">Retry</button>
+              {(basemapError ? onBasemapRetry : mapError ? retryMap : undefined) ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (basemapError) onBasemapRetry?.();
+                    else retryMap();
+                  }}
+                  className="mt-1 font-medium text-accent hover:underline"
+                >
+                  Retry
+                </button>
               ) : null}
             </div>
           </div>
@@ -541,6 +599,42 @@ export function TripMapChart({
       </div>
     )
   );
+}
+
+function mapLibreErrorDetails(event: unknown): {
+  error: unknown;
+  status?: number | undefined;
+  resourceKind?: string | undefined;
+  sourceId?: string | undefined;
+  url?: string | undefined;
+} {
+  if (!isRecord(event)) return { error: event };
+
+  const nestedError = isRecord(event.error) ? event.error : undefined;
+  const status = finiteNumber(event.status) ?? (nestedError ? finiteNumber(nestedError.status) : undefined);
+  const url = firstString(event.url, nestedError?.url, event.resource, event.source);
+  const sourceId = firstString(event.sourceId, nestedError?.sourceId);
+  const resourceKind = firstString(event.resourceType, nestedError?.resourceType, event.type);
+
+  return {
+    error: nestedError ?? event.error ?? event,
+    status,
+    resourceKind,
+    sourceId,
+    url,
+  };
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  return values.find((value): value is string => typeof value === 'string' && value.length > 0);
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 function syncActivePoint(
@@ -615,14 +709,6 @@ function applyPerspective(map: MapApi, basemap: BasemapConfig, preference: MapSt
 
 function getRouteColors(): string[] {
   return FALLBACK_ROUTE_COLORS.map((fallbackColor, i) => getCssColor(`--rm-map-route-${i}`, fallbackColor));
-}
-
-function stableColorIndex(routeId: string, fallbackIndex: number) {
-  let hash = fallbackIndex;
-  for (let index = 0; index < routeId.length; index += 1) {
-    hash = ((hash << 5) - hash + routeId.charCodeAt(index)) | 0;
-  }
-  return Math.abs(hash);
 }
 
 function getCssColor(variableName: string, fallbackColor: string) {

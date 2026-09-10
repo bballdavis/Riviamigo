@@ -1,9 +1,9 @@
 import React from 'react';
-import { act, render, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { TripMapChart, type TripMapRoute } from '../../../../packages/ui/src/charts/TripMapChart';
 
-type MapHandler = () => void;
+type MapHandler = (event?: unknown) => void;
 
 class MockMap {
   handlers = new Map<string, MapHandler[]>();
@@ -49,9 +49,9 @@ class MockMap {
 
   off = vi.fn();
 
-  emit(event: string) {
+  emit(event: string, payload?: unknown) {
     for (const handler of this.handlers.get(event) ?? []) {
-      handler();
+      handler(payload);
     }
   }
 }
@@ -67,6 +67,144 @@ function buildRoutes(count: number): TripMapRoute[] {
 }
 
 describe('TripMapChart', () => {
+  it('logs MapLibre failures and retries the active style', async () => {
+    const mockMap = new MockMap();
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const config = {
+      enabled: true,
+      resolved_provider: 'openfreemap' as const,
+      revision: 'vector-1',
+      attributions: [],
+      styles: [{
+        id: 'follow-theme' as const,
+        label: 'Follow appearance',
+        kind: 'style' as const,
+        light_url: '/v1/external/basemap/openfreemap/styles/positron?v=1',
+        dark_url: '/v1/external/basemap/openfreemap/styles/dark?v=1',
+        perspective_3d: false,
+      }],
+    };
+
+    render(
+      <TripMapChart
+        routes={buildRoutes(1)}
+        track={[]}
+        basemapConfig={config}
+        mapStyle="light"
+        mapLoader={mapLoader as never}
+      />,
+    );
+
+    await waitFor(() => expect(mapLoader).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      mockMap.emit('error', {
+        error: new Error('style request failed'),
+        status: 503,
+        url: '/v1/external/basemap/openfreemap/planet/1/2/3.pbf',
+        sourceId: 'planet',
+        resourceType: 'Tile',
+      });
+    });
+
+    expect(consoleError).toHaveBeenCalledWith(
+      '[Riviamigo client]',
+      expect.objectContaining({
+        event: 'maplibre.error',
+        status: 503,
+        provider: 'openfreemap',
+        resourceKind: 'Tile',
+        url: '/v1/external/basemap/openfreemap/planet/<tile>.pbf',
+      }),
+    );
+    expect(screen.getByText('Map tiles unavailable')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(mockMap.setStyle).toHaveBeenCalledWith('/v1/external/basemap/openfreemap/styles/positron?v=1');
+    consoleError.mockRestore();
+  });
+
+  it('ignores expected resource aborts during a MapLibre style swap', async () => {
+    const mockMap = new MockMap();
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    render(
+      <TripMapChart
+        routes={buildRoutes(1)}
+        track={[]}
+        basemapConfig={{
+          enabled: true,
+          resolved_provider: 'openfreemap',
+          revision: 'vector-1',
+          attributions: [],
+          styles: [{
+            id: 'follow-theme',
+            label: 'Follow appearance',
+            kind: 'style',
+            light_url: '/v1/external/basemap/openfreemap/styles/positron?v=1',
+            dark_url: '/v1/external/basemap/openfreemap/styles/dark?v=1',
+            perspective_3d: false,
+          }],
+        }}
+        mapStyle="light"
+        mapLoader={mapLoader as never}
+      />,
+    );
+
+    await waitFor(() => expect(mapLoader).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      mockMap.emit('load');
+      mockMap.emit('error', { error: new DOMException('The operation was aborted', 'AbortError') });
+    });
+
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(screen.queryByText('Map tiles unavailable')).not.toBeInTheDocument();
+    consoleError.mockRestore();
+  });
+
+  it('shows and retries the map recovery state when MapLibre initialization fails', async () => {
+    const mockMap = new MockMap();
+    const mapConstructor = vi.fn(function Map() { return mockMap; });
+    const mapLoader = vi.fn()
+      .mockRejectedValueOnce(new Error('MapLibre failed to load'))
+      .mockResolvedValue({ Map: mapConstructor });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    render(
+      <TripMapChart
+        routes={buildRoutes(1)}
+        track={[]}
+        basemapConfig={{ enabled: true, resolved_provider: 'openfreemap', revision: 'vector-1' }}
+        mapLoader={mapLoader as never}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('Map tiles unavailable')).toBeInTheDocument());
+    expect(consoleError).toHaveBeenCalledWith(
+      '[Riviamigo client]',
+      expect.objectContaining({ event: 'maplibre.initialization_failed', area: 'map' }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(mapLoader).toHaveBeenCalledTimes(2));
+    expect(mapConstructor).toHaveBeenCalledTimes(1);
+    consoleError.mockRestore();
+  });
+
+  it('keeps configuration failures distinct from tile failures', () => {
+    render(
+      <TripMapChart
+        routes={buildRoutes(1)}
+        track={[]}
+        basemapError="Map configuration unavailable"
+        onBasemapRetry={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Map configuration unavailable')).toBeInTheDocument();
+  });
+
   it('maps Follow appearance to Positron in light mode and Dark in dark mode', async () => {
     const mockMap = new MockMap();
     const mapConstructor = vi.fn(function Map(_options: unknown) { return mockMap; });
@@ -131,13 +269,13 @@ describe('TripMapChart', () => {
       revision: 'vector-1',
       attributions: [],
       styles: [
-        { id: 'follow-theme' as const, label: 'Follow appearance', kind: 'style' as const, light_url: '/v1/external/basemap/styles/positron.json', dark_url: '/v1/external/basemap/styles/dark.json', perspective_3d: false },
-        { id: '3d' as const, label: '3D', kind: 'style' as const, light_url: '/v1/external/basemap/styles/liberty.json', dark_url: '/v1/external/basemap/styles/liberty.json', perspective_3d: true },
+        { id: 'follow-theme' as const, label: 'Follow appearance', kind: 'style' as const, light_url: '/v1/external/basemap/openfreemap/styles/positron?v=1', dark_url: '/v1/external/basemap/openfreemap/styles/dark?v=1', perspective_3d: false },
+        { id: '3d' as const, label: '3D', kind: 'style' as const, light_url: '/v1/external/basemap/openfreemap/styles/liberty?v=1', dark_url: '/v1/external/basemap/openfreemap/styles/liberty?v=1', perspective_3d: true },
       ],
     };
     const { rerender } = render(<TripMapChart routes={buildRoutes(1)} track={[]} basemapConfig={config} mapStylePreference="3d" mapLoader={mapLoader as never} />);
     await waitFor(() => expect(mapConstructor).toHaveBeenCalledTimes(1));
-    expect(mapConstructor.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ style: '/v1/external/basemap/styles/liberty.json' }));
+    expect(mapConstructor.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ style: '/v1/external/basemap/openfreemap/styles/liberty?v=1' }));
     await act(async () => mockMap.emit('load'));
     expect(mockMap.setPitch).toHaveBeenCalledWith(45);
     expect(mockMap.dragRotate.enable).toHaveBeenCalled();
@@ -215,6 +353,27 @@ describe('TripMapChart', () => {
     const sourceCall = mockMap.addSource.mock.calls[0]?.[1] as unknown as { data: { features: unknown[] } };
     expect(sourceCall.data.features).toHaveLength(15);
     expect(mockMap.fitBounds).toHaveBeenCalledTimes(1);
+  });
+
+  it('assigns consecutive route colors in order before cycling and preserves explicit colors', async () => {
+    const mockMap = new MockMap();
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
+    const routeColors = ['#110000', '#002200', '#000033', '#444400', '#550055', '#006666'];
+    routeColors.forEach((color, index) => document.documentElement.style.setProperty(`--rm-map-route-${index}`, color));
+    const routes = buildRoutes(8);
+    routes[2] = { ...routes[2]!, color: '#ABCDEF' };
+
+    render(<TripMapChart routes={routes} track={[]} height={320} mapLoader={mapLoader as never} />);
+    await waitFor(() => expect(mapLoader).toHaveBeenCalledTimes(1));
+    await act(async () => mockMap.emit('load'));
+
+    const sourceCall = mockMap.addSource.mock.calls.find(([id]) => id === 'trip-routes')?.[1] as unknown as {
+      data: { features: Array<{ properties: { color: string } }> };
+    };
+    expect(sourceCall.data.features.map((feature) => feature.properties.color)).toEqual([
+      routeColors[0], routeColors[1], '#ABCDEF', routeColors[3], routeColors[4], routeColors[5], routeColors[0], routeColors[1],
+    ]);
+    routeColors.forEach((_, index) => document.documentElement.style.removeProperty(`--rm-map-route-${index}`));
   });
 
   it('shows only selected routes and refits to their bounds when selection changes', async () => {

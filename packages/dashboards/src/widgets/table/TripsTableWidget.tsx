@@ -167,7 +167,7 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
               className="h-full w-full"
               accessToken={accessToken}
               basemapConfig={basemap.data}
-              basemapError={basemap.isError ? 'Map tiles unavailable' : null}
+              basemapError={basemap.isError ? 'Map configuration unavailable' : null}
               onBasemapRetry={() => void basemap.refetch()}
             />
           ) : (

@@ -151,7 +151,7 @@ describe('palette-aware chart renderer boundaries', () => {
     setPalette('rad');
     await waitFor(() => {
       const lastCall = source?.setData.mock.calls.at(-1)?.[0] as { features?: Array<{ properties?: { color?: string } }> };
-      expect(lastCall?.features?.[0]?.properties?.color).toBe(getThemeRuntimeSnapshot().cssVariables['--rm-map-route-3']);
+      expect(lastCall?.features?.[0]?.properties?.color).toBe(getThemeRuntimeSnapshot().cssVariables['--rm-map-route-0']);
     });
   });
 

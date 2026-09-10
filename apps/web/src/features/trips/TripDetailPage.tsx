@@ -357,7 +357,7 @@ export function TripDetailContent() {
                       mapStylePreference={userPreferences.data?.map_style ?? 'follow-theme'}
                       accessToken={accessToken}
                       basemapConfig={basemap.data}
-                      basemapError={basemap.isError ? 'Map tiles unavailable' : null}
+                      basemapError={basemap.isError ? 'Map configuration unavailable' : null}
                       onBasemapRetry={() => void basemap.refetch()}
                     />
                   )}

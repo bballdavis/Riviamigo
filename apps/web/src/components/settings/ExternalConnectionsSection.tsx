@@ -193,6 +193,8 @@ function ConnectionCard({
 
   const active = draft.enabled && draft.mode !== 'disabled';
   const custom = draft.mode === 'custom';
+  const basemapProviderChanged = connection.id === 'basemap'
+    && (draft.basemap_provider ?? 'auto') !== (connection.basemap_provider ?? 'auto');
 
   function save() {
     if (!active && connection.enabled && !window.confirm(`Disable ${connection.name}? ${connection.disabled_effect}`)) return;
@@ -275,7 +277,7 @@ function ConnectionCard({
 
         {connection.editable ? (
           <div className="grid gap-3 rounded-xl border border-border p-3">
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid items-start gap-3 sm:grid-cols-2">
               <Field label="Mode">
                 <SelectPicker
                   className="w-full"
@@ -315,6 +317,7 @@ function ConnectionCard({
                       : (draft.basemap_provider ?? 'auto') === 'carto'
                         ? 'Always uses CARTO and requires a stored or new CARTO key.'
                         : 'Automatic uses CARTO when a key is stored; otherwise it uses OpenFreeMap.'}
+                    {basemapProviderChanged ? ' Save to apply this provider to maps.' : ''}
                   </span>
                 </Field>
               ) : null}
@@ -507,7 +510,7 @@ function CustomFields({ connection, draft, setDraft, apiKey, setApiKey, bearerTo
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label className="grid gap-1"><span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">{label}</span>{children}</label>;
+  return <label className="grid content-start gap-1"><span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">{label}</span>{children}</label>;
 }
 
 function Info({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {

@@ -43,7 +43,7 @@ Choosing **Disabled** keeps the route on a neutral background. Custom XYZ raster
 
 Riviamigo keeps a persistent local cache for basemap tiles and address-search results. Reopening a map or repeating an address search uses the local cache instead of contacting the provider again. Reverse-geocoded address records are also stored in the database and survive restarts.
 
-Use **Test with synthetic data** in External Connections to verify a provider without sending vehicle history. If a map has route geometry but its basemap is unavailable, Riviamigo keeps the route visible on a neutral background and identifies the tile-provider failure.
+Use **Test with synthetic data** in External Connections to verify a provider without sending vehicle history. If a map has route geometry but its basemap is unavailable, Riviamigo keeps the route visible on a neutral background and identifies the failure. **Map configuration unavailable** means the signed-in basemap configuration request failed; **Map tiles unavailable** means a configured style or tile resource failed. Each state has its own retry action, and actionable browser diagnostics remain available in the local console.
 
 The selected connection shows its entry count and storage use. Administrators can use **Purge cache** when a provider changes data or storage needs to be reclaimed. Purging map tiles means the next view may request a tile again. Purging Nominatim removes lookup-only address records and search results, while preserving addresses attached to trips, charge sessions, or saved places.
 
@@ -77,4 +77,4 @@ addresses, search text, query strings, credentials, VINs, and vehicle names.
 
 Use **Test with synthetic data** before relying on a provider. The result is separate from runtime health, so testing an unsaved endpoint never overwrites the installed provider's last-success record. Each result shows named checks and safe messages; it uses a generic location, map tile, or icon name rather than a real drive.
 
-For a release or a new self-hosted endpoint, verify every enabled connection, then inspect a signed-in browser's network panel. Browser requests should target only Riviamigo's same-origin basemap and Iconify proxy paths. A tile failure switches the map to a neutral recovery state with a retry action; it must not leave a blank interactive map.
+For a release or a new self-hosted endpoint, verify every enabled connection, then inspect a signed-in browser's network panel. Browser requests should target only Riviamigo's same-origin basemap and Iconify proxy paths. A configuration or tile failure switches the map to a neutral recovery state with the matching retry action; it must not leave a blank interactive map. See [Frontend error observability](../architecture/frontend-error-observability.md) for the safe diagnostic fields and expected quiet failures.
