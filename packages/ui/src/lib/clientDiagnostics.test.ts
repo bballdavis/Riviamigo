@@ -50,7 +50,7 @@ describe('client diagnostics', () => {
     window.dispatchEvent(errorEvent);
 
     expect(consoleError).toHaveBeenCalledWith(
-      '[Riviamigo client]',
+      expect.stringContaining('[Riviamigo client] browser.error: Error: uncaught browser failure'),
       expect.objectContaining({ event: 'browser.error', area: 'browser' }),
     );
     expect(preventDefault).toHaveBeenCalled();
@@ -68,7 +68,7 @@ describe('client diagnostics', () => {
     window.dispatchEvent(rejectionEvent);
 
     expect(consoleError).toHaveBeenCalledWith(
-      '[Riviamigo client]',
+      expect.stringContaining('[Riviamigo client] browser.unhandled_rejection: Error: uncaught rejection'),
       expect.objectContaining({ event: 'browser.unhandled_rejection', area: 'browser' }),
     );
     expect(preventDefault).toHaveBeenCalled();

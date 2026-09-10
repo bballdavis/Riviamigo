@@ -75,10 +75,11 @@ export function reportClientError(
   recentReports.set(dedupeKey, now);
 
   const severity = context.severity ?? defaultSeverity(context.area);
+  const summary = `[Riviamigo client] ${record.event}: ${record.error.name}: ${record.error.message}`;
   if (severity === 'error') {
-    console.error('[Riviamigo client]', record);
+    console.error(summary, record);
   } else {
-    console.warn('[Riviamigo client]', record);
+    console.warn(summary, record);
   }
 }
 

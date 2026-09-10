@@ -105,11 +105,11 @@ export function CurrentVehicleStatePanel({
     rr: makeTireDisplay(status?.tire_rr_psi, status?.tire_rr_status, targetTirePressurePsi),
   };
   const stats = [
-    { label: 'Driver mode', value: renderDriverMode(status?.drive_mode, status?.gear_status), icon: <Car className="h-3.5 w-3.5" /> },
-    { label: 'Altitude', value: formatAltitude(status?.altitude_m), icon: <MapPin className="h-3.5 w-3.5" /> },
-    { label: 'Cabin', value: formatTemp(status?.cabin_temp_c), icon: <Thermometer className="h-3.5 w-3.5" /> },
-    { label: 'Speed', value: formatMph(status?.speed_mph), icon: <Gauge className="h-3.5 w-3.5" /> },
-    { label: 'Software', value: formatSoftware(status), icon: <Cpu className="h-3.5 w-3.5" /> },
+    { label: 'Driver mode', value: renderDriverMode(status?.drive_mode, status?.gear_status), icon: <Car className="h-3.5 w-3.5" style={{ color: 'var(--rm-dm-everyday)' }} /> },
+    { label: 'Altitude', value: formatAltitude(status?.altitude_m), icon: <MapPin className="h-3.5 w-3.5" style={{ color: 'var(--rm-chart-teal)' }} /> },
+    { label: 'Cabin', value: formatTemp(status?.cabin_temp_c), icon: <Thermometer className="h-3.5 w-3.5" style={{ color: 'var(--rm-chart-sky)' }} /> },
+    { label: 'Speed', value: formatMph(status?.speed_mph), icon: <Gauge className="h-3.5 w-3.5" style={{ color: 'var(--rm-chart-sky)' }} /> },
+    { label: 'Software', value: formatSoftware(status), icon: <Cpu className="h-3.5 w-3.5" style={{ color: 'var(--rm-status-positive)' }} /> },
   ];
   const freshnessLabel = status?.telemetry_stale
     ? 'Telemetry stale'
@@ -140,7 +140,7 @@ export function CurrentVehicleStatePanel({
   return (
     <section
       className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border p-4 shadow-sm"
-      style={{ background: 'radial-gradient(circle at 20% 20%, color-mix(in oklab, var(--rm-accent) 16%, transparent) 32%, transparent), linear-gradient(135deg, var(--rm-bg-surface), var(--rm-bg-elevated))' }}
+      style={{ background: 'var(--rm-bg-surface)' }}
     >
       <div className="mb-4 flex shrink-0 items-center justify-between gap-3">
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-fg-tertiary">Vehicle overview</p>
@@ -149,8 +149,17 @@ export function CurrentVehicleStatePanel({
         </span>
       </div>
       <div className="grid flex-1 min-h-0 content-stretch gap-4 md:grid-cols-2 xl:grid-cols-[16rem_minmax(22rem,1fr)_18rem]">
-        <div className="grid min-h-60 grid-cols-[3.75rem_minmax(0,1fr)] gap-4 rounded-2xl border border-accent/25 bg-accent/10 p-4">
-          <div className="relative h-full min-h-48 overflow-hidden rounded-2xl border border-accent/40 bg-bg-surface">
+        <div
+          className="grid min-h-60 grid-cols-[3.75rem_minmax(0,1fr)] gap-4 rounded-2xl border p-4"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--rm-accent) 8%, var(--rm-bg-surface))',
+            borderColor: 'color-mix(in srgb, var(--rm-accent) 28%, var(--rm-border-default))',
+          }}
+        >
+          <div
+            className="relative h-full min-h-48 overflow-hidden rounded-2xl border bg-bg-surface"
+            style={{ borderColor: 'color-mix(in srgb, var(--rm-accent) 32%, var(--rm-border-default))' }}
+          >
             <div data-testid="overview-soc-rail" className="absolute inset-1 flex items-end overflow-hidden rounded-xl p-1">
               <div
                 data-testid="overview-soc-fill"
@@ -211,7 +220,7 @@ export function CurrentVehicleStatePanel({
         </div>
         <div className="md:col-span-2 xl:col-span-1 grid auto-rows-fr gap-2 md:grid-cols-2 xl:grid-cols-1">
           {stats.map((stat) => (
-            <div key={stat.label} className="flex min-h-10 items-center justify-between gap-3 rounded-xl border border-border bg-bg-elevated/70 px-3 py-2 text-sm">
+            <div key={stat.label} className="flex min-h-10 items-center justify-between gap-3 rounded-xl border border-border bg-bg-surface px-3 py-2 text-sm">
               <span className="inline-flex min-w-0 items-center gap-2 truncate text-fg-tertiary">
                 {stat.icon}
                 <span className="truncate">{stat.label}</span>

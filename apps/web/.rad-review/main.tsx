@@ -1,0 +1,10 @@
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {QueryClient,QueryClientProvider} from '@tanstack/react-query';
+import {AppLayout} from '../src/components/layout/AppLayout';
+import {applyThemePreferences} from '@riviamigo/ui/lib/theme';
+import '../src/index.css';
+applyThemePreferences({schemaVersion:2,mode:'light',selection:{kind:'builtin',themeId:'rad'}});
+const series=Array.from({length:16},(_,index)=>`var(--rm-series-${String(index+1).padStart(2,'0')})`);
+const routes=Array.from({length:6},(_,index)=>`var(--rm-map-route-${index})`);
+createRoot(document.getElementById('root')!).render(<QueryClientProvider client={new QueryClient()}><AppLayout activeKey="dashboard"><h1 className="text-2xl font-bold">RAD palette review</h1><p className="mt-2 text-fg-secondary">Warm neutral surfaces with vermilion, gold, teal, and alternating data colors.</p><section className="mt-6 rounded-xl border border-border bg-bg-elevated p-5"><h2 className="font-semibold">Ordered chart series</h2><div className="mt-4 grid grid-cols-8 gap-2">{series.map((color,index)=><div key={color} className="flex h-20 items-end rounded-lg p-2 text-xs font-bold" style={{backgroundColor:color,color:index===0?'white':'#10363B'}}>{index+1}</div>)}</div><h2 className="mt-6 font-semibold">Consecutive trip routes</h2><div className="mt-3 grid grid-cols-6 gap-2">{routes.map((color,index)=><div key={color} className="h-8 rounded-full" style={{backgroundColor:color}} title={`Route ${index+1}`}/>)}</div></section></AppLayout></QueryClientProvider>);

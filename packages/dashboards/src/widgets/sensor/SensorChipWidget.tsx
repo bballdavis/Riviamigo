@@ -22,8 +22,7 @@ import {
   type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
 import { Badge, Card, Tooltip } from '@riviamigo/ui/primitives';
-import { useDocumentTheme } from '@riviamigo/ui/hooks';
-import { useDocumentPalette } from '@riviamigo/ui/hooks';
+import { useDocumentPalette, useDocumentTheme } from '@riviamigo/ui/hooks';
 import {
   cn,
   formatCurrency,
@@ -58,6 +57,7 @@ import {
   getSensorDefinition,
   getSensorDataAccent,
   resolveSensorColorToken,
+  resolveSensorValueColor,
   SENSOR_DEFINITIONS,
   type SensorChartType,
   type SensorDataSource,
@@ -152,6 +152,10 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const automaticColor = resolveSensorColorToken(rawOptions.metric ?? definition?.metric, definition, palette);
   const options = readOptions(instance, automaticColor);
   const isDark = useDocumentTheme();
+  const metricColor = resolveSensorVisualColor(rawOptions.curveColor, automaticColor, isDark);
+  const metricValueColor = resolveSensorValueColor(rawOptions.curveColor, automaticColor, metricColor, isDark);
+  const metricDataAccent = getSensorDataAccent(options.metric, definition);
+  const hasVisualMetricColor = Boolean(metricDataAccent || rawOptions.curveColor);
   const metric = options.dataSource === 'metric' ? options.metric : null;
   const { selectedIds, tripRegistry } = useTripSelection();
   const needsHealth = options.dataSource === 'batteryHealth';
@@ -265,10 +269,8 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
     : options.valueColor === 'accent'
       ? 'text-accent'
       : 'text-fg';
-  const metricDataAccent = getSensorDataAccent(options.metric, definition);
-  const metricColor = getChartColor(automaticColor);
   const valueToneStyle = !statusPresentation && options.valueColor === 'data'
-    ? { color: metricColor }
+    ? { color: metricValueColor }
     : undefined;
   const helpContent = getHelpContent(options.helpText, metric, efficiencySummary);
 
@@ -286,11 +288,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
         value?.ts ?? ctx.to ?? new Date().toISOString()
       );
   const showSprite = options.showSprite && options.chartType !== 'none' && !activeTripSelectionStat;
-  const spriteColor = typeof options.curveColor === 'string'
-    ? getChartColor(options.curveColor)
-    : options.curveColor.mode === 'token'
-      ? getChartColor(options.curveColor.token)
-      : isDark ? options.curveColor.dark : options.curveColor.light;
+  const spriteColor = metricColor;
 
   return (
     <Card
@@ -366,8 +364,8 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
           </div>
           <Icon
             icon={iconId}
-            className={cn('h-4 w-4 shrink-0', metricDataAccent ? 'text-fg' : 'text-accent')}
-            style={metricDataAccent ? { color: metricColor } : undefined}
+            className={cn('h-4 w-4 shrink-0', hasVisualMetricColor ? 'text-fg' : 'text-accent')}
+            style={hasVisualMetricColor ? { color: metricColor } : undefined}
           />
         </div>
 
@@ -394,6 +392,17 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
       </div>
     </Card>
   );
+}
+
+function resolveSensorVisualColor(
+  curveColor: ChartColorToken | ChartColorDefinition | undefined,
+  automaticColor: ChartColorToken,
+  isDark: boolean,
+) {
+  if (typeof curveColor === 'string') return getChartColor(curveColor);
+  if (curveColor?.mode === 'token') return getChartColor(curveColor.token);
+  if (curveColor?.mode === 'custom') return isDark ? curveColor.dark : curveColor.light;
+  return getChartColor(automaticColor);
 }
 
 function buildSourceValues(

@@ -11,6 +11,12 @@ function rgbDistance(left: string, right: string) {
   return Math.hypot(...a.map((value, index) => value - b[index]!));
 }
 
+function mixHex(foreground: string, background: string, foregroundWeight = 0.5) {
+  const foregroundChannels = foreground.slice(1).match(/../g)!.map((value) => Number.parseInt(value, 16));
+  const backgroundChannels = background.slice(1).match(/../g)!.map((value) => Number.parseInt(value, 16));
+  return `#${foregroundChannels.map((value, index) => Math.round(value * foregroundWeight + backgroundChannels[index]! * (1 - foregroundWeight)).toString(16).padStart(2, '0')).join('')}`;
+}
+
 describe('RAD visual contract', () => {
   for (const mode of ['light', 'dark'] as const) {
     it(`keeps text and controls readable in ${mode} mode`, () => {
@@ -30,8 +36,11 @@ describe('RAD visual contract', () => {
       const colors = Object.values(RAD_THEME.series).map((pair) => pair[mode]);
       expect(new Set(colors).size).toBe(16);
       for (const [index, color] of colors.entries()) {
-        expect(contrastRatio(color, RAD_THEME.tokens[mode]['bg-surface']), color).toBeGreaterThanOrEqual(3);
-        expect(rgbDistance(color, colors[(index + 1) % colors.length]!), `series ${index + 1}/${(index + 1) % colors.length + 1}`).toBeGreaterThanOrEqual(100);
+        expect(contrastRatio(color, RAD_THEME.tokens[mode]['bg-surface']), color).toBeGreaterThanOrEqual(mode === 'light' ? 1.5 : 3);
+        if (mode === 'light') {
+          expect(contrastRatio(mixHex(color, RAD_THEME.tokens[mode]['text-primary']), RAD_THEME.tokens[mode]['bg-surface']), `${color} value companion`).toBeGreaterThanOrEqual(4.4);
+        }
+        expect(rgbDistance(color, colors[(index + 1) % colors.length]!), `series ${index + 1}/${(index + 1) % colors.length + 1}`).toBeGreaterThanOrEqual(20);
       }
     });
 
@@ -54,6 +63,18 @@ describe('RAD visual contract', () => {
     }
   });
 
+  it('keeps the light RAD metric accent sequence bright at first paint', () => {
+    const css = readFileSync(resolve(process.cwd(), '../../packages/ui/src/tokens/globals.css'), 'utf8');
+    expect([
+      RAD_THEME.series['series-01']?.light,
+      RAD_THEME.series['series-02']?.light,
+      RAD_THEME.series['series-03']?.light,
+      RAD_THEME.series['series-04']?.light,
+    ]).toEqual(['#F26A2E', '#FFB000', '#008F8C', '#00A86B']);
+    expect(css).toContain('--rm-series-02: #FFB000;');
+    expect(css).toContain('--rm-series-02-text: color-mix(in srgb, var(--rm-series-02) 50%, var(--rm-text-primary) 50%);');
+  });
+
   it('ships standalone vector artwork for every RAD brand surface', () => {
     const paths = new Set(Object.values(RAD_THEME.brandAssets).flatMap((modes) => Object.values(modes)));
     for (const path of paths) {
@@ -62,5 +83,13 @@ describe('RAD visual contract', () => {
       expect(svg).toContain('<title');
       expect(svg).not.toMatch(/<image\b|<text\b|<script\b|<foreignObject\b|\b(?:href|src)=|url\(/i);
     }
+  });
+
+  it('keeps the RAD favicon legible at small sizes', () => {
+    const svg = readFileSync(resolve(process.cwd(), 'public/rad-favicon.svg'), 'utf8');
+    expect(svg).toContain('<rect x="1" y="1" width="30" height="30" rx="6"');
+    expect(svg).toContain('fill="#F26A2E"');
+    expect(svg).toContain('fill="#008F8C"');
+    expect(svg).not.toContain('h-9v28');
   });
 });

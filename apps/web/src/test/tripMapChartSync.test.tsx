@@ -108,7 +108,7 @@ describe('TripMapChart', () => {
     });
 
     expect(consoleError).toHaveBeenCalledWith(
-      '[Riviamigo client]',
+      expect.stringContaining('[Riviamigo client] maplibre.error: Error: style request failed'),
       expect.objectContaining({
         event: 'maplibre.error',
         status: 503,
@@ -182,7 +182,7 @@ describe('TripMapChart', () => {
 
     await waitFor(() => expect(screen.getByText('Map tiles unavailable')).toBeInTheDocument());
     expect(consoleError).toHaveBeenCalledWith(
-      '[Riviamigo client]',
+      expect.stringContaining('[Riviamigo client] maplibre.initialization_failed: Error: MapLibre failed to load'),
       expect.objectContaining({ event: 'maplibre.initialization_failed', area: 'map' }),
     );
 
@@ -442,8 +442,8 @@ describe('TripMapChart', () => {
 
     const mapOptions = mapConstructor.mock.calls[0]?.[0] as unknown as { transformRequest: (url: string) => { url: string; headers?: Record<string, string> } };
     expect(mapOptions.transformRequest('/v1/external/basemap/raster/light/1/2/3.png').headers).toEqual({ Authorization: 'Bearer first-party-token' });
-    expect(mapOptions.transformRequest('https://riviamigo.invalid/v1/external/basemap/openfreemap/sprites/ofm_f384/ofm.json?cf=v2')).toEqual({
-      url: 'http://localhost:3000/v1/external/basemap/openfreemap/sprites/ofm_f384/ofm.json?cf=v2',
+    expect(mapOptions.transformRequest('https://riviamigo.invalid/v1/external/basemap/openfreemap/sprites/ofm_f384/ofm.json?cf=v3')).toEqual({
+      url: 'http://localhost:3000/v1/external/basemap/openfreemap/sprites/ofm_f384/ofm.json?cf=v3',
       headers: { Authorization: 'Bearer first-party-token' },
       credentials: 'same-origin',
     });

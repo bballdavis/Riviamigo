@@ -123,6 +123,10 @@ Use `componentType: "sensor"` for compact stat chips unless the card owns a genu
 - Direct page data through `dataSource`: `batteryHealth`, `chargingSummary`, or `vehicleStatus`.
 - Simple math through formulas such as `([home_kwh] / [total_energy_kwh]) * 100`.
 - Composite display pieces through paths, formulas, and templates such as `/[usable_new_kwh:kWh]` or `Home [home_kwh:kWh] / Away [away_kwh:kWh]`.
+- Theme-owned data-category color through `dataAccent` and `valueColor: "data"`.
+  The active theme resolves the automatic series slot; explicit `curveColor`
+  and style choices remain user overrides. Charging and Battery definitions
+  should use the shared category mapping instead of route-local colors.
 
 For `vehicleStatus` chips, the definition also owns the semantic availability behavior.
 

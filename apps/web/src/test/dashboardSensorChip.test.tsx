@@ -103,7 +103,9 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
 
 import { DashboardRenderer } from '@riviamigo/dashboards';
 import { MiniSparkline, resolveCanvasColor } from '@riviamigo/ui/charts';
+import { applyThemePreferences } from '@riviamigo/ui/lib/theme';
 import type { DashboardConfig } from '@riviamigo/dashboards';
+import { getSensorDefinition, resolveSensorColorToken } from '../../../../packages/dashboards/src/widgets/sensor/sensorDefinitions';
 
 const defaultCtx = {
   vehicleId: 'vehicle-1',
@@ -155,6 +157,7 @@ function config(
 
 describe('dashboard sensor chips', () => {
   beforeEach(() => {
+    applyThemePreferences({ mode: 'dark', palette: 'classic' });
     metricMocks.value = {
       metric: 'total_miles',
       value: 12345,
@@ -295,6 +298,22 @@ describe('dashboard sensor chips', () => {
     expect(screen.getByTestId('sensor-sprite-layer').querySelector('canvas')).not.toBeNull();
   });
 
+  it('uses an explicit curve color for the sensor accent as well as its sprite', () => {
+    applyThemePreferences({ mode: 'light', palette: 'rad' });
+
+    render(
+      <DashboardRenderer
+        config={config(true, true, { curveColor: 'series-07', valueColor: 'data' })}
+        ctx={defaultCtx}
+      />
+    );
+
+    const chip = screen.getByTestId('sensor-chip');
+    expect(chip).toHaveAttribute('style', expect.stringContaining('border-color: var(--rm-series-07)'));
+    expect(chip.outerHTML).toContain('color: var(--rm-series-07)');
+    expect(chip.querySelector('.font-mono')).toHaveAttribute('style', expect.stringContaining('var(--rm-series-07-text)'));
+  });
+
   it('resolves theme tokens for Canvas without replacing an explicit editor color', () => {
     const canvas = document.createElement('canvas');
     canvas.style.setProperty('--rm-accent', 'rgb(27, 125, 232)');
@@ -307,7 +326,127 @@ describe('dashboard sensor chips', () => {
     render(<DashboardRenderer config={config(false, true)} ctx={defaultCtx} />);
 
     expect(screen.queryByTestId('sensor-sprite-layer')).not.toBeInTheDocument();
-    expect(screen.getByTestId('sensor-chip')).toHaveClass('border-accent/60');
+    expect(screen.getByTestId('sensor-chip')).toHaveAttribute('style', expect.stringContaining('border-color: var(--rm-chart-accent)'));
+  });
+
+  it('keeps automatic metric colors monochrome in Classic and maps categories in RAD', () => {
+    const mappings = [
+      ['energy_charged', 'series-01'],
+      ['total_trips', 'series-02'],
+      ['total_miles', 'series-03'],
+      ['trip_miles', 'series-03'],
+      ['avg_efficiency', 'series-04'],
+      ['avg_gross_efficiency', 'series-04'],
+    ] as const;
+
+    for (const [metric, token] of mappings) {
+      expect(resolveSensorColorToken(metric, null, 'classic')).toBe('accent');
+      expect(resolveSensorColorToken(metric, null, 'rad')).toBe(token);
+    }
+  });
+
+  it('maps Charging and Battery source chips to stable RAD data categories', () => {
+    const mappings = [
+      ['charging_sessions_summary', 'series-02'],
+      ['charging_total_energy', 'series-01'],
+      ['charging_cycles_summary', 'series-02'],
+      ['charging_total_cost', 'series-08'],
+      ['charging_home_share', 'series-07'],
+      ['charging_dc_share', 'series-09'],
+      ['charging_efficiency_summary', 'series-04'],
+      ['charging_max_limit', 'series-10'],
+      ['charging_max_rate', 'series-11'],
+      ['charging_avg_session', 'series-01'],
+      ['battery_health_pct', 'series-05'],
+      ['estimated_degradation_pct', 'series-06'],
+      ['usable_capacity', 'series-12'],
+      ['max_range', 'series-03'],
+      ['charge_count', 'series-02'],
+      ['charging_cycles_health', 'series-02'],
+      ['battery_energy_added', 'series-01'],
+      ['battery_charge_efficiency', 'series-04'],
+    ] as const;
+
+    for (const [definitionId, token] of mappings) {
+      const definition = getSensorDefinition(definitionId);
+      expect(definition, definitionId).toBeDefined();
+      expect(resolveSensorColorToken(null, definition, 'classic')).toBe('accent');
+      expect(resolveSensorColorToken(null, definition, 'rad')).toBe(token);
+    }
+  });
+
+  it('renders the mapped RAD color through the shared chip renderer', () => {
+    applyThemePreferences({ mode: 'light', palette: 'rad' });
+
+    for (const [metric, token] of [
+      ['energy_charged', 'series-01'],
+      ['total_trips', 'series-02'],
+      ['total_miles', 'series-03'],
+      ['avg_efficiency', 'series-04'],
+    ] as const) {
+      const view = render(
+        <DashboardRenderer config={config(false, false, {}, metric, metric)} ctx={defaultCtx} />
+      );
+
+      expect(view.container.querySelector('[data-testid="sensor-chip"]')?.outerHTML).toContain(`color: var(--rm-${token}-text)`);
+      view.unmount();
+    }
+  });
+
+  it('keeps light RAD Total Trips bright for graphics and readable for the value', () => {
+    applyThemePreferences({ mode: 'light', palette: 'rad' });
+
+    render(
+      <DashboardRenderer
+        config={config(true, true, { valueColor: 'data' }, 'total_trips', 'Total Trips')}
+        ctx={defaultCtx}
+      />
+    );
+
+    const chip = screen.getByTestId('sensor-chip');
+    expect(chip).toHaveAttribute('style', expect.stringContaining('border-color: var(--rm-series-02)'));
+    expect(chip.outerHTML).toContain('color: var(--rm-series-02)');
+    expect(chip.querySelector('.font-mono')).toHaveAttribute('style', expect.stringContaining('var(--rm-series-02-text)'));
+  });
+
+  it('renders automatic source-chip colors and readable light values for RAD', () => {
+    applyThemePreferences({ mode: 'light', palette: 'rad' });
+    metricMocks.batteryHealth = {
+      usable_now_kwh: 111.6,
+      usable_new_kwh: 109.0,
+      battery_health_pct: 102.4,
+      estimated_degradation_pct: 0,
+      charging_cycles: 18,
+      charge_count: 22,
+      total_energy_added_kwh: 1800,
+      total_energy_used_kwh: 1900,
+      charging_efficiency_pct: 94.4,
+    };
+    metricMocks.chargingSummary = {
+      session_count: 6,
+      total_energy_kwh: 240,
+      total_cost_usd: 48,
+      home_kwh: 180,
+      away_kwh: 60,
+      unknown_location_kwh: 20,
+      ac_kwh: 120,
+      dc_kwh: 120,
+      charging_cycles: 4,
+      charging_efficiency_pct: 92.5,
+      max_charge_rate_kw: 164.2,
+      max_charge_limit_pct: 85,
+    };
+
+    for (const [definitionId, title, token] of [
+      ['charging_total_energy', 'Total Energy', 'series-01'],
+      ['battery_health_pct', 'Battery Health', 'series-05'],
+    ] as const) {
+      const view = render(<DashboardRenderer config={config(false, true, {}, definitionId, title)} ctx={defaultCtx} />);
+      const chip = screen.getByTestId('sensor-chip');
+      expect(chip.outerHTML).toContain(`var(--rm-${token})`);
+      expect(chip.querySelector('.font-mono')).toHaveAttribute('style', expect.stringContaining(`var(--rm-${token}-text)`));
+      view.unmount();
+    }
   });
 
   it('shows an empty sprite state for sparse bounded range data instead of falling back to latest', () => {

@@ -10,8 +10,8 @@ import {
   type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
 import { resolveIconId } from '../../editor/iconMigration';
-import { useDocumentPalette } from '@riviamigo/ui/hooks';
-import type { SensorDataAccent, SensorIconKey, SensorValueColor } from './sensorDefinitions';
+import { useDocumentPalette, useDocumentTheme } from '@riviamigo/ui/hooks';
+import { resolveSensorValueColor, type SensorDataAccent, type SensorIconKey, type SensorValueColor } from './sensorDefinitions';
 
 type SensorChipHistoryPoint = { ts?: string; value: number | null | undefined };
 type SensorValueTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
@@ -53,6 +53,13 @@ export function SensorChipSummary({
 }: SensorChipSummaryProps) {
   const palette = useDocumentPalette();
   const metricColor = getChartColor(palette === 'rad' && dataAccent ? dataAccent : 'accent');
+  const isDark = useDocumentTheme();
+  const metricValueColor = resolveSensorValueColor(
+    undefined,
+    palette === 'rad' && dataAccent ? dataAccent : 'accent',
+    metricColor,
+    isDark,
+  );
   const resolvedHistoryColor = historyColor ?? metricColor ?? CHART_COLORS.accent;
   return (
     <Card
@@ -115,7 +122,7 @@ export function SensorChipSummary({
                       ? 'text-status-info'
                       : dataAccent ? 'text-fg' : 'text-accent'
             )}
-            style={dataAccent ? { color: metricColor } : undefined}
+            style={dataAccent && !valueTone ? { color: metricColor } : undefined}
           />
         </div>
 
@@ -138,7 +145,7 @@ export function SensorChipSummary({
                           : 'text-fg',
               valueSize === 'sm' ? 'text-xl' : valueSize === 'lg' ? 'text-3xl' : 'text-2xl'
             )}
-            style={{ textShadow: 'var(--rm-value-halo)', ...(valueColor === 'data' ? { color: metricColor } : {}) }}
+            style={{ textShadow: 'var(--rm-value-halo)', ...(valueColor === 'data' && !valueTone ? { color: metricValueColor } : {}) }}
           >
             {value}
           </span>

@@ -27,9 +27,9 @@ use crate::{
 const BASEMAP_RASTER_ROUTE: &str = "/external/basemap/raster/{style}/{z}/{x}/{y}";
 const OPENFREEMAP_PROXY_ROUTE: &str = "/external/basemap/openfreemap/{*resource}";
 // Bump when cached OpenFreeMap responses change representation. The first
-// cache format stored upstream style JSON before dependent URLs were rewritten
-// to the authenticated first-party proxy.
-const OPENFREEMAP_CACHE_FORMAT: &str = "v2";
+// Bump this whenever the cached response representation or rewritten dependent
+// URL contract changes. It versions both Redis entries and browser-facing URLs.
+const OPENFREEMAP_CACHE_FORMAT: &str = "v3";
 // MapLibre requires style sprite URLs to be absolute before transformRequest
 // runs. The browser rewrites this reserved origin to its current Riviamigo
 // origin and attaches authentication, so it is never contacted directly.
@@ -2221,11 +2221,11 @@ mod tests {
         .expect("valid JSON");
         assert_eq!(
             String::from_utf8(rewritten).unwrap(),
-            r#"{"sources":{"labels":{"url":"https://riviamigo.invalid/v1/external/basemap/openfreemap/fonts?cf=v2"},"planet":{"url":"https://riviamigo.invalid/v1/external/basemap/openfreemap/planet?cf=v2"}},"sprite":"https://riviamigo.invalid/v1/external/basemap/openfreemap/sprites/ofm_f384/ofm?cf=v2"}"#
+            r#"{"sources":{"labels":{"url":"https://riviamigo.invalid/v1/external/basemap/openfreemap/fonts?cf=v3"},"planet":{"url":"https://riviamigo.invalid/v1/external/basemap/openfreemap/planet?cf=v3"}},"sprite":"https://riviamigo.invalid/v1/external/basemap/openfreemap/sprites/ofm_f384/ofm?cf=v3"}"#
         );
         assert_eq!(
             openfreemap_cache_key(123, "styles/positron"),
-            "external:basemap:openfreemap:v2:123:styles/positron"
+            "external:basemap:openfreemap:v3:123:styles/positron"
         );
     }
 
@@ -2264,11 +2264,11 @@ mod tests {
             .any(|style| style.id == "3d" && style.perspective_3d));
         assert_eq!(
             styles[0].light_url,
-            "/v1/external/basemap/openfreemap/styles/positron?v=123&cf=v2"
+            "/v1/external/basemap/openfreemap/styles/positron?v=123&cf=v3"
         );
         assert_eq!(
             styles[0].dark_url,
-            "/v1/external/basemap/openfreemap/styles/dark?v=123&cf=v2"
+            "/v1/external/basemap/openfreemap/styles/dark?v=123&cf=v3"
         );
     }
 

@@ -63,8 +63,8 @@
     },
     {
       "publicPath": "/rad-favicon.svg",
-      "sha256": "5a6b5aa2276b3b21dddf3e83f7ca3732dd44181971cb4e7f24044818f8400985",
-      "bytes": 446,
+      "sha256": "8c803a14332587bf6ec5d81408be93c3955cbd1b445d750b4531a9785c729683",
+      "bytes": 530,
       "status": "approved-vector",
       "selfContained": true,
       "externalReferences": [],

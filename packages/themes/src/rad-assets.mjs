@@ -4,6 +4,9 @@ const red = '#E34427';
 const teal = '#087F83';
 const ink = '#10363B';
 const white = '#FFFFFF';
+const faviconInk = '#123B43';
+const faviconRed = '#F26A2E';
+const faviconTeal = '#008F8C';
 
 // The open road forms the leg of the R; three terrain bands carry the RAD palette.
 const badge = `<path fill="${ink}" d="M24 0h208l24 24v208l-24 24H24L0 232V24Z"/>
@@ -45,8 +48,8 @@ export function radAssets() {
   return {
     'rad-logo.svg': svg('Riviamigo RAD logo', '0 0 256 256', badge),
     'rad-icon.svg': svg('Riviamigo RAD icon', '0 0 256 256', badge),
-    // Favicon uses a heavier, open silhouette to survive 16px rasterization.
-    'rad-favicon.svg': svg('Riviamigo RAD favicon', '0 0 32 32', `<path fill="${ink}" d="M3 0h26l3 3v26l-3 3H3l-3-3V3Z"/><path fill="${gold}" d="M2 2h9v28H2Z"/><path fill="${red}" d="M11 2h9v28h-9Z"/><path fill="${teal}" d="M20 2h10v28H20Z"/><path fill="${white}" fill-rule="evenodd" d="M6 7h13q7 0 7 6 0 4-4 6l5 6h-6l-5-6h-5v6H6Zm5 4v4h8q2 0 2-2t-2-2Z"/>`),
+    // The favicon is intentionally simplified so the R and color signature remain legible at 16px.
+    'rad-favicon.svg': svg('Riviamigo RAD favicon', '0 0 32 32', `<rect x="1" y="1" width="30" height="30" rx="6" fill="${faviconInk}"/><path fill="${white}" fill-rule="evenodd" d="M7 6h11.25C23.5 6 26 8.7 26 12.5c0 2.7-1.2 4.9-3.8 6.2l4.5 7.3h-5.8l-4-6.3H12v6.3H7V6Zm5 4.5v4.7h5.6c2.1 0 3.4-.8 3.4-2.35s-1.3-2.35-3.4-2.35Z"/><path fill="${gold}" d="M4 27h8v2H4Z"/><path fill="${faviconRed}" d="M12 27h8v2h-8Z"/><path fill="${faviconTeal}" d="M20 27h8v2h-8Z"/>`),
     'rad-text_white.svg': svg('Riviamigo RAD wordmark', '0 0 530 104', wordmark(white)),
     'rad-text_black.svg': svg('Riviamigo RAD wordmark', '0 0 530 104', wordmark(ink)),
   };

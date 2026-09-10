@@ -1,7 +1,7 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -44,16 +44,7 @@ let ports = { ...requestedPorts };
 export function deriveDevComposeProjectName(checkoutRoot, env = process.env) {
   const override = env.DEV_COMPOSE_PROJECT_NAME || env.COMPOSE_PROJECT_NAME;
   if (override) return override;
-
-  const resolvedRoot = resolve(checkoutRoot);
-  const pathIdentity = process.platform === 'win32' ? resolvedRoot.toLowerCase() : resolvedRoot;
-  const checkoutName = basename(resolvedRoot)
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^[-_]+|[-_]+$/g, '')
-    .slice(0, 32) || 'checkout';
-  const checkoutHash = createHash('sha256').update(pathIdentity).digest('hex').slice(0, 8);
-  return `riviamigo-${checkoutName}-${checkoutHash}`;
+  return 'riviamigo';
 }
 
 const composeProjectName = deriveDevComposeProjectName(rootDir);
@@ -295,11 +286,20 @@ async function findAvailablePort(start, label, maxTries = 50, reservedPorts = ne
   throw new Error(`[dev] Could not find an available ${label} port after ${maxTries} attempts from ${start}.`);
 }
 
-export async function allocateDistinctRuntimePorts(definitions, findPort = findAvailablePort) {
-  const reservedPorts = new Set();
+export async function allocateDistinctRuntimePorts(
+  definitions,
+  findPort = findAvailablePort,
+  reusedPorts = new Map(),
+) {
+  const reservedPorts = new Set(reusedPorts.values());
   const allocated = {};
 
   for (const { key, start, label } of definitions) {
+    const reusedPort = reusedPorts.get(key);
+    if (reusedPort) {
+      allocated[key] = reusedPort;
+      continue;
+    }
     const port = await findPort(start, label, 50, reservedPorts);
     reservedPorts.add(port);
     allocated[key] = port;
@@ -308,10 +308,142 @@ export async function allocateDistinctRuntimePorts(definitions, findPort = findA
   return allocated;
 }
 
+export function parseComposePortMetadata(output) {
+  const records = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const metadata = new Map();
+
+  for (const record of records) {
+    const service = record.Service ?? record.service;
+    const state = String(record.State ?? record.state ?? '').toLowerCase();
+    if (!service || !Array.isArray(record.Publishers ?? record.publishers)) continue;
+
+    for (const publisher of record.Publishers ?? record.publishers) {
+      const targetPort = Number.parseInt(publisher.TargetPort ?? publisher.targetPort, 10);
+      const publishedPort = Number.parseInt(publisher.PublishedPort ?? publisher.publishedPort, 10);
+      if (!Number.isInteger(targetPort) || !Number.isInteger(publishedPort)) continue;
+      metadata.set(`${service}:${targetPort}`, { port: publishedPort, running: state === 'running' });
+    }
+  }
+
+  return metadata;
+}
+
+function normalizeComposeFilePath(value) {
+  return String(value)
+    .trim()
+    .replaceAll('\\', '/')
+    .replace(/\/+/g, '/')
+    .toLowerCase();
+}
+
+function composeFilesFromRecord(record) {
+  let configFiles = record.ConfigFiles ?? record.configFiles ?? record.config_files;
+  let labels = record.Labels ?? record.labels;
+  if (typeof labels === 'string') {
+    const configLabel = labels.match(/(?:^|,)com\.docker\.compose\.project\.config_files=([\s\S]*?)(?=,[^=,]+=|$)/i);
+    configFiles = configFiles ?? configLabel?.[1]?.split(',');
+    labels = null;
+  }
+  if (configFiles === undefined && labels && typeof labels === 'object') {
+    configFiles = labels['com.docker.compose.project.config_files']
+      ?? labels['com.docker.compose.project.config-files'];
+  }
+  if (typeof configFiles === 'string') {
+    try {
+      configFiles = JSON.parse(configFiles);
+    } catch {
+      // Compose labels are normally comma-separated when multiple files exist.
+    }
+  }
+  if (typeof configFiles === 'string') configFiles = configFiles.split(',');
+  if (!Array.isArray(configFiles)) return [];
+  return [...new Set(configFiles.map(normalizeComposeFilePath).filter(Boolean))].sort();
+}
+
+function siblingProductionComposeFile(expectedComposeFile) {
+  return expectedComposeFile.replace(/\.dev(?=\.[^/]+$)/, '');
+}
+
+export function parseComposeIdentityMetadata(output, expectedComposeFile) {
+  const records = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const expected = normalizeComposeFilePath(expectedComposeFile);
+  const production = siblingProductionComposeFile(expected);
+  const identities = records.map((record) => ({
+    service: record.Service ?? record.service,
+    composeFiles: composeFilesFromRecord(record),
+  }));
+  const signatures = new Set(identities.map(({ composeFiles }) => composeFiles.join('\n')));
+  const hasMissing = identities.some(({ composeFiles }) => composeFiles.length === 0);
+  const mixed = signatures.size > 1;
+  const includesExpected = identities.length > 0 && identities.every(({ composeFiles }) => composeFiles.includes(expected));
+  const includesProduction = identities.some(({ composeFiles }) => composeFiles.includes(production));
+  const hasDevelopmentAndProduction = includesExpected && includesProduction;
+
+  return {
+    records: identities,
+    composeFiles: identities[0]?.composeFiles ?? [],
+    hasExistingRecords: identities.length > 0,
+    valid: identities.length === 0 || (!hasMissing && !mixed && includesExpected && !includesProduction),
+    reason: hasMissing
+      ? 'missing identity metadata'
+      : mixed
+        ? 'mixed Compose config files'
+        : hasDevelopmentAndProduction
+          ? 'production Compose config file'
+          : includesExpected
+            ? null
+            : 'unexpected Compose config file',
+  };
+}
+
+function assertExpectedDevelopmentComposeProject(output) {
+  const identity = parseComposeIdentityMetadata(output, composeFile);
+  if (!identity.valid) {
+    throw new Error(
+      `[dev] The selected project is not the expected development project (${identity.reason}); `
+      + 'set DEV_COMPOSE_PROJECT_NAME to a unique isolated name before starting.',
+    );
+  }
+  return identity;
+}
+
+async function readExistingComposePorts() {
+  const result = await capture('docker', [
+    'compose', '-p', composeProjectName, '-f', composeFile,
+    'ps', '--all', '--format', 'json',
+  ]);
+  if (result.code !== 0) {
+    throw new Error(
+      `[dev] Could not verify the selected project before startup; `
+      + 'set DEV_COMPOSE_PROJECT_NAME to a unique isolated name and retry.',
+    );
+  }
+  if (!result.stdout.trim()) {
+    return new Map();
+  }
+  assertExpectedDevelopmentComposeProject(result.stdout);
+  return parseComposePortMetadata(result.stdout);
+}
+
 async function allocateRuntimePorts() {
   // Probe ports serially and reserve each result. Parallel probes can all see
   // the same free requested port when users override multiple services to one
   // value (for example API and restore agent both set to 3003).
+  const existingComposePorts = await readExistingComposePorts();
+  const reusedPorts = new Map([
+    ['postgres', existingComposePorts.get('timescaledb:5432')],
+    ['redis', existingComposePorts.get('redis:6379')],
+    ['garageApi', existingComposePorts.get('garage:3900')],
+    ['garageAdmin', existingComposePorts.get('garage:3903')],
+  ].filter(([, metadata]) => metadata?.running).map(([key, metadata]) => [key, metadata.port]));
   const allocated = await allocateDistinctRuntimePorts([
     { key: 'api', start: requestedPorts.api, label: 'API' },
     { key: 'web', start: requestedPorts.web, label: 'Web' },
@@ -320,7 +452,7 @@ async function allocateRuntimePorts() {
     { key: 'garageApi', start: requestedPorts.garageApi, label: 'Garage API' },
     { key: 'garageAdmin', start: requestedPorts.garageAdmin, label: 'Garage admin' },
     { key: 'restoreAgent', start: requestedPorts.restoreAgent, label: 'Restore agent' },
-  ]);
+  ], findAvailablePort, reusedPorts);
   const { api, web, postgres, redis, garageApi, garageAdmin, restoreAgent } = allocated;
 
   ports = { api, web, postgres, redis, garageApi, garageAdmin, restoreAgent };

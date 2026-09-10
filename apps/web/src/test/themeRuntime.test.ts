@@ -25,7 +25,7 @@ describe('theme runtime', () => {
     expect(root.dataset.rmPalette).toBe('rad');
     expect(root.dataset.rmThemeId).toBe('rad');
     expect(root.dataset.rmThemeKind).toBe('builtin');
-    expect(root.style.getPropertyValue('--rm-chart-accent')).toBe('#A46617');
+    expect(root.style.getPropertyValue('--rm-chart-accent')).toBe('#F26A2E');
     expect(localStorage.getItem('rm-theme')).toBeNull();
   });
 
@@ -50,6 +50,7 @@ describe('theme runtime', () => {
       expect(snapshot.cssVariables[`--rm-${token}`]).toMatch(/^#[0-9A-Fa-f]{6}$/);
       expect(snapshot.chartColors[token]).toBe(snapshot.cssVariables[`--rm-${token}`]);
       expect(document.documentElement.style.getPropertyValue(`--rm-${token}`)).toBe(snapshot.chartColors[token]);
+      expect(snapshot.cssVariables[`--rm-${token}-text`]).toBe(`color-mix(in srgb, var(--rm-${token}) 50%, var(--rm-text-primary) 50%)`);
     }
   });
 

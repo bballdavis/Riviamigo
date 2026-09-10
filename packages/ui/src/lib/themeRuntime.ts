@@ -87,6 +87,7 @@ function makeSnapshot(input: ThemeSelection, custom?: ResolvedTheme | null): The
   for (let i = 1; i <= 16; i += 1) {
     const seriesKey = `series-${String(i).padStart(2, '0')}` as keyof typeof definition.series;
     cssVariables[`--rm-${seriesKey}`] = definition.series[seriesKey]![effectiveMode];
+    cssVariables[`--rm-${seriesKey}-text`] = `color-mix(in srgb, var(--rm-${seriesKey}) 50%, var(--rm-text-primary) 50%)`;
   }
   for (let i = 0; i < 6; i += 1) {
     const seriesKey = `series-${String(i + 1).padStart(2, '0')}` as keyof typeof definition.series;

@@ -324,25 +324,25 @@
       "brandPaints": {
         "accent": {
           "dark": "#FFB000",
-          "light": "#C9371E"
+          "light": "#C2410C"
         },
         "accentMuted": {
           "dark": "rgba(255, 176, 0, 0.17)",
-          "light": "rgba(201, 55, 30, 0.12)"
+          "light": "rgba(194, 65, 12, 0.14)"
         },
         "mark": {
           "dark": "#FFB000",
-          "light": "#C9371E"
+          "light": "#C2410C"
         }
       },
       "chartAliases": {
         "accent": {
           "dark": "#FFB000",
-          "light": "#C9371E"
+          "light": "#F26A2E"
         },
         "amber": {
           "dark": "#FFB000",
-          "light": "#8D6A00"
+          "light": "#B87900"
         },
         "danger": {
           "dark": "#FF7054",
@@ -358,11 +358,11 @@
         },
         "muted": {
           "dark": "#9AA9AA",
-          "light": "#52716F"
+          "light": "#527278"
         },
         "orange": {
           "dark": "#FF9850",
-          "light": "#B84D00"
+          "light": "#DE571E"
         },
         "rose": {
           "dark": "#FF7054",
@@ -400,19 +400,19 @@
       "series": {
         "series-01": {
           "dark": "#FFB000",
-          "light": "#C9371E"
+          "light": "#F26A2E"
         },
         "series-02": {
           "dark": "#36CEFF",
-          "light": "#007DA3"
+          "light": "#FFB000"
         },
         "series-03": {
           "dark": "#FF7054",
-          "light": "#D02D30"
+          "light": "#008F8C"
         },
         "series-04": {
           "dark": "#38E8A5",
-          "light": "#007A4B"
+          "light": "#00A86B"
         },
         "series-05": {
           "dark": "#B59AFF",
@@ -534,40 +534,40 @@
           "value-halo": "-2px -2px 0 #10363B, 0 -2px 0 #10363B, 2px -2px 0 #10363B, 2px 0 0 #10363B, 2px 2px 0 #10363B, 0 2px 0 #10363B, -2px 2px 0 #10363B, -2px 0 0 #10363B"
         },
         "light": {
-          "accent": "#C9371E",
-          "accent-active": "#94200F",
-          "accent-hover": "#AE2B16",
-          "accent-muted": "rgba(201, 55, 30, 0.12)",
-          "bg-elevated": "#F1EDE5",
-          "bg-glass": "rgba(255, 255, 255, 0.82)",
-          "bg-overlay": "rgba(17, 30, 30, 0.42)",
-          "bg-page": "#F7F5F0",
+          "accent": "#C2410C",
+          "accent-active": "#8E2E0A",
+          "accent-hover": "#A83B0F",
+          "accent-muted": "rgba(194, 65, 12, 0.14)",
+          "bg-elevated": "#F8FAF9",
+          "bg-glass": "rgba(255, 255, 255, 0.88)",
+          "bg-overlay": "rgba(18, 59, 67, 0.42)",
+          "bg-page": "#FCFCFA",
           "bg-surface": "#FFFFFF",
-          "border-accent": "rgba(201, 55, 30, 0.36)",
-          "border-default": "rgba(22, 43, 43, 0.10)",
-          "border-strong": "rgba(22, 43, 43, 0.19)",
+          "border-accent": "rgba(194, 65, 12, 0.34)",
+          "border-default": "rgba(18, 59, 67, 0.10)",
+          "border-strong": "rgba(18, 59, 67, 0.18)",
           "charging-ac": "#007DA3",
-          "charging-active": "#C9371E",
+          "charging-active": "#C2410C",
           "charging-dc": "#7945D8",
           "charging-dcfc": "#B02A91",
           "charging-done": "#007A4B",
           "charging-limited": "#D02D30",
-          "chart-accent": "#C9371E",
-          "chart-amber": "#C9371E",
+          "chart-accent": "#F26A2E",
+          "chart-amber": "#F26A2E",
           "chart-danger": "#D02D30",
           "chart-emerald": "#007A4B",
-          "chart-grid": "rgba(22, 43, 43, 0.10)",
-          "chart-hover-bg": "rgba(22, 43, 43, 0.035)",
+          "chart-grid": "rgba(18, 59, 67, 0.10)",
+          "chart-hover-bg": "rgba(18, 59, 67, 0.035)",
           "chart-indigo": "#435BD0",
-          "chart-muted": "#52716F",
-          "chart-orange": "#B84D00",
+          "chart-muted": "#527278",
+          "chart-orange": "#DE571E",
           "chart-rose": "#D02D30",
           "chart-sky": "#007DA3",
           "chart-success": "#007A4B",
           "chart-teal": "#007C73",
           "chart-violet": "#7945D8",
           "chart-warning": "#9C5D00",
-          "chart-yellow": "#8D6A00",
+          "chart-yellow": "#B87900",
           "dm-conserve": "#007DA3",
           "dm-drift": "#D02D30",
           "dm-everyday": "#007A4B",
@@ -576,35 +576,35 @@
           "dm-sand": "#8D6A00",
           "dm-terrain": "#007C73",
           "dm-towing": "#B84D00",
-          "dm-unknown": "#52716F",
-          "glow-button": "0 4px 12px rgba(201, 55, 30, 0.28)",
-          "glow-lg": "0 2px 8px rgba(201, 55, 30, 0.21)",
-          "glow-md": "0 1px 2px rgba(201, 55, 30, 0.16)",
-          "glow-sm": "0 0 0 1px rgba(201, 55, 30, 0.12)",
-          "map-route-0": "#C9371E",
+          "dm-unknown": "#527278",
+          "glow-button": "0 4px 12px rgba(194, 65, 12, 0.28)",
+          "glow-lg": "0 2px 8px rgba(194, 65, 12, 0.21)",
+          "glow-md": "0 1px 2px rgba(194, 65, 12, 0.16)",
+          "glow-sm": "0 0 0 1px rgba(194, 65, 12, 0.12)",
+          "map-route-0": "#DE571E",
           "map-route-1": "#007DA3",
-          "map-route-2": "#8D6A00",
+          "map-route-2": "#B87900",
           "map-route-3": "#7945D8",
           "map-route-4": "#007A4B",
           "map-route-5": "#B02A91",
-          "shadow-lg": "0 8px 20px rgba(22, 43, 43, 0.12)",
-          "shadow-md": "0 2px 6px rgba(22, 43, 43, 0.09)",
-          "shadow-sm": "0 1px 2px rgba(22, 43, 43, 0.07)",
-          "shadow-xl": "0 16px 32px rgba(22, 43, 43, 0.14)",
+          "shadow-lg": "0 8px 20px rgba(18, 59, 67, 0.12)",
+          "shadow-md": "0 2px 6px rgba(18, 59, 67, 0.09)",
+          "shadow-sm": "0 1px 2px rgba(18, 59, 67, 0.07)",
+          "shadow-xl": "0 16px 32px rgba(18, 59, 67, 0.14)",
           "status-danger": "#D02D30",
           "status-info": "#007DA3",
           "status-positive": "#007A4B",
           "status-warning": "#9C5D00",
-          "text-disabled": "#A5B1AE",
+          "text-disabled": "#A0AEAE",
           "text-on-accent": "#FFFFFF",
-          "text-primary": "#10363B",
+          "text-primary": "#123B43",
           "text-secondary": "#355F60",
-          "text-tertiary": "#52716F",
+          "text-tertiary": "#527278",
           "value-halo": "-2px -2px 0 #FFFFFF, 0 -2px 0 #FFFFFF, 2px -2px 0 #FFFFFF, 2px 0 0 #FFFFFF, 2px 2px 0 #FFFFFF, 0 2px 0 #FFFFFF, -2px 2px 0 #FFFFFF, -2px 0 0 #FFFFFF"
         }
       }
     }
   ],
-  "registryHash": "4a9614d2ef0b0701",
+  "registryHash": "4a9614d228e6ed46",
   "schemaVersion": 1
 }

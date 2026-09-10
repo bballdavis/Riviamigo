@@ -70,22 +70,36 @@ Production components consume semantic tokens; raw colors and named utility
 colors are rejected by `pnpm colors:check` outside the documented owner files.
 
 The RAD built-in is app-specific visual direction inspired by Rivian's white,
-gold, red, and teal RAD identity. Its saturated gold, vermilion, teal, and white treatment includes sixteen
-unrepeated chart-series colors in each mode. Dark mode uses gold controls on
-teal surfaces; light mode uses vermilion controls for readable contrast.
+gold, orange, teal, and green RAD identity. Its saturated gold, vermilion,
+teal, and white treatment includes sixteen unrepeated chart-series colors in
+each mode. Dark mode uses gold controls on teal surfaces; light mode uses a
+near-white canvas with concentrated orange, gold, teal, and green accents.
 Its values are accessible Riviamigo choices,
 not a claim about exact Rivian brand colors. Both modes cover surfaces, text,
 borders, states, charging and drive modes, overlays, shadows, focus treatments,
 charts, and maps.
-RAD light mode uses warm neutral page and elevated surfaces so vermilion, gold,
-and teal remain distinct without casting the whole interface green. Ordered
-series alternate hue families, and consecutive trip routes consume the six map
-colors in order before repeating. Explicit route colors still take precedence.
+RAD light mode uses `#FCFCFA` for the page, white elevated surfaces, and
+`#F8FAF9` for secondary surfaces so orange, gold, teal, and green remain
+distinct without tinting the whole interface. Automatic dashboard sensor chips
+use stable data-category slots. Energy uses `series-01`, counts and cycles use
+`series-02`, range and miles use `series-03`, and efficiency uses `series-04`;
+battery health, degradation, capacity, cost, share, rate, and limit categories
+continue through the later series slots in their shared sensor definitions. The
+RAD light slots are intentionally vivid: orange, gold, teal, and green lead the
+primary dashboard categories. Their light-mode numeric values use a readable
+companion derived from the same slot, while icons, sprites, and decorative
+borders keep the vivid series color. These are data categories, not status
+indicators: Classic keeps automatic sensor chips monochrome, and Success,
+Warning, Danger, and Info remain independent semantic tokens.
+Ordered series alternate hue families, and consecutive trip routes consume the
+six map colors in order before repeating. Explicit route colors still take
+precedence.
 
 Chart definitions persist theme-independent tokens or literal light/dark custom
 colors. New categorical series use `series-01` through `series-16`; legacy names
-remain valid. The shared color field groups series and semantic colors and opens
-the controlled ColorPicker for visual OKLCH authoring plus Hex, RGB, HSL, and
+remain valid. The shared color field groups theme series in a swatch-bearing
+accent picker alongside semantic colors, and opens the controlled ColorPicker
+for visual OKLCH authoring plus Hex, RGB, HSL, and
 OKLCH inputs. Edited colors persist as deterministic sRGB hex. After sixteen
 series, renderers cycle colors and add distinct line/point patterns.
 
@@ -173,7 +187,7 @@ Common usage:
 ### Charts
 
 - Fixed and assignment-driven dashboard catalogs use one shared chart frame. Overview must retain the same picker, settings, plot spacing, mobile viewer, focus behavior, and production renderer as the same chart on Battery, Charging, Efficiency, or Trips.
-- Dashboard sensor sprites and time-series charts use the editor-selected curve color. Canvas renderers must resolve theme tokens such as `var(--rm-accent)` before drawing.
+- Dashboard sensor sprites and time-series charts use the editor-selected curve color. For sensor cards, that explicit choice carries through the metric icon, sprite, and accent border; light-mode data-colored values use a readable companion from the same selected color. Automatic returns the card to its theme-assigned slot. Canvas renderers must resolve theme tokens such as `var(--rm-accent)` before drawing.
 - The shared display control is **Display filter**, not geometric curve smoothing. Its time-window choices are `Raw`, `15 min`, `1 hr`, `6 hr`, `24 hr`, `3 days`, and `7 days`; sprites default to `24 hr` and dashboard charts to `15 min`. Dashboard filtering and curve smoothness apply to every compatible curve in the active chart. A bar sprite sums its source values into non-overlapping time bins, so activity totals remain truthful while the card is easier to read; `Raw` remains available when individual events matter.
 - Eligible line and area views expose **Curve smoothness** with three independently persisted positions: `Straight`, `Gentle` (the default), and `Smooth`. This renderer-only path shaping preserves recorded timestamps, tooltip values, point counts, and null-gap behavior. `Straight` draws hard point-to-point corners. `Gentle` blends halfway from those straight controls toward the shape-preserving curve. `Smooth` uses the full irregular-time-aware curve for the strongest rounded, hilly appearance. Both curved positions keep Bezier handles inside each timestamp segment and cannot rise above or fall below its adjacent recorded values. Bars, scatter, stepped charts, non-smoothable supporting series, and categories bypass smoothing; surfaces without chart settings do not expose the control.
 - Ordinary quantitative bars use the shared filled-bar treatment from `CHART_BAR_STYLE`: semantic chart colors, quiet gridlines, consistent width/opacity, and rounded tops where the renderer supports them. Outline-only bars are not the default dashboard treatment.

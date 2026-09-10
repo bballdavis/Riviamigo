@@ -79,6 +79,24 @@ light/dark editing, copy actions, secondary numeric formats, explicit Apply and
 Cancel, deterministic sRGB gamut mapping, keyboard radio-grid behavior, live
 announcements, focus restoration, and a mobile fullscreen dialog.
 
+Automatic dashboard sensor colors are resolved from the active theme rather than
+saved as per-widget hex values. RAD binds source-backed Charging and Battery
+chips to stable data-category slots alongside the existing Energy Charged,
+Total Trips, Miles, and Efficiency bindings; the mapping lives in
+`sensorDefinitions.ts` so the category keeps its color when a chip moves
+between dashboards. Classic resolves those automatic slots to its single
+accent so the compatibility theme remains monochrome. Explicit widget curve
+colors, chart assignments, and custom-theme series overrides continue to take
+precedence. For sensor widgets, the selected curve token or custom pair drives
+the vivid metric icon, sprite, and accent border. In light mode, a data-colored
+numeric value uses a readable companion derived from that same selected color;
+it is not a status color. Choosing Automatic removes that widget override and
+restores the theme-resolved slot. The dashboard editor exposes all sixteen
+theme slots in a swatch-bearing accent picker so the explicit choice remains
+understandable.
+Status-backed widgets still use the semantic status tokens and do not inherit
+metric-category colors.
+
 ## Brand assets
 
 Every app consumer uses the registry-backed resolver or runtime snapshot. The

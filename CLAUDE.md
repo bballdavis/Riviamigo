@@ -24,10 +24,21 @@ launched from `apps/web`. It does not terminate unrelated applications that
 happen to use the usual development ports; those still trigger fallback-port
 allocation.
 
-The launcher derives a stable Docker Compose project name from the checkout
-path, so separate worktrees do not share migration ledgers or other development
-volumes. Set `DEV_COMPOSE_PROJECT_NAME` only when an intentional shared or
-pre-existing development stack is required.
+The launcher uses the existing `riviamigo` Docker Compose project by default
+for the infrastructure services it starts: TimescaleDB, Redis, and Garage.
+Active bindings are preserved. The API, web, and restore-agent processes are
+host-run and use independently allocated ports. Set
+`DEV_COMPOSE_PROJECT_NAME` (or `COMPOSE_PROJECT_NAME`) to a unique value when
+intentional checkout isolation is required. Isolating a worktree gives it
+separate development data, while using the shared project requires compatible
+migration/schema revisions.
+
+Before allocation, it verifies existing project metadata identifies this
+repository's `compose/docker-compose.dev.yml`. Missing, mixed, or production
+Compose identity metadata fails closed and reports that
+`DEV_COMPOSE_PROJECT_NAME` should be set to a unique isolated name. A shared
+project still requires compatible migration and data/schema revisions;
+preserving its active bindings does not reconcile incompatible callers.
 
 ### Workspace
 
