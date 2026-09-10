@@ -440,8 +440,13 @@ describe('TripMapChart', () => {
     await waitFor(() => expect(mapLoader).toHaveBeenCalledTimes(1));
     expect(fetchMock).not.toHaveBeenCalled();
 
-    const mapOptions = mapConstructor.mock.calls[0]?.[0] as unknown as { transformRequest: (url: string) => { headers?: Record<string, string> } };
+    const mapOptions = mapConstructor.mock.calls[0]?.[0] as unknown as { transformRequest: (url: string) => { url: string; headers?: Record<string, string> } };
     expect(mapOptions.transformRequest('/v1/external/basemap/raster/light/1/2/3.png').headers).toEqual({ Authorization: 'Bearer first-party-token' });
+    expect(mapOptions.transformRequest('https://riviamigo.invalid/v1/external/basemap/openfreemap/sprites/ofm_f384/ofm.json?cf=v2')).toEqual({
+      url: 'http://localhost:3000/v1/external/basemap/openfreemap/sprites/ofm_f384/ofm.json?cf=v2',
+      headers: { Authorization: 'Bearer first-party-token' },
+      credentials: 'same-origin',
+    });
     expect(mapOptions.transformRequest('https://provider.invalid/1/2/3.png').headers).toBeUndefined();
     fetchMock.mockRestore();
   });

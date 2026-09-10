@@ -94,6 +94,7 @@ const ACTIVE_POINT_LAYER_ID = 'trip-active-point-layer';
 const ROUTE_SOURCE_ID = 'trip-routes';
 const ROUTE_LAYER_ID = 'trip-routes-line';
 const ROUTE_HIT_LAYER_ID = 'trip-routes-hit';
+const BASEMAP_PROXY_PLACEHOLDER_ORIGIN = 'https://riviamigo.invalid';
 
 export const NEUTRAL_BASEMAP_CONFIG: BasemapConfig = {
   enabled: false,
@@ -278,9 +279,16 @@ export function TripMapChart({
           transformRequest: (url: string) => {
             try {
               const requestUrl = new URL(url, window.location.origin);
-              if (requestUrl.origin === window.location.origin && requestUrl.pathname.startsWith('/v1/external/basemap/')) {
+              const placeholderProxyRequest = requestUrl.origin === BASEMAP_PROXY_PLACEHOLDER_ORIGIN
+                && requestUrl.pathname.startsWith('/v1/external/basemap/');
+              const sameOriginProxyRequest = requestUrl.origin === window.location.origin
+                && requestUrl.pathname.startsWith('/v1/external/basemap/');
+              if (placeholderProxyRequest || sameOriginProxyRequest) {
                 const token = accessTokenRef.current;
-                return token ? { url, headers: { Authorization: `Bearer ${token}` }, credentials: 'same-origin' } : { url, credentials: 'same-origin' };
+                const firstPartyUrl = placeholderProxyRequest
+                  ? `${window.location.origin}${requestUrl.pathname}${requestUrl.search}${requestUrl.hash}`
+                  : url;
+                return token ? { url: firstPartyUrl, headers: { Authorization: `Bearer ${token}` }, credentials: 'same-origin' } : { url: firstPartyUrl, credentials: 'same-origin' };
               }
             } catch {
               // MapLibre will surface malformed source URLs through its normal error event.

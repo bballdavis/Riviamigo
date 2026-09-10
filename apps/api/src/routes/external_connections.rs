@@ -30,6 +30,10 @@ const OPENFREEMAP_PROXY_ROUTE: &str = "/external/basemap/openfreemap/{*resource}
 // cache format stored upstream style JSON before dependent URLs were rewritten
 // to the authenticated first-party proxy.
 const OPENFREEMAP_CACHE_FORMAT: &str = "v2";
+// MapLibre requires style sprite URLs to be absolute before transformRequest
+// runs. The browser rewrites this reserved origin to its current Riviamigo
+// origin and attaches authentication, so it is never contacted directly.
+const OPENFREEMAP_PROXY_ORIGIN: &str = "https://riviamigo.invalid";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -1474,7 +1478,7 @@ fn rewrite_openfreemap_value(value: &mut serde_json::Value) {
             ] {
                 if let Some(resource) = value.strip_prefix(prefix) {
                     *value = format!(
-                        "/v1/external/basemap/openfreemap/{resource}?cf={OPENFREEMAP_CACHE_FORMAT}"
+                        "{OPENFREEMAP_PROXY_ORIGIN}/v1/external/basemap/openfreemap/{resource}?cf={OPENFREEMAP_CACHE_FORMAT}"
                     );
                     break;
                 }
@@ -2217,7 +2221,7 @@ mod tests {
         .expect("valid JSON");
         assert_eq!(
             String::from_utf8(rewritten).unwrap(),
-            r#"{"sources":{"labels":{"url":"/v1/external/basemap/openfreemap/fonts?cf=v2"},"planet":{"url":"/v1/external/basemap/openfreemap/planet?cf=v2"}},"sprite":"/v1/external/basemap/openfreemap/sprites/ofm_f384/ofm?cf=v2"}"#
+            r#"{"sources":{"labels":{"url":"https://riviamigo.invalid/v1/external/basemap/openfreemap/fonts?cf=v2"},"planet":{"url":"https://riviamigo.invalid/v1/external/basemap/openfreemap/planet?cf=v2"}},"sprite":"https://riviamigo.invalid/v1/external/basemap/openfreemap/sprites/ofm_f384/ofm?cf=v2"}"#
         );
         assert_eq!(
             openfreemap_cache_key(123, "styles/positron"),
