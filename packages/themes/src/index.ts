@@ -81,8 +81,8 @@ const makeTokens = (rad: boolean): Record<SemanticToken, ThemeColorPair> => {
 };
 
 const makeTheme = (id: ThemePalette): ThemeDefinition => {
-  const rad = id === 'rad'; const colors = rad ? ['#FFB000','#36CEFF','#FF7054','#38E8A5','#B59AFF','#FF9850','#2AE0CB','#FF93A7','#839FFF','#F4F36B','#7AE0FF','#FFAFC7','#8AE36C','#DAA1FF','#FFD34E','#A6C7C2'] : ['#FD8304','#FACC15','#60A5FA','#10B981','#A78BFA','#F87171','#34D399','#FB923C','#818CF8'];
-  const lightColors = rad ? ['#F26A2E','#FFB000','#008F8C','#00A86B','#7945D8','#B84D00','#007C73','#B83461','#435BD0','#697900','#16769B','#A74773','#478100','#9744B8','#8D6A00','#486A64'] : ['#C96F08','#A16207','#2563EB','#047857','#7C3AED','#DC2626','#047857','#C2410C','#4F46E5'];
+  const rad = id === 'rad'; const colors = rad ? ['#FFB000','#FF7054','#2AE0CB','#36CEFF','#B59AFF','#FF9850','#38E8A5','#FF93A7','#839FFF','#F4F36B','#7AE0FF','#FFAFC7','#8AE36C','#DAA1FF','#FFD34E','#A6C7C2'] : ['#FD8304','#FACC15','#60A5FA','#10B981','#A78BFA','#F87171','#34D399','#FB923C','#818CF8'];
+  const lightColors = rad ? ['#FFB000','#F26A2E','#008F8C','#435BD0','#7945D8','#B84D00','#00A86B','#B83461','#007C73','#697900','#16769B','#A74773','#478100','#9744B8','#8D6A00','#486A64'] : ['#C96F08','#A16207','#2563EB','#047857','#7C3AED','#DC2626','#047857','#C2410C','#4F46E5'];
   const series = Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`series-${String(i + 1).padStart(2, '0')}`, { dark: colors[i % colors.length]!, light: lightColors[i % lightColors.length]! }])) as ThemeDefinition['series'];
   const aliases = rad
     ? chart(

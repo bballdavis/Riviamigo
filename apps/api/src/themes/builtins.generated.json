@@ -400,19 +400,19 @@
       "series": {
         "series-01": {
           "dark": "#FFB000",
-          "light": "#F26A2E"
-        },
-        "series-02": {
-          "dark": "#36CEFF",
           "light": "#FFB000"
         },
-        "series-03": {
+        "series-02": {
           "dark": "#FF7054",
+          "light": "#F26A2E"
+        },
+        "series-03": {
+          "dark": "#2AE0CB",
           "light": "#008F8C"
         },
         "series-04": {
-          "dark": "#38E8A5",
-          "light": "#00A86B"
+          "dark": "#36CEFF",
+          "light": "#435BD0"
         },
         "series-05": {
           "dark": "#B59AFF",
@@ -423,8 +423,8 @@
           "light": "#B84D00"
         },
         "series-07": {
-          "dark": "#2AE0CB",
-          "light": "#007C73"
+          "dark": "#38E8A5",
+          "light": "#00A86B"
         },
         "series-08": {
           "dark": "#FF93A7",
@@ -432,7 +432,7 @@
         },
         "series-09": {
           "dark": "#839FFF",
-          "light": "#435BD0"
+          "light": "#007C73"
         },
         "series-10": {
           "dark": "#F4F36B",
@@ -605,6 +605,6 @@
       }
     }
   ],
-  "registryHash": "4a9614d228e6ed46",
+  "registryHash": "4a9614d271d9ef24",
   "schemaVersion": 1
 }

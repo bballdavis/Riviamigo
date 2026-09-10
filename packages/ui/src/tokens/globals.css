@@ -233,6 +233,38 @@
   --rm-map-route-3: #B59AFF;
   --rm-map-route-4: #38E8A5;
   --rm-map-route-5: #F077DA;
+  --rm-series-01: #FFB000;
+  --rm-series-02: #FF7054;
+  --rm-series-03: #2AE0CB;
+  --rm-series-04: #36CEFF;
+  --rm-series-05: #B59AFF;
+  --rm-series-06: #FF9850;
+  --rm-series-07: #38E8A5;
+  --rm-series-08: #FF93A7;
+  --rm-series-09: #839FFF;
+  --rm-series-10: #F4F36B;
+  --rm-series-11: #7AE0FF;
+  --rm-series-12: #FFAFC7;
+  --rm-series-13: #8AE36C;
+  --rm-series-14: #DAA1FF;
+  --rm-series-15: #FFD34E;
+  --rm-series-16: #A6C7C2;
+  --rm-series-01-text: color-mix(in srgb, var(--rm-series-01) 50%, var(--rm-text-primary) 50%);
+  --rm-series-02-text: color-mix(in srgb, var(--rm-series-02) 50%, var(--rm-text-primary) 50%);
+  --rm-series-03-text: color-mix(in srgb, var(--rm-series-03) 50%, var(--rm-text-primary) 50%);
+  --rm-series-04-text: color-mix(in srgb, var(--rm-series-04) 50%, var(--rm-text-primary) 50%);
+  --rm-series-05-text: color-mix(in srgb, var(--rm-series-05) 50%, var(--rm-text-primary) 50%);
+  --rm-series-06-text: color-mix(in srgb, var(--rm-series-06) 50%, var(--rm-text-primary) 50%);
+  --rm-series-07-text: color-mix(in srgb, var(--rm-series-07) 50%, var(--rm-text-primary) 50%);
+  --rm-series-08-text: color-mix(in srgb, var(--rm-series-08) 50%, var(--rm-text-primary) 50%);
+  --rm-series-09-text: color-mix(in srgb, var(--rm-series-09) 50%, var(--rm-text-primary) 50%);
+  --rm-series-10-text: color-mix(in srgb, var(--rm-series-10) 50%, var(--rm-text-primary) 50%);
+  --rm-series-11-text: color-mix(in srgb, var(--rm-series-11) 50%, var(--rm-text-primary) 50%);
+  --rm-series-12-text: color-mix(in srgb, var(--rm-series-12) 50%, var(--rm-text-primary) 50%);
+  --rm-series-13-text: color-mix(in srgb, var(--rm-series-13) 50%, var(--rm-text-primary) 50%);
+  --rm-series-14-text: color-mix(in srgb, var(--rm-series-14) 50%, var(--rm-text-primary) 50%);
+  --rm-series-15-text: color-mix(in srgb, var(--rm-series-15) 50%, var(--rm-text-primary) 50%);
+  --rm-series-16-text: color-mix(in srgb, var(--rm-series-16) 50%, var(--rm-text-primary) 50%);
 }
 
 .light[data-rm-palette='rad'],
@@ -310,14 +342,38 @@
   --rm-map-route-3: #7945D8;
   --rm-map-route-4: #007A4B;
   --rm-map-route-5: #B02A91;
-  --rm-series-01: #F26A2E;
-  --rm-series-02: #FFB000;
+  --rm-series-01: #FFB000;
+  --rm-series-02: #F26A2E;
   --rm-series-03: #008F8C;
-  --rm-series-04: #00A86B;
+  --rm-series-04: #435BD0;
+  --rm-series-05: #7945D8;
+  --rm-series-06: #B84D00;
+  --rm-series-07: #00A86B;
+  --rm-series-08: #B83461;
+  --rm-series-09: #007C73;
+  --rm-series-10: #697900;
+  --rm-series-11: #16769B;
+  --rm-series-12: #A74773;
+  --rm-series-13: #478100;
+  --rm-series-14: #9744B8;
+  --rm-series-15: #8D6A00;
+  --rm-series-16: #486A64;
   --rm-series-01-text: color-mix(in srgb, var(--rm-series-01) 50%, var(--rm-text-primary) 50%);
   --rm-series-02-text: color-mix(in srgb, var(--rm-series-02) 50%, var(--rm-text-primary) 50%);
   --rm-series-03-text: color-mix(in srgb, var(--rm-series-03) 50%, var(--rm-text-primary) 50%);
   --rm-series-04-text: color-mix(in srgb, var(--rm-series-04) 50%, var(--rm-text-primary) 50%);
+  --rm-series-05-text: color-mix(in srgb, var(--rm-series-05) 50%, var(--rm-text-primary) 50%);
+  --rm-series-06-text: color-mix(in srgb, var(--rm-series-06) 50%, var(--rm-text-primary) 50%);
+  --rm-series-07-text: color-mix(in srgb, var(--rm-series-07) 50%, var(--rm-text-primary) 50%);
+  --rm-series-08-text: color-mix(in srgb, var(--rm-series-08) 50%, var(--rm-text-primary) 50%);
+  --rm-series-09-text: color-mix(in srgb, var(--rm-series-09) 50%, var(--rm-text-primary) 50%);
+  --rm-series-10-text: color-mix(in srgb, var(--rm-series-10) 50%, var(--rm-text-primary) 50%);
+  --rm-series-11-text: color-mix(in srgb, var(--rm-series-11) 50%, var(--rm-text-primary) 50%);
+  --rm-series-12-text: color-mix(in srgb, var(--rm-series-12) 50%, var(--rm-text-primary) 50%);
+  --rm-series-13-text: color-mix(in srgb, var(--rm-series-13) 50%, var(--rm-text-primary) 50%);
+  --rm-series-14-text: color-mix(in srgb, var(--rm-series-14) 50%, var(--rm-text-primary) 50%);
+  --rm-series-15-text: color-mix(in srgb, var(--rm-series-15) 50%, var(--rm-text-primary) 50%);
+  --rm-series-16-text: color-mix(in srgb, var(--rm-series-16) 50%, var(--rm-text-primary) 50%);
 }
 
 *, *::before, *::after { box-sizing: border-box; }

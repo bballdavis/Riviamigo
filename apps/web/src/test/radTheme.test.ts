@@ -70,8 +70,10 @@ describe('RAD visual contract', () => {
       RAD_THEME.series['series-02']?.light,
       RAD_THEME.series['series-03']?.light,
       RAD_THEME.series['series-04']?.light,
-    ]).toEqual(['#F26A2E', '#FFB000', '#008F8C', '#00A86B']);
-    expect(css).toContain('--rm-series-02: #FFB000;');
+    ]).toEqual(['#FFB000', '#F26A2E', '#008F8C', '#435BD0']);
+    expect(css).toContain('--rm-series-01: #FFB000;');
+    expect(css).toContain('--rm-series-02: #F26A2E;');
+    expect(css).toContain('--rm-series-04: #435BD0;');
     expect(css).toContain('--rm-series-02-text: color-mix(in srgb, var(--rm-series-02) 50%, var(--rm-text-primary) 50%);');
   });
 

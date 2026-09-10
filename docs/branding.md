@@ -73,19 +73,20 @@ The RAD built-in is app-specific visual direction inspired by Rivian's white,
 gold, orange, teal, and green RAD identity. Its saturated gold, vermilion,
 teal, and white treatment includes sixteen unrepeated chart-series colors in
 each mode. Dark mode uses gold controls on teal surfaces; light mode uses a
-near-white canvas with concentrated orange, gold, teal, and green accents.
+near-white canvas with concentrated gold, red-orange, teal, and blue accents.
 Its values are accessible Riviamigo choices,
 not a claim about exact Rivian brand colors. Both modes cover surfaces, text,
 borders, states, charging and drive modes, overlays, shadows, focus treatments,
 charts, and maps.
 RAD light mode uses `#FCFCFA` for the page, white elevated surfaces, and
-`#F8FAF9` for secondary surfaces so orange, gold, teal, and green remain
+`#F8FAF9` for secondary surfaces so gold, red-orange, teal, and blue remain
 distinct without tinting the whole interface. Automatic dashboard sensor chips
-use stable data-category slots. Energy uses `series-01`, counts and cycles use
-`series-02`, range and miles use `series-03`, and efficiency uses `series-04`;
+use stable data-category slots. Energy uses `series-01`, counts use `series-02`,
+range and miles use `series-03`, and efficiency uses `series-04`; adjacent cycle
+summaries use a later slot when they sit beside a count card;
 battery health, degradation, capacity, cost, share, rate, and limit categories
 continue through the later series slots in their shared sensor definitions. The
-RAD light slots are intentionally vivid: orange, gold, teal, and green lead the
+RAD light slots are intentionally vivid: gold, red-orange, teal, and blue lead the
 primary dashboard categories. Their light-mode numeric values use a readable
 companion derived from the same slot, while icons, sprites, and decorative
 borders keep the vivid series color. These are data categories, not status

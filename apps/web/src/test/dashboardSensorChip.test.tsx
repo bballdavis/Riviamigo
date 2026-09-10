@@ -336,7 +336,8 @@ describe('dashboard sensor chips', () => {
       ['total_miles', 'series-03'],
       ['trip_miles', 'series-03'],
       ['avg_efficiency', 'series-04'],
-      ['avg_gross_efficiency', 'series-04'],
+      ['avg_gross_efficiency', 'series-05'],
+      ['avg_outside_temp_c', 'series-06'],
     ] as const;
 
     for (const [metric, token] of mappings) {
@@ -349,7 +350,7 @@ describe('dashboard sensor chips', () => {
     const mappings = [
       ['charging_sessions_summary', 'series-02'],
       ['charging_total_energy', 'series-01'],
-      ['charging_cycles_summary', 'series-02'],
+      ['charging_cycles_summary', 'series-13'],
       ['charging_total_cost', 'series-08'],
       ['charging_home_share', 'series-07'],
       ['charging_dc_share', 'series-09'],
@@ -362,7 +363,7 @@ describe('dashboard sensor chips', () => {
       ['usable_capacity', 'series-12'],
       ['max_range', 'series-03'],
       ['charge_count', 'series-02'],
-      ['charging_cycles_health', 'series-02'],
+      ['charging_cycles_health', 'series-13'],
       ['battery_energy_added', 'series-01'],
       ['battery_charge_efficiency', 'series-04'],
     ] as const;

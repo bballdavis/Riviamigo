@@ -17,7 +17,7 @@ describe('theme registry', () => {
     expect(BUILT_IN_THEMES.classic.tokens.light['charging-done']).toBe('#059669');
     expect(BUILT_IN_THEMES.classic.tokens.dark['glow-sm']).toBe('0 0 20px rgba(253, 131, 4, 0.15)');
     expect(BUILT_IN_THEMES.rad.chartAliases.accent).toEqual({ dark: '#FFB000', light: '#F26A2E' });
-    expect(BUILT_IN_THEMES.rad.series['series-02']).toEqual({ dark: '#36CEFF', light: '#FFB000' });
+    expect(BUILT_IN_THEMES.rad.series['series-02']).toEqual({ dark: '#FF7054', light: '#F26A2E' });
     expect(BUILT_IN_THEMES.rad.tokens.light['status-positive']).toBe('#007A4B');
     expect(BUILT_IN_THEMES.rad.tokens.light['accent-active']).toBe('#8E2E0A');
     expect(BUILT_IN_THEMES.rad.tokens.light['charging-ac']).toBe('#007DA3');
@@ -35,7 +35,7 @@ describe('theme registry', () => {
   });
   it('resolves deterministically and retains legacy aliases', () => {
     const a = resolveTheme({ theme: 'rad', series: { 'series-01': { dark: '#112233' } } });
-    expect(a.series['series-01']).toEqual({ dark: '#112233', light: '#F26A2E' }); expect(resolveTheme({ theme: 'rad' })).toEqual(resolveTheme({ theme: 'rad' }));
+    expect(a.series['series-01']).toEqual({ dark: '#112233', light: '#FFB000' }); expect(resolveTheme({ theme: 'rad' })).toEqual(resolveTheme({ theme: 'rad' }));
     expect(registryHash()).toBe(registryHash()); expect(LEGACY_CHART_ALIASES.accent).toEqual({ dark: '#FD8304', light: '#FD8304' });
     expect(Object.keys(registryManifest())).toEqual(['schemaVersion', 'registryHash', 'builtins']);
   });
