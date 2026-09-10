@@ -18,7 +18,8 @@
     "./lib/vehicleStatus": "./src/lib/vehicleStatus.ts",
     "./lib/vehicleTires": "./src/lib/vehicleTires.ts",
     "./lib/brandAssets": "./src/lib/brandAssets.ts",
-    "./lib/color": "./src/lib/color.ts"
+    "./lib/color": "./src/lib/color.ts",
+    "./lib/clientDiagnostics": "./src/lib/clientDiagnostics.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

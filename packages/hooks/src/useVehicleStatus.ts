@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { create } from 'zustand';
 import type { VehicleStatus } from '@riviamigo/types';
+import { reportClientError } from '@riviamigo/ui/lib/clientDiagnostics';
 import { api } from './api';
 import { useAuthReady } from './useAuthState';
 import { queryKeys } from './queryKeys';
@@ -192,7 +193,13 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
           setConnectionState('connecting');
           ws.close();
         }, PROBE_RESPONSE_TIMEOUT_MS);
-      } catch {
+      } catch (error) {
+        reportClientError(error, {
+          event: 'live.websocket_send_failed',
+          area: 'websocket',
+          operation: 'initial-probe',
+          severity: 'warn',
+        });
         ws.close();
       }
     };
@@ -230,8 +237,13 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
           // Heartbeat / control frame — ignore.
           wsDebugLog(vehicleId, 'ignored', message, null);
         }
-      } catch (err) {
-        console.warn('[WS] message parse error', err);
+      } catch (error) {
+        reportClientError(error, {
+          event: 'live.websocket_message_invalid',
+          area: 'websocket',
+          operation: 'message-parse',
+          severity: 'warn',
+        });
       }
     };
 
@@ -269,7 +281,15 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
       }, backoffRef.current);
     };
 
-    ws.onerror = () => ws.close();
+    ws.onerror = () => {
+      reportClientError(new Error('Live status websocket failed'), {
+        event: 'live.websocket_error',
+        area: 'websocket',
+        operation: 'live-status',
+        severity: 'warn',
+      });
+      ws.close();
+    };
   }, [
     accessToken,
     clearProbeTimeout,
@@ -307,7 +327,13 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
         ws.close();
       }, PROBE_RESPONSE_TIMEOUT_MS);
       return true;
-    } catch {
+    } catch (error) {
+      reportClientError(error, {
+        event: 'live.websocket_send_failed',
+        area: 'websocket',
+        operation: 'liveness-probe',
+        severity: 'warn',
+      });
       forceReconnect();
       return false;
     }

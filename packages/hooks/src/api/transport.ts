@@ -98,6 +98,7 @@ import type {
   ChargingNetworkPreference,
 } from '@riviamigo/types';
 import { liveFields } from './chargingSessionFields';
+import { reportClientError } from '@riviamigo/ui/lib/clientDiagnostics';
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
 
@@ -245,6 +246,7 @@ interface ApiFailureDetail {
   message: string;
   method: string;
   path: string;
+  requestId?: string | undefined;
   rateLimitSource?: string;
   rateLimitClass?: string;
   rateLimitLimit?: number;
@@ -330,21 +332,56 @@ export class AuthenticatedTransport {
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     const origin = typeof window === 'undefined' ? 'http://localhost' : window.location.origin;
     let firstPartyProxy = false;
+    let proxyUrl: URL | undefined;
     try {
       const url = new URL(rawUrl, origin);
+      proxyUrl = url;
       firstPartyProxy =
         url.origin === origin && /^\/v1\/external\/(basemap|iconify)(?:\/|$)/.test(url.pathname);
     } catch {
       // Let fetch report an invalid URL; it is not a connection proxy request.
     }
 
-    if (!firstPartyProxy || !this.accessToken) {
-      return fetch(input, init);
-    }
+    const requestInit = firstPartyProxy && this.accessToken
+      ? (() => {
+        const headers = new Headers(init.headers);
+        headers.set('Authorization', `Bearer ${this.accessToken}`);
+        return { ...init, credentials: 'same-origin' as const, headers };
+      })()
+      : init;
 
-    const headers = new Headers(init.headers);
-    headers.set('Authorization', `Bearer ${this.accessToken}`);
-    return fetch(input, { ...init, credentials: 'same-origin', headers });
+    const request = fetch(input, requestInit);
+    if (!firstPartyProxy) return request;
+
+    const method = init.method ?? 'GET';
+    return request
+      .then((response) => {
+        if (!response.ok) {
+          reportClientError(new Error(`First-party proxy returned HTTP ${response.status}`), {
+            event: 'proxy.response_failed',
+            area: 'api',
+            operation: 'first-party-proxy',
+            method,
+            path: proxyUrl?.pathname,
+            status: response.status,
+            code: `HTTP_${response.status}`,
+            requestId: response.headers.get('x-request-id') ?? undefined,
+            severity: 'warn',
+          });
+        }
+        return response;
+      })
+      .catch((error: unknown) => {
+        reportClientError(error, {
+          event: 'proxy.request_failed',
+          area: 'api',
+          operation: 'first-party-proxy',
+          method,
+          path: proxyUrl?.pathname,
+          severity: 'warn',
+        });
+        throw error;
+      });
   }
 
   /**
@@ -441,12 +478,27 @@ export class AuthenticatedTransport {
 
     const shouldRetryOnUnauthorized = retryOnUnauthorized && !isPublicAuthPath(path);
 
-    const res = await fetch(url, {
-      method,
-      headers: { ...(this.headers(path) as Record<string, string>), ...extraHeaders },
-      credentials: 'include',
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method,
+        headers: { ...(this.headers(path) as Record<string, string>), ...extraHeaders },
+        credentials: 'include',
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      });
+    } catch (error) {
+      if (reportErrors) {
+        reportClientError(error, {
+          event: 'api.request_failed',
+          area: 'api',
+          operation: classifyClientRequestSource(path),
+          method,
+          path,
+          severity: 'warn',
+        });
+      }
+      throw error;
+    }
 
     if (!res.ok) {
       const rateLimitHeaders = parseRateLimitHeaders(res.headers, method, path);
@@ -469,14 +521,16 @@ export class AuthenticatedTransport {
             message: `Session expired while calling ${method} ${path}. Sign in again.`,
             method,
             path,
+            requestId: res.headers.get('x-request-id') ?? undefined,
             ...rateLimitHeaders,
           };
-          this.reportFailure(detail);
-          throw Object.assign(new Error(formatApiError(detail)), {
+          const apiError = Object.assign(new Error(formatApiError(detail)), {
             status: res.status,
             code: detail.code,
             detail,
           });
+          this.reportFailure(detail, apiError);
+          throw apiError;
         }
       }
 
@@ -488,15 +542,17 @@ export class AuthenticatedTransport {
         message: err.message,
         method,
         path,
+        requestId: res.headers.get('x-request-id') ?? undefined,
         ...rateLimitHeaders,
       };
       if (res.status === 429) this.rememberRateLimitCooldown(detail);
-      if (reportErrors) this.reportFailure(detail);
-      throw Object.assign(new Error(formatApiError(detail)), {
+      const apiError = Object.assign(new Error(formatApiError(detail)), {
         status: res.status,
         code: err.code,
         detail,
       });
+      if (reportErrors) this.reportFailure(detail, apiError);
+      throw apiError;
     }
 
     return res;
@@ -1863,7 +1919,7 @@ export class AuthenticatedTransport {
     return this.request('GET', '/v1/admin/rivian/stewardship');
   }
 
-  private reportFailure(detail: ApiFailureDetail) {
+  private reportFailure(detail: ApiFailureDetail, error: Error = new Error(detail.message)) {
     if (detail.path === '/v1/auth/refresh' && detail.status === 401) return;
 
     if (detail.code === 'AUTH_EXPIRED') {
@@ -1871,21 +1927,16 @@ export class AuthenticatedTransport {
       this.authExpiredReported = true;
     }
 
-    console.warn('[Riviamigo API] request failed', {
-      status: detail.status,
-      code: detail.code,
+    reportClientError(error, {
+      event: 'api.request_failed',
+      area: 'api',
+      operation: classifyClientRequestSource(detail.path),
       method: detail.method,
       path: detail.path,
-      source: classifyClientRequestSource(detail.path),
-      startupCandidate: isStartupProtectedPath(detail.path),
-      hasAccessToken: !!this.accessToken,
-      rateLimitSource: detail.rateLimitSource,
-      rateLimitClass: detail.rateLimitClass,
-      rateLimitLimit: detail.rateLimitLimit,
-      rateLimitRemaining: detail.rateLimitRemaining,
-      rateLimitResetSeconds: detail.rateLimitResetSeconds,
-      retryAfterSeconds: detail.retryAfterSeconds,
-      message: truncate(detail.message, 240),
+      status: detail.status,
+      code: detail.code,
+      requestId: detail.requestId,
+      severity: 'warn',
     });
 
     if (typeof window !== 'undefined') {
@@ -2193,15 +2244,6 @@ function classifyClientRequestSource(path: string) {
   if (path === '/v1/vehicles/live') return 'live_websocket';
   if (path.startsWith('/v1/dashboards/by-slug/')) return 'dashboard_metadata';
   return 'protected_api';
-}
-
-function isStartupProtectedPath(path: string) {
-  return (
-    path === '/v1/auth/me' ||
-    path === '/v1/auth/preferences' ||
-    path.startsWith('/v1/dashboards/by-slug/') ||
-    path === '/v1/vehicles/live'
-  );
 }
 
 function finiteNumber(value: unknown): number | undefined {

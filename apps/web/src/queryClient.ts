@@ -1,11 +1,15 @@
 import {
+  MutationCache,
   QueryClient,
+  QueryCache,
   dehydrate,
   hydrate,
   type DehydratedState,
+  type Mutation,
   type Query,
   type QueryKey,
 } from '@tanstack/react-query';
+import { reportClientError } from '@riviamigo/ui/lib/clientDiagnostics';
 
 const QUERY_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_PERSISTED_CACHE_BYTES = 1_500_000;
@@ -32,6 +36,26 @@ function cacheKey(userId: string) {
 }
 
 export const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: (error, query) => {
+      reportClientError(error, {
+        event: 'query.failed',
+        area: 'query',
+        operation: queryOperation(query.queryKey),
+        severity: 'warn',
+      });
+    },
+  }),
+  mutationCache: new MutationCache({
+    onError: (error, _variables, _context, mutation) => {
+      reportClientError(error, {
+        event: 'mutation.failed',
+        area: 'mutation',
+        operation: mutationOperation(mutation),
+        severity: 'warn',
+      });
+    },
+  }),
   defaultOptions: {
     queries: {
       retry: (failureCount, error) => {
@@ -153,4 +177,14 @@ function shouldDehydrateQuery(query: Query) {
 function isPersistedQueryKey(queryKey: QueryKey) {
   const root = queryKey[0];
   return typeof root === 'string' && PERSISTED_QUERY_ROOTS.has(root);
+}
+
+function queryOperation(queryKey: QueryKey): string {
+  const root = queryKey[0];
+  return typeof root === 'string' ? root : 'unknown-query';
+}
+
+function mutationOperation(mutation: Mutation<unknown, unknown, unknown, unknown>): string {
+  const root = mutation.options.mutationKey?.[0];
+  return typeof root === 'string' ? root : 'unknown-mutation';
 }
