@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import {
   Sidebar,
   StatusBar,
+  ThemeToggle,
   AmbientOrbs,
   DEFAULT_NAV_ITEMS,
   type NavItem,
@@ -30,6 +31,7 @@ import {
 } from 'react-icons/tb';
 import { FaTruckPickup } from 'react-icons/fa6';
 import { emitToast } from '../feedback/toast';
+import { useThemePreferenceController } from '../../hooks/useThemePreferenceController';
 import {
   getRivianCredentialRenewalNotice,
   type RivianCredentialRenewalNotice,
@@ -71,7 +73,7 @@ function CredentialRenewalNotice({
         : 'flex min-h-10 w-full items-center gap-2 rounded-lg bg-bg-elevated px-3 py-2 text-start text-status-warning transition-colors hover:bg-bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent'}
     >
       <CalendarClock className="h-4 w-4 shrink-0" aria-hidden="true" />
-      {!compact ? <span className="min-w-0 text-xs font-medium leading-5">{notice.label}</span> : null}
+      {!compact ? <span className="min-w-0 text-sm font-medium leading-5">{notice.label}</span> : null}
     </button>
   );
 }
@@ -158,6 +160,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
   } = useVehicleStatus(liveVehicleId, liveAccessToken);
   const { data: currentStatus } = useCurrentVehicleStatus(liveVehicleId);
   const status = currentStatus ?? liveStatus;
+  const themeController = useThemePreferenceController();
   const [unitSystem, setUnitSystem] = React.useState(() => getUnitSystem());
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(() => {
     if (typeof window === 'undefined') return false;
@@ -287,6 +290,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
         activeKey={activeKey}
         onNavigate={(href) => navigate({ to: href })}
         items={sidebarItems}
+        mobileHeaderSlot={<ThemeToggle mode={themeController.mode} onModeChange={themeController.onModeChange} disabled={themeController.isPending} variant="ghost" className="h-11 w-11" ariaLabel="Theme options" />}
         collapsed={sidebarCollapsed}
         onCollapsedChange={setPersistedSidebarCollapsed}
         bottomSlot={({ collapsed, mobile, closeMobileNavigation }) =>
@@ -307,6 +311,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 isCharging={isVehicleCharging(status)}
                 rangeEstimateMi={status?.range_miles ?? undefined}
                 className="h-12 px-4"
+                size="menu"
               />
 
               <button
@@ -376,7 +381,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 >
                   {compactBatteryIcon && (
                     <compactBatteryIcon.Component
-                      className={`h-[1.44375rem] w-[1.44375rem] ${
+                      className={`h-4 w-4 ${
                         compactBatteryIcon.variant === 'charging'
                           ? 'text-accent'
                           : (compactBatteryLevel ?? 0) > 50
@@ -409,7 +414,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 <Settings className="h-4 w-4 shrink-0" />
               </button>
 
-              <div className="flex justify-end">
+              <div className={collapsedFooterRow}>
                 <button
                   type="button"
                   onClick={handleLogout}
@@ -419,6 +424,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 >
                   <LogOut className="h-4 w-4 shrink-0" />
                 </button>
+                <ThemeToggle mode={themeController.mode} onModeChange={themeController.onModeChange} disabled={themeController.isPending} variant="ghost" className="h-8 w-8" ariaLabel="Theme options" />
               </div>
             </div>
           ) : (
@@ -445,7 +451,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-fg-tertiary transition-colors hover:bg-bg-elevated hover:text-fg"
               >
                 <Settings className="h-4 w-4 shrink-0" />
-                <span className="text-xs font-medium">Settings</span>
+                  <span className="text-sm font-medium">Settings</span>
               </button>
 
               <div className="flex items-center justify-between">
@@ -457,9 +463,9 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                   className="flex items-center gap-2 rounded-lg px-3 py-2 text-fg-tertiary transition-colors hover:bg-bg-elevated hover:text-fg"
                 >
                   <LogOut className="h-4 w-4 shrink-0" />
-                  <span className="text-xs font-medium">Sign out</span>
+                  <span className="text-sm font-medium">Sign out</span>
                 </button>
-
+                <ThemeToggle mode={themeController.mode} onModeChange={themeController.onModeChange} disabled={themeController.isPending} variant="ghost" className="h-8 w-8" ariaLabel="Theme options" />
               </div>
             </div>
           )

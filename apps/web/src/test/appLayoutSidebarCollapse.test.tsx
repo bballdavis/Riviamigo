@@ -4,6 +4,9 @@ import { AppLayout } from '../components/layout/AppLayout';
 
 const navigate = vi.fn();
 const logout = vi.fn();
+const { updateThemePreferences } = vi.hoisted(() => ({
+  updateThemePreferences: vi.fn(async (...args: unknown[]) => ({ preferences: args[0], etag: 'theme-etag-2' })),
+}));
 let currentStatusData: Record<string, unknown> | null = null;
 let liveConnected = true;
 let liveConnectionState = 'online';
@@ -13,6 +16,13 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 vi.mock('@riviamigo/hooks', () => ({
+  themeClient: {
+    getPreferences: vi.fn(async () => ({
+      preferences: { schemaVersion: 2, mode: 'dark', selection: { kind: 'builtin', themeId: 'classic' } },
+      etag: 'theme-etag-1',
+    })),
+    updatePreferences: updateThemePreferences,
+  },
   useAuth: (
     selector?: (state: {
       accessToken: string;
@@ -40,6 +50,15 @@ vi.mock('@riviamigo/hooks', () => ({
     status: null,
     connected: liveConnected,
     connectionState: liveConnectionState,
+  }),
+}));
+
+vi.mock('../hooks/useThemePreferenceController', () => ({
+  useThemePreferenceController: () => ({
+    mode: 'dark',
+    isPending: false,
+    error: null,
+    onModeChange: (mode: string) => updateThemePreferences({ schemaVersion: 2, mode, selection: { kind: 'builtin', themeId: 'classic' } }, 'theme-etag-1'),
   }),
 }));
 
@@ -282,6 +301,7 @@ describe('AppLayout sidebar collapse', () => {
 
     const sheet = screen.getByRole('dialog', { name: 'Navigation' });
     const sheetControls = within(sheet);
+    await waitFor(() => expect(sheetControls.getByRole('button', { name: 'Close navigation' })).toHaveFocus());
     const overview = sheetControls.getByRole('button', { name: 'Overview' });
     const battery = sheetControls.getByRole('button', { name: 'Battery' });
     const settings = sheetControls.getByRole('button', { name: 'Open settings' });
@@ -295,6 +315,23 @@ describe('AppLayout sidebar collapse', () => {
     expect(sheetControls.getByLabelText('Vehicle status: Online').parentElement).toHaveClass(
       'h-12'
     );
+    expect(sheetControls.getByLabelText('Vehicle status: Online').querySelector('svg')).toHaveClass(
+      'h-5',
+      'w-5'
+    );
+    const theme = sheetControls.getByRole('button', { name: /Theme options/i });
+    expect(theme).toHaveClass('h-11', 'w-11');
+    fireEvent.click(theme);
+    expect(await screen.findByRole('menuitemradio', { name: /dark/i })).toHaveFocus();
+    expect(screen.getByRole('menu', { name: 'Theme options' })).toHaveClass('z-[70]');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('menuitemradio', { name: /dark/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Navigation' })).toBeInTheDocument();
+    expect(theme).toHaveFocus();
+    fireEvent.click(theme);
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /system/i }));
+    expect(updateThemePreferences).toHaveBeenCalledWith(expect.objectContaining({ mode: 'system' }), 'theme-etag-1');
+    expect(theme).toHaveFocus();
     expect(settings).toHaveClass('h-12');
     expect(signOut).toHaveClass('h-12');
 
@@ -320,5 +357,23 @@ describe('AppLayout sidebar collapse', () => {
       expect(screen.getByRole('button', { name: 'Toggle navigation' })).toHaveFocus()
     );
     expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument();
+  });
+
+  it('routes a selected mode through the account preference controller', async () => {
+    render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>
+    );
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Theme options/i })[0]!);
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /light/i }));
+
+    await waitFor(() => {
+      expect(updateThemePreferences).toHaveBeenCalledWith(
+        { schemaVersion: 2, mode: 'light', selection: { kind: 'builtin', themeId: 'classic' } },
+        'theme-etag-1'
+      );
+    });
   });
 });

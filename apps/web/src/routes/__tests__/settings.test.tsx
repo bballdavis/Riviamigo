@@ -564,6 +564,10 @@ function renderSettings() {
   );
 }
 
+function clickSettingsSection(label: string) {
+  fireEvent.click(screen.getByRole('button', { name: label }));
+}
+
 describe('Settings page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -640,6 +644,49 @@ describe('Settings page', () => {
   it('uses a chart icon for the Charts settings section', () => {
     renderSettings();
     expect(screen.getByTestId('icon-chart-line')).toBeInTheDocument();
+  });
+
+  it('renders the mobile section picker with every available section', () => {
+    renderSettings();
+
+    const picker = screen.getByLabelText('Settings section');
+    expect(picker).toHaveClass('w-full');
+    expect(picker).toHaveValue('vehicles');
+    expect(Array.from((picker as HTMLSelectElement).options).map((option) => option.value)).toEqual([
+      'vehicles',
+      'dashboards',
+      'charts',
+      'units',
+      'places',
+      'charging',
+      'external',
+      'api',
+      'jobs',
+      'raw',
+      'appearance',
+      'account',
+    ]);
+
+    fireEvent.change(picker, { target: { value: 'appearance' } });
+
+    expect(picker).toHaveValue('appearance');
+    expect(screen.getByText('Appearance mode')).toBeInTheDocument();
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/settings',
+      search: { section: 'appearance' },
+    });
+  });
+
+  it('includes Backups in the mobile section picker for administrators', () => {
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'admin@example.com',
+      role: 'admin',
+      default_vehicle_id: 'v1',
+    };
+    renderSettings();
+
+    expect(screen.getByRole('option', { name: 'Backups' })).toBeInTheDocument();
   });
 
   it('renders the connected vehicle display name', () => {
@@ -781,7 +828,7 @@ describe('Settings page', () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     renderSettings();
-    fireEvent.click(screen.getByText('Dashboards'));
+    clickSettingsSection('Dashboards');
 
     expect(screen.getByText('System Defaults')).toBeInTheDocument();
     expect(screen.getByText('My Dashboards')).toBeInTheDocument();
@@ -880,7 +927,7 @@ describe('Settings page', () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     renderSettings();
-    fireEvent.click(screen.getByText('Dashboards'));
+    clickSettingsSection('Dashboards');
 
     expect(screen.getAllByText('Active for you')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Customize' })).not.toBeInTheDocument();
@@ -1007,7 +1054,7 @@ describe('Settings page', () => {
 
   it('renders the Appearance section', () => {
     renderSettings();
-    fireEvent.click(screen.getByText('Appearance'));
+    clickSettingsSection('Appearance');
     expect(screen.getAllByText('Appearance').length).toBeGreaterThan(0);
     expect(screen.getByText('Appearance mode')).toBeInTheDocument();
   });
@@ -1015,7 +1062,7 @@ describe('Settings page', () => {
   it('offers every OpenFreeMap style and saves the user selection', async () => {
     settingsMocks.basemapConfig = { resolved_provider: 'openfreemap' };
     renderSettings();
-    fireEvent.click(screen.getByText('Appearance'));
+    clickSettingsSection('Appearance');
 
     const style = screen.getByLabelText('Map style');
     for (const value of ['follow-theme', 'positron', 'bright', 'liberty', 'dark', 'fiord', '3d']) {
@@ -1029,13 +1076,13 @@ describe('Settings page', () => {
   it('hides OpenFreeMap-only style controls for CARTO', () => {
     settingsMocks.basemapConfig = { resolved_provider: 'carto' };
     renderSettings();
-    fireEvent.click(screen.getByText('Appearance'));
+    clickSettingsSection('Appearance');
     expect(screen.queryByLabelText('Map style')).not.toBeInTheDocument();
   });
 
   it('renders the Places section', () => {
     renderSettings();
-    fireEvent.click(screen.getByText('Places'));
+    clickSettingsSection('Places');
     expect(screen.getAllByText('Places').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Saved Places/i).length).toBeGreaterThan(0);
   });
@@ -1044,7 +1091,7 @@ describe('Settings page', () => {
     const hooks = await import('@riviamigo/hooks');
     settingsMocks.auth.accessToken = 'test-access-token';
     renderSettings();
-    fireEvent.click(screen.getByText('API Access'));
+    clickSettingsSection('API Access');
 
     expect(screen.getByText('Integration Keys')).toBeInTheDocument();
     expect(screen.getByText(/read-only and limited to one vehicle/i)).toBeInTheDocument();
@@ -1065,7 +1112,7 @@ describe('Settings page', () => {
 
   it('shows address suggestions after explicitly submitting a place search', async () => {
     renderSettings();
-    fireEvent.click(screen.getByText('Places'));
+    clickSettingsSection('Places');
 
     fireEvent.change(screen.getByLabelText('Address Search'), { target: { value: '123 Main' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
@@ -1080,7 +1127,7 @@ describe('Settings page', () => {
     vi.mocked(hooks.api.searchPlaceAddresses).mockImplementationOnce(() => new Promise(() => {}));
 
     renderSettings();
-    fireEvent.click(screen.getByText('Places'));
+    clickSettingsSection('Places');
     fireEvent.change(screen.getByLabelText('Address Search'), { target: { value: '123 Main' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
@@ -1094,7 +1141,7 @@ describe('Settings page', () => {
     vi.mocked(hooks.api.searchPlaceAddresses).mockResolvedValueOnce([]);
 
     renderSettings();
-    fireEvent.click(screen.getByText('Places'));
+    clickSettingsSection('Places');
     fireEvent.change(screen.getByLabelText('Address Search'), {
       target: { value: 'unlikely query xyz' },
     });
@@ -1159,7 +1206,7 @@ describe('Settings page', () => {
     ]);
 
     renderSettings();
-    fireEvent.click(screen.getByText('Places'));
+    clickSettingsSection('Places');
 
     await waitFor(() => {
       expect(screen.getByText('Home Garage')).toBeInTheDocument();
@@ -1176,7 +1223,7 @@ describe('Settings page', () => {
 
   it('renders the theme chooser', async () => {
     renderSettings();
-    fireEvent.click(screen.getByText('Appearance'));
+    clickSettingsSection('Appearance');
     expect(screen.getByText('Appearance mode')).toBeInTheDocument();
     expect(screen.getByLabelText('Appearance mode')).toBeInTheDocument();
     expect(await screen.findByRole('radiogroup', { name: 'Themes' })).toBeInTheDocument();
@@ -1188,7 +1235,7 @@ describe('Settings page', () => {
     const hooks = await import('@riviamigo/hooks');
     settingsMocks.auth.accessToken = 'test-access-token';
     renderSettings();
-    fireEvent.click(screen.getByText('Appearance'));
+    clickSettingsSection('Appearance');
 
     await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
     fireEvent.click(await screen.findByRole('radio', { name: /^RAD/ }));
@@ -1207,7 +1254,7 @@ describe('Settings page', () => {
     settingsMocks.auth.accessToken = 'test-access-token';
     vi.mocked(hooks.api.updateThemePreferences).mockRejectedValueOnce(new Error('save failed'));
     renderSettings();
-    fireEvent.click(screen.getByText('Appearance'));
+    clickSettingsSection('Appearance');
 
     await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
     fireEvent.change(screen.getByLabelText('Appearance mode'), { target: { value: 'light' } });
@@ -1219,7 +1266,7 @@ describe('Settings page', () => {
 
   it('renders the Account section with Sign Out', () => {
     renderSettings();
-    fireEvent.click(screen.getByText('Account'));
+    clickSettingsSection('Account');
     expect(screen.getAllByText('Account').length).toBeGreaterThan(0);
     expect(screen.getByText('Sign Out')).toBeInTheDocument();
   });
@@ -1232,7 +1279,7 @@ describe('Settings page', () => {
       default_vehicle_id: 'v1',
     };
     renderSettings();
-    fireEvent.click(screen.getByText('Raw Data'));
+    clickSettingsSection('Raw Data');
 
     await waitFor(() => {
       expect(screen.getByText('Telemetry Explorer')).toBeInTheDocument();
@@ -1251,8 +1298,8 @@ describe('Settings page', () => {
     };
     renderSettings();
 
-    await waitFor(() => expect(screen.getByText('Backups')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('Backups'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Backups' })).toBeInTheDocument());
+    clickSettingsSection('Backups');
 
     await waitFor(() => {
       expect(screen.getAllByText('Backups').length).toBeGreaterThan(0);
@@ -1413,8 +1460,8 @@ describe('Settings page', () => {
     };
     renderSettings();
 
-    await waitFor(() => expect(screen.getByText('Backups')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('Backups'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Backups' })).toBeInTheDocument());
+    clickSettingsSection('Backups');
     const restorePicker = await screen.findByRole('combobox', {
       name: 'Choose a recovery package',
     });
@@ -1446,8 +1493,8 @@ describe('Settings page', () => {
     };
     renderSettings();
 
-    await waitFor(() => expect(screen.getByText('Backups')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('Backups'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Backups' })).toBeInTheDocument());
+    clickSettingsSection('Backups');
 
     await waitFor(() => {
       expect(screen.getAllByText('Backups').length).toBeGreaterThan(0);
@@ -1504,7 +1551,7 @@ describe('Settings page', () => {
     };
 
     renderSettings();
-    fireEvent.click(screen.getByText('Backups'));
+    clickSettingsSection('Backups');
 
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent('Backup Packaging');
@@ -1526,7 +1573,7 @@ describe('Settings page', () => {
       useVehicles: () => ({ data: [] }),
     }));
     renderSettings();
-    fireEvent.click(screen.getByText('Account'));
+    clickSettingsSection('Account');
     fireEvent.click(screen.getByText('Sign Out'));
     // logout is async; just assert the click doesn't throw
     expect(screen.getByText('Sign Out')).toBeInTheDocument();
@@ -1534,7 +1581,7 @@ describe('Settings page', () => {
 
   it('shows live password requirements and changes the password only after confirmation matches', async () => {
     renderSettings();
-    fireEvent.click(screen.getByText('Account'));
+    clickSettingsSection('Account');
 
     const submit = screen.getByRole('button', { name: 'Change password' });
     expect(submit).toBeDisabled();
@@ -1565,5 +1612,4 @@ describe('Settings page', () => {
     expect(settingsMocks.auth.clearSession).toHaveBeenCalledOnce();
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { password_changed: '1' } });
   });
-
 });
