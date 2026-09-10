@@ -83,7 +83,7 @@ describe('palette-aware chart renderer boundaries', () => {
 
     await waitFor(() => expect(context.strokeStyle).toBe('#FD8304'));
     setPalette('rad');
-    await waitFor(() => expect(context.strokeStyle).toBe('#D9A441'));
+    await waitFor(() => expect(context.strokeStyle).toBe('#FFB000'));
     getContext.mockRestore();
   });
 

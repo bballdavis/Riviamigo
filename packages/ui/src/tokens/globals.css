@@ -160,51 +160,51 @@
  * updates the entire application through this single layer. */
 .dark[data-rm-palette='rad'],
 [data-theme='dark'][data-rm-palette='rad'] {
-  --rm-bg-page:        #0B1014;
-  --rm-bg-surface:     #121B20;
-  --rm-bg-elevated:    #1A282D;
-  --rm-bg-glass:       rgba(26, 40, 45, 0.68);
+  --rm-bg-page:        #082529;
+  --rm-bg-surface:     #10363B;
+  --rm-bg-elevated:    #18464B;
+  --rm-bg-glass:       rgba(24, 70, 75, 0.68);
   --rm-bg-overlay:     rgba(7, 13, 16, 0.74);
 
-  --rm-text-primary:   #F4F5F2;
-  --rm-text-secondary: #B9C4C1;
-  --rm-text-tertiary:  #7A8B89;
-  --rm-text-disabled:  #516361;
-  --rm-text-on-accent: #14201F;
+  --rm-text-primary:   #FFFFFF;
+  --rm-text-secondary: #C4E3DF;
+  --rm-text-tertiary:  #9CBDB9;
+  --rm-text-disabled:  #658B88;
+  --rm-text-on-accent: #082529;
 
   --rm-border-default: rgba(214, 239, 230, 0.10);
   --rm-border-strong:  rgba(214, 239, 230, 0.19);
-  --rm-border-accent:  rgba(217, 164, 65, 0.36);
-  --rm-status-positive: #55C59A;
-  --rm-status-warning:  #E5B34F;
-  --rm-status-danger:   #E87870;
-  --rm-status-info:     #59B9C7;
+  --rm-border-accent:  rgba(255, 176, 0, 0.36);
+  --rm-status-positive: #38E8A5;
+  --rm-status-warning:  #FFC43D;
+  --rm-status-danger:   #FF7054;
+  --rm-status-info:     #36CEFF;
 
   --rm-charging-active: var(--rm-accent);
   --rm-charging-done:   var(--rm-status-positive);
   --rm-charging-limited: var(--rm-status-danger);
   --rm-charging-ac:     var(--rm-status-info);
-  --rm-charging-dc:     #9D91D3;
-  --rm-charging-dcfc:   #C38CBE;
+  --rm-charging-dc:     #B59AFF;
+  --rm-charging-dcfc:   #F077DA;
 
-  --rm-dm-everyday:  #55C59A;
-  --rm-dm-conserve:  #59B9C7;
-  --rm-dm-terrain:   #43B7AE;
-  --rm-dm-sand:      #EBC45F;
-  --rm-dm-rock:      #9D91D3;
-  --rm-dm-rally:     #C38CBE;
-  --rm-dm-drift:     #E87870;
-  --rm-dm-towing:    #E3914F;
+  --rm-dm-everyday:  #38E8A5;
+  --rm-dm-conserve:  #36CEFF;
+  --rm-dm-terrain:   #2AE0CB;
+  --rm-dm-sand:      #FFD34E;
+  --rm-dm-rock:      #B59AFF;
+  --rm-dm-rally:     #F077DA;
+  --rm-dm-drift:     #FF7054;
+  --rm-dm-towing:    #FF9850;
   --rm-dm-unknown:   var(--rm-text-tertiary);
 
-  --rm-accent:       #D9A441;
-  --rm-accent-hover: #EBC45F;
-  --rm-accent-active: #B87B1F;
-  --rm-accent-muted: rgba(217, 164, 65, 0.17);
-  --rm-glow-sm:      0 0 20px rgba(217, 164, 65, 0.16);
-  --rm-glow-md:      0 0 40px rgba(217, 164, 65, 0.21);
-  --rm-glow-lg:      0 0 60px rgba(217, 164, 65, 0.26);
-  --rm-glow-button:  0 0 20px rgba(217, 164, 65, 0.42);
+  --rm-accent:       #FFB000;
+  --rm-accent-hover: #FFD34E;
+  --rm-accent-active: #F59A00;
+  --rm-accent-muted: rgba(255, 176, 0, 0.17);
+  --rm-glow-sm:      0 0 20px rgba(255, 176, 0, 0.16);
+  --rm-glow-md:      0 0 40px rgba(255, 176, 0, 0.21);
+  --rm-glow-lg:      0 0 60px rgba(255, 176, 0, 0.26);
+  --rm-glow-button:  0 0 20px rgba(255, 176, 0, 0.42);
 
   --rm-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.34);
   --rm-shadow-md: 0 4px 6px rgba(0, 0, 0, 0.34);
@@ -213,75 +213,75 @@
 
   --rm-chart-grid: rgba(214, 239, 230, 0.09);
   --rm-chart-hover-bg: rgba(214, 239, 230, 0.035);
-  --rm-chart-accent: #D9A441;
-  --rm-chart-success: #55C59A;
-  --rm-chart-warning: #E5B34F;
-  --rm-chart-danger: #E87870;
+  --rm-chart-accent: #FFB000;
+  --rm-chart-success: #38E8A5;
+  --rm-chart-warning: #FFC43D;
+  --rm-chart-danger: #FF7054;
   --rm-chart-muted: #9AA9AA;
-  --rm-chart-amber: #D9A441;
-  --rm-chart-yellow: #EBC45F;
-  --rm-chart-sky: #59B9C7;
-  --rm-chart-emerald: #55C59A;
-  --rm-chart-violet: #9D91D3;
-  --rm-chart-rose: #E87870;
-  --rm-chart-teal: #43B7AE;
-  --rm-chart-orange: #E3914F;
-  --rm-chart-indigo: #7D8FD8;
-  --rm-map-route-0: #59B9C7;
-  --rm-map-route-1: #55C59A;
-  --rm-map-route-2: #9D91D3;
-  --rm-map-route-3: #C38CBE;
-  --rm-map-route-4: #EBC45F;
-  --rm-map-route-5: #E87870;
+  --rm-chart-amber: #FFB000;
+  --rm-chart-yellow: #F4F36B;
+  --rm-chart-sky: #36CEFF;
+  --rm-chart-emerald: #38E8A5;
+  --rm-chart-violet: #B59AFF;
+  --rm-chart-rose: #FF7054;
+  --rm-chart-teal: #2AE0CB;
+  --rm-chart-orange: #FF9850;
+  --rm-chart-indigo: #839FFF;
+  --rm-map-route-0: #FF7054;
+  --rm-map-route-1: #36CEFF;
+  --rm-map-route-2: #FFD34E;
+  --rm-map-route-3: #B59AFF;
+  --rm-map-route-4: #38E8A5;
+  --rm-map-route-5: #F077DA;
 }
 
 .light[data-rm-palette='rad'],
 [data-theme='light'][data-rm-palette='rad'] {
-  --rm-bg-page:        #F6F7F1;
+  --rm-bg-page:        #F7F5F0;
   --rm-bg-surface:     #FFFFFF;
-  --rm-bg-elevated:    #EEF1EA;
-  --rm-bg-glass:       rgba(255, 255, 255, 0.78);
+  --rm-bg-elevated:    #F1EDE5;
+  --rm-bg-glass:       rgba(255, 255, 255, 0.82);
   --rm-bg-overlay:     rgba(17, 30, 30, 0.42);
 
-  --rm-text-primary:   #182124;
-  --rm-text-secondary: #4E5F60;
-  --rm-text-tertiary:  #6B7C7C;
+  --rm-text-primary:   #10363B;
+  --rm-text-secondary: #355F60;
+  --rm-text-tertiary:  #52716F;
   --rm-text-disabled:  #A5B1AE;
   --rm-text-on-accent: #FFFFFF;
 
   --rm-border-default: rgba(22, 43, 43, 0.10);
   --rm-border-strong:  rgba(22, 43, 43, 0.19);
-  --rm-border-accent:  rgba(164, 101, 23, 0.36);
-  --rm-status-positive: #087F5B;
-  --rm-status-warning:  #A96512;
-  --rm-status-danger:   #C94C45;
-  --rm-status-info:     #197E8E;
+  --rm-border-accent:  rgba(201, 55, 30, 0.36);
+  --rm-status-positive: #007A4B;
+  --rm-status-warning:  #9C5D00;
+  --rm-status-danger:   #D02D30;
+  --rm-status-info:     #007DA3;
 
   --rm-charging-active: var(--rm-accent);
   --rm-charging-done:   var(--rm-status-positive);
   --rm-charging-limited: var(--rm-status-danger);
   --rm-charging-ac:     var(--rm-status-info);
-  --rm-charging-dc:     #6857AA;
-  --rm-charging-dcfc:   #965B91;
+  --rm-charging-dc:     #7945D8;
+  --rm-charging-dcfc:   #B02A91;
 
-  --rm-dm-everyday:  #087F5B;
-  --rm-dm-conserve:  #197E8E;
-  --rm-dm-terrain:   #137A73;
-  --rm-dm-sand:      #9A6A05;
-  --rm-dm-rock:      #6857AA;
-  --rm-dm-rally:     #965B91;
-  --rm-dm-drift:     #C94C45;
-  --rm-dm-towing:    #A95818;
+  --rm-dm-everyday:  #007A4B;
+  --rm-dm-conserve:  #007DA3;
+  --rm-dm-terrain:   #007C73;
+  --rm-dm-sand:      #8D6A00;
+  --rm-dm-rock:      #7945D8;
+  --rm-dm-rally:     #B02A91;
+  --rm-dm-drift:     #D02D30;
+  --rm-dm-towing:    #B84D00;
   --rm-dm-unknown:   var(--rm-text-tertiary);
 
-  --rm-accent:       #A46617;
-  --rm-accent-hover: #874F0E;
-  --rm-accent-active: #683B0B;
-  --rm-accent-muted: rgba(164, 102, 23, 0.12);
-  --rm-glow-sm:      0 0 0 1px rgba(164, 102, 23, 0.12);
-  --rm-glow-md:      0 1px 2px rgba(164, 102, 23, 0.16);
-  --rm-glow-lg:      0 2px 8px rgba(164, 102, 23, 0.21);
-  --rm-glow-button:  0 4px 12px rgba(164, 102, 23, 0.28);
+  --rm-accent:       #C9371E;
+  --rm-accent-hover: #AE2B16;
+  --rm-accent-active: #94200F;
+  --rm-accent-muted: rgba(201, 55, 30, 0.12);
+  --rm-glow-sm:      0 0 0 1px rgba(201, 55, 30, 0.12);
+  --rm-glow-md:      0 1px 2px rgba(201, 55, 30, 0.16);
+  --rm-glow-lg:      0 2px 8px rgba(201, 55, 30, 0.21);
+  --rm-glow-button:  0 4px 12px rgba(201, 55, 30, 0.28);
 
   --rm-shadow-sm: 0 1px 2px rgba(22, 43, 43, 0.07);
   --rm-shadow-md: 0 2px 6px rgba(22, 43, 43, 0.09);
@@ -290,26 +290,26 @@
 
   --rm-chart-grid: rgba(22, 43, 43, 0.10);
   --rm-chart-hover-bg: rgba(22, 43, 43, 0.035);
-  --rm-chart-accent: #A46617;
-  --rm-chart-success: #087F5B;
-  --rm-chart-warning: #A96512;
-  --rm-chart-danger: #C94C45;
-  --rm-chart-muted: #6B7C7C;
-  --rm-chart-amber: #A46617;
-  --rm-chart-yellow: #9A6A05;
-  --rm-chart-sky: #197E8E;
-  --rm-chart-emerald: #087F5B;
-  --rm-chart-violet: #6857AA;
-  --rm-chart-rose: #C94C45;
-  --rm-chart-teal: #137A73;
-  --rm-chart-orange: #A95818;
-  --rm-chart-indigo: #4C5BB2;
-  --rm-map-route-0: #197E8E;
-  --rm-map-route-1: #087F5B;
-  --rm-map-route-2: #6857AA;
-  --rm-map-route-3: #965B91;
-  --rm-map-route-4: #9A6A05;
-  --rm-map-route-5: #C94C45;
+  --rm-chart-accent: #C9371E;
+  --rm-chart-success: #007A4B;
+  --rm-chart-warning: #9C5D00;
+  --rm-chart-danger: #D02D30;
+  --rm-chart-muted: #52716F;
+  --rm-chart-amber: #8D6A00;
+  --rm-chart-yellow: #697900;
+  --rm-chart-sky: #007DA3;
+  --rm-chart-emerald: #007A4B;
+  --rm-chart-violet: #7945D8;
+  --rm-chart-rose: #D02D30;
+  --rm-chart-teal: #007C73;
+  --rm-chart-orange: #B84D00;
+  --rm-chart-indigo: #435BD0;
+  --rm-map-route-0: #C9371E;
+  --rm-map-route-1: #007DA3;
+  --rm-map-route-2: #8D6A00;
+  --rm-map-route-3: #7945D8;
+  --rm-map-route-4: #007A4B;
+  --rm-map-route-5: #B02A91;
 }
 
 *, *::before, *::after { box-sizing: border-box; }

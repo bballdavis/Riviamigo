@@ -16,11 +16,11 @@ describe('theme registry', () => {
     expect(BUILT_IN_THEMES.classic.tokens.light['accent-hover']).toBe('#EA580C');
     expect(BUILT_IN_THEMES.classic.tokens.light['charging-done']).toBe('#059669');
     expect(BUILT_IN_THEMES.classic.tokens.dark['glow-sm']).toBe('0 0 20px rgba(253, 131, 4, 0.15)');
-    expect(BUILT_IN_THEMES.rad.chartAliases.accent).toEqual({ dark: '#D9A441', light: '#A46617' });
-    expect(BUILT_IN_THEMES.rad.tokens.light['status-positive']).toBe('#087F5B');
-    expect(BUILT_IN_THEMES.rad.tokens.light['accent-active']).toBe('#683B0B');
-    expect(BUILT_IN_THEMES.rad.tokens.light['charging-ac']).toBe('#197E8E');
-    expect(BUILT_IN_THEMES.rad.tokens.light['dm-everyday']).toBe('#087F5B');
+    expect(BUILT_IN_THEMES.rad.chartAliases.accent).toEqual({ dark: '#FFB000', light: '#C9371E' });
+    expect(BUILT_IN_THEMES.rad.tokens.light['status-positive']).toBe('#007A4B');
+    expect(BUILT_IN_THEMES.rad.tokens.light['accent-active']).toBe('#94200F');
+    expect(BUILT_IN_THEMES.rad.tokens.light['charging-ac']).toBe('#007DA3');
+    expect(BUILT_IN_THEMES.rad.tokens.light['dm-everyday']).toBe('#007A4B');
   });
   it('rejects unknown or non-canonical overrides', () => {
     expect(validateThemeOverride({ tokens: { nope: { dark: '#FFFFFF' } } as never })).toContain('Token is not customizable: nope');
@@ -34,7 +34,7 @@ describe('theme registry', () => {
   });
   it('resolves deterministically and retains legacy aliases', () => {
     const a = resolveTheme({ theme: 'rad', series: { 'series-01': { dark: '#112233' } } });
-    expect(a.series['series-01']).toEqual({ dark: '#112233', light: '#A46617' }); expect(resolveTheme({ theme: 'rad' })).toEqual(resolveTheme({ theme: 'rad' }));
+    expect(a.series['series-01']).toEqual({ dark: '#112233', light: '#C9371E' }); expect(resolveTheme({ theme: 'rad' })).toEqual(resolveTheme({ theme: 'rad' }));
     expect(registryHash()).toBe(registryHash()); expect(LEGACY_CHART_ALIASES.accent).toEqual({ dark: '#FD8304', light: '#FD8304' });
     expect(Object.keys(registryManifest())).toEqual(['schemaVersion', 'registryHash', 'builtins']);
   });

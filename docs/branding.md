@@ -45,11 +45,19 @@ The selected value is either a built-in theme ID or an exact, published custom
 revision. Publishing a newer revision never silently changes an account's
 selection.
 
-Settings → Appearance is the only selection surface. It contains the
-Light/Dark/System control and a gallery of built-in and owned custom themes.
+Settings → Appearance is the theme-selection surface, with a gallery of built-in
+and owned custom themes. Light/Dark/System is also available from the desktop
+sidebar (expanded or collapsed) and mobile navigation. The desktop mode
+control is icon-only, right-aligned beside Sign out; mobile keeps an icon-only
+header shortcut, visible both with navigation closed and inside the open menu. All mode controls update the
+same account preference and preserve the selected theme and custom revision.
+Footer status, battery percentage, range, Settings, and Sign out share 14px
+labels with the same UI font and weight. Status and utility icons share a 16px
+box on desktop and a 20px box on mobile. Numeric telemetry uses tabular figures
+without switching font families. All connection states use this same sizing.
 Theme Studio owns custom interface and chart overrides plus the brand-asset
-status surface. Trusted brand-paint editing remains locked while the current
-masters are classified as raster-backed fallbacks.
+status surface. Trusted brand-paint editing remains locked until the runtime can apply
+validated paint slots to the inherited artwork.
 Draft previews are scoped unless the user explicitly enters the visibly labeled,
 memory-only full-app preview. No theme state is stored in `localStorage`.
 Classic-dark is applied before authentication and after logout/account changes.
@@ -62,10 +70,17 @@ Production components consume semantic tokens; raw colors and named utility
 colors are rejected by `pnpm colors:check` outside the documented owner files.
 
 The RAD built-in is app-specific visual direction inspired by Rivian's white,
-gold, red, and teal RAD identity. Its values are accessible Riviamigo choices,
+gold, red, and teal RAD identity. Its saturated gold, vermilion, teal, and white treatment includes sixteen
+unrepeated chart-series colors in each mode. Dark mode uses gold controls on
+teal surfaces; light mode uses vermilion controls for readable contrast.
+Its values are accessible Riviamigo choices,
 not a claim about exact Rivian brand colors. Both modes cover surfaces, text,
 borders, states, charging and drive modes, overlays, shadows, focus treatments,
 charts, and maps.
+RAD light mode uses warm neutral page and elevated surfaces so vermilion, gold,
+and teal remain distinct without casting the whole interface green. Ordered
+series alternate hue families, and consecutive trip routes consume the six map
+colors in order before repeating. Explicit route colors still take precedence.
 
 Chart definitions persist theme-independent tokens or literal light/dark custom
 colors. New categorical series use `series-01` through `series-16`; legacy names
@@ -76,10 +91,13 @@ series, renderers cycle colors and add distinct line/point patterns.
 
 Application brand consumers resolve through the runtime asset snapshot backed by
 the theme registry. The generated asset manifest records every variant and its
-checksum. Current source artwork contains embedded raster or raster-backed RAD
-wrappers, so it is explicitly classified as a fallback and is not represented as
-completed vector reconstruction. Replacement with self-contained vector masters
-requires visual approval at favicon, sidebar, login, and high-resolution sizes.
+checksum. RAD masters live in `packages/themes/src/rad-assets.mjs` and generate
+self-contained SVG logo, wordmark, compact icon, and small-size favicon assets.
+The lettering is outlined; no fonts, raster images, or external files are needed.
+`pnpm themes:generate` regenerates them and `pnpm themes:check` detects drift.
+Classic retains its original raster-backed artwork. Custom brand-paint editing
+remains locked; new geometry alone does not add runtime paint-slot support.
+Review RAD artwork at favicon, sidebar, login, and high-resolution sizes.
 The documentation site remains static Classic and account-independent.
 
 ## Typography

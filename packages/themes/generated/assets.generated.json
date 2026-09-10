@@ -63,13 +63,11 @@
     },
     {
       "publicPath": "/rad-favicon.svg",
-      "sha256": "2faff30f4f213e286ae09635619c33302931e3a670d6906b82c8672fccec22e3",
-      "bytes": 568,
-      "status": "raster-backed-fallback",
-      "selfContained": false,
-      "externalReferences": [
-        "/favicon.svg"
-      ],
+      "sha256": "5a6b5aa2276b3b21dddf3e83f7ca3732dd44181971cb4e7f24044818f8400985",
+      "bytes": 446,
+      "status": "approved-vector",
+      "selfContained": true,
+      "externalReferences": [],
       "owners": [
         {
           "themeId": "rad",
@@ -85,13 +83,11 @@
     },
     {
       "publicPath": "/rad-icon.svg",
-      "sha256": "55af3f1bc406f3415cfc32228d2e1915a5db569001be66179455c903a4d25479",
-      "bytes": 576,
-      "status": "raster-backed-fallback",
-      "selfContained": false,
-      "externalReferences": [
-        "/icon_color_lighter.svg"
-      ],
+      "sha256": "8b0b803b7929fb9d4690e9cc4dec53aa80ae37d4d8672ce1a4ad684d8ed6d30e",
+      "bytes": 546,
+      "status": "approved-vector",
+      "selfContained": true,
+      "externalReferences": [],
       "owners": [
         {
           "themeId": "rad",
@@ -107,13 +103,11 @@
     },
     {
       "publicPath": "/rad-logo.svg",
-      "sha256": "8a7658b388d1415b365ca6024c34faef5292838473bf617478783947e24d4e57",
-      "bytes": 576,
-      "status": "raster-backed-fallback",
-      "selfContained": false,
-      "externalReferences": [
-        "/logo_color_lighter.svg"
-      ],
+      "sha256": "2642d3529015ac383e5fada113ac9604c091044635857c6f7c7d9fda93e16ef4",
+      "bytes": 546,
+      "status": "approved-vector",
+      "selfContained": true,
+      "externalReferences": [],
       "owners": [
         {
           "themeId": "rad",
@@ -129,13 +123,11 @@
     },
     {
       "publicPath": "/rad-text_black.svg",
-      "sha256": "b633b47da8386c3ed2b057abed486e74a1ce12fb32083d6ce90f235805471591",
-      "bytes": 484,
-      "status": "raster-backed-fallback",
-      "selfContained": false,
-      "externalReferences": [
-        "/text_black.svg"
-      ],
+      "sha256": "aa407278577bf32e7b75b63b55851539b3b920c8562774c429917b08b93c2e4b",
+      "bytes": 1253,
+      "status": "approved-vector",
+      "selfContained": true,
+      "externalReferences": [],
       "owners": [
         {
           "themeId": "rad",
@@ -146,13 +138,11 @@
     },
     {
       "publicPath": "/rad-text_white.svg",
-      "sha256": "bdc90c3cbfa2ddae47f1c4889f7526ca5186d124dbe9866ec6a50eb264179be7",
-      "bytes": 484,
-      "status": "raster-backed-fallback",
-      "selfContained": false,
-      "externalReferences": [
-        "/text_white.svg"
-      ],
+      "sha256": "02c4221241c88b9b8dec24dad62370492916083a008e12a52787e524489834d8",
+      "bytes": 1253,
+      "status": "approved-vector",
+      "selfContained": true,
+      "externalReferences": [],
       "owners": [
         {
           "themeId": "rad",

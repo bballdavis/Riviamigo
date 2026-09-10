@@ -83,11 +83,12 @@ announcements, focus restoration, and a mobile fullscreen dialog.
 
 Every app consumer uses the registry-backed resolver or runtime snapshot. The
 generated asset manifest records checksums, ownership, self-containment, and
-whether a file is an approved vector or raster-backed fallback. Existing artwork
-is currently retained as raster-backed source; RAD wrappers add the theme
-treatment but are not claimed as completed vector reconstruction. New vector
-masters must be self-contained, sanitized, and visually approved at every
-production size before their manifest status changes.
+whether a file is vector or raster-backed. RAD's original outlined masters live
+in `packages/themes/src/rad-assets.mjs`; generation writes self-contained SVGs
+and refreshes their checksums. The check command compares generated SVGs with
+those masters as well as checking registry drift. Classic retains its original
+raster-backed sources. Custom paint editing remains locked until the runtime
+supports applying trusted paint slots to these assets.
 
 The documentation site intentionally stays static Classic and does not load
 account preferences.

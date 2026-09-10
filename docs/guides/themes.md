@@ -7,6 +7,8 @@ description: Choose an account theme, customize chart colors, and work safely wi
 
 Open **Settings → Appearance** to change how Riviamigo looks. Your choices are
 saved to your account and follow you across supported browsers and devices.
+You can also choose Light, Dark, or System directly from the desktop sidebar
+or mobile menu, without changing your selected theme.
 
 Appearance mode and theme are separate:
 
@@ -55,7 +57,7 @@ renderers add line patterns so color is not the only differentiator.
 
 ## Brand asset status
 
-The current logo and wordmark sources contain raster artwork. Classic and RAD
-variants are checksummed and resolved through the theme system, but are not
-claimed as completed vector reconstruction. Custom brand-paint controls remain
-locked until self-contained vector masters pass visual approval at all app sizes.
+RAD uses bright gold, vermilion, teal, and white with sixteen distinct chart
+colors. Its new vector logo, wordmark, icon, and favicon stay sharp at every size.
+Classic keeps its original artwork. Custom themes inherit their base theme's
+artwork; custom brand-color editing is not available yet.

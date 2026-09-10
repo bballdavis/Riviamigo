@@ -3,9 +3,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { buildAssetManifest } from './asset-manifest.mjs';
+import { radAssets } from './rad-assets.mjs';
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const root = resolve(packageDir, '../..');
+for (const [name, source] of Object.entries(radAssets())) {
+  await writeFile(resolve(root, 'apps/web/public', name), source, 'utf8');
+}
 const source = pathToFileURL(resolve(packageDir, 'src/index.ts')).href;
 const expression = `import { registryManifest, stableThemeJson } from ${JSON.stringify(source)}; console.log(stableThemeJson(registryManifest()));`;
 const result = spawnSync(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', expression], { encoding: 'utf8' });

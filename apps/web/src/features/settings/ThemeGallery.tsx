@@ -47,7 +47,7 @@ export function ThemeGallery() {
       {(['classic', 'rad'] as const).map((themeId) => {
         const theme = BUILT_IN_THEMES[themeId];
         const active = selected?.kind === 'builtin' && selected.themeId === themeId;
-        return <ThemeCard key={themeId} name={theme.name} description={themeId === 'classic' ? 'The original Riviamigo visual system.' : 'Warm gold, trail red, and adventure teal.'} colors={theme.series} surface={theme.tokens.dark['bg-page']} panel={theme.tokens.dark['bg-surface']} foreground={theme.tokens.dark['text-primary']} accent={theme.tokens.dark.accent} brandAsset={theme.brandAssets.wordmark.dark} active={active} disabled={selectTheme.isPending} onSelect={() => selectTheme.mutate({ kind: 'builtin', themeId })} />;
+        return <ThemeCard key={themeId} name={theme.name} description={themeId === 'classic' ? 'The original Riviamigo visual system.' : 'Bright gold, vivid vermilion, and adventure teal.'} colors={theme.series} surface={theme.tokens.dark['bg-page']} panel={theme.tokens.dark['bg-surface']} foreground={theme.tokens.dark['text-primary']} accent={theme.tokens.dark.accent} brandAsset={theme.brandAssets.wordmark.dark} active={active} disabled={selectTheme.isPending} onSelect={() => selectTheme.mutate({ kind: 'builtin', themeId })} />;
       })}
       {(catalog.data?.customThemes ?? []).filter((theme) => theme.publishedRevision !== null).map((theme) => {
         const definition = resolveTheme((theme.publishedDefinition ?? { theme: theme.baseThemeId }) as ThemeOverride);
