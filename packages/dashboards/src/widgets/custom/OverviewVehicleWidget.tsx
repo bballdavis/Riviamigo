@@ -163,8 +163,11 @@ export function CurrentVehicleStatePanel({
             <div data-testid="overview-soc-rail" className="absolute inset-1 flex items-end overflow-hidden rounded-xl p-1">
               <div
                 data-testid="overview-soc-fill"
-                className="w-full rounded-lg transition-all"
-                style={{ height: `${batteryLevel}%`, background: 'linear-gradient(to top, var(--rm-accent), var(--rm-status-positive))' }}
+                className="h-full w-full rounded-lg transition-[clip-path]"
+                style={{
+                  background: 'linear-gradient(to top, var(--rm-status-danger) 0%, var(--rm-chart-rose) 10%, var(--rm-chart-orange) 20%, var(--rm-chart-amber) 32%, var(--rm-chart-amber) 50%, var(--rm-chart-emerald) 51%, var(--rm-status-positive) 75%, var(--rm-status-positive) 100%)',
+                  clipPath: `inset(${100 - batteryLevel}% 0 0 round 0.5rem)`,
+                }}
               />
             </div>
             <Battery className="absolute left-1/2 top-3 h-4 w-4 -translate-x-1/2 text-fg/80" />

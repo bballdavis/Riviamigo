@@ -105,8 +105,8 @@ vi.mock('@riviamigo/dashboards', () => ({
     isDefault: false,
     isLocked: false,
   }),
-  SensorChipSummary: ({ title, value, secondary }: { title: string; value: string; secondary?: string }) => (
-    <div data-testid="sensor-chip-summary">
+  SensorChipSummary: ({ title, value, secondary, dataAccent, valueColor }: { title: string; value: string; secondary?: string; dataAccent?: string; valueColor?: string }) => (
+    <div data-testid="sensor-chip-summary" data-accent={dataAccent} data-value-color={valueColor}>
       <div>{title}</div>
       <div>{value}</div>
       {secondary ? <div>{secondary}</div> : null}
@@ -209,6 +209,18 @@ describe('BatteryPhantomDrainPage', () => {
     expect(screen.getByText('Avg sleep')).toBeInTheDocument();
     expect(screen.getByText('Max drain rate')).toBeInTheDocument();
     expect(screen.getByText('Drain / h')).toBeInTheDocument();
+    expect(screen.getAllByTestId('sensor-chip-summary').map((card) => card.getAttribute('data-accent'))).toEqual([
+      'series-02',
+      'series-03',
+      'series-01',
+      'series-04',
+    ]);
+    expect(screen.getAllByTestId('sensor-chip-summary').map((card) => card.getAttribute('data-value-color'))).toEqual([
+      'data',
+      'data',
+      'data',
+      'data',
+    ]);
 
     await waitFor(() => expect(
       screen.getByText((content) => content.includes('68') && content.includes('62'))

@@ -485,6 +485,17 @@ describe('DashboardChartWidget - smoothing controls', () => {
     });
   });
 
+  it('does not include State of Charge aliases in bundled dashboard chart assignments', () => {
+    for (const slug of ['dashboard', 'battery'] as const) {
+      const dashboard = getDefaultBySlug(slug);
+      const chart = dashboard?.widgets.find((widget) => widget.definitionId === 'catalog');
+      const chartIds = (chart?.options as { chartIds?: unknown[] } | undefined)?.chartIds ?? [];
+
+      expect(chartIds).not.toContain('soc-history');
+      expect(chartIds).not.toContain('range-history');
+    }
+  });
+
   it('falls back to projected range by mileage when an overview chart has no saved chart ID', () => {
     renderWidget({
       ...makeInstance('soc-history', true),
