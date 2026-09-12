@@ -63,10 +63,10 @@ pub fn rivian_renewal_state_for_auth(
 }
 
 pub async fn rivian_status(pool: &PgPool) -> Result<RivianConnectionStatus, AppError> {
-    let issued_at = sqlx::query_scalar::<_, DateTime<Utc>>(
+    let issued_at = sqlx::query_scalar::<_, Option<DateTime<Utc>>>(
         "SELECT MIN(token_created_at) FROM riviamigo.vehicle_credentials",
     )
-    .fetch_optional(pool)
+    .fetch_one(pool)
     .await?;
     let auth_failed = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicle_runtime_state WHERE auth_state = 'needs_reauth')",

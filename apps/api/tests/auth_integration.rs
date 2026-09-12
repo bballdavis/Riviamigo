@@ -1161,6 +1161,65 @@ async fn vehicles_returns_empty_list_for_new_user() {
 }
 
 #[tokio::test]
+async fn external_connections_loads_without_rivian_credentials() {
+    let app = TestApp::new().await;
+    riviamigo_api::services::external_connections::ensure_defaults(&app.pool)
+        .await
+        .expect("seed external connection defaults");
+    let token = register_and_login(&app, "external-connections-empty@example.com").await;
+
+    let credential_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM riviamigo.vehicle_credentials")
+            .fetch_one(&app.pool)
+            .await
+            .expect("credential count");
+    assert_eq!(credential_count, 0, "test requires a fresh Rivian account");
+
+    let response = app
+        .request(
+            Method::GET,
+            "/v1/settings/external-connections",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        response.status,
+        StatusCode::OK,
+        "response: {}",
+        response.body
+    );
+    let connections = response.body["connections"]
+        .as_array()
+        .expect("connections array");
+    let ids: Vec<&str> = connections
+        .iter()
+        .map(|connection| connection["id"].as_str().expect("connection id"))
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            "rivian_account",
+            "open_meteo",
+            "nominatim",
+            "basemap",
+            "iconify",
+            "s3_backup",
+        ]
+    );
+
+    let rivian = connections
+        .iter()
+        .find(|connection| connection["id"] == "rivian_account")
+        .expect("Rivian account connection");
+    assert!(rivian["credential_issued_at"].is_null());
+    assert!(rivian["expected_renewal_at"].is_null());
+    assert!(rivian["renewal_state"].is_null());
+}
+
+#[tokio::test]
 async fn vehicles_only_returns_current_users_vehicles() {
     let app = TestApp::new().await;
     let owner_token = register_and_login(&app, "owner@example.com").await;
