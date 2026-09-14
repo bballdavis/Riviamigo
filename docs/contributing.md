@@ -64,15 +64,43 @@ Install the repository hooks once in each checkout:
 pnpm hooks:install
 ```
 
-The hooks select the appropriate gate automatically:
+The hooks use a small local sanity gate by default on every branch. It checks
+repository whitespace and migration integrity only; it does not run the PR
+quality suite, start disposable services, build images, or query GitHub. Run
+the broader local checks explicitly when you want them:
 
-- Commits and pushes on `main` run `pnpm verify:ci`.
-- Pushes for an existing GitHub PR run `pnpm verify:ci`.
-- Other feature-branch commits and pushes run `pnpm verify:local`.
-- Use `pnpm pr:create -- --base dev --fill` to run the full gate before creating the first PR for a branch.
+```bash
+pnpm verify:local
+```
+
+Run the full local parity gate explicitly when you want the disposable-stack
+and database-backed checks:
+
+```bash
+pnpm verify:ci
+```
+
+To make a specific commit or push run the full gate, set
+`RIVIAMIGO_FULL_LOCAL_CI=1` for that command. In PowerShell:
+
+```powershell
+$env:RIVIAMIGO_FULL_LOCAL_CI = '1'; git push origin dev
+```
+
+In POSIX shells:
+
+```bash
+RIVIAMIGO_FULL_LOCAL_CI=1 git push origin dev
+```
+
+Use `pnpm pr:create -- --base dev --fill` to run the full gate before creating
+the first PR for a branch. After `dev` is pushed, the upstream GitOps flow
+deploys it to the production-dev server for full-stack testing; that remote
+validation remains separate from the local hook.
 
 `verify:local` runs the static, dependency, frontend, backend, documentation,
-contract, and unit-test checks without starting disposable services.
+contract, and unit-test checks without starting disposable services. The
+default Git hooks intentionally run only the small sanity gate described above.
 `verify:ci` starts isolated digest-pinned TimescaleDB and Redis containers,
 then adds SQLx migration/metadata checks, Clippy, database-backed tests, the
 ignored migration-ledger repair test, and workspace/documentation builds. The
@@ -121,11 +149,11 @@ CI is organized into independently visible workflows so contributors can rerun
 the evidence closest to their change:
 
 The fast validation gate runs on pull requests targeting `dev` or `main`, not
-on every push to either protected branch. Pushes to `main` and `dev` build an
-unversioned, commit-addressed AMD64 candidate that feeds the shared GHCR layer
-cache. Versioned container images are published only by intentional release
-workflows: stable images from a validated `main` tag and pre-release images
-from an approved `dev` candidate.
+on every push to either protected branch. Candidate image builds are manual;
+run **Candidate image** from Actions with the desired source ref and platform
+when a dev or release-candidate image is needed. Versioned container images are
+published only by intentional release workflows: stable images from a
+validated `main` tag and pre-release images from an approved `dev` candidate.
 
 PRs run deterministic quality, typecheck, unit-test, SQLx, route-security, and
 source-scan checks. Coverage and Storybook run from the scheduled/manual

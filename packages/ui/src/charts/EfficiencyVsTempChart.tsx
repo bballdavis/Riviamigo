@@ -6,7 +6,6 @@ import {
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_BAR_STYLE, CHART_COLORS, CHART_MARGINS, CHART_X_AXIS_DEFAULTS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
-import { colors } from '../tokens/colors';
 
 export interface EfficiencyVsTempPoint {
   temp_c_low: number;
@@ -25,9 +24,9 @@ export interface EfficiencyVsTempChartProps {
 function toF(c: number) { return Math.round(c * 9 / 5 + 32); }
 
 function barColor(efficiency: number): string {
-  if (efficiency < 300) return colors.soc.high;
-  if (efficiency < 380) return colors.soc.mid;
-  return colors.soc.low;
+  if (efficiency < 300) return CHART_COLORS.success;
+  if (efficiency < 380) return CHART_COLORS.warning;
+  return CHART_COLORS.danger;
 }
 
 export function EfficiencyVsTempChart({

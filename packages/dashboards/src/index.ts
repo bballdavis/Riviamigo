@@ -19,6 +19,8 @@ export type {
   PhantomDrainDailyPoint,
 } from './widgets/chart/PhantomDrainChart';
 export { SensorChipSummary } from './widgets/sensor/SensorChipSummary';
+export type { SensorChipSummaryProps } from './widgets/sensor/SensorChipSummary';
+export type { SensorDataAccent } from './widgets/sensor/sensorDefinitions';
 export { CurrentVehicleStatePanel } from './widgets/custom/OverviewVehicleWidget';
 export {
   registerWidget,

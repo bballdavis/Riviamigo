@@ -1,15 +1,15 @@
 {
   "hotspots": {
-    "apps/web/src/features/settings/SettingsPage.tsx": { "maxLines": 1905, "maxBytes": 100100 },
+    "apps/web/src/features/settings/SettingsPage.tsx": { "maxLines": 1910, "maxBytes": 100128 },
     "apps/web/src/components/settings/BackupSection.tsx": { "maxLines": 1700, "maxBytes": 71666 },
-    "apps/web/src/components/layout/AppLayout.tsx": { "maxLines": 483, "maxBytes": 18139 },
+    "apps/web/src/components/layout/AppLayout.tsx": { "maxLines": 485, "maxBytes": 18642 },
     "apps/web/src/components/dashboard/DashboardPageShell.tsx": { "maxLines": 485, "maxBytes": 18178 },
     "apps/api/src/routes/vehicles.rs": { "maxLines": 5676, "maxBytes": 201797 },
     "apps/api/src/routes/charging.rs": { "maxLines": 2258, "maxBytes": 85053 },
     "apps/api/src/routes/trips.rs": { "maxLines": 1833, "maxBytes": 65504 },
     "apps/api/src/services/backups.rs": { "maxLines": 2673, "maxBytes": 98764 },
     "apps/api/src/services/charge_sessions.rs": { "maxLines": 1949, "maxBytes": 73563 },
-    "packages/hooks/src/api/transport.ts": { "maxLines": 2268, "maxBytes": 77421 }
+    "packages/hooks/src/api/transport.ts": { "maxLines": 2311, "maxBytes": 79085 }
   },
   "orchestration": {
     "maxLines": 500,
@@ -37,6 +37,7 @@
       "packages/types/src/api.ts": "Existing wire-contract catalog; split with D1.",
       "apps/api/src/routes/external_connections.rs": "Existing route hotspot; split with route ownership work.",
       "apps/api/src/routes/auth.rs": "Existing auth route hotspot; split only with auth contract coverage.",
+      "apps/api/src/routes/themes.rs": "Account theme revision lifecycle; split after the V2 compatibility window.",
       "apps/api/src/routes/metrics.rs": "Existing analytics route hotspot; split with query ownership work.",
       "apps/web/src/features/health/VehicleHealthPage.tsx": "Existing custom health surface; migrate onto the vehicle shell in F2.",
       "packages/ui/src/charts/RichTimeSeriesChart.tsx": "Existing specialized renderer; split only after F7 regression coverage.",

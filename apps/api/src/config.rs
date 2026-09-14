@@ -1,8 +1,10 @@
 use anyhow::Context;
-use serde::Deserialize;
+use serde::{de, Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
+use std::fmt;
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 const MIN_SETUP_TOKEN_BYTES: usize = 32;
 
@@ -93,42 +95,50 @@ pub struct RateLimitConfig {
 pub struct RecoveryConfig {
     #[serde(
         rename = "recovery_max_upload_bytes",
-        default = "default_recovery_max_upload_bytes"
+        default = "default_recovery_max_upload_bytes",
+        deserialize_with = "deserialize_from_str"
     )]
     pub max_upload_bytes: u64,
     #[serde(
         rename = "recovery_max_expanded_bytes",
-        default = "default_recovery_max_expanded_bytes"
+        default = "default_recovery_max_expanded_bytes",
+        deserialize_with = "deserialize_from_str"
     )]
     pub max_expanded_bytes: u64,
     #[serde(
         rename = "recovery_max_member_bytes",
-        default = "default_recovery_max_member_bytes"
+        default = "default_recovery_max_member_bytes",
+        deserialize_with = "deserialize_from_str"
     )]
     pub max_member_bytes: u64,
     #[serde(
         rename = "recovery_max_members",
-        default = "default_recovery_max_members"
+        default = "default_recovery_max_members",
+        deserialize_with = "deserialize_from_str"
     )]
     pub max_members: usize,
     #[serde(
         rename = "recovery_max_compression_ratio",
-        default = "default_recovery_max_compression_ratio"
+        default = "default_recovery_max_compression_ratio",
+        deserialize_with = "deserialize_from_str"
     )]
     pub max_compression_ratio: u64,
     #[serde(
         rename = "recovery_min_free_bytes",
-        default = "default_recovery_min_free_bytes"
+        default = "default_recovery_min_free_bytes",
+        deserialize_with = "deserialize_from_str"
     )]
     pub min_free_bytes: u64,
     #[serde(
         rename = "recovery_upload_deadline_seconds",
-        default = "default_recovery_upload_deadline_seconds"
+        default = "default_recovery_upload_deadline_seconds",
+        deserialize_with = "deserialize_from_str"
     )]
     pub upload_deadline_seconds: u64,
     #[serde(
         rename = "recovery_restore_deadline_seconds",
-        default = "default_recovery_restore_deadline_seconds"
+        default = "default_recovery_restore_deadline_seconds",
+        deserialize_with = "deserialize_from_str"
     )]
     pub restore_deadline_seconds: u64,
 }
@@ -137,8 +147,47 @@ pub struct RecoveryConfig {
 pub struct OriginBindConfig {
     #[serde(default = "default_riviamigo_bind_address")]
     pub riviamigo_bind_address: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_from_str")]
     pub allow_public_origin_bind: bool,
+}
+
+fn deserialize_from_str<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: FromStr,
+    T::Err: fmt::Display,
+{
+    struct FromStrVisitor<T>(std::marker::PhantomData<T>);
+
+    impl<'de, T> de::Visitor<'de> for FromStrVisitor<T>
+    where
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        type Value = T;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a string containing a value")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<T, E>
+        where
+            E: de::Error,
+        {
+            value
+                .parse()
+                .map_err(|error: T::Err| E::custom(format!("invalid value {value:?}: {error}")))
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<T, E>
+        where
+            E: de::Error,
+        {
+            self.visit_str(&value)
+        }
+    }
+
+    deserializer.deserialize_any(FromStrVisitor(std::marker::PhantomData))
 }
 
 fn default_port() -> u16 {
@@ -779,6 +828,47 @@ mod tests {
         .expect("origin environment configuration");
         assert_eq!(origin.riviamigo_bind_address, "0.0.0.0");
         assert!(origin.allow_public_origin_bind);
+    }
+
+    #[test]
+    fn whole_config_deserializes_flattened_typed_overrides_strictly() {
+        let base = vec![
+            (
+                "DATABASE_URL".to_owned(),
+                "postgresql://riviamigo:password@localhost/riviamigo".to_owned(),
+            ),
+            (
+                "REDIS_URL".to_owned(),
+                "redis://:password@localhost/".to_owned(),
+            ),
+            ("RIVIAMIGO_BIND_ADDRESS".to_owned(), "0.0.0.0".to_owned()),
+            ("ALLOW_PUBLIC_ORIGIN_BIND".to_owned(), "true".to_owned()),
+            ("RECOVERY_MAX_UPLOAD_BYTES".to_owned(), "123456".to_owned()),
+            ("RECOVERY_MAX_MEMBERS".to_owned(), "42".to_owned()),
+        ];
+
+        let config = envy::from_iter::<_, Config>(base.clone())
+            .expect("whole config accepts flattened typed overrides");
+        assert!(config.origin_bind.allow_public_origin_bind);
+        assert_eq!(config.recovery.max_upload_bytes, 123456);
+        assert_eq!(config.recovery.max_members, 42);
+
+        let mut explicitly_false = base.clone();
+        explicitly_false.retain(|(name, _)| name != "ALLOW_PUBLIC_ORIGIN_BIND");
+        explicitly_false.push(("ALLOW_PUBLIC_ORIGIN_BIND".to_owned(), "false".to_owned()));
+        let config = envy::from_iter::<_, Config>(explicitly_false)
+            .expect("whole config accepts literal false");
+        assert!(!config.origin_bind.allow_public_origin_bind);
+
+        let mut invalid_bool = base.clone();
+        invalid_bool.retain(|(name, _)| name != "ALLOW_PUBLIC_ORIGIN_BIND");
+        invalid_bool.push(("ALLOW_PUBLIC_ORIGIN_BIND".to_owned(), "1".to_owned()));
+        assert!(envy::from_iter::<_, Config>(invalid_bool).is_err());
+
+        let mut invalid_number = base;
+        invalid_number.retain(|(name, _)| name != "RECOVERY_MAX_MEMBERS");
+        invalid_number.push(("RECOVERY_MAX_MEMBERS".to_owned(), "not-a-number".to_owned()));
+        assert!(envy::from_iter::<_, Config>(invalid_number).is_err());
     }
 
     #[test]

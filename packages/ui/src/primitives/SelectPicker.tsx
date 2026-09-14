@@ -6,6 +6,7 @@ export interface SelectPickerOption<TValue extends string = string> {
   value: TValue;
   label: React.ReactNode;
   description?: React.ReactNode;
+  leading?: React.ReactNode;
   disabled?: boolean;
 }
 
@@ -161,7 +162,10 @@ export function SelectPicker<TValue extends string = string>({
           triggerClassName
         )}
       >
-        <span className="min-w-0 flex-1 truncate">{selectedOption?.label ?? placeholder}</span>
+        <span className="flex min-w-0 flex-1 items-center gap-2">
+          {selectedOption?.leading ? <span className="shrink-0">{selectedOption.leading}</span> : null}
+          <span className="min-w-0 truncate">{selectedOption?.label ?? placeholder}</span>
+        </span>
         <ChevronDown
           className={cn(
             'h-3.5 w-3.5 shrink-0 text-fg-tertiary transition-transform',
@@ -211,13 +215,16 @@ export function SelectPicker<TValue extends string = string>({
                     isSelected && 'bg-accent/10 text-accent'
                   )}
                 >
-                  <span className="min-w-0 truncate">
-                    <span className="block truncate">{option.label}</span>
-                    {option.description ? (
-                      <span className="mt-0.5 block truncate text-xs text-fg-tertiary">
-                        {option.description}
-                      </span>
-                    ) : null}
+                  <span className="flex min-w-0 items-center gap-2">
+                    {option.leading ? <span className="shrink-0">{option.leading}</span> : null}
+                    <span className="min-w-0 truncate">
+                      <span className="block truncate">{option.label}</span>
+                      {option.description ? (
+                        <span className="mt-0.5 block truncate text-xs text-fg-tertiary">
+                          {option.description}
+                        </span>
+                      ) : null}
+                    </span>
                   </span>
                   {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
                 </button>

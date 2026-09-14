@@ -11,6 +11,7 @@ import { healthRoute } from './routes/health';
 import { settingsRoute } from './routes/settings';
 import { settingsChartsNewRoute } from './routes/settings.charts.new';
 import { settingsChartsEditRoute } from './routes/settings.charts.$chartId';
+import { settingsThemeStudioRoute } from './routes/settings.themes.$themeId';
 import { connectRoute } from './routes/connect';
 import { connectOtpRoute } from './routes/connect.otp';
 import { loginRoute } from './routes/login';
@@ -32,6 +33,7 @@ export const routeTree = rootRoute.addChildren([
   settingsRoute,
   settingsChartsNewRoute,
   settingsChartsEditRoute,
+  settingsThemeStudioRoute,
   connectRoute,
   connectOtpRoute,
   loginRoute,

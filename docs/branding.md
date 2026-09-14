@@ -32,6 +32,88 @@ Rules:
 - Use semantic tokens only.
 - Do not add raw hex, named colors, `rgb()`, or arbitrary Tailwind palette colors.
 - If a needed color does not exist, add a token first and then use it semantically.
+- `scripts/local-ci.mjs` enforces this rule across production web, UI, dashboard,
+  and hook code. Its allowlist is limited to token definitions, approved palette
+  tables, CSS variable reads, chart token seams, and test fixtures.
+
+## Account-backed appearance and themes
+
+Appearance mode and theme selection are independent account settings. V2 reads
+and writes use `/v2/auth/preferences/theme` with an ETag; `/v1/auth/preferences`
+continues to project `theme_mode` and the classic/RAD base for compatibility.
+The selected value is either a built-in theme ID or an exact, published custom
+revision. Publishing a newer revision never silently changes an account's
+selection.
+
+Settings → Appearance is the theme-selection surface, with a gallery of built-in
+and owned custom themes. Light/Dark/System is also available from the desktop
+sidebar (expanded or collapsed) and mobile navigation. The desktop mode
+control is icon-only, right-aligned beside Sign out; mobile keeps an icon-only
+header shortcut, visible both with navigation closed and inside the open menu. All mode controls update the
+same account preference and preserve the selected theme and custom revision.
+Footer status, battery percentage, range, Settings, and Sign out share 14px
+labels with the same UI font and weight. Status and utility icons share a 16px
+box on desktop and a 20px box on mobile. Numeric telemetry uses tabular figures
+without switching font families. All connection states use this same sizing.
+Theme Studio owns custom interface and chart overrides plus the brand-asset
+status surface. Trusted brand-paint editing remains locked until the runtime can apply
+validated paint slots to the inherited artwork.
+Draft previews are scoped unless the user explicitly enters the visibly labeled,
+memory-only full-app preview. No theme state is stored in `localStorage`.
+Classic-dark is applied before authentication and after logout/account changes.
+
+`packages/themes` owns the semantic catalog, Classic and RAD definitions,
+inheritance validation, all sixteen ordered chart-series slots, legacy aliases,
+brand manifests, deterministic generated artifacts, and registry hash. Run
+`pnpm themes:generate` after source changes and `pnpm themes:check` in review.
+Production components consume semantic tokens; raw colors and named utility
+colors are rejected by `pnpm colors:check` outside the documented owner files.
+
+The RAD built-in is app-specific visual direction inspired by Rivian's white,
+gold, orange, teal, and green RAD identity. Its saturated gold, vermilion,
+teal, and white treatment includes sixteen unrepeated chart-series colors in
+each mode. Dark mode uses gold controls on teal surfaces; light mode uses a
+near-white canvas with concentrated gold, red-orange, teal, and blue accents.
+Its values are accessible Riviamigo choices,
+not a claim about exact Rivian brand colors. Both modes cover surfaces, text,
+borders, states, charging and drive modes, overlays, shadows, focus treatments,
+charts, and maps.
+RAD light mode uses `#FCFCFA` for the page, white elevated surfaces, and
+`#F8FAF9` for secondary surfaces so gold, red-orange, teal, and blue remain
+distinct without tinting the whole interface. Automatic dashboard sensor chips
+use stable data-category slots. Energy uses `series-01`, counts use `series-02`,
+range and miles use `series-03`, and efficiency uses `series-04`; adjacent cycle
+summaries use a later slot when they sit beside a count card;
+battery health, degradation, capacity, cost, share, rate, and limit categories
+continue through the later series slots in their shared sensor definitions. The
+RAD light slots are intentionally vivid: gold, red-orange, teal, and blue lead the
+primary dashboard categories. Their light-mode numeric values use a readable
+companion derived from the same slot, while icons, sprites, and decorative
+borders keep the vivid series color. These are data categories, not status
+indicators: Classic keeps automatic sensor chips monochrome, and Success,
+Warning, Danger, and Info remain independent semantic tokens.
+Ordered series alternate hue families, and consecutive trip routes consume the
+six map colors in order before repeating. Explicit route colors still take
+precedence.
+
+Chart definitions persist theme-independent tokens or literal light/dark custom
+colors. New categorical series use `series-01` through `series-16`; legacy names
+remain valid. The shared color field groups theme series in a swatch-bearing
+accent picker alongside semantic colors, and opens the controlled ColorPicker
+for visual OKLCH authoring plus Hex, RGB, HSL, and
+OKLCH inputs. Edited colors persist as deterministic sRGB hex. After sixteen
+series, renderers cycle colors and add distinct line/point patterns.
+
+Application brand consumers resolve through the runtime asset snapshot backed by
+the theme registry. The generated asset manifest records every variant and its
+checksum. RAD masters live in `packages/themes/src/rad-assets.mjs` and generate
+self-contained SVG logo, wordmark, compact icon, and small-size favicon assets.
+The lettering is outlined; no fonts, raster images, or external files are needed.
+`pnpm themes:generate` regenerates them and `pnpm themes:check` detects drift.
+Classic retains its original raster-backed artwork. Custom brand-paint editing
+remains locked; new geometry alone does not add runtime paint-slot support.
+Review RAD artwork at favicon, sidebar, login, and high-resolution sizes.
+The documentation site remains static Classic and account-independent.
 
 ## Typography
 
@@ -71,7 +153,10 @@ Common usage:
 - Chart-assignment badges use the shared tag icon and deterministic token colors. Keep the assignment editor icon-only, chip-height, and immediately adjacent to the badge group; enabled state belongs at the bottom-right of the chart card, apart from ordinary actions.
 - Dashboard edit mode uses compact icon controls directly on each widget. Keep edit and move controls visibly present with subdued default contrast, strengthen them on hover/focus/selection, and never make pointer hover the only way to discover or activate them.
 - Resizable dashboard widgets use a persistent subtle corner handle in edit mode. Fixed-size widgets use a lock indicator and must not expose a resize hit target.
-- Theme selection is a shared shell interaction, not a route-local toggle. Support `light`, `dark`, and `system`, and make the chooser responsive so desktop can anchor to the trigger while mobile renders a viewport-aware sheet or modal that fits on screen.
+- Theme selection is an account-backed Settings → Appearance interaction, not a
+  shell/sidebar toggle. Keep mode and theme as separate responsive controls,
+  show loading/conflict/rollback/error states, and pin custom selections to an
+  immutable published revision.
 
 ## Responsive Control Surfaces
 
@@ -103,7 +188,7 @@ Common usage:
 ### Charts
 
 - Fixed and assignment-driven dashboard catalogs use one shared chart frame. Overview must retain the same picker, settings, plot spacing, mobile viewer, focus behavior, and production renderer as the same chart on Battery, Charging, Efficiency, or Trips.
-- Dashboard sensor sprites and time-series charts use the editor-selected curve color. Canvas renderers must resolve theme tokens such as `var(--rm-accent)` before drawing.
+- Dashboard sensor sprites and time-series charts use the editor-selected curve color. For sensor cards, that explicit choice carries through the metric icon, sprite, and accent border; light-mode data-colored values use a readable companion from the same selected color. Automatic returns the card to its theme-assigned slot. Canvas renderers must resolve theme tokens such as `var(--rm-accent)` before drawing.
 - The shared display control is **Display filter**, not geometric curve smoothing. Its time-window choices are `Raw`, `15 min`, `1 hr`, `6 hr`, `24 hr`, `3 days`, and `7 days`; sprites default to `24 hr` and dashboard charts to `15 min`. Dashboard filtering and curve smoothness apply to every compatible curve in the active chart. A bar sprite sums its source values into non-overlapping time bins, so activity totals remain truthful while the card is easier to read; `Raw` remains available when individual events matter.
 - Eligible line and area views expose **Curve smoothness** with three independently persisted positions: `Straight`, `Gentle` (the default), and `Smooth`. This renderer-only path shaping preserves recorded timestamps, tooltip values, point counts, and null-gap behavior. `Straight` draws hard point-to-point corners. `Gentle` blends halfway from those straight controls toward the shape-preserving curve. `Smooth` uses the full irregular-time-aware curve for the strongest rounded, hilly appearance. Both curved positions keep Bezier handles inside each timestamp segment and cannot rise above or fall below its adjacent recorded values. Bars, scatter, stepped charts, non-smoothable supporting series, and categories bypass smoothing; surfaces without chart settings do not expose the control.
 - Ordinary quantitative bars use the shared filled-bar treatment from `CHART_BAR_STYLE`: semantic chart colors, quiet gridlines, consistent width/opacity, and rounded tops where the renderer supports them. Outline-only bars are not the default dashboard treatment.

@@ -13,6 +13,7 @@ const settingsMocks = vi.hoisted(() => ({
     logout: vi.fn(),
     clearSession: vi.fn(),
     accessToken: undefined as string | undefined,
+    userId: 'u1',
     defaultVehicleId: 'v1',
     setDefaultVehicleId: vi.fn(),
     setActiveVehicleId: vi.fn(),
@@ -36,8 +37,31 @@ const settingsMocks = vi.hoisted(() => ({
       target_tire_pressure_psi: 48,
       membership_role: 'owner',
       is_demo: false,
-    },
+      },
   ],
+  basemapConfig: undefined as { resolved_provider: string } | undefined,
+  preferences: {
+    units: {
+      mode: 'imperial',
+      distance_unit: 'miles',
+      speed_unit: 'mph',
+      temperature_unit: 'fahrenheit',
+      pressure_unit: 'psi',
+      altitude_unit: 'feet',
+      place_radius_unit: 'feet',
+      efficiency_display: 'distance_per_energy',
+    },
+    theme: { mode: 'dark', palette: 'classic' },
+    map_style: 'follow-theme',
+  },
+  themePreferences: {
+    preferences: {
+      schemaVersion: 2 as const,
+      mode: 'dark' as const,
+      selection: { kind: 'builtin' as const, themeId: 'classic' },
+    },
+    etag: '"theme-preferences-u1-1"',
+  },
 }));
 
 const dashboardMocks = vi.hoisted(() => ({
@@ -52,6 +76,7 @@ const dashboardMocks = vi.hoisted(() => ({
 
 const hooksMocks = vi.hoisted(() => ({
   changePassword: vi.fn().mockResolvedValue(undefined),
+  updateMapStylePreference: vi.fn().mockResolvedValue({ map_style: 'follow-theme' }),
 }));
 
 const mockNavigate = vi.fn();
@@ -70,6 +95,14 @@ vi.mock('@riviamigo/hooks', () => ({
       overview: (page: number, perPage: number) => ['backup-overview', page, perPage],
     },
     me: { all: ['me'] },
+    themePreferences: {
+      all: ['theme-preferences'],
+      forUser: (userId: string) => ['theme-preferences', userId],
+    },
+    themes: {
+      catalog: (userId: string) => ['themes', userId, 'catalog'],
+      resource: (userId: string, themeId: string) => ['themes', userId, 'resource', themeId],
+    },
     unitPreferences: { current: ['unit-preferences'] },
     vehicle: {
       health: (vehicleId: string) => ['vehicles', 'health', vehicleId],
@@ -86,8 +119,25 @@ vi.mock('@riviamigo/hooks', () => ({
       status: (vehicleId: string) => ['vehicles', 'status', vehicleId],
     },
   },
-  api: {
+  themeClient: {
+    getCatalog: vi.fn().mockResolvedValue({ builtInThemes: ['classic', 'rad'], customThemes: [] }),
+    getPreferences: vi.fn().mockImplementation(() => Promise.resolve(settingsMocks.themePreferences)),
+    updatePreferences: vi.fn().mockImplementation(async (preferences) => {
+      settingsMocks.themePreferences = {
+        preferences,
+        etag: '"theme-preferences-u1-2"',
+      };
+      return settingsMocks.themePreferences;
+    }),
+    create: vi.fn(),
+  },
+    api: {
     me: vi.fn().mockResolvedValue({ role: 'user' }),
+    getUnitPreferences: vi.fn().mockImplementation(() => Promise.resolve(settingsMocks.preferences)),
+    updateThemePreferences: vi.fn().mockImplementation(async (theme) => {
+      settingsMocks.preferences.theme = theme;
+      return settingsMocks.preferences;
+    }),
     changePassword: hooksMocks.changePassword,
     listApiKeys: vi.fn().mockResolvedValue([]),
     getApiCatalog: vi.fn().mockResolvedValue({
@@ -365,11 +415,17 @@ vi.mock('@riviamigo/hooks', () => ({
     updateVehicleName: vi.fn().mockResolvedValue({}),
     refreshVehicleArtwork: vi.fn().mockResolvedValue({ ok: true, vehicle_id: 'v1' }),
   },
-  useAuth: () => settingsMocks.auth,
+  useAuth: (selector?: (state: typeof settingsMocks.auth) => unknown) => selector ? selector(settingsMocks.auth) : settingsMocks.auth,
   useAuthReady: () => true,
   useMe: () => ({ data: settingsMocks.me }),
   useVehicles: () => ({ data: settingsMocks.vehicles }),
   useChargingNetworkPreferences: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
+  useBasemapConfig: () => ({ data: settingsMocks.basemapConfig, isLoading: false, isError: false }),
+  useUpdateMapStyle: () => ({
+    mutate: hooksMocks.updateMapStylePreference,
+    isPending: false,
+    isError: false,
+  }),
   useUpdateChargingNetworkPreference: () => ({
     mutate: vi.fn(),
     isPending: false,
@@ -508,6 +564,10 @@ function renderSettings() {
   );
 }
 
+function clickSettingsSection(label: string) {
+  fireEvent.click(screen.getByRole('button', { name: label }));
+}
+
 describe('Settings page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -520,6 +580,29 @@ describe('Settings page', () => {
     settingsMocks.auth.setActiveVehicleId.mockReset();
     settingsMocks.auth.accessToken = undefined;
     settingsMocks.auth.defaultVehicleId = 'v1';
+    settingsMocks.basemapConfig = undefined;
+    settingsMocks.preferences = {
+      units: {
+        mode: 'imperial',
+        distance_unit: 'miles',
+        speed_unit: 'mph',
+        temperature_unit: 'fahrenheit',
+        pressure_unit: 'psi',
+        altitude_unit: 'feet',
+        place_radius_unit: 'feet',
+        efficiency_display: 'distance_per_energy',
+      },
+      theme: { mode: 'dark', palette: 'classic' },
+      map_style: 'follow-theme',
+    };
+    settingsMocks.themePreferences = {
+      preferences: {
+        schemaVersion: 2,
+        mode: 'dark',
+        selection: { kind: 'builtin', themeId: 'classic' },
+      },
+      etag: '"theme-preferences-u1-1"',
+    };
     dashboardMocks.dashboards = [];
     dashboardMocks.downloadDashboardYaml.mockReset();
     dashboardMocks.cloneMutateAsync.mockReset();
@@ -534,6 +617,8 @@ describe('Settings page', () => {
       role: 'user',
       default_vehicle_id: 'v1',
     };
+    document.documentElement.className = 'dark';
+    document.documentElement.removeAttribute('data-rm-palette');
     settingsMocks.vehicles = [
       {
         id: 'v1',
@@ -559,6 +644,49 @@ describe('Settings page', () => {
   it('uses a chart icon for the Charts settings section', () => {
     renderSettings();
     expect(screen.getByTestId('icon-chart-line')).toBeInTheDocument();
+  });
+
+  it('renders the mobile section picker with every available section', () => {
+    renderSettings();
+
+    const picker = screen.getByLabelText('Settings section');
+    expect(picker).toHaveClass('w-full');
+    expect(picker).toHaveValue('vehicles');
+    expect(Array.from((picker as HTMLSelectElement).options).map((option) => option.value)).toEqual([
+      'vehicles',
+      'dashboards',
+      'charts',
+      'units',
+      'places',
+      'charging',
+      'external',
+      'api',
+      'jobs',
+      'raw',
+      'appearance',
+      'account',
+    ]);
+
+    fireEvent.change(picker, { target: { value: 'appearance' } });
+
+    expect(picker).toHaveValue('appearance');
+    expect(screen.getByText('Appearance mode')).toBeInTheDocument();
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/settings',
+      search: { section: 'appearance' },
+    });
+  });
+
+  it('includes Backups in the mobile section picker for administrators', () => {
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'admin@example.com',
+      role: 'admin',
+      default_vehicle_id: 'v1',
+    };
+    renderSettings();
+
+    expect(screen.getByRole('option', { name: 'Backups' })).toBeInTheDocument();
   });
 
   it('renders the connected vehicle display name', () => {
@@ -700,7 +828,7 @@ describe('Settings page', () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     renderSettings();
-    fireEvent.click(screen.getByText('Dashboards'));
+    clickSettingsSection('Dashboards');
 
     expect(screen.getByText('System Defaults')).toBeInTheDocument();
     expect(screen.getByText('My Dashboards')).toBeInTheDocument();
@@ -799,7 +927,7 @@ describe('Settings page', () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     renderSettings();
-    fireEvent.click(screen.getByText('Dashboards'));
+    clickSettingsSection('Dashboards');
 
     expect(screen.getAllByText('Active for you')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Customize' })).not.toBeInTheDocument();
@@ -926,14 +1054,35 @@ describe('Settings page', () => {
 
   it('renders the Appearance section', () => {
     renderSettings();
-    fireEvent.click(screen.getByText('Appearance'));
+    clickSettingsSection('Appearance');
     expect(screen.getAllByText('Appearance').length).toBeGreaterThan(0);
-    expect(screen.getByText('Theme')).toBeInTheDocument();
+    expect(screen.getByText('Appearance mode')).toBeInTheDocument();
+  });
+
+  it('offers every OpenFreeMap style and saves the user selection', async () => {
+    settingsMocks.basemapConfig = { resolved_provider: 'openfreemap' };
+    renderSettings();
+    clickSettingsSection('Appearance');
+
+    const style = screen.getByLabelText('Map style');
+    for (const value of ['follow-theme', 'positron', 'bright', 'liberty', 'dark', 'fiord', '3d']) {
+      expect(style.querySelector(`option[value="${value}"]`)).toBeInTheDocument();
+    }
+
+    fireEvent.change(style, { target: { value: 'liberty' } });
+    await waitFor(() => expect(hooksMocks.updateMapStylePreference).toHaveBeenCalledWith('liberty'));
+  });
+
+  it('hides OpenFreeMap-only style controls for CARTO', () => {
+    settingsMocks.basemapConfig = { resolved_provider: 'carto' };
+    renderSettings();
+    clickSettingsSection('Appearance');
+    expect(screen.queryByLabelText('Map style')).not.toBeInTheDocument();
   });
 
   it('renders the Places section', () => {
     renderSettings();
-    fireEvent.click(screen.getByText('Places'));
+    clickSettingsSection('Places');
     expect(screen.getAllByText('Places').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Saved Places/i).length).toBeGreaterThan(0);
   });
@@ -942,7 +1091,7 @@ describe('Settings page', () => {
     const hooks = await import('@riviamigo/hooks');
     settingsMocks.auth.accessToken = 'test-access-token';
     renderSettings();
-    fireEvent.click(screen.getByText('API Access'));
+    clickSettingsSection('API Access');
 
     expect(screen.getByText('Integration Keys')).toBeInTheDocument();
     expect(screen.getByText(/read-only and limited to one vehicle/i)).toBeInTheDocument();
@@ -963,7 +1112,7 @@ describe('Settings page', () => {
 
   it('shows address suggestions after explicitly submitting a place search', async () => {
     renderSettings();
-    fireEvent.click(screen.getByText('Places'));
+    clickSettingsSection('Places');
 
     fireEvent.change(screen.getByLabelText('Address Search'), { target: { value: '123 Main' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
@@ -978,7 +1127,7 @@ describe('Settings page', () => {
     vi.mocked(hooks.api.searchPlaceAddresses).mockImplementationOnce(() => new Promise(() => {}));
 
     renderSettings();
-    fireEvent.click(screen.getByText('Places'));
+    clickSettingsSection('Places');
     fireEvent.change(screen.getByLabelText('Address Search'), { target: { value: '123 Main' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
@@ -992,7 +1141,7 @@ describe('Settings page', () => {
     vi.mocked(hooks.api.searchPlaceAddresses).mockResolvedValueOnce([]);
 
     renderSettings();
-    fireEvent.click(screen.getByText('Places'));
+    clickSettingsSection('Places');
     fireEvent.change(screen.getByLabelText('Address Search'), {
       target: { value: 'unlikely query xyz' },
     });
@@ -1057,7 +1206,7 @@ describe('Settings page', () => {
     ]);
 
     renderSettings();
-    fireEvent.click(screen.getByText('Places'));
+    clickSettingsSection('Places');
 
     await waitFor(() => {
       expect(screen.getByText('Home Garage')).toBeInTheDocument();
@@ -1072,18 +1221,52 @@ describe('Settings page', () => {
     });
   });
 
-  it('renders the theme chooser', () => {
+  it('renders the theme chooser', async () => {
     renderSettings();
-    fireEvent.click(screen.getByText('Appearance'));
-    expect(
-      screen.getByText('Toggle between dark, light, and system appearance')
-    ).toBeInTheDocument();
-    expect(screen.getByTestId('theme-toggle')).toBeInTheDocument();
+    clickSettingsSection('Appearance');
+    expect(screen.getByText('Appearance mode')).toBeInTheDocument();
+    expect(screen.getByLabelText('Appearance mode')).toBeInTheDocument();
+    expect(await screen.findByRole('radiogroup', { name: 'Themes' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^Classic/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^RAD/ })).toBeInTheDocument();
+  });
+
+  it('persists account-backed appearance and palette changes', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.auth.accessToken = 'test-access-token';
+    renderSettings();
+    clickSettingsSection('Appearance');
+
+    await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
+    fireEvent.click(await screen.findByRole('radio', { name: /^RAD/ }));
+
+    await waitFor(() => {
+      expect(hooks.themeClient.updatePreferences).toHaveBeenCalledWith(
+        { schemaVersion: 2, mode: 'dark', selection: { kind: 'builtin', themeId: 'rad' } },
+        '"theme-preferences-u1-1"',
+      );
+    });
+    expect(localStorage.getItem('rm-theme')).toBeNull();
+  });
+
+  it('rolls back appearance changes when the account update fails', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.auth.accessToken = 'test-access-token';
+    vi.mocked(hooks.api.updateThemePreferences).mockRejectedValueOnce(new Error('save failed'));
+    renderSettings();
+    clickSettingsSection('Appearance');
+
+    await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
+    fireEvent.change(screen.getByLabelText('Appearance mode'), { target: { value: 'light' } });
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/previous selection has been restored/i));
+    expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark');
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
   });
 
   it('renders the Account section with Sign Out', () => {
     renderSettings();
-    fireEvent.click(screen.getByText('Account'));
+    clickSettingsSection('Account');
     expect(screen.getAllByText('Account').length).toBeGreaterThan(0);
     expect(screen.getByText('Sign Out')).toBeInTheDocument();
   });
@@ -1096,7 +1279,7 @@ describe('Settings page', () => {
       default_vehicle_id: 'v1',
     };
     renderSettings();
-    fireEvent.click(screen.getByText('Raw Data'));
+    clickSettingsSection('Raw Data');
 
     await waitFor(() => {
       expect(screen.getByText('Telemetry Explorer')).toBeInTheDocument();
@@ -1115,8 +1298,8 @@ describe('Settings page', () => {
     };
     renderSettings();
 
-    await waitFor(() => expect(screen.getByText('Backups')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('Backups'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Backups' })).toBeInTheDocument());
+    clickSettingsSection('Backups');
 
     await waitFor(() => {
       expect(screen.getAllByText('Backups').length).toBeGreaterThan(0);
@@ -1277,8 +1460,8 @@ describe('Settings page', () => {
     };
     renderSettings();
 
-    await waitFor(() => expect(screen.getByText('Backups')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('Backups'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Backups' })).toBeInTheDocument());
+    clickSettingsSection('Backups');
     const restorePicker = await screen.findByRole('combobox', {
       name: 'Choose a recovery package',
     });
@@ -1310,8 +1493,8 @@ describe('Settings page', () => {
     };
     renderSettings();
 
-    await waitFor(() => expect(screen.getByText('Backups')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('Backups'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Backups' })).toBeInTheDocument());
+    clickSettingsSection('Backups');
 
     await waitFor(() => {
       expect(screen.getAllByText('Backups').length).toBeGreaterThan(0);
@@ -1368,7 +1551,7 @@ describe('Settings page', () => {
     };
 
     renderSettings();
-    fireEvent.click(screen.getByText('Backups'));
+    clickSettingsSection('Backups');
 
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent('Backup Packaging');
@@ -1390,7 +1573,7 @@ describe('Settings page', () => {
       useVehicles: () => ({ data: [] }),
     }));
     renderSettings();
-    fireEvent.click(screen.getByText('Account'));
+    clickSettingsSection('Account');
     fireEvent.click(screen.getByText('Sign Out'));
     // logout is async; just assert the click doesn't throw
     expect(screen.getByText('Sign Out')).toBeInTheDocument();
@@ -1398,7 +1581,7 @@ describe('Settings page', () => {
 
   it('shows live password requirements and changes the password only after confirmation matches', async () => {
     renderSettings();
-    fireEvent.click(screen.getByText('Account'));
+    clickSettingsSection('Account');
 
     const submit = screen.getByRole('button', { name: 'Change password' });
     expect(submit).toBeDisabled();
@@ -1429,5 +1612,4 @@ describe('Settings page', () => {
     expect(settingsMocks.auth.clearSession).toHaveBeenCalledOnce();
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { password_changed: '1' } });
   });
-
 });

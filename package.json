@@ -48,12 +48,14 @@
     "compose:render-check": "node ./scripts/validate-compose.mjs",
     "dashboards:sync-defaults": "node ./scripts/sync-dashboard-defaults.mjs",
     "charts:sync-defaults": "node ./scripts/sync-chart-defaults.mjs",
+    "themes:generate": "pnpm --filter @riviamigo/themes generate",
+    "themes:check": "pnpm --filter @riviamigo/themes check",
+    "colors:check": "node ./scripts/check-color-tokens.mjs",
     "storybook": "turbo storybook",
     "clean": "turbo clean && rm -rf node_modules",
     "db:migrate": "node ./scripts/database.mjs migrate",
     "db:reset": "node ./scripts/database.mjs reset",
-    "db:rebaseline": "cd apps/api && cargo run --bin rebaseline_db --",
-    "graph:explore": "cargo run --manifest-path tools/graph-exploration/Cargo.toml --"
+    "db:rebaseline": "cd apps/api && cargo run --bin rebaseline_db --"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

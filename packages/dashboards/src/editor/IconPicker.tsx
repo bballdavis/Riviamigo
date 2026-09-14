@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Icon, _api, addAPIProvider } from '@iconify/react';
 import { Search, X } from 'lucide-react';
 import { api } from '@riviamigo/hooks';
+import { isAbortError, reportClientError } from '@riviamigo/ui/lib/clientDiagnostics';
 import { resolveIconId } from './iconMigration';
 
 interface IconPickerProps {
@@ -117,10 +118,22 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
         const params = new URLSearchParams({ query: q, limit: '40' });
         if (collection) params.set('prefix', collection);
         const res = await api.proxyFetch(`/v1/external/iconify/search?${params.toString()}`, { signal: controller.signal });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          if (!cancelled) setResults([]);
+          return;
+        }
         const data = (await res.json()) as { icons?: string[] };
         if (!cancelled) setResults(Array.isArray(data.icons) ? data.icons : []);
-      } catch {
+      } catch (error) {
+        if (!isAbortError(error)) {
+          reportClientError(error, {
+            event: 'iconify.search_failed',
+            area: 'asset',
+            operation: 'icon-search',
+            provider: 'iconify',
+            severity: 'warn',
+          });
+        }
         if (!cancelled) setResults([]);
       } finally {
         if (!cancelled) setLoading(false);

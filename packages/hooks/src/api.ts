@@ -23,3 +23,4 @@ export {
   vehicleClient,
 } from './api/clients';
 export { transport as api } from './api/transport';
+export { themeClient } from './api/themeClient';

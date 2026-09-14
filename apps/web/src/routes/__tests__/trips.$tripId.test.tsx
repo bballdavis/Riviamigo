@@ -9,6 +9,7 @@ vi.mock('@riviamigo/ui/primitives', async () => {
 
 vi.mock('@riviamigo/ui/hooks', () => ({
   useDocumentTheme: () => false,
+  useDocumentPalette: () => 'classic',
 }));
 
 const mockNavigate = vi.fn();
@@ -25,6 +26,7 @@ vi.mock('@riviamigo/ui/charts', () => ({
   DEFAULT_CURVE_SMOOTHING: 0.2,
   DEFAULT_CHART_TIME_FILTER: '15m',
   DEFAULT_SPRITE_TIME_FILTER: '24h',
+  getChartColor: () => '#fff',
   TripMapChart:           () => <div data-testid="trip-map-chart">map</div>,
   RichTimeSeriesChart:    ({ series, height, connectGaps }: { series: Array<{ label: string }>; height?: number; connectGaps?: boolean }) => <div data-testid="trip-drive-chart" data-height={height} data-connect-gaps={connectGaps ? 'true' : 'false'}>{series.map((item) => item.label).join(', ')}</div>,
   CHART_COLORS:           { accent: '#fff', success: '#fff', sky: '#fff', emerald: '#fff', warning: '#fff', teal: '#fff' },
@@ -34,6 +36,7 @@ vi.mock('@riviamigo/ui/charts', () => ({
 vi.mock('@riviamigo/hooks', () => ({
   useAuth:            () => ({ defaultVehicleId: null }),
   useBasemapConfig:   () => ({ style: undefined, attribution: undefined }),
+  useUserPreferences: () => ({ data: { units: {}, map_style: 'follow-theme' } }),
   useResolvedVehicleSelection: () => ({ authReady: true, effectiveVehicleId: 'v1', vehicleSelectionReady: true }),
   useUpdateTripTagAssignments: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useTripDetailData:  () => ({

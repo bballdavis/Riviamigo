@@ -1,5 +1,8 @@
 import React from 'react';
-import { CHART_COLORS } from './ChartProvider';
+import { CHART_COLORS, getChartColor, resolveChartColor } from './ChartProvider';
+import { useDocumentPalette } from '../hooks/useDocumentPalette';
+import { useDocumentTheme } from '../hooks/useDocumentTheme';
+import { useThemeRevision } from '../lib/themeRuntime';
 import {
   bucketTimeSeriesValues,
   DEFAULT_SPRITE_TIME_FILTER,
@@ -123,9 +126,7 @@ function EmptySparkline({ height, color }: { height: number; color: string }) {
 }
 
 export function resolveCanvasColor(canvas: HTMLCanvasElement, color: string) {
-  const variable = color.match(/^var\((--[^,)]+)\)$/)?.[1];
-  if (!variable || typeof window === 'undefined') return color;
-  return window.getComputedStyle(canvas).getPropertyValue(variable).trim() || CHART_COLORS.accent;
+  return resolveChartColor(color, canvas, getChartColor('accent', 'classic'));
 }
 
 function CanvasSparkline({
@@ -148,6 +149,9 @@ function CanvasSparkline({
   yDomain?: MiniSparklineYDomain | undefined;
 }) {
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const palette = useDocumentPalette();
+  const isDark = useDocumentTheme();
+  const themeRevision = useThemeRevision();
 
   React.useEffect(() => {
     const canvas = canvasRef.current;
@@ -318,7 +322,7 @@ function CanvasSparkline({
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(draw);
     observer?.observe(canvas);
     return () => observer?.disconnect();
-  }, [color, data, fill, height, smoothness, timeFilter, type, yDomain?.max, yDomain?.min]);
+  }, [color, data, fill, height, isDark, palette, themeRevision, smoothness, timeFilter, type, yDomain?.max, yDomain?.min]);
 
   return (
     <div

@@ -4,7 +4,6 @@ import { Check, Laptop, Moon, Sun, type LucideIcon } from 'lucide-react';
 import { cn } from '../lib/utils';
 import {
   applyThemeMode,
-  getStoredThemeMode,
   resolveThemeMode,
   type ThemeMode,
 } from '../lib/theme';
@@ -16,6 +15,10 @@ export interface ThemeToggleProps {
   ariaLabel?: string;
   align?: 'start' | 'end';
   variant?: 'solid' | 'ghost';
+  disabled?: boolean;
+  size?: 'default' | 'menu';
+  mode?: ThemeMode;
+  onModeChange?: (mode: ThemeMode) => void;
 }
 
 type Position = {
@@ -68,8 +71,13 @@ export function ThemeToggle({
   ariaLabel,
   align = 'end',
   variant = 'solid',
+  disabled = false,
+  size = 'default',
+  mode: controlledMode,
+  onModeChange,
 }: ThemeToggleProps) {
-  const [mode, setMode] = React.useState<ThemeMode>(() => getStoredThemeMode());
+  const [uncontrolledMode, setUncontrolledMode] = React.useState<ThemeMode>('dark');
+  const mode = controlledMode ?? uncontrolledMode;
   const [open, setOpen] = React.useState(false);
   const [isMobile, setIsMobile] = React.useState(isMobileViewport);
   const [position, setPosition] = React.useState<Position>({
@@ -84,26 +92,15 @@ export function ThemeToggle({
   const triggerAriaLabel = ariaLabel ?? (showLabel ? undefined : 'Theme options');
 
   React.useEffect(() => {
-    const syncMode = () => setMode(getStoredThemeMode());
-    syncMode();
-
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === 'rm-theme' || event.key === null) {
-        syncMode();
-      }
-    };
-
     const mediaQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
       ? window.matchMedia('(max-width: 639px)')
       : null;
     const handleViewportChange = () => setIsMobile(mediaQuery ? mediaQuery.matches : false);
 
-    window.addEventListener('storage', handleStorage);
     mediaQuery?.addEventListener?.('change', handleViewportChange);
     mediaQuery?.addListener?.(handleViewportChange);
 
     return () => {
-      window.removeEventListener('storage', handleStorage);
       mediaQuery?.removeEventListener?.('change', handleViewportChange);
       mediaQuery?.removeListener?.(handleViewportChange);
     };
@@ -122,18 +119,27 @@ export function ThemeToggle({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
         setOpen(false);
+        triggerRef.current?.focus();
       }
     };
 
     document.addEventListener('pointerdown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('keydown', handleKeyDown, true);
 
     return () => {
       document.removeEventListener('pointerdown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('keydown', handleKeyDown, true);
     };
   }, [open]);
+
+  React.useEffect(() => {
+    if (open && (isMobile || position.visibility === 'visible')) {
+      menuRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
+    }
+  }, [open, isMobile, position.visibility]);
 
   React.useLayoutEffect(() => {
     if (!open || isMobile) return;
@@ -188,16 +194,22 @@ export function ThemeToggle({
   }, [align, isMobile, open]);
 
   function setThemeMode(next: ThemeMode) {
-    applyThemeMode(next);
-    setMode(next);
+    if (onModeChange) {
+      onModeChange(next);
+    } else {
+      applyThemeMode(next);
+      setUncontrolledMode(next);
+    }
     setOpen(false);
+    triggerRef.current?.focus();
   }
 
   const trigger = (
     <button
       ref={triggerRef}
       type="button"
-      onClick={() => setOpen((current) => !current)}
+      aria-disabled={disabled || undefined}
+      onClick={() => { if (!disabled) setOpen((current) => !current); }}
       aria-label={triggerAriaLabel}
       aria-haspopup="menu"
       aria-expanded={open}
@@ -206,11 +218,13 @@ export function ThemeToggle({
           ? 'group inline-flex items-center gap-2 rounded-lg text-fg-tertiary transition-colors duration-150 hover:text-fg hover:bg-bg-elevated'
           : 'group inline-flex items-center gap-2 rounded-lg border border-border bg-bg-elevated text-fg-secondary transition-colors duration-150 hover:border-border-strong hover:text-fg hover:bg-bg-elevated/80',
         showLabel ? 'h-9 px-3 text-sm font-medium' : 'h-8 w-8 justify-center',
+        disabled && 'cursor-wait opacity-60',
+        size === 'menu' && 'gap-3',
         className
       )}
     >
-      <span className="inline-flex shrink-0 items-center justify-center h-4 w-4">
-        <ModeIcon className="h-4 w-4" />
+      <span className={cn('inline-flex shrink-0 items-center justify-center', size === 'menu' ? 'h-5 w-5' : 'h-4 w-4')}>
+        <ModeIcon className={size === 'menu' ? 'h-5 w-5' : 'h-4 w-4'} />
       </span>
       {showLabel && (
         <span className="min-w-0 flex-1 truncate text-left text-sm font-medium text-fg">
@@ -218,7 +232,7 @@ export function ThemeToggle({
         </span>
       )}
       {showLabel && (
-        <span className="shrink-0 text-xs font-medium text-fg-tertiary">
+        <span className={cn('shrink-0 font-medium text-fg-tertiary', size === 'menu' ? 'text-sm' : 'text-xs')}>
           {modeLabel}
         </span>
       )}
@@ -230,8 +244,16 @@ export function ThemeToggle({
       ref={menuRef}
       role="menu"
       aria-label="Theme options"
+      onKeyDown={(event) => {
+        const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]') ?? []);
+        const current = items.indexOf(document.activeElement as HTMLButtonElement);
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+          : event.key === 'ArrowDown' ? (current + 1) % items.length
+          : event.key === 'ArrowUp' ? (current - 1 + items.length) % items.length : -1;
+        if (next >= 0) { event.preventDefault(); items[next]?.focus(); }
+      }}
       className={cn(
-        'fixed z-50 overflow-hidden rounded-2xl border border-border bg-bg-surface shadow-xl',
+        'fixed z-[70] overflow-hidden rounded-2xl border border-border bg-bg-surface shadow-xl',
         isMobile
           ? 'inset-x-2 bottom-2 max-h-[calc(100vh-1rem)] w-auto'
           : 'w-72 max-w-[calc(100vw-1rem)]'

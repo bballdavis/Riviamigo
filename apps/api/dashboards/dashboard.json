@@ -25,7 +25,6 @@
         "chartId": "projected-range-mileage",
         "chartIds": [
           "battery-degradation",
-          "soc-history",
           "charge-level",
           "charging-curve-analysis",
           "charging-sessions-energy",

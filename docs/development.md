@@ -34,6 +34,21 @@ The development and production Compose stacks both use PostgreSQL 18 with
 TimescaleDB 2.28.3, but they use separate volumes and data layouts. Keep the
 development volume separate from production data.
 
+The development launcher uses the existing `riviamigo` Compose project by
+default for the infrastructure services it starts: TimescaleDB, Redis, and
+Garage. Active bindings are preserved. The API, web app, and restore agent run
+on the host and use independently allocated ports. To isolate a checkout deliberately, set
+`DEV_COMPOSE_PROJECT_NAME` (or `COMPOSE_PROJECT_NAME`) to a unique project name
+before starting it. Isolated projects use separate volumes; sharing a project
+also shares its migration ledger and data, so do not point incompatible schema
+revisions at the same project.
+
+Before allocation, the launcher verifies that an existing selected project was
+created from this repository's `compose/docker-compose.dev.yml`. Missing,
+mixed, or production Compose identity metadata fails closed; set
+`DEV_COMPOSE_PROJECT_NAME` to a unique isolated name to avoid a same-named
+production project.
+
 `pnpm dev:stack` also starts the local restore supervisor alongside the
 host-run API. Its capability key is generated under the ignored `data/`
 directory, while backup artifacts continue to use the local `/backups` path.
@@ -41,6 +56,10 @@ This keeps the in-app restore path testable without putting development
 credentials or restore data in Git.
 Vite proxies restore-runtime status requests directly to that supervisor so
 the status poll can survive the API process restart.
+
+Before allocating ports, the launcher reads the selected Compose project's
+existing service metadata. Sharing a project still makes migration and
+data/schema compatibility the caller's responsibility.
 
 The local stack is HTTP-only, so `compose/docker-compose.dev.yml` and the
 launcher set `RIVIAMIGO_ENV=development` and `COOKIE_INSECURE=true`. The latter

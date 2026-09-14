@@ -6,6 +6,8 @@ import { rootRoute } from './__root';
 import { api, useAuth } from '@riviamigo/hooks';
 import { useDocumentTheme } from '@riviamigo/ui/hooks';
 import { Button, Input } from '@riviamigo/ui/primitives';
+import { getBrandAsset } from '@riviamigo/ui/lib/brandAssets';
+import { useDocumentPalette } from '@riviamigo/ui/hooks';
 import { Zap, Route, Battery } from 'lucide-react';
 import { normalizeLoginRedirectTarget } from '../components/layout/AuthGuard';
 import { PASSWORD_MIN_LENGTH, PasswordRequirements } from '../components/auth/PasswordRequirements';
@@ -31,6 +33,7 @@ export function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const isDark = useDocumentTheme();
+  const palette = useDocumentPalette();
   const redirectTarget = normalizeLoginRedirectTarget(search.redirect);
   const setup = useQuery({ queryKey: ['auth-setup'], queryFn: () => api.setup(), retry: false });
   const setupRequired = setup.data?.setup_required === true;
@@ -102,7 +105,7 @@ export function LoginPage() {
           <div className="relative mb-5">
             <div className="w-24 h-24 rounded-2xl bg-accent/10 border border-accent/25 grid place-items-center shadow-glow-md overflow-hidden">
               <img
-                src="/logo_color_lighter.svg"
+                src={getBrandAsset('logo', { dark: isDark, palette })}
                 alt="Riviamigo logo"
                 className="block h-20 w-20 object-contain"
                 style={{ transform: 'translateX(-6px)' }}
@@ -112,7 +115,7 @@ export function LoginPage() {
             <div className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-accent/10" />
           </div>
           <img
-            src={isDark ? '/text_white.svg' : '/text_black.svg'}
+            src={getBrandAsset('wordmark', { dark: isDark, palette })}
             alt="Riviamigo"
             className="block h-14 w-auto max-w-full object-contain"
           />
