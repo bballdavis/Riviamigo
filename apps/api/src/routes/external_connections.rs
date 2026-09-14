@@ -892,18 +892,20 @@ async fn test_connection(
                     request = request.query(&[carto_basemap_key_query(&api_key)]);
                 }
             }
-            let bearer_token = body
-                .bearer_token
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .or(decrypt_secret(
-                    &state.age_key,
-                    settings.bearer_token_encrypted.as_deref(),
-                )?);
-            if let Some(token) = bearer_token {
-                request = request.bearer_auth(token);
+            if should_forward_basemap_bearer_token(&provider) {
+                let bearer_token = body
+                    .bearer_token
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .or(decrypt_secret(
+                        &state.age_key,
+                        settings.bearer_token_encrypted.as_deref(),
+                    )?);
+                if let Some(token) = bearer_token {
+                    request = request.bearer_auth(token);
+                }
             }
             request.send().await
         }
@@ -1004,7 +1006,8 @@ async fn proxy_basemap_tile(
     Path((style, z, x, y)): Path<(String, u8, u32, String)>,
 ) -> Result<Response<Body>, AppError> {
     let settings = connections::require_enabled(&state.pool, connections::BASEMAP).await?;
-    if !matches!(resolve_basemap_provider(&settings), "carto" | "custom") {
+    let provider = resolve_basemap_provider(&settings);
+    if !matches!(provider, "carto" | "custom") {
         return Err(AppError::Validation(
             "raster tiles are not active for this basemap provider".into(),
         ));
@@ -1056,8 +1059,8 @@ async fn proxy_basemap_tile(
     connections::record_attempt(&state.pool, connections::BASEMAP).await;
     let url = Url::parse(&url).map_err(|_| AppError::Validation("invalid tile endpoint".into()))?;
     let allowlist = configured_private_network_allowlist(&settings)?;
-    let forward_carto_api_key = resolve_basemap_provider(&settings) == "carto"
-        && should_forward_carto_api_key(&settings.mode, &url);
+    let forward_carto_api_key =
+        provider == "carto" && should_forward_carto_api_key(&settings.mode, &url);
     let mut request = outbound_client_for_url(&url, &allowlist).await?.get(url);
     if forward_carto_api_key {
         if let Some(api_key) =
@@ -1066,9 +1069,12 @@ async fn proxy_basemap_tile(
             request = request.query(&[carto_basemap_key_query(&api_key)]);
         }
     }
-    if let Some(token) = decrypt_secret(&state.age_key, settings.bearer_token_encrypted.as_deref())?
-    {
-        request = request.bearer_auth(token);
+    if should_forward_basemap_bearer_token(provider) {
+        if let Some(token) =
+            decrypt_secret(&state.age_key, settings.bearer_token_encrypted.as_deref())?
+        {
+            request = request.bearer_auth(token);
+        }
     }
     let response = match request.send().await {
         Ok(response) => response,
@@ -1125,6 +1131,10 @@ fn should_forward_carto_api_key(_mode: &str, endpoint: &Url) -> bool {
     endpoint.host_str().is_some_and(|host| {
         host == "carto.com" || host.ends_with(".carto.com") || host.ends_with(".cartocdn.com")
     })
+}
+
+fn should_forward_basemap_bearer_token(provider: &str) -> bool {
+    provider == "custom"
 }
 
 /// CARTO Basemaps authenticate with `key`; this is deliberately distinct from
@@ -2122,8 +2132,8 @@ mod tests {
         endpoint_is_private, is_forbidden_ip, is_private_ip, openfreemap_cache_key,
         openfreemap_resource_is_allowed, parse_private_network_allowlist, resolve_basemap_provider,
         resolve_effective_basemap_provider_update, rewrite_openfreemap_json,
-        should_forward_carto_api_key, validate_tile_template, UpdateConnectionBody,
-        BASEMAP_RASTER_ROUTE, OPENFREEMAP_PROXY_ROUTE,
+        should_forward_basemap_bearer_token, should_forward_carto_api_key, validate_tile_template,
+        UpdateConnectionBody, BASEMAP_RASTER_ROUTE, OPENFREEMAP_PROXY_ROUTE,
     };
     use crate::services::external_connections::ConnectionSettingsRow;
     use axum::{
@@ -2328,6 +2338,13 @@ mod tests {
         assert!(should_forward_carto_api_key("remote", &carto));
         assert!(should_forward_carto_api_key("custom", &carto));
         assert!(!should_forward_carto_api_key("custom", &custom));
+    }
+
+    #[test]
+    fn forwards_basemap_bearer_tokens_only_to_custom_provider() {
+        assert!(should_forward_basemap_bearer_token("custom"));
+        assert!(!should_forward_basemap_bearer_token("carto"));
+        assert!(!should_forward_basemap_bearer_token("openfreemap"));
     }
 
     #[test]
