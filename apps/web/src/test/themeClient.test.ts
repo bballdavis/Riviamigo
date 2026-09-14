@@ -34,6 +34,31 @@ describe('theme client', () => {
     expect(fetchMock.mock.calls[1]?.[0]).toContain('/v2/themes/custom-1/revisions');
   });
 
+  it('backs off repeated V2 theme requests in the server auth metadata bucket', async () => {
+    vi.useFakeTimers();
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(
+      JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'Rate limit exceeded' } }),
+      {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-riviamigo-ratelimit-source': 'api',
+          'retry-after': '2',
+        },
+      }
+    ));
+
+    await expect(themeClient.getPreferences()).rejects.toMatchObject({ status: 429 });
+    await expect(themeClient.getPreferences()).rejects.toMatchObject({
+      status: 429,
+      detail: { rateLimitClass: 'auth_metadata' },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(2100);
+  });
+
   it('returns the fully resolved account preference after applying a published revision', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       schemaVersion: 2,

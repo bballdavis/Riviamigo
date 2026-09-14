@@ -9,7 +9,7 @@
     "apps/api/src/routes/trips.rs": { "maxLines": 1833, "maxBytes": 65504 },
     "apps/api/src/services/backups.rs": { "maxLines": 2673, "maxBytes": 98764 },
     "apps/api/src/services/charge_sessions.rs": { "maxLines": 1949, "maxBytes": 73563 },
-    "packages/hooks/src/api/transport.ts": { "maxLines": 2309, "maxBytes": 79001 }
+    "packages/hooks/src/api/transport.ts": { "maxLines": 2311, "maxBytes": 79085 }
   },
   "orchestration": {
     "maxLines": 500,

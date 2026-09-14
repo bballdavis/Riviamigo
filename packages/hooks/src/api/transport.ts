@@ -2210,6 +2210,8 @@ function inferClientRateLimitClass(method: string, path: string) {
   if (
     path.startsWith('/v1/auth/me') ||
     path.startsWith('/v1/auth/preferences') ||
+    path.startsWith('/v2/auth/preferences') ||
+    path.startsWith('/v2/themes') ||
     path.startsWith('/v1/dashboards/by-slug/')
   ) {
     return 'auth_metadata';

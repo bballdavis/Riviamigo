@@ -51,6 +51,13 @@ impl TestApp {
     }
 
     async fn new_with_rate_limit(rate_limit: RateLimitConfig) -> Self {
+        Self::new_with_rate_limit_and_pool_size(rate_limit, 1).await
+    }
+
+    async fn new_with_rate_limit_and_pool_size(
+        rate_limit: RateLimitConfig,
+        max_connections: u32,
+    ) -> Self {
         let base_db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
             "postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo".into()
         });
@@ -71,7 +78,7 @@ impl TestApp {
 
         let db_url = replace_database_name(&base_db_url, &db_name);
         let pool = PgPoolOptions::new()
-            .max_connections(1)
+            .max_connections(max_connections)
             .connect(&db_url)
             .await
             .expect("db connect");
@@ -971,6 +978,62 @@ async fn v2_themes_are_account_scoped_revision_pinned_and_v1_compatible() {
         .await;
     assert_eq!(builtin.body["selection"]["kind"], "builtin");
     assert_eq!(builtin.body["selection"]["themeId"], "rad");
+}
+
+#[tokio::test]
+async fn concurrent_theme_creation_enforces_the_per_account_limit() {
+    let app = TestApp::new_with_rate_limit_and_pool_size(RateLimitConfig::default(), 4).await;
+    let owner_token = register_and_login(&app, "theme-limit-owner@example.com").await;
+    let owner_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM riviamigo.users WHERE email = 'theme-limit-owner@example.com'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("owner id");
+
+    for index in 0..19 {
+        sqlx::query(
+            "INSERT INTO riviamigo.user_themes (owner_id, name, base_theme_id)
+             VALUES ($1, $2, 'classic')",
+        )
+        .bind(owner_id)
+        .bind(format!("Seed theme {index}"))
+        .execute(&app.pool)
+        .await
+        .expect("seed theme");
+    }
+
+    let (first, second) = tokio::join!(
+        app.request(
+            Method::POST,
+            "/v2/themes",
+            Some(json!({ "name": "Concurrent theme A", "baseThemeId": "classic" })),
+            Some(&owner_token),
+            None,
+        ),
+        app.request(
+            Method::POST,
+            "/v2/themes",
+            Some(json!({ "name": "Concurrent theme B", "baseThemeId": "classic" })),
+            Some(&owner_token),
+            None,
+        ),
+    );
+
+    let statuses = [first.status, second.status];
+    assert!(statuses.contains(&StatusCode::OK), "statuses: {statuses:?}");
+    assert!(
+        statuses.contains(&StatusCode::UNPROCESSABLE_ENTITY),
+        "statuses: {statuses:?}"
+    );
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM riviamigo.user_themes WHERE owner_id = $1 AND retired_at IS NULL",
+    )
+    .bind(owner_id)
+    .fetch_one(&app.pool)
+    .await
+    .expect("theme count");
+    assert_eq!(count, 20);
 }
 
 #[tokio::test]

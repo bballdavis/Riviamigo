@@ -9,6 +9,7 @@ vi.mock('@riviamigo/ui/primitives', async () => {
 
 vi.mock('@riviamigo/ui/hooks', () => ({
   useDocumentTheme: () => false,
+  useDocumentPalette: () => 'classic',
 }));
 
 const mockNavigate = vi.fn();
@@ -27,6 +28,7 @@ vi.mock('@riviamigo/ui/charts', () => ({
   DEFAULT_CURVE_SMOOTHING: 0.2,
   DEFAULT_CHART_TIME_FILTER: '15m',
   DEFAULT_SPRITE_TIME_FILTER: '24h',
+  getChartColor: () => '#fff',
   TripMapChart: () => <div data-testid="trip-map-chart" />,
   RichTimeSeriesChart: () => <div data-testid="trip-drive-chart" />,
   CHART_COLORS: {

@@ -421,11 +421,16 @@ async fn create_theme(
 ) -> Result<Response, AppError> {
     validate_builtin_id(&body.base_theme_id)?;
     let name = normalize_name(&body.name)?;
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SELECT id FROM riviamigo.users WHERE id = $1 FOR UPDATE")
+        .bind(auth.user_id)
+        .fetch_one(&mut *tx)
+        .await?;
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM riviamigo.user_themes WHERE owner_id = $1 AND retired_at IS NULL",
     )
     .bind(auth.user_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
     if count >= MAX_CUSTOM_THEMES {
         return Err(AppError::Validation(
@@ -440,10 +445,11 @@ async fn create_theme(
     .bind(auth.user_id)
     .bind(name)
     .bind(body.base_theme_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
     let id: Uuid = row.get("id");
     let etag = theme_etag(id, row.get("etag_version"));
+    tx.commit().await?;
     etag_json(&etag, json!({ "themeId": id, "etag": etag }))
 }
 

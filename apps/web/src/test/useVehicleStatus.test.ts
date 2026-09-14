@@ -181,7 +181,7 @@ describe('useVehicleStatus', () => {
     });
     expect(result.current.status).toBeNull();
     expect(warn).toHaveBeenCalledWith(
-      '[Riviamigo client]',
+      expect.stringContaining('[Riviamigo client] live.websocket_message_invalid:'),
       expect.objectContaining({
         event: 'live.websocket_message_invalid',
         area: 'websocket',
