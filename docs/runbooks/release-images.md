@@ -14,7 +14,7 @@ Stable releases use bare Calendar Versions: `YYYY.MM.PATCH`. The first release i
 
 1. Ensure `main` is the intended, validated release commit.
 2. Run **Candidate image** manually from Actions for that exact `main` commit with at least the `amd64` platform.
-3. Run **Release prep** from Actions. It calculates the next UTC monthly patch number and pushes the protected tag.
+3. Run **Release prep** from Actions. It verifies that the exact `main` AMD64 candidate exists, then calculates the next UTC monthly patch number and pushes the protected tag.
 4. **Release image** promotes that commit-addressed candidate to the exact version plus `latest`, verifies the promoted digest, and creates the GitHub release with `images.lock`.
 5. Treat the `images.lock` digests as the immutable release identifiers. `latest` is a moving convenience tag; self-hosters who require exact repeatability should set `RIVIAMIGO_IMAGE` to the digest-qualified reference from `images.lock`. Pinning `IMAGE_TAG` to the Calendar Version is stable for normal use but is not as strong as a digest.
 
@@ -50,7 +50,7 @@ The published-image smoke verifier prints the app container's last 200 log lines
 when startup or endpoint verification fails, so runtime failures are visible in
 the Actions job instead of only appearing as a health-check timeout.
 
-If image publication or manifest verification fails, no GitHub release is created. Correct the failure before creating another release tag; immutable releases intentionally make published release tags non-reusable.
+If image publication or manifest verification fails, the release workflow does not create its release assets. A release record can still exist when a tag or release was created before the workflow failed, or when it was created outside the successful publication path. Treat a zero-asset release as invalid: do not upload a later image to that tag, mark or withdraw it according to repository policy, preserve its tag, and create the next Calendar Version from repaired `main` after its exact candidate has been verified. Immutable release tags are not a recovery target.
 
 ## Pre-release images from dev
 

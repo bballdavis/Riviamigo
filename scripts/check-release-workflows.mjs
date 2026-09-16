@@ -115,6 +115,27 @@ const packageJson = JSON.parse(read('package.json'));
 if (packageJson.scripts?.['release-workflows:check'] !== 'node ./scripts/check-release-workflows.mjs') {
   fail('package.json must expose release-workflows:check');
 }
+const dockerfile = read('compose/Dockerfile');
+const themesManifestCopy = 'COPY packages/themes/package.json packages/themes/';
+const themesSourceCopy = 'COPY packages/themes/ packages/themes/';
+requireText(
+  dockerfile,
+  /COPY packages\/themes\/package\.json packages\/themes\//,
+  'production Dockerfile must include the themes workspace manifest before install',
+);
+requireText(
+  dockerfile,
+  /COPY packages\/themes\/ packages\/themes\//,
+  'production Dockerfile must include the themes workspace source before the web build',
+);
+const installIndex = dockerfile.indexOf('RUN pnpm config set allowUnusedPatches true --location project');
+const webBuildIndex = dockerfile.indexOf('RUN pnpm --filter @riviamigo/web build');
+if (dockerfile.indexOf(themesManifestCopy) > installIndex) {
+  fail('production Dockerfile must copy the themes workspace manifest before pnpm install');
+}
+if (dockerfile.indexOf(themesSourceCopy) > webBuildIndex) {
+  fail('production Dockerfile must copy the themes workspace source before the web build');
+}
 const compose = read('compose/docker-compose.yml');
 requireText(compose, /image: \$\{RIVIAMIGO_IMAGE:-/, 'production Compose must accept an exact image reference');
 const freshInstall = read('scripts/verify-fresh-install.mjs');
@@ -150,6 +171,24 @@ requireText(
   /pnpm verify:fresh-install -- --mode "\$\{\{ inputs\.mode \|\| 'production' \}\}" --production-env "\$fresh_env" --source-build/,
   'fresh-install workflow must exercise the production acceptance path',
 );
+const prepareReleaseWorkflow = read('.github/workflows/prepare-release.yml');
+checkPins(prepareReleaseWorkflow, 'prepare-release.yml');
+requireText(prepareReleaseWorkflow, /packages:\s*read/, 'prepare-release.yml must be able to inspect GHCR candidates');
+requireText(
+  prepareReleaseWorkflow,
+  /docker\/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9/,
+  'prepare-release.yml must authenticate to GHCR before candidate verification',
+);
+requireText(
+  prepareReleaseWorkflow,
+  /docker buildx imagetools inspect "\$candidate"/,
+  'prepare-release.yml must verify the exact main AMD64 candidate before tagging',
+);
+const candidateGateIndex = prepareReleaseWorkflow.indexOf('docker buildx imagetools inspect "$candidate"');
+const tagPushIndex = prepareReleaseWorkflow.indexOf('git push origin "$version"');
+if (candidateGateIndex < 0 || tagPushIndex < 0 || candidateGateIndex > tagPushIndex) {
+  fail('prepare-release.yml must verify the exact main candidate before pushing its release tag');
+}
 if (/secrets\.FRESH_INSTALL_(?:JWT_SECRET|JWT_PUBLIC_KEY|AGE_ENCRYPTION_KEY)/.test(freshInstallWorkflow)) {
   fail('fresh-install workflow must validate generated key persistence without repository key secrets');
 }
