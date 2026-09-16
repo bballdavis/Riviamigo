@@ -6,6 +6,7 @@ on:
 permissions:
   actions: write
   contents: write
+  packages: read
 
 concurrency:
   group: prepare-calendar-release
@@ -20,6 +21,24 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+
+      - name: Authenticate to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify exact main candidate exists
+        env:
+          IMAGE: ghcr.io/bballdavis/riviamigo
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          candidate="$IMAGE:candidate-${source_sha}-amd64"
+          docker buildx imagetools inspect "$candidate" >/dev/null
+          echo "Verified AMD64 candidate for main at $source_sha."
 
       - name: Calculate and push the next Calendar Version
         id: version

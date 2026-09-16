@@ -14,7 +14,7 @@ Stable releases use bare Calendar Versions: `YYYY.MM.PATCH`. The first release i
 
 1. Ensure `main` is the intended, validated release commit.
 2. Run **Candidate image** manually from Actions for that exact `main` commit with at least the `amd64` platform.
-3. Run **Release prep** from Actions. It calculates the next UTC monthly patch number and pushes the protected tag.
+3. Run **Release prep** from Actions. It verifies that the exact `main` AMD64 candidate exists, then calculates the next UTC monthly patch number and pushes the protected tag.
 4. **Release image** promotes that commit-addressed candidate to the exact version plus `latest`, verifies the promoted digest, and creates the GitHub release with `images.lock`.
 5. Treat the `images.lock` digests as the immutable release identifiers. `latest` is a moving convenience tag; self-hosters who require exact repeatability should set `RIVIAMIGO_IMAGE` to the digest-qualified reference from `images.lock`. Pinning `IMAGE_TAG` to the Calendar Version is stable for normal use but is not as strong as a digest.
 
