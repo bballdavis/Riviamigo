@@ -50,7 +50,7 @@ The published-image smoke verifier prints the app container's last 200 log lines
 when startup or endpoint verification fails, so runtime failures are visible in
 the Actions job instead of only appearing as a health-check timeout.
 
-If image publication or manifest verification fails, no GitHub release is created. Correct the failure before creating another release tag; immutable releases intentionally make published release tags non-reusable.
+If image publication or manifest verification fails, the release workflow does not create its release assets. A release record can still exist when a tag or release was created before the workflow failed, or when it was created outside the successful publication path. Treat a zero-asset release as invalid: do not upload a later image to that tag, mark or withdraw it according to repository policy, preserve its tag, and create the next Calendar Version from repaired `main` after its exact candidate has been verified. Immutable release tags are not a recovery target.
 
 ## Pre-release images from dev
 

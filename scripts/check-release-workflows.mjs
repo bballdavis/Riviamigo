@@ -184,6 +184,11 @@ requireText(
   /docker buildx imagetools inspect "\$candidate"/,
   'prepare-release.yml must verify the exact main AMD64 candidate before tagging',
 );
+const candidateGateIndex = prepareReleaseWorkflow.indexOf('docker buildx imagetools inspect "$candidate"');
+const tagPushIndex = prepareReleaseWorkflow.indexOf('git push origin "$version"');
+if (candidateGateIndex < 0 || tagPushIndex < 0 || candidateGateIndex > tagPushIndex) {
+  fail('prepare-release.yml must verify the exact main candidate before pushing its release tag');
+}
 if (/secrets\.FRESH_INSTALL_(?:JWT_SECRET|JWT_PUBLIC_KEY|AGE_ENCRYPTION_KEY)/.test(freshInstallWorkflow)) {
   fail('fresh-install workflow must validate generated key persistence without repository key secrets');
 }
