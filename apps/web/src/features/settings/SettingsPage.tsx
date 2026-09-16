@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, AuthenticatedVehicleArtwork, queryKeys, resolveVehicleArtwork, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
-import type { UnitPreferences, VehicleImages, VehicleMember } from '@riviamigo/types';
+import { type UnitPreferences, type VehicleImages, type VehicleMember } from '@riviamigo/types';
 import {
   downloadDashboardYaml,
   materializeUserDashboardDraft,
@@ -31,7 +31,7 @@ import {
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI } from '@riviamigo/ui/lib/vehicleTires';
 import {
   PageLayout, Card, CardHeader, CardTitle, CardContent,
-  Button, Badge, Input, SelectPicker, ThemeToggle, Tooltip,
+  Button, Badge, Input, SelectPicker, Tooltip,
 } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../../components/layout/AppLayout';
 import { BackupSection } from '../../components/settings/BackupSection';
@@ -39,6 +39,7 @@ import { ExternalConnectionsSection } from '../../components/settings/ExternalCo
 import { JobsSection } from '../../components/settings/JobsSection';
 import { PlacesSection } from '../../components/settings/PlacesSection';
 import { ChargingSection } from '../../components/settings/ChargingSection';
+import { AppearanceSection } from './AppearanceSection';
 import { RawTelemetryExplorer } from '../../components/settings/RawTelemetryExplorer';
 import { ChartManagerSection } from './charts/ChartManagerSection';
 import { canManageSystemDashboards } from '../../components/dashboard/DashboardPage';
@@ -882,7 +883,26 @@ export function SettingsContent({ initialSection }: { initialSection?: SettingsS
     <AppLayout activeKey="settings">
       <PageLayout title="Settings" subtitle="Account, vehicle, and API controls for local troubleshooting.">
         <div className="grid gap-5 lg:grid-cols-[13rem_minmax(0,1fr)]">
-          <nav className="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-visible" aria-label="Settings sections">
+          <div className="rounded-xl border border-accent/30 bg-accent/10 p-3 shadow-sm lg:hidden">
+            <label
+              className="mb-2 block text-xs font-semibold uppercase tracking-wider text-fg-secondary"
+              htmlFor="settings-section-picker"
+            >
+              Settings section
+            </label>
+            <SelectPicker<SettingsSection>
+              id="settings-section-picker"
+              value={activeSection}
+              onChange={selectSettingsSection}
+              aria-label="Settings section"
+              className="w-full"
+              triggerClassName="min-h-11 border-accent bg-bg-surface text-fg shadow-sm focus-visible:ring-2 focus-visible:ring-accent"
+              menuClassName="w-full border-accent bg-bg-surface shadow-lg"
+              options={sections.map((section) => ({ value: section.id, label: section.label }))}
+            />
+          </div>
+
+          <nav className="hidden gap-2 lg:flex lg:flex-col" aria-label="Settings sections">
             {sections.map((section) => {
               const Icon = section.icon;
               const active = activeSection === section.id;
@@ -892,7 +912,7 @@ export function SettingsContent({ initialSection }: { initialSection?: SettingsS
                   type="button"
                   onClick={() => selectSettingsSection(section.id)}
                   className={[
-                    'flex h-9 shrink-0 items-center gap-2 rounded-lg px-3 text-sm transition-colors',
+                    'flex h-9 shrink-0 items-center gap-2 rounded-lg px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent',
                     active
                       ? 'bg-bg-elevated text-fg shadow-sm'
                       : 'text-fg-secondary hover:bg-bg-elevated/70 hover:text-fg',
@@ -1823,22 +1843,7 @@ export function SettingsContent({ initialSection }: { initialSection?: SettingsS
 
             {activeSection === 'raw' && <RawTelemetryExplorer vehicles={vehicles ?? []} isAdmin={isAdmin} />}
 
-            {activeSection === 'appearance' && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Appearance</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-fg">Theme</p>
-                      <p className="mt-0.5 text-xs text-fg-tertiary">Toggle between dark, light, and system appearance</p>
-                    </div>
-                    <ThemeToggle />
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+            {activeSection === 'appearance' && <AppearanceSection preferencesQuery={unitPreferencesQuery} />}
 
             {activeSection === 'account' && (
               <Card>

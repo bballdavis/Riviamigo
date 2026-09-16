@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 530 104" role="img" aria-labelledby="title">
+  <title id="title">Riviamigo RAD wordmark</title>
+  <g transform="translate(4 8)" fill="#10363B" fill-rule="evenodd"><path transform="translate(0 0)" d="M0 0H42Q60 0 60 18V22Q60 36 46 39L64 60H46L29 40H14V60H0ZM14 12V28H40Q46 28 46 22V18Q46 12 40 12Z"/>
+    <path transform="translate(76 0)" d="M0 0H14V60H0Z"/>
+    <path transform="translate(102 0)" d="M0 0H15L32 44 49 0H64L40 60H24Z"/>
+    <path transform="translate(178 0)" d="M0 0H14V60H0Z"/>
+    <path transform="translate(204 0)" d="M24 0H40L66 60H51L46 48H18L13 60H0ZM23 36H41L32 14Z"/>
+    <path transform="translate(282 0)" d="M0 60V0H15L34 26 53 0H68V60H54V22L34 48 14 22V60Z"/>
+    <path transform="translate(362 0)" d="M0 0H14V60H0Z"/>
+    <path transform="translate(388 0)" d="M20 0H58V12H22Q14 12 14 20V40Q14 48 22 48H46V36H31V24H60V60H20Q0 60 0 40V20Q0 0 20 0Z"/>
+    <path transform="translate(460 0)" d="M20 0H42Q62 0 62 20V40Q62 60 42 60H20Q0 60 0 40V20Q0 0 20 0ZM22 12Q14 12 14 20V40Q14 48 22 48H40Q48 48 48 40V20Q48 12 40 12Z"/></g>
+  <path fill="#FFB000" d="M4 84h170v10H4Z"/>
+  <path fill="#E34427" d="M178 84h170v10H178Z"/>
+  <path fill="#087F83" d="M352 84h174v10H352Z"/>
+</svg>

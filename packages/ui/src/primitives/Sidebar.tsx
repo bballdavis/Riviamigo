@@ -7,7 +7,7 @@ import { TbCarSuv } from 'react-icons/tb';
 import { FaChargingStation } from 'react-icons/fa6';
 import { BiTrip } from 'react-icons/bi';
 import { cn } from '../lib/utils';
-import { useDocumentTheme } from '../hooks/useDocumentTheme';
+import { useThemeRuntime } from '../lib/themeRuntime';
 
 export interface NavItem {
   key: string;
@@ -26,7 +26,7 @@ const DEFAULT_NAV_ITEMS: NavItem[] = [
   { key: 'charging',   label: 'Charging',   href: '/charging',  icon: <FaChargingStation className={NAV_ICON_CLASS} /> },
   { key: 'trips',      label: 'Trips',      href: '/trips',     icon: <BiTrip className={NAV_ICON_CLASS} /> },
   { key: 'efficiency', label: 'Efficiency', href: '/efficiency',icon: <TrendingUp className={NAV_ICON_CLASS} /> },
-  { key: 'health',     label: 'Health',     href: '/health',    icon: <Heart className={NAV_ICON_CLASS} /> },
+  { key: 'health',     label: 'Health',     href: '/vehicle-health', icon: <Heart className={NAV_ICON_CLASS} /> },
 ];
 
 export interface SidebarProps {
@@ -75,7 +75,7 @@ export function Sidebar({
   const mobileCloseButtonRef = React.useRef<HTMLButtonElement>(null);
   const lastMobileFocusRef = React.useRef<HTMLElement | null>(null);
   const restoreFocusOnCloseRef = React.useRef(true);
-  const isDark = useDocumentTheme();
+  const { brandAssets } = useThemeRuntime();
 
   const closeMobileNavigation = React.useCallback((restoreFocus = true) => {
     restoreFocusOnCloseRef.current = restoreFocus;
@@ -213,7 +213,7 @@ export function Sidebar({
           aria-label="Go to home"
         >
           <img
-            src={isDark ? '/text_white.svg' : '/text_black.svg'}
+            src={brandAssets.wordmark}
             alt="Riviamigo"
             className="h-[1.5625rem] w-auto"
             style={{ transform: 'translateY(10%)' }}
@@ -254,7 +254,7 @@ export function Sidebar({
               aria-label="Go to home"
             >
               <img
-                src={isDark ? '/text_white.svg' : '/text_black.svg'}
+                src={brandAssets.wordmark}
                 alt="Riviamigo"
                 className="h-[1.5625rem] w-auto"
                 style={{ transform: 'translateY(10%)' }}
@@ -312,7 +312,7 @@ export function Sidebar({
               title="Expand sidebar"
             >
               <img
-                src="/logo_color_lighter.svg"
+                src={brandAssets.logo}
                 alt="Riviamigo logo"
                 className="h-[80%] w-auto"
               />
@@ -322,7 +322,7 @@ export function Sidebar({
               {logo ?? (
                 <div className="flex h-full min-w-0 items-center justify-start pl-1 overflow-hidden">
                   <img
-                    src={isDark ? '/text_white.svg' : '/text_black.svg'}
+                    src={brandAssets.wordmark}
                     alt="Riviamigo"
                     className="block h-[62%] w-auto max-w-[calc(100%-2.25rem)] object-contain"
                     style={{ transform: 'translateY(15%)' }}

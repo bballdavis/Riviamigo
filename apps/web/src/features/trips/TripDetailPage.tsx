@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import {
-  useAuth, useBasemapConfig, useResolvedVehicleSelection, useTripDetailData, useUpdateTripTagAssignments,
+  useAuth, useBasemapConfig, useResolvedVehicleSelection, useTripDetailData, useUpdateTripTagAssignments, useUserPreferences,
 } from '@riviamigo/hooks';
 import { useDocumentTheme } from '@riviamigo/ui/hooks';
 import { Button, PageLayout } from '@riviamigo/ui/primitives';
@@ -46,6 +46,7 @@ export function TripDetailContent() {
   const activeIndexFrameRef = React.useRef<number | null>(null);
   const isDark = useDocumentTheme();
   const basemap = useBasemapConfig();
+  const userPreferences = useUserPreferences();
 
   const setActiveIndexThrottled = React.useCallback((value: number | null) => {
     if (pendingActiveIndexRef.current === value) return;
@@ -324,11 +325,13 @@ export function TripDetailContent() {
         ) : (
           <>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <SensorChipSummary title="Distance Driven" value={trip ? formatMiles(trip.distance_mi) : '—'} icon="lucide:map-pin" />
+              <SensorChipSummary title="Distance Driven" value={trip ? formatMiles(trip.distance_mi) : '—'} icon="lucide:map-pin" dataAccent="series-03" valueColor="data" />
               <SensorChipSummary
                 title={`Avg. Effic. (${getEfficiencyUnitLabel()})`}
                 value={trip?.efficiency_wh_mi != null ? formatEfficiencyValue(trip.efficiency_wh_mi) : '—'}
                 icon="lucide:gauge"
+                dataAccent="series-04"
+                valueColor="data"
               />
               <SensorChipSummary title="Avg. Speed" value={avgSpeed != null ? formatMph(avgSpeed) : '—'} icon="lucide:car" />
               <SensorChipSummary title="Duration" value={durationMin !== undefined ? formatDuration(durationMin) : '—'} icon="lucide:clock-3" />
@@ -353,9 +356,10 @@ export function TripDetailContent() {
                       activePoint={activeMapPoint}
                       height={TRIP_PRIMARY_CHART_HEIGHT}
                       mapStyle={mapStyle}
+                      mapStylePreference={userPreferences.data?.map_style ?? 'follow-theme'}
                       accessToken={accessToken}
                       basemapConfig={basemap.data}
-                      basemapError={basemap.isError ? 'Map tiles unavailable' : null}
+                      basemapError={basemap.isError ? 'Map configuration unavailable' : null}
                       onBasemapRetry={() => void basemap.refetch()}
                     />
                   )}

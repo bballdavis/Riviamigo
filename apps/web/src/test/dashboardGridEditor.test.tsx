@@ -68,6 +68,53 @@ function getEditorStyles() {
 }
 
 describe('GridEditor overlays', () => {
+  it('keeps sensor color automatic by default and exposes all 16 theme accent overrides', () => {
+    const onChange = vi.fn();
+
+    render(
+      <WidgetEditForm
+        widget={BASE_CONFIG.widgets[0]!}
+        onChange={onChange}
+        onClose={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole('radio', { name: 'Automatic' })).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Theme accent color' }));
+    const accentOptions = screen.getAllByRole('option').filter((option) => !option.hasAttribute('disabled'));
+    expect(accentOptions).toHaveLength(16);
+    const accent03 = screen.getByRole('option', { name: /Accent 03 series-03/i });
+    expect(accent03.querySelector('[style]')).toHaveAttribute('style', expect.stringContaining('--rm-series-03'));
+
+    fireEvent.click(accent03);
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      options: expect.objectContaining({ curveColor: 'series-03' }),
+    }));
+  });
+
+  it('lets an explicit sensor accent return to the theme default', () => {
+    const onChange = vi.fn();
+    const widget = {
+      ...BASE_CONFIG.widgets[0]!,
+      options: { curveColor: 'series-03' },
+    };
+
+    render(
+      <WidgetEditForm
+        widget={widget}
+        onChange={onChange}
+        onClose={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole('radio', { name: 'Automatic' })).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'Theme accent color' }));
+    expect(screen.getByRole('option', { name: /Accent 03 series-03/i })).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Automatic' }));
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ options: {} }));
+  });
+
   it('writes sensor display-filter changes back through the widget options contract', () => {
     const onChange = vi.fn();
     const widget = {

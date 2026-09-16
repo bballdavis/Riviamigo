@@ -136,10 +136,10 @@ These values do not change the standard production topology.
 | `DEV_GARAGE_PORT` | Automatically selected near `3900` | Development Garage S3 API port. |
 | `DEV_GARAGE_ADMIN_PORT` | Automatically selected near `3903` | Development Garage administration port. |
 | `DEV_WEB_ORIGINS` | Active Vite origin | Development CORS origins. |
-| `DEV_COMPOSE_PROJECT_NAME` | Checkout-derived | Development Compose isolation name. |
+| `DEV_COMPOSE_PROJECT_NAME` | `riviamigo` | Development Compose project name. The default shares the existing local development project; set a unique value for deliberate checkout isolation. |
 | `DEV_DATABASE_READY_TIMEOUT_SECONDS` | `600` | Maximum wait for TimescaleDB startup or crash recovery before `pnpm dev:stack` fails. Minimum `60`. |
 | `DEV_CARGO_BUILD_JOBS` | `4` on Windows; unused elsewhere | Maximum concurrent Cargo jobs while Windows `pnpm dev:stack` builds the API and restore supervisor. Set a positive integer to override. |
-| `COMPOSE_PROJECT_NAME` | Compose-derived | Optional general Compose project-name override. |
+| `COMPOSE_PROJECT_NAME` | `riviamigo` | Optional general Compose project-name override used when `DEV_COMPOSE_PROJECT_NAME` is unset. Use a unique value for deliberate checkout isolation. |
 | `VITE_RIVIAMIGO_API_BASE_URL` | Current browser origin in production | Preferred frontend API base URL override. |
 | `VITE_RIVIAMIGO_DEV_API_KEY` | Unset | Development-only integration key used by supported local tooling. |
 | `VITE_RIVIAMIGO_RUN_LIVE_CONTRACT` | `0` | Enables explicitly requested live frontend contract tests. |

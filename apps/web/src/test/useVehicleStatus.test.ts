@@ -172,7 +172,7 @@ describe('useVehicleStatus', () => {
     });
   });
 
-  it('logs a warning and does not update state for non-JSON messages', () => {
+  it('logs a structured warning and does not update state for non-JSON messages', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { result } = renderHook(() => useVehicleStatus('vid-1', 'tok'));
     act(() => {
@@ -180,7 +180,15 @@ describe('useVehicleStatus', () => {
       wsAt(0)._message('not-json');
     });
     expect(result.current.status).toBeNull();
-    expect(warn).toHaveBeenCalledWith('[WS] message parse error', expect.any(SyntaxError));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('[Riviamigo client] live.websocket_message_invalid:'),
+      expect.objectContaining({
+        event: 'live.websocket_message_invalid',
+        area: 'websocket',
+        operation: 'message-parse',
+        error: expect.objectContaining({ name: 'SyntaxError' }),
+      }),
+    );
     warn.mockRestore();
   });
 

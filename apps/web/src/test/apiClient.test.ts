@@ -444,6 +444,37 @@ describe('api client dashboard contracts', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/auth/login');
   });
 
+  it('reports basemap configuration failures with the server request id', async () => {
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        error: { code: 'DEPENDENCY_UNAVAILABLE', message: 'Basemap provider unavailable' },
+      }), {
+        status: 503,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': 'request-123',
+        },
+      }) as Response,
+    );
+
+    await expect(api.apiFetch('GET', '/v1/external/basemap/config')).rejects.toMatchObject({
+      status: 503,
+      code: 'DEPENDENCY_UNAVAILABLE',
+      detail: { requestId: 'request-123' },
+    });
+    expect(consoleWarn).toHaveBeenCalledWith(
+      expect.stringContaining('[Riviamigo client] api.request_failed:'),
+      expect.objectContaining({
+        event: 'api.request_failed',
+        path: '/v1/external/basemap/config',
+        requestId: 'request-123',
+        status: 503,
+      }),
+    );
+    consoleWarn.mockRestore();
+  });
+
   it('sends setup proof in the register JSON body and never in the URL', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ access_token: 'owner-token', expires_in: 900, default_vehicle_id: null }), {

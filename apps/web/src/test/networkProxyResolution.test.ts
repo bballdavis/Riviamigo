@@ -1,8 +1,20 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveApiBaseUrl } from '../../../../packages/hooks/src/api';
 import { getWebSocketBaseUrl } from '../../../../packages/hooks/src/useVehicleStatus';
 
 describe('network proxy URL resolution', () => {
+  it('proxies both supported versioned REST roots in local and packaged deployments', () => {
+    const viteConfig = readFileSync(resolve(process.cwd(), 'vite.config.ts'), 'utf8');
+    const nginxConfig = readFileSync(resolve(process.cwd(), '../../compose/nginx/nginx.conf'), 'utf8');
+
+    expect(viteConfig).toMatch(/['"]\/v1['"]\s*:/);
+    expect(viteConfig).toMatch(/['"]\/v2['"]\s*:/);
+    expect(nginxConfig).toMatch(/location\s+\^~\s+\/v1\//);
+    expect(nginxConfig).toMatch(/location\s+\^~\s+\/v2\//);
+  });
+
   it('keeps REST calls same-origin for localhost browsers when VITE_API_URL targets localhost', () => {
     const baseUrl = resolveApiBaseUrl('http://localhost:3001', {
       hostname: 'localhost',

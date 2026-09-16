@@ -1,4 +1,5 @@
 import React from 'react';
+import type { ChartColorDefinition, ChartColorToken } from '@riviamigo/types';
 import { Icon } from '@iconify/react';
 import { CircleHelp } from 'lucide-react';
 import {
@@ -16,12 +17,12 @@ import {
   MiniSparkline,
   normalizeCurveSmoothness,
   normalizeTimeFilter,
-  type ChartColorKey,
   type CurveSmoothness,
   type MiniSparklineType,
   type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
 import { Badge, Card, Tooltip } from '@riviamigo/ui/primitives';
+import { useDocumentPalette, useDocumentTheme } from '@riviamigo/ui/hooks';
 import {
   cn,
   formatCurrency,
@@ -54,6 +55,9 @@ import {
 } from '../table/tripStatMetrics';
 import {
   getSensorDefinition,
+  getSensorDataAccent,
+  resolveSensorColorToken,
+  resolveSensorValueColor,
   SENSOR_DEFINITIONS,
   type SensorChartType,
   type SensorDataSource,
@@ -89,7 +93,7 @@ interface SensorChipOptions {
   timeFilter?: TimeFilterWindow;
   smoothness?: CurveSmoothness;
   curveSmoothing?: number | boolean;
-  curveColor?: ChartColorKey;
+  curveColor?: ChartColorToken | ChartColorDefinition;
   windowDays?: number;
   timeframeScope?: 'range' | 'current' | 'lifetime';
   tripSelectionAware?: boolean;
@@ -97,7 +101,7 @@ interface SensorChipOptions {
 
 const DEFAULT_WINDOW_DAYS = 30;
 
-function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
+function readOptions(instance: WidgetInstance, automaticColor: ChartColorToken = 'accent'): Required<SensorChipOptions> {
   const definition = getSensorDefinition(instance.definitionId) ?? SENSOR_DEFINITIONS[0]!;
   const options = (instance.options ?? {}) as SensorChipOptions;
   const chartType = options.chartType ?? definition.chartType;
@@ -128,7 +132,7 @@ function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
     valueSize: options.valueSize ?? 'md',
     valueColor: options.valueColor ?? definition.valueColor ?? 'accent',
     valueMode: options.valueMode ?? definition.valueMode,
-    curveColor: options.curveColor ?? 'accent',
+    curveColor: options.curveColor ?? automaticColor,
     timeframeScope: options.timeframeScope ?? definition.timeframeScope ?? 'range',
     tripSelectionAware: options.tripSelectionAware ?? false,
     curveSmoothing: options.curveSmoothing ?? 0,
@@ -143,7 +147,15 @@ function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
 
 export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const definition = getSensorDefinition(instance.definitionId);
-  const options = readOptions(instance);
+  const palette = useDocumentPalette();
+  const rawOptions = (instance.options ?? {}) as SensorChipOptions;
+  const automaticColor = resolveSensorColorToken(rawOptions.metric ?? definition?.metric, definition, palette);
+  const options = readOptions(instance, automaticColor);
+  const isDark = useDocumentTheme();
+  const metricColor = resolveSensorVisualColor(rawOptions.curveColor, automaticColor, isDark);
+  const metricValueColor = resolveSensorValueColor(rawOptions.curveColor, automaticColor, metricColor, isDark);
+  const metricDataAccent = getSensorDataAccent(options.metric, definition);
+  const hasVisualMetricColor = Boolean(metricDataAccent || rawOptions.curveColor);
   const metric = options.dataSource === 'metric' ? options.metric : null;
   const { selectedIds, tripRegistry } = useTripSelection();
   const needsHealth = options.dataSource === 'batteryHealth';
@@ -257,6 +269,9 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
     : options.valueColor === 'accent'
       ? 'text-accent'
       : 'text-fg';
+  const valueToneStyle = !statusPresentation && options.valueColor === 'data'
+    ? { color: metricValueColor }
+    : undefined;
   const helpContent = getHelpContent(options.helpText, metric, efficiencySummary);
 
   const isDailyDelta = options.chartType === 'daily_delta';
@@ -273,6 +288,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
         value?.ts ?? ctx.to ?? new Date().toISOString()
       );
   const showSprite = options.showSprite && options.chartType !== 'none' && !activeTripSelectionStat;
+  const spriteColor = metricColor;
 
   return (
     <Card
@@ -280,9 +296,10 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
       className={cn(
         'relative flex h-full min-h-[72px] flex-col overflow-hidden border p-3',
         options.accentBorder
-          ? 'border-accent/60 shadow-[inset_0_0_0_1px_var(--rm-border-accent)]'
+          ? 'shadow-[inset_0_0_0_1px_var(--rm-border-accent)]'
           : 'border-border'
       )}
+      style={options.accentBorder ? { borderColor: metricColor } : undefined}
       data-testid="sensor-chip"
     >
       {showSprite ? (
@@ -295,12 +312,16 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
             data={spriteData}
             type={sparklineType}
             height={36}
-            color={getChartColor(options.curveColor)}
+            color={spriteColor}
             showFallback
             timeFilter={options.timeFilter}
             smoothness={options.smoothness}
           />
-          <div className="absolute inset-x-0 bottom-[2px] h-px bg-accent/35" aria-hidden="true" />
+          <div
+            className="absolute inset-x-0 bottom-[2px] h-px"
+            style={{ backgroundColor: spriteColor, opacity: 0.35 }}
+            aria-hidden="true"
+          />
         </div>
       ) : null}
 
@@ -341,7 +362,11 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
               <p className="mt-1 truncate text-xs text-fg-tertiary">{options.subtitle}</p>
             ) : null}
           </div>
-          <Icon icon={iconId} className="h-4 w-4 shrink-0 text-accent" />
+          <Icon
+            icon={iconId}
+            className={cn('h-4 w-4 shrink-0', hasVisualMetricColor ? 'text-fg' : 'text-accent')}
+            style={hasVisualMetricColor ? { color: metricColor } : undefined}
+          />
         </div>
 
         <div className="mt-1.5 flex items-baseline gap-1">
@@ -349,6 +374,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
             presentation: statusPresentation,
             displayValue,
             valueToneClass,
+            ...(valueToneStyle ? { valueToneStyle } : {}),
             valueSize: options.valueSize,
           })}
           {inlineSecondary ? (
@@ -366,6 +392,17 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
       </div>
     </Card>
   );
+}
+
+function resolveSensorVisualColor(
+  curveColor: ChartColorToken | ChartColorDefinition | undefined,
+  automaticColor: ChartColorToken,
+  isDark: boolean,
+) {
+  if (typeof curveColor === 'string') return getChartColor(curveColor);
+  if (curveColor?.mode === 'token') return getChartColor(curveColor.token);
+  if (curveColor?.mode === 'custom') return isDark ? curveColor.dark : curveColor.light;
+  return getChartColor(automaticColor);
 }
 
 function buildSourceValues(
@@ -546,11 +583,13 @@ function renderStatusValue({
   presentation,
   displayValue,
   valueToneClass,
+  valueToneStyle,
   valueSize,
 }: {
   presentation: ReturnType<typeof presentVehicleStatusDefinition> | null;
   displayValue: string;
   valueToneClass: string;
+  valueToneStyle?: React.CSSProperties;
   valueSize: Required<SensorChipOptions>['valueSize'];
 }) {
   if (presentation?.renderUnavailableChip) {
@@ -573,7 +612,7 @@ function renderStatusValue({
         valueToneClass,
         valueSize === 'sm' ? 'text-xl' : valueSize === 'lg' ? 'text-3xl' : 'text-2xl'
       )}
-      style={{ textShadow: 'var(--rm-value-halo)' }}
+      style={{ textShadow: 'var(--rm-value-halo)', ...valueToneStyle }}
     >
       {displayValue}
     </span>
@@ -651,7 +690,6 @@ for (const definition of SENSOR_DEFINITIONS) {
       valueMode: definition.valueMode,
       valueColor: definition.valueColor ?? 'accent',
       showSprite: definition.chartType !== 'none',
-      curveColor: 'accent',
       timeFilter: definition.chartType === 'line' || definition.chartType === 'area' || definition.chartType === 'bar' || definition.chartType === 'daily_delta'
         ? DEFAULT_SPRITE_TIME_FILTER
         : 'raw',

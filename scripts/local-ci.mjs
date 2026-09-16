@@ -1,10 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { existsSync, mkdirSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { colorTokenViolations } from './check-color-tokens.mjs';
+import { selectHookGate } from './local-ci-policy.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-process.env.CARGO_TARGET_DIR = join(root, 'apps/api/target-ci-local');
+process.env.CARGO_TARGET_DIR ??= join(root, 'apps/api/target-ci-local');
 const hookPath = join(root, '.githooks');
 const ciProject = 'riviamigo-ci-local';
 const ciCompose = ['-p', ciProject, '-f', 'compose/docker-compose.dev.yml'];
@@ -53,25 +55,11 @@ function git(args) {
   return result.status === 0 ? result.stdout.trim() : '';
 }
 
-function trackedFiles(directory) {
-  if (!existsSync(directory)) return [];
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const path = join(directory, entry.name);
-    return entry.isDirectory() ? trackedFiles(path) : [path];
-  });
-}
-
 function colorTokenGuard() {
-  const roots = ['apps/web/src', 'packages/ui/src', 'packages/dashboards/src', 'packages/hooks/src'];
-  const pattern = /#[0-9a-f]{3,8}\b|rgba?\(|(?:text|bg)-(?:blue|indigo|sky|green|red|orange|yellow|slate|zinc|stone)-\d+/i;
-  const allowed = /tokens[\\/]colors\.ts|globals\.css|\.test\.|\.spec\.|getPropertyValue|CHART_COLORS|rm-map-route|\/\/.*#/;
-  const violations = roots.flatMap((path) => trackedFiles(join(root, path)))
-    .filter((path) => /\.(tsx?|css)$/.test(path))
-    .flatMap((path) => readFileSync(path, 'utf8').split(/\r?\n/).map((line, index) => ({ path, line, index }))
-      .filter(({ path, line }) => pattern.test(line) && !allowed.test(`${relative(root, path)} ${line}`)));
+  const violations = colorTokenViolations(root);
   if (violations.length) {
     console.error('Color-token violations found:');
-    for (const violation of violations) console.error(`${relative(root, violation.path)}:${violation.index + 1}: ${violation.line}`);
+    for (const violation of violations) console.error(violation);
     throw new Error('Use design tokens instead of raw colors.');
   }
 }
@@ -81,6 +69,11 @@ function hygiene() {
     /(^|\/)(\.codex|\.claude|node_modules|target|dist|coverage|\.turbo|\.playwright-cli)(\/|$)|(^|\/)(package-lock\.json|test_output\.txt)$|(^|\/)[^/]+\.tmp$/.test(path));
   if (forbidden.length) throw new Error(`Generated or local-only files are tracked:\n${forbidden.join('\n')}`);
   run('git', ['diff', '--check', 'HEAD'], { label: 'Repository whitespace check' });
+}
+
+function fastHookChecks() {
+  hygiene();
+  run('node', ['tools/migration-integrity.mjs'], { label: 'Migration integrity' });
 }
 
 function commonChecks({ includeInstall = false, includeBuild = false, apiTests = 'lib', env = {} } = {}) {
@@ -149,26 +142,20 @@ function ciChecks() {
   }
 }
 
-function hasPullRequest() {
-  const result = spawnSync(commandName('gh'), ['pr', 'view', '--json', 'number'], { cwd: root, stdio: 'ignore', shell: process.platform === 'win32', windowsHide: true });
-  return result.status === 0;
-}
-
-function hookMode(kind) {
-  const branch = git(['branch', '--show-current']);
-  if (process.env.SKIP_LOCAL_CI === '1') {
+function hookMode() {
+  const gate = selectHookGate(process.env);
+  if (gate === 'bypass') {
     console.warn('SKIP_LOCAL_CI=1: local verification bypassed.');
     return;
   }
-  const full = branch === 'main' || (kind === 'pre-push' && hasPullRequest());
-  if (full) ciChecks();
-  else commonChecks({ includeInstall: false, includeBuild: false });
+  if (gate === 'full') ciChecks();
+  else fastHookChecks();
 }
 
 function installHooks() {
   mkdirSync(hookPath, { recursive: true });
   run('git', ['config', 'core.hooksPath', '.githooks'], { label: 'Install repository Git hooks' });
-  console.log('Hooks installed. Commits on main and pushes for existing PRs use the full CI gate.');
+  console.log('Hooks installed. Commits and pushes use the fast local gate by default; set RIVIAMIGO_FULL_LOCAL_CI=1 for the full CI gate.');
 }
 
 function uninstallHooks() {

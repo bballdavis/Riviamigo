@@ -174,7 +174,7 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
       ? pageDefaultChartId
       : fallbackIds[0]) ??
     getChartDefinitions()[0]?.id ??
-    'soc-history';
+    'projected-range-mileage';
   const configuredChartId =
     typeof options.chartId === 'string' ? normalizeChartId(options.chartId) : undefined;
   const chartId =

@@ -2,19 +2,22 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Save, Trash2 } from 'lucide-react';
 import { useMetricCatalog } from '@riviamigo/hooks';
 import {
-  CHART_COLOR_OPTIONS,
+  ChartColorField,
+  CHART_COLOR_TOKENS,
+  CHART_SERIES_TOKENS,
   CURVE_SMOOTHNESS_OPTIONS,
   DEFAULT_SPRITE_TIME_FILTER,
   curveSmoothnessLabel,
-  getChartColor,
   normalizeCurveSmoothness,
   normalizeTimeFilter,
   TIME_FILTER_OPTIONS,
   timeFilterLabel,
-  type ChartColorKey,
+  getChartColor,
   type CurveSmoothness,
   type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
+import { useDocumentPalette } from '@riviamigo/ui/hooks';
+import type { ChartColorDefinition, ChartColorToken } from '@riviamigo/types';
 import { SelectPicker } from '@riviamigo/ui/primitives';
 import { getWidgetForInstance } from '../registry';
 import type { WidgetInstance } from '../schema';
@@ -25,6 +28,8 @@ import {
 import { getChartDefinitions, type DashboardChartPage } from '../charts/catalog';
 import {
   getSensorDefinition,
+  getSensorDataAccent,
+  resolveSensorColorToken,
   SENSOR_DEFINITIONS,
   type SensorDataSource,
   type SensorValueColor,
@@ -36,7 +41,7 @@ const DEFAULT_WINDOW_DAYS = 30;
 
 /** Drawer background color — matches EditorDrawer's --rm-bg. Fields stack on top. */
 const FIELD_BG = 'bg-bg-elevated';
-const SECTION_BG = 'bg-white/[0.03]';
+const SECTION_BG = 'bg-bg-surface/30';
 
 interface WidgetEditFormProps {
   widget: WidgetInstance;
@@ -63,8 +68,10 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
     ? options.dataSource
     : sensorDefinition?.dataSource ?? 'metric';
   const metric = typeof options.metric === 'string' ? options.metric : sensorDefinition?.metric ?? 'total_miles';
+  const palette = useDocumentPalette();
+  const automaticCurveColor = getChartColor(resolveSensorColorToken(metric, sensorDefinition, palette));
   const chartType = typeof options.chartType === 'string' ? options.chartType : sensorDefinition?.chartType ?? 'line';
-  const curveColor = isChartColorKey(options.curveColor) ? options.curveColor : 'accent';
+  const curveColor = normalizeChartColor(options.curveColor);
   const timeFilterSupported = supportsSpriteTimeFilter(chartType);
   const timeFilter = normalizeTimeFilter(
     options.timeFilter,
@@ -140,6 +147,12 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
     onChange({ ...widget, options: { ...options, ...patchOptions } });
   }
 
+  function clearOption(key: string) {
+    const next = { ...options };
+    delete next[key];
+    onChange({ ...widget, options: next });
+  }
+
   function patchTitle(next: string) {
     onChange({ ...widget, title: next.trim() ? next : undefined });
   }
@@ -198,7 +211,7 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
             type="button"
             onClick={onClose}
             title="Save component"
-            className="flex items-center justify-center rounded-lg bg-accent p-2 text-white transition-colors hover:bg-accent/90"
+            className="flex items-center justify-center rounded-lg bg-accent p-2 text-fg-on-accent transition-colors hover:bg-accent/90"
           >
             <Save className="h-4 w-4" />
           </button>
@@ -377,7 +390,11 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                   value={valueColor}
                   onChange={(value) => patch({ valueColor: value as SensorValueColor })}
                   aria-label="Value color"
-                  options={[{ value: 'accent', label: 'Accent' }, { value: 'default', label: 'Default' }]}
+                  options={[
+                    ...(getSensorDataAccent(metric, sensorDefinition) ? [{ value: 'data', label: 'Automatic' }] : []),
+                    { value: 'accent', label: 'Accent' },
+                    { value: 'default', label: 'Default' },
+                  ]}
                 />
               </Field>
             </div>
@@ -511,22 +528,17 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                     />
                   </Field>
                 ) : null}
-                <Field label="Color">
-                  <div className="flex items-center gap-2">
-                    <span
-                      aria-hidden
-                      className="h-4 w-4 shrink-0 rounded border border-border"
-                      style={{ backgroundColor: getChartColor(curveColor) }}
-                    />
-                    <SelectPicker
-                      className="min-w-0 flex-1"
-                      value={curveColor}
-                      onChange={(value) => patch({ curveColor: value })}
-                      aria-label="Chart color"
-                      options={CHART_COLOR_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
-                    />
-                  </div>
-                </Field>
+                <ChartColorField
+                  value={curveColor}
+                  {...(sensorMode ? {
+                    automatic: {
+                      active: options.curveColor == null,
+                      color: automaticCurveColor,
+                      onSelect: () => clearOption('curveColor'),
+                    },
+                  } : {})}
+                  onChange={(color) => patch({ curveColor: color.mode === 'token' ? color.token : color })}
+                />
               </div>
             ) : null}
           </Section>
@@ -589,7 +601,7 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                 {chartDefinitions.map((d) => (
                   <label
                     key={d.id}
-                    className="flex cursor-pointer items-start gap-2 rounded-md px-1.5 py-1.5 text-xs text-fg-secondary hover:bg-white/5"
+                    className="flex cursor-pointer items-start gap-2 rounded-md px-1.5 py-1.5 text-xs text-fg-secondary hover:bg-bg-surface/30"
                   >
                     <input
                       type="checkbox"
@@ -659,7 +671,7 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                   setConfirmRemoveOpen(false);
                   onRemove?.();
                 }}
-                className="rounded-lg border border-status-danger/60 bg-status-danger px-3 py-1.5 text-xs font-medium text-white transition-colors hover:brightness-110"
+                className="rounded-lg border border-status-danger/60 bg-status-danger px-3 py-1.5 text-xs font-medium text-fg-on-accent transition-colors hover:brightness-110"
               >
                 Delete Widget
               </button>
@@ -724,7 +736,7 @@ function ToggleSwitch({
       >
         {/* Thumb */}
         <span
-          className={`h-4 w-4 rounded-full border bg-white shadow-sm ${
+          className={`h-4 w-4 rounded-full border bg-bg-surface shadow-sm ${
             checked ? 'border-accent' : 'border-border-strong'
           }`}
           style={{ transition: 'transform 150ms', transform: checked ? 'translateX(20px)' : 'translateX(0px)' }}
@@ -746,8 +758,20 @@ function isDashboardChartPage(value: unknown): value is DashboardChartPage {
   );
 }
 
-function isChartColorKey(value: unknown): value is ChartColorKey {
-  return typeof value === 'string' && CHART_COLOR_OPTIONS.some((opt) => opt.value === value);
+function normalizeChartColor(value: unknown): ChartColorDefinition {
+  if (isChartColorToken(value)) return { mode: 'token', token: value };
+  if (value && typeof value === 'object') {
+    const color = value as Partial<ChartColorDefinition>;
+    if (color.mode === 'custom' && typeof color.light === 'string' && typeof color.dark === 'string') {
+      return { mode: 'custom', light: color.light, dark: color.dark };
+    }
+    if (color.mode === 'token' && isChartColorToken(color.token)) return { mode: 'token', token: color.token };
+  }
+  return { mode: 'token', token: 'accent' };
+}
+
+function isChartColorToken(value: unknown): value is ChartColorToken {
+  return typeof value === 'string' && ([...CHART_COLOR_TOKENS, ...CHART_SERIES_TOKENS] as readonly string[]).includes(value);
 }
 
 function legacySmoothingToTimeFilter(value: unknown, chartType: string): TimeFilterWindow {
@@ -771,7 +795,7 @@ function isSensorDataSource(value: unknown): value is SensorDataSource {
 }
 
 function isSensorValueColor(value: unknown): value is SensorValueColor {
-  return value === 'accent' || value === 'default';
+  return value === 'accent' || value === 'data' || value === 'default';
 }
 
 function supportsSpriteTimeFilter(chartType: string) {

@@ -43,23 +43,7 @@ jobs:
       - name: Lint
         run: pnpm turbo lint
       - name: Color-token guard
-        shell: bash
-        run: |
-          set +e
-          VIOLATIONS=$(grep -rn \
-            --include="*.tsx" --include="*.ts" --include="*.css" \
-            -E '#[0-9a-fA-F]{3,8}|rgb\(|rgba\(|text-(blue|indigo|sky|green|red|orange|yellow|slate|zinc|stone)-[0-9]+|bg-(blue|indigo|sky|green|red|orange|yellow|slate|zinc|stone)-[0-9]+' \
-            apps/web/src packages/ui/src packages/dashboards/src packages/hooks/src \
-            --exclude-dir=node_modules \
-            | grep -v 'tokens/colors\.ts\|globals\.css\|\.test\.\|\.spec\.\|//.*#' \
-            | grep -v 'getPropertyValue\|CHART_COLORS\|rm-map-route' \
-          )
-          if [ -n "$VIOLATIONS" ]; then
-            echo "Color-token violations found — use design tokens instead of raw colors:"
-            echo "$VIOLATIONS"
-            exit 1
-          fi
-          echo "No color-token violations"
+        run: pnpm colors:check
       - name: Docs check
         run: pnpm docs:check
       - name: Compose deployment contracts

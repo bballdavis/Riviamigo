@@ -460,7 +460,7 @@ import { healthRoute } from '../health';
 
 const HealthContent = healthRoute.options.component as React.ComponentType;
 
-describe('/health page cleanup', () => {
+describe('/vehicle-health page cleanup', () => {
   beforeEach(() => {
     healthPageMocks.auth.defaultVehicleId = 'veh-1';
     healthPageMocks.auth.activeVehicleId = null;
@@ -493,6 +493,10 @@ describe('/health page cleanup', () => {
     mockUseCurrentVehicleStatus.mockClear();
     mockUseTelemetryLanes.mockClear();
     mockUseQuery.mockClear();
+  });
+
+  it('uses the vehicle health dashboard path', () => {
+    expect((healthRoute.options as { path?: string }).path).toBe('/vehicle-health');
   });
 
   it('renders the hero three-quarter image and software release notes link with no fake update banner', () => {

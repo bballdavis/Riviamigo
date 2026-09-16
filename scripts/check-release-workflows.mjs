@@ -80,7 +80,8 @@ function checkPromotionWorkflow(relativePath, mode) {
 function checkCandidateWorkflow() {
   const workflow = read('.github/workflows/publish-candidate-image.yml');
   checkPins(workflow, 'publish-candidate-image.yml');
-  requireText(workflow, /branches:\s*\[main, dev\]/, 'candidate workflow must build every main and dev commit');
+  requireText(workflow, /^\s{2}workflow_dispatch:/m, 'candidate workflow must remain manually dispatched');
+  if (/^\s{2}push:/m.test(workflow)) fail('candidate workflow must not build on every main or dev push');
   requireText(workflow, /runs-on:\s*ubuntu-24\.04(?:\s|$)/, 'AMD64 candidates must use the native AMD64 runner');
   requireText(workflow, /runs-on:\s*ubuntu-24\.04-arm(?:\s|$)/, 'ARM64 candidates must use the native ARM64 runner');
   requireText(workflow, /Build candidate \(arm64, manual\)/, 'ARM64 candidate builds must remain manual');

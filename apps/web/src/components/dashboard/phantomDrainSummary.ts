@@ -1,5 +1,6 @@
 import { formatKwh, formatPercent } from '@riviamigo/ui/lib/utils';
 import type { PhantomDrainPeriod } from '@riviamigo/types';
+import type { SensorDataAccent } from '@riviamigo/dashboards';
 
 export interface PhantomDrainSummary {
   maxDrainPctPerHour: number | null;
@@ -14,6 +15,7 @@ export interface PhantomDrainSummaryCard {
   title: string;
   value: string;
   icon: string;
+  dataAccent: SensorDataAccent;
   accentBorder?: boolean;
   secondary?: string;
 }
@@ -86,6 +88,7 @@ export function buildPhantomDrainSummaryCards(summary: PhantomDrainSummary): Pha
       title: 'Max drain rate',
       value: summary.maxDrainPctPerHour == null ? '-' : `${formatPercent(summary.maxDrainPctPerHour, 2)} / h`,
       icon: 'lucide:activity',
+      dataAccent: 'series-02',
       accentBorder: true,
     },
     {
@@ -93,6 +96,7 @@ export function buildPhantomDrainSummaryCards(summary: PhantomDrainSummary): Pha
       title: 'Avg sleep',
       value: formatRatioPercent(summary.avgSleepPct, 1),
       icon: 'lucide:moon-star',
+      dataAccent: 'series-03',
       secondary: `State coverage ${summary.avgStateCoveragePct == null ? 'unknown' : formatRatioPercent(summary.avgStateCoveragePct, 0)}`,
     },
     {
@@ -100,12 +104,14 @@ export function buildPhantomDrainSummaryCards(summary: PhantomDrainSummary): Pha
       title: 'Total energy drained',
       value: formatKwh(summary.totalEnergyDrainedKwh),
       icon: 'lucide:bolt',
+      dataAccent: 'series-01',
     },
     {
       key: 'avg-drain-per-hour',
       title: 'Avg drain per hour',
       value: summary.avgDrainPctPerHour == null ? '-' : `${formatPercent(summary.avgDrainPctPerHour, 2)} / h`,
       icon: 'lucide:timer',
+      dataAccent: 'series-04',
     },
   ];
 }

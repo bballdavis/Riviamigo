@@ -55,3 +55,6 @@ export type { SwitchProps } from './Switch';
 
 export { ResponsiveDialog } from './ResponsiveDialog';
 export type { ResponsiveDialogProps } from './ResponsiveDialog';
+
+export { ColorPicker } from './ColorPicker';
+export type { ColorPickerProps, ColorPickerSwatch } from './ColorPicker';

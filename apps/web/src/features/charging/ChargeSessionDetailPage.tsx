@@ -149,6 +149,8 @@ function ChargeSessionContentInner() {
                 value={session ? displayedEnergy != null ? formatKwh(displayedEnergy) : isActiveSession ? 'Pending' : '-' : '-'}
                 secondary={liveRange != null ? `Range added: ${formatDistanceKm(liveRange)} · Live` : session?.range_added_km != null ? `Range added: ${formatDistanceKm(session.range_added_km)}` : undefined}
                 icon="lucide:bolt"
+                dataAccent="series-01"
+                valueColor="data"
                 accentBorder
               />
               <SensorChipSummary

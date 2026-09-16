@@ -59,7 +59,7 @@ export function ChartDefinitionRenderer({ definition, datasets, height, loading 
   const domain = Array.from(new Map(datasets.flatMap((dataset) => dataset.domain.values).map((value) => [domainKey(value, definition.x.kind), value])).values());
   if (definition.x.kind !== 'category') domain.sort((left, right) => compareDomainValues(left, right, definition.x.kind));
   const points = domain.map((value) => ({ ts: value }));
-  const series = definition.series.flatMap((definitionSeries) => {
+  const series = definition.series.flatMap((definitionSeries, seriesIndex) => {
     const dataset = datasets.find((candidate) => candidate.sourceBindingId === definitionSeries.y.sourceBindingId);
     const field = dataset?.fields[definitionSeries.y.field];
     if (!dataset || !field) return [];
@@ -76,6 +76,7 @@ export function ChartDefinitionRenderer({ definition, datasets, height, loading 
       stackId: definitionSeries.stackId,
       showInLegend: definitionSeries.visibleInLegend,
       interpolation: definitionSeries.mark === 'step' ? 'step' as const : undefined,
+      dash: seriesIndex < 16 ? undefined : [[8, 4], [3, 3], [10, 3, 2, 3]][Math.floor(seriesIndex / 16 - 1) % 3],
     }];
   }) as unknown as RichSeries[];
   if (!primary || series.length === 0) {

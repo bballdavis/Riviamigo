@@ -127,7 +127,7 @@ describe('StatusBar', () => {
     expect(screen.queryByText('68%')).not.toBeInTheDocument();
     const batteryIcon = container.querySelector('[data-battery-icon="tb-battery-three"]');
     expect(batteryIcon).toBeInTheDocument();
-    expect(batteryIcon).toHaveClass('h-[1.44375rem]', 'w-[1.44375rem]');
+    expect(batteryIcon).toHaveClass('h-4', 'w-4');
   });
 
   it('renders an unhealthy upstream feed separately from a local connection failure', () => {
@@ -144,6 +144,17 @@ describe('StatusBar', () => {
     expect(screen.getByLabelText('Battery status: 12%')).toBeInTheDocument();
     const batteryIcon = container.querySelector('[data-battery-icon="tb-battery-one"]');
     expect(batteryIcon).toBeInTheDocument();
-    expect(batteryIcon).toHaveClass('h-[1.44375rem]', 'w-[1.44375rem]');
+    expect(batteryIcon).toHaveClass('h-4', 'w-4');
+  });
+
+  it.each(['online', 'offline', 'connecting', 'unhealthy', 'error'] as const)('uses the shared menu typography and 20px status icons for %s', (onlineState) => {
+    const { container } = render(<StatusBar onlineState={onlineState} size="menu" socPercent={68} />);
+    const status = container.querySelector('[aria-label^="Vehicle status:"]');
+    expect(status?.querySelector('svg')).toHaveClass('h-5', 'w-5');
+    expect(status?.querySelector('span')).toHaveClass('text-sm');
+    if (onlineState === 'online') {
+      expect(container.querySelector('[aria-label^="Battery status:"] svg')).toHaveClass('h-5', 'w-5');
+      expect(container.querySelector('[aria-label^="Battery status:"] span')).toHaveClass('text-sm', 'tabular-nums');
+    }
   });
 });

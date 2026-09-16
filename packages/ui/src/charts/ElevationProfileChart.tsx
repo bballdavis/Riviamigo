@@ -6,7 +6,6 @@ import {
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, CHART_X_AXIS_DEFAULTS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
-import { colors } from '../tokens/colors';
 import { formatAppTime } from '../lib/dateTime';
 
 export interface ElevationPoint {
@@ -43,8 +42,8 @@ export function ElevationProfileChart({
       <AreaChart data={chartData} margin={CHART_MARGINS.withYAxis}>
         <defs>
           <linearGradient id="elevGradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%"  stopColor={colors.dataViz.teal} stopOpacity={0.3} />
-            <stop offset="95%" stopColor={colors.dataViz.teal} stopOpacity={0.02} />
+            <stop offset="5%"  stopColor={CHART_COLORS.teal} stopOpacity={0.3} />
+            <stop offset="95%" stopColor={CHART_COLORS.teal} stopOpacity={0.02} />
           </linearGradient>
         </defs>
 
@@ -82,11 +81,11 @@ export function ElevationProfileChart({
         <Area
           type="monotone"
           dataKey="elev"
-          stroke={colors.dataViz.teal}
+          stroke={CHART_COLORS.teal}
           strokeWidth={1.5}
           fill="url(#elevGradient)"
           dot={false}
-          activeDot={{ r: 3, strokeWidth: 0, fill: colors.dataViz.teal }}
+          activeDot={{ r: 3, strokeWidth: 0, fill: CHART_COLORS.teal }}
           isAnimationActive={false}
           connectNulls={false}
         />

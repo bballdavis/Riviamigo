@@ -9,7 +9,11 @@ use axum::{
     body::{to_bytes, Body},
     extract::ConnectInfo,
     http::{
-        header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, SET_COOKIE},
+        header::{
+            ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_REQUEST_HEADERS,
+            ACCESS_CONTROL_REQUEST_METHOD, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, COOKIE,
+            ETAG, IF_MATCH, ORIGIN, SET_COOKIE, VARY,
+        },
         HeaderMap, Method, Request, StatusCode,
     },
     Router,
@@ -47,6 +51,13 @@ impl TestApp {
     }
 
     async fn new_with_rate_limit(rate_limit: RateLimitConfig) -> Self {
+        Self::new_with_rate_limit_and_pool_size(rate_limit, 1).await
+    }
+
+    async fn new_with_rate_limit_and_pool_size(
+        rate_limit: RateLimitConfig,
+        max_connections: u32,
+    ) -> Self {
         let base_db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
             "postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo".into()
         });
@@ -67,7 +78,7 @@ impl TestApp {
 
         let db_url = replace_database_name(&base_db_url, &db_name);
         let pool = PgPoolOptions::new()
-            .max_connections(1)
+            .max_connections(max_connections)
             .connect(&db_url)
             .await
             .expect("db connect");
@@ -94,7 +105,7 @@ impl TestApp {
                 jwt_public_key: None,
                 age_encryption_key: None,
                 port: 0,
-                allowed_origins: vec![],
+                allowed_origins: vec!["http://localhost:3000".into()],
                 s3_endpoint: None,
                 s3_access_key: None,
                 s3_secret_key: None,
@@ -237,6 +248,70 @@ impl TestApp {
                 .unwrap_or_else(|_| json!({ "raw": String::from_utf8_lossy(&bytes).to_string() }))
         };
 
+        TestResponse {
+            status,
+            headers,
+            body,
+        }
+    }
+
+    async fn request_with_if_match(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        bearer_token: &str,
+        if_match: &str,
+    ) -> TestResponse {
+        self.request_with_resource_etags(method, path, body, bearer_token, if_match, None)
+            .await
+    }
+
+    async fn request_with_resource_etags(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        bearer_token: &str,
+        if_match: &str,
+        preference_if_match: Option<&str>,
+    ) -> TestResponse {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(AUTHORIZATION, format!("Bearer {bearer_token}"))
+            .header(IF_MATCH, if_match);
+        if let Some(preference_etag) = preference_if_match {
+            req = req.header("x-theme-preferences-if-match", preference_etag);
+        }
+        let mut request = if let Some(json_body) = body {
+            req = req.header(CONTENT_TYPE, "application/json");
+            req.body(Body::from(json_body.to_string()))
+                .expect("request body")
+        } else {
+            req.body(Body::empty()).expect("empty request")
+        };
+        request.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            12345,
+        )));
+        let response = self
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router response");
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let body = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes)
+                .unwrap_or_else(|_| json!({ "raw": String::from_utf8_lossy(&bytes).to_string() }))
+        };
         TestResponse {
             status,
             headers,
@@ -587,6 +662,478 @@ async fn me_returns_401_without_token() {
     assert_eq!(res.status, StatusCode::UNAUTHORIZED);
 }
 
+#[tokio::test]
+async fn v2_themes_are_account_scoped_revision_pinned_and_v1_compatible() {
+    let app = TestApp::new().await;
+    let mut preflight = Request::builder()
+        .method(Method::OPTIONS)
+        .uri("/v2/themes/example/rollback")
+        .header(ORIGIN, "http://localhost:3000")
+        .header(ACCESS_CONTROL_REQUEST_METHOD, "POST")
+        .header(
+            ACCESS_CONTROL_REQUEST_HEADERS,
+            "content-type,if-match,x-theme-preferences-if-match",
+        )
+        .body(Body::empty())
+        .expect("preflight request");
+    preflight
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            12345,
+        )));
+    let preflight_response = app
+        .router
+        .clone()
+        .oneshot(preflight)
+        .await
+        .expect("preflight response");
+    assert!(preflight_response.status().is_success());
+    let allowed_headers = preflight_response
+        .headers()
+        .get(ACCESS_CONTROL_ALLOW_HEADERS)
+        .and_then(|value| value.to_str().ok())
+        .expect("allowed CORS headers");
+    assert!(allowed_headers.split(',').any(|value| value
+        .trim()
+        .eq_ignore_ascii_case("x-theme-preferences-if-match")));
+    let owner_token = register_and_login(&app, "theme-owner@example.com").await;
+    let other_token =
+        insert_user_and_login(&app, "theme-other@example.com", "correctpassword123").await;
+
+    let defaults = app
+        .request(
+            Method::GET,
+            "/v2/auth/preferences/theme",
+            None,
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(defaults.status, StatusCode::OK);
+    assert_eq!(defaults.body["mode"], "dark");
+    assert_eq!(defaults.body["selection"]["themeId"], "classic");
+    assert!(defaults.headers.get(ETAG).is_some());
+    assert_eq!(
+        defaults
+            .headers
+            .get(CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok()),
+        Some("private, no-store")
+    );
+    let vary = defaults
+        .headers
+        .get(VARY)
+        .and_then(|v| v.to_str().ok())
+        .expect("identity Vary");
+    assert!(vary
+        .split(',')
+        .any(|v| v.trim().eq_ignore_ascii_case("authorization")));
+    assert!(vary
+        .split(',')
+        .any(|v| v.trim().eq_ignore_ascii_case("cookie")));
+    let default_preference_etag = defaults
+        .headers
+        .get(ETAG)
+        .and_then(|value| value.to_str().ok())
+        .expect("default preference ETag")
+        .to_owned();
+
+    let created = app
+        .request(
+            Method::POST,
+            "/v2/themes",
+            Some(json!({ "name": "My telemetry theme", "baseThemeId": "classic" })),
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::OK, "{}", created.body);
+    let theme_id = created.body["themeId"].as_str().expect("theme id");
+    let create_etag = created
+        .headers
+        .get(ETAG)
+        .and_then(|value| value.to_str().ok())
+        .expect("create ETag");
+
+    let saved = app
+        .request_with_if_match(
+            Method::POST,
+            &format!("/v2/themes/{theme_id}/revisions"),
+            Some(json!({
+                "definition": {
+                    "theme": "classic",
+                    "tokens": { "accent": { "light": "#123456", "dark": "#abcdef" } },
+                    "series": { "series-16": { "light": "#224466", "dark": "#6688aa" } }
+                }
+            })),
+            &owner_token,
+            create_etag,
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+    assert_eq!(saved.body["revision"], 1);
+    let saved_etag = saved
+        .headers
+        .get(ETAG)
+        .and_then(|value| value.to_str().ok())
+        .expect("revision ETag");
+
+    let stale_write = app
+        .request_with_if_match(
+            Method::POST,
+            &format!("/v2/themes/{theme_id}/revisions"),
+            Some(json!({ "definition": { "theme": "classic" } })),
+            &owner_token,
+            create_etag,
+        )
+        .await;
+    assert_eq!(stale_write.status, StatusCode::CONFLICT);
+
+    let published = app
+        .request_with_resource_etags(
+            Method::POST,
+            &format!("/v2/themes/{theme_id}/revisions/1/publish"),
+            Some(json!({ "apply": true })),
+            &owner_token,
+            saved_etag,
+            Some(&default_preference_etag),
+        )
+        .await;
+    assert_eq!(published.status, StatusCode::OK, "{}", published.body);
+    assert_eq!(published.body["applied"], true);
+
+    let selected = app
+        .request(
+            Method::GET,
+            "/v2/auth/preferences/theme",
+            None,
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(selected.body["selection"]["kind"], "custom");
+    assert_eq!(selected.body["selection"]["revision"], 1);
+    assert_eq!(
+        selected.body["selection"]["definition"]["tokens"]["accent"]["dark"],
+        "#abcdef"
+    );
+
+    let published_etag = published
+        .headers
+        .get(ETAG)
+        .and_then(|value| value.to_str().ok())
+        .expect("published theme ETag");
+    let saved_second = app
+        .request_with_if_match(
+            Method::POST,
+            &format!("/v2/themes/{theme_id}/revisions"),
+            Some(json!({
+                "definition": {
+                    "theme": "classic",
+                    "tokens": { "accent": { "light": "#654321", "dark": "#fedcba" } }
+                }
+            })),
+            &owner_token,
+            published_etag,
+        )
+        .await;
+    assert_eq!(saved_second.status, StatusCode::OK, "{}", saved_second.body);
+    let saved_second_etag = saved_second
+        .headers
+        .get(ETAG)
+        .and_then(|value| value.to_str().ok())
+        .expect("second revision ETag");
+    let published_second = app
+        .request_with_if_match(
+            Method::POST,
+            &format!("/v2/themes/{theme_id}/revisions/2/publish"),
+            Some(json!({ "apply": false })),
+            &owner_token,
+            saved_second_etag,
+        )
+        .await;
+    assert_eq!(
+        published_second.status,
+        StatusCode::OK,
+        "{}",
+        published_second.body
+    );
+    let still_pinned = app
+        .request(
+            Method::GET,
+            "/v2/auth/preferences/theme",
+            None,
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(still_pinned.body["selection"]["revision"], 1);
+
+    let published_second_etag = published_second
+        .headers
+        .get(ETAG)
+        .and_then(|value| value.to_str().ok())
+        .expect("second publication ETag");
+    let current_preference_etag = still_pinned
+        .headers
+        .get(ETAG)
+        .and_then(|value| value.to_str().ok())
+        .expect("current preference ETag");
+    let stale_rollback = app
+        .request_with_resource_etags(
+            Method::POST,
+            &format!("/v2/themes/{theme_id}/rollback"),
+            Some(json!({ "revision": 2 })),
+            &owner_token,
+            published_second_etag,
+            Some(&default_preference_etag),
+        )
+        .await;
+    assert_eq!(stale_rollback.status, StatusCode::CONFLICT);
+    let rolled_back = app
+        .request_with_resource_etags(
+            Method::POST,
+            &format!("/v2/themes/{theme_id}/rollback"),
+            Some(json!({ "revision": 2 })),
+            &owner_token,
+            published_second_etag,
+            Some(current_preference_etag),
+        )
+        .await;
+    assert_eq!(rolled_back.status, StatusCode::OK, "{}", rolled_back.body);
+    assert_eq!(rolled_back.body["mode"], "dark");
+    assert_eq!(rolled_back.body["selection"]["revision"], 2);
+    assert_eq!(
+        rolled_back.body["selection"]["definition"]["tokens"]["accent"]["dark"],
+        "#fedcba"
+    );
+
+    let catalog = app
+        .request(
+            Method::GET,
+            "/v2/themes/catalog",
+            None,
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(catalog.status, StatusCode::OK);
+    assert_eq!(
+        catalog.body["customThemes"][0]["publishedDefinition"]["tokens"]["accent"]["dark"],
+        "#fedcba"
+    );
+
+    let legacy_mode_only = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences",
+            Some(json!({ "theme": { "mode": "system", "palette": "classic" } })),
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(legacy_mode_only.status, StatusCode::OK);
+    let preserved = app
+        .request(
+            Method::GET,
+            "/v2/auth/preferences/theme",
+            None,
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(preserved.body["mode"], "system");
+    assert_eq!(preserved.body["selection"]["kind"], "custom");
+
+    let forbidden = app
+        .request(
+            Method::GET,
+            &format!("/v2/themes/{theme_id}"),
+            None,
+            Some(&other_token),
+            None,
+        )
+        .await;
+    assert_eq!(forbidden.status, StatusCode::NOT_FOUND);
+
+    let switched = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences",
+            Some(json!({ "theme": { "mode": "dark", "palette": "rad" } })),
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(switched.status, StatusCode::OK);
+    let builtin = app
+        .request(
+            Method::GET,
+            "/v2/auth/preferences/theme",
+            None,
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(builtin.body["selection"]["kind"], "builtin");
+    assert_eq!(builtin.body["selection"]["themeId"], "rad");
+}
+
+#[tokio::test]
+async fn concurrent_theme_creation_enforces_the_per_account_limit() {
+    let app = TestApp::new_with_rate_limit_and_pool_size(RateLimitConfig::default(), 4).await;
+    let owner_token = register_and_login(&app, "theme-limit-owner@example.com").await;
+    let owner_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM riviamigo.users WHERE email = 'theme-limit-owner@example.com'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("owner id");
+
+    for index in 0..19 {
+        sqlx::query(
+            "INSERT INTO riviamigo.user_themes (owner_id, name, base_theme_id)
+             VALUES ($1, $2, 'classic')",
+        )
+        .bind(owner_id)
+        .bind(format!("Seed theme {index}"))
+        .execute(&app.pool)
+        .await
+        .expect("seed theme");
+    }
+
+    let (first, second) = tokio::join!(
+        app.request(
+            Method::POST,
+            "/v2/themes",
+            Some(json!({ "name": "Concurrent theme A", "baseThemeId": "classic" })),
+            Some(&owner_token),
+            None,
+        ),
+        app.request(
+            Method::POST,
+            "/v2/themes",
+            Some(json!({ "name": "Concurrent theme B", "baseThemeId": "classic" })),
+            Some(&owner_token),
+            None,
+        ),
+    );
+
+    let statuses = [first.status, second.status];
+    assert!(statuses.contains(&StatusCode::OK), "statuses: {statuses:?}");
+    assert!(
+        statuses.contains(&StatusCode::UNPROCESSABLE_ENTITY),
+        "statuses: {statuses:?}"
+    );
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM riviamigo.user_themes WHERE owner_id = $1 AND retired_at IS NULL",
+    )
+    .bind(owner_id)
+    .fetch_one(&app.pool)
+    .await
+    .expect("theme count");
+    assert_eq!(count, 20);
+}
+
+#[tokio::test]
+async fn deleting_theme_owner_cleans_history_but_direct_revision_mutation_is_rejected() {
+    let app = TestApp::new().await;
+    let admin_token = register_and_login(&app, "theme-delete-admin@example.com").await;
+    let owner_token =
+        insert_user_and_login(&app, "theme-delete-owner@example.com", "correctpassword123").await;
+    let owner_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM riviamigo.users WHERE email = 'theme-delete-owner@example.com'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("owner id");
+    let created = app
+        .request(
+            Method::POST,
+            "/v2/themes",
+            Some(json!({"name":"Delete me","baseThemeId":"classic"})),
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::OK, "{}", created.body);
+    let theme_id: Uuid = created.body["themeId"]
+        .as_str()
+        .expect("theme id")
+        .parse()
+        .expect("uuid");
+    let create_etag = created
+        .headers
+        .get(ETAG)
+        .and_then(|v| v.to_str().ok())
+        .expect("create ETag");
+    let saved = app.request_with_if_match(Method::POST, &format!("/v2/themes/{theme_id}/revisions"), Some(json!({"definition":{"theme":"classic","tokens":{"accent":{"light":"#123456","dark":"#abcdef"}}}})), &owner_token, create_etag).await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+    let direct_update = sqlx::query(
+        "UPDATE riviamigo.user_theme_revisions SET definition = definition WHERE theme_id = $1",
+    )
+    .bind(theme_id)
+    .execute(&app.pool)
+    .await;
+    assert!(direct_update
+        .expect_err("revision update must be rejected")
+        .to_string()
+        .contains("append-only"));
+    let direct_delete = sqlx::query(
+        "DELETE FROM riviamigo.user_theme_revisions WHERE theme_id = $1 AND revision = 1",
+    )
+    .bind(theme_id)
+    .execute(&app.pool)
+    .await;
+    assert!(direct_delete
+        .expect_err("revision delete must be rejected")
+        .to_string()
+        .contains("append-only"));
+    let revision_etag = saved
+        .headers
+        .get(ETAG)
+        .and_then(|v| v.to_str().ok())
+        .expect("revision ETag");
+    let preferences = app
+        .request(
+            Method::GET,
+            "/v2/auth/preferences/theme",
+            None,
+            Some(&owner_token),
+            None,
+        )
+        .await;
+    let preference_etag = preferences
+        .headers
+        .get(ETAG)
+        .and_then(|v| v.to_str().ok())
+        .expect("preference ETag");
+    let published = app
+        .request_with_resource_etags(
+            Method::POST,
+            &format!("/v2/themes/{theme_id}/revisions/1/publish"),
+            Some(json!({"apply":true})),
+            &owner_token,
+            revision_etag,
+            Some(preference_etag),
+        )
+        .await;
+    assert_eq!(published.status, StatusCode::OK, "{}", published.body);
+    let deleted = app
+        .request(
+            Method::DELETE,
+            &format!("/v1/admin/users/{owner_id}"),
+            None,
+            Some(&admin_token),
+            None,
+        )
+        .await;
+    assert_eq!(deleted.status, StatusCode::OK, "{}", deleted.body);
+    let remaining: (i64, i64, i64, i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM riviamigo.users WHERE id = $1), (SELECT count(*) FROM riviamigo.user_preferences WHERE user_id = $1), (SELECT count(*) FROM riviamigo.user_themes WHERE id = $2), (SELECT count(*) FROM riviamigo.user_theme_revisions WHERE theme_id = $2), (SELECT count(*) FROM riviamigo.user_theme_publications WHERE theme_id = $2)").bind(owner_id).bind(theme_id).fetch_one(&app.pool).await.expect("cleanup counts");
+    assert_eq!(remaining, (0, 0, 0, 0, 0));
+}
+
 // ── Logout + Refresh ──────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -674,6 +1221,65 @@ async fn vehicles_returns_empty_list_for_new_user() {
 
     assert_eq!(res.status, StatusCode::OK);
     assert_eq!(res.body["vehicles"], json!([]));
+}
+
+#[tokio::test]
+async fn external_connections_loads_without_rivian_credentials() {
+    let app = TestApp::new().await;
+    riviamigo_api::services::external_connections::ensure_defaults(&app.pool)
+        .await
+        .expect("seed external connection defaults");
+    let token = register_and_login(&app, "external-connections-empty@example.com").await;
+
+    let credential_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM riviamigo.vehicle_credentials")
+            .fetch_one(&app.pool)
+            .await
+            .expect("credential count");
+    assert_eq!(credential_count, 0, "test requires a fresh Rivian account");
+
+    let response = app
+        .request(
+            Method::GET,
+            "/v1/settings/external-connections",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        response.status,
+        StatusCode::OK,
+        "response: {}",
+        response.body
+    );
+    let connections = response.body["connections"]
+        .as_array()
+        .expect("connections array");
+    let ids: Vec<&str> = connections
+        .iter()
+        .map(|connection| connection["id"].as_str().expect("connection id"))
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            "rivian_account",
+            "open_meteo",
+            "nominatim",
+            "basemap",
+            "iconify",
+            "s3_backup",
+        ]
+    );
+
+    let rivian = connections
+        .iter()
+        .find(|connection| connection["id"] == "rivian_account")
+        .expect("Rivian account connection");
+    assert!(rivian["credential_issued_at"].is_null());
+    assert!(rivian["expected_renewal_at"].is_null());
+    assert!(rivian["renewal_state"].is_null());
 }
 
 #[tokio::test]

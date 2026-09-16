@@ -5,7 +5,7 @@ import { rootRoute } from './__root';
 
 export const healthRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/health',
+  path: '/vehicle-health',
   component: VehicleHealthPage,
 });
 

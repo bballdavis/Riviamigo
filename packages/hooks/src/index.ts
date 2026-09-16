@@ -1,4 +1,4 @@
-export { api, setApiBaseUrl, resolveApiBaseUrl } from './api';
+export { api, themeClient, setApiBaseUrl, resolveApiBaseUrl } from './api';
 export { authClient, vehicleClient, tripClient, chargingClient, telemetryClient, analyticsClient, systemClient } from './api';
 export { queryKeys } from './queryKeys';
 export type { ChargingSchedule, ChargingScheduleInput, DepartureSchedule, DepartureScheduleInput, DepartureOccurrence, DepartureComfortSettings, LiveSession, BackfillStatus } from './api';
@@ -59,6 +59,7 @@ export { useVehicleHealth } from './useHealth';
 export { useTelemetryLanes } from './useTelemetryLanes';
 export { BASEMAP_CONFIG_QUERY_KEY, useBasemapConfig } from './useBasemapConfig';
 export type { BasemapConfigPayload } from './useBasemapConfig';
+export { useUserPreferences, useUpdateMapStyle } from './useUserPreferences';
 export { useDocumentTheme } from './useDocumentTheme';
 export { AuthenticatedVehicleArtwork, useVehicleArtwork } from './useVehicleArtwork';
 export { getVehicleArtworkFallback, normalizeVehicleArtworkModel, resolveVehicleArtwork } from './vehicleArtworkFallback';

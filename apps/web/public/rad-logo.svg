@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">Riviamigo RAD logo</title>
+  <path fill="#10363B" d="M24 0h208l24 24v208l-24 24H24L0 232V24Z"/>
+  <path fill="#FFB000" d="M24 16h69v224H24l-8-8V24Z"/>
+  <path fill="#E34427" d="M93 16h70v224H93Z"/>
+  <path fill="#087F83" d="M163 16h69l8 8v208l-8 8h-69Z"/>
+  <path fill="#FFFFFF" fill-rule="evenodd" d="M52 56h96c38 0 56 18 56 48 0 23-13 40-34 46l42 50h-44l-43-50H88v50H52Zm36 32v34h58c15 0 22-6 22-17 0-12-7-17-22-17Z"/>
+</svg>

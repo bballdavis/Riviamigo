@@ -164,7 +164,7 @@ export function TripDriveChart({
           stroke={CHART_COLORS.accent}
           strokeWidth={2}
           dot={powerDot}
-          activeDot={{ r: 4.2, fill: CHART_COLORS.accent, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
+          activeDot={{ r: 4.2, fill: CHART_COLORS.accent, stroke: 'var(--rm-bg-surface)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
           yAxisId="power"
@@ -176,7 +176,7 @@ export function TripDriveChart({
           stroke={CHART_COLORS.sky}
           strokeWidth={1.6}
           dot={regenDot}
-          activeDot={{ r: 4.2, fill: CHART_COLORS.sky, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
+          activeDot={{ r: 4.2, fill: CHART_COLORS.sky, stroke: 'var(--rm-bg-surface)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
           yAxisId="power"
@@ -189,7 +189,7 @@ export function TripDriveChart({
           strokeWidth={1.4}
           strokeDasharray="4 4"
           dot={speedDot}
-          activeDot={{ r: 4, fill: CHART_COLORS.warning, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
+          activeDot={{ r: 4, fill: CHART_COLORS.warning, stroke: 'var(--rm-bg-surface)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
           yAxisId="speed"

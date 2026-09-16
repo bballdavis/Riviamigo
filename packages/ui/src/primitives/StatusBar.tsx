@@ -19,6 +19,7 @@ export interface StatusBarProps {
   isCharging?: boolean | undefined;
   rangeEstimateMi?: number | undefined;
   compact?: boolean | undefined;
+  size?: 'default' | 'menu' | undefined;
   className?: string | undefined;
 }
 
@@ -37,6 +38,7 @@ export function StatusBar({
   isCharging,
   rangeEstimateMi,
   compact = false,
+  size = 'default',
   className,
 }: StatusBarProps) {
   const batteryIcon =
@@ -74,20 +76,20 @@ export function StatusBar({
         aria-label={`Vehicle status: ${statusLabel}`}
       >
         {onlineState === 'connecting' ? (
-          <Loader2 className="h-4 w-4 text-accent animate-spin" />
+          <Loader2 className={cn(size === 'menu' ? 'h-5 w-5' : 'h-4 w-4', 'shrink-0 text-accent animate-spin')} />
         ) : onlineState === 'online' ? (
-          <Wifi className="h-4 w-4 text-status-positive" />
+          <Wifi className={cn(size === 'menu' ? 'h-5 w-5' : 'h-4 w-4', 'shrink-0 text-status-positive')} />
         ) : onlineState === 'unhealthy' ? (
-          <TriangleAlert className="h-4 w-4 text-status-danger" />
+          <TriangleAlert className={cn(size === 'menu' ? 'h-5 w-5' : 'h-4 w-4', 'shrink-0 text-status-danger')} />
         ) : onlineState === 'error' ? (
-          <WifiOff className="h-4 w-4 text-status-danger" />
+          <WifiOff className={cn(size === 'menu' ? 'h-5 w-5' : 'h-4 w-4', 'shrink-0 text-status-danger')} />
         ) : (
-          <WifiOff className="h-4 w-4 text-fg-tertiary" />
+          <WifiOff className={cn(size === 'menu' ? 'h-5 w-5' : 'h-4 w-4', 'shrink-0 text-fg-tertiary')} />
         )}
         {!compact && (
           <span
             className={cn(
-              'text-xs font-medium',
+              'text-sm font-medium',
               onlineState === 'online'
                 ? 'text-status-positive'
                 : onlineState === 'connecting'
@@ -105,7 +107,7 @@ export function StatusBar({
       </div>
 
       {!compact && vehicleName && (
-        <span className="text-xs text-fg-tertiary truncate max-w-[120px]">{vehicleName}</span>
+        <span className="text-sm font-medium text-fg-tertiary truncate max-w-[120px]">{vehicleName}</span>
       )}
 
       {showBattery && (
@@ -117,7 +119,8 @@ export function StatusBar({
           {batteryIcon && (
             <batteryIcon.Component
               className={cn(
-                'h-[1.44375rem] w-[1.44375rem]',
+                size === 'menu' ? 'h-5 w-5' : 'h-4 w-4',
+                'shrink-0',
                 isCharging
                   ? 'text-accent'
                   : socPercent > 50
@@ -130,10 +133,10 @@ export function StatusBar({
             />
           )}
           {!compact && (
-            <span className="text-xs font-mono font-medium text-fg">{Math.round(socPercent)}%</span>
+            <span className="text-sm font-medium tabular-nums text-fg">{Math.round(socPercent)}%</span>
           )}
           {!compact && rangeEstimateMi !== undefined && (
-            <span className="text-xs text-fg-tertiary">- {formatMiles(rangeEstimateMi)}</span>
+            <span className="text-sm font-medium tabular-nums text-fg-tertiary">- {formatMiles(rangeEstimateMi)}</span>
           )}
         </div>
       )}
