@@ -115,6 +115,17 @@ const packageJson = JSON.parse(read('package.json'));
 if (packageJson.scripts?.['release-workflows:check'] !== 'node ./scripts/check-release-workflows.mjs') {
   fail('package.json must expose release-workflows:check');
 }
+const dockerfile = read('compose/Dockerfile');
+requireText(
+  dockerfile,
+  /COPY packages\/themes\/package\.json packages\/themes\//,
+  'production Dockerfile must include the themes workspace manifest before install',
+);
+requireText(
+  dockerfile,
+  /COPY packages\/themes\/ packages\/themes\//,
+  'production Dockerfile must include the themes workspace source before the web build',
+);
 const compose = read('compose/docker-compose.yml');
 requireText(compose, /image: \$\{RIVIAMIGO_IMAGE:-/, 'production Compose must accept an exact image reference');
 const freshInstall = read('scripts/verify-fresh-install.mjs');

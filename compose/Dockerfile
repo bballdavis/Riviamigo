@@ -79,6 +79,7 @@ COPY apps/web/package.json apps/web/
 COPY packages/config/package.json packages/config/
 COPY packages/dashboards/package.json packages/dashboards/
 COPY packages/hooks/package.json packages/hooks/
+COPY packages/themes/package.json packages/themes/
 COPY packages/types/package.json packages/types/
 COPY packages/ui/package.json packages/ui/
 COPY patches/image-size@2.0.2.patch patches/
@@ -88,6 +89,7 @@ COPY apps/web/ apps/web/
 COPY packages/config/ packages/config/
 COPY packages/dashboards/ packages/dashboards/
 COPY packages/hooks/ packages/hooks/
+COPY packages/themes/ packages/themes/
 COPY packages/types/ packages/types/
 COPY packages/ui/ packages/ui/
 RUN pnpm --filter @riviamigo/web build
