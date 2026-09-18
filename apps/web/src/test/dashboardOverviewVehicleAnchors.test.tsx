@@ -307,7 +307,7 @@ describe('overview vehicle anchors', () => {
     expect(fill.parentElement).toBe(rail);
     expect(fill).toHaveClass('h-full', 'w-full', 'rounded-lg', 'transition-[clip-path]');
     expect(fill).not.toHaveClass('transition-all');
-    expect(fill.style.background).toBe('linear-gradient(to top, var(--rm-status-danger) 0%, var(--rm-chart-rose) 10%, var(--rm-chart-orange) 20%, var(--rm-chart-amber) 32%, var(--rm-chart-amber) 50%, var(--rm-chart-emerald) 51%, var(--rm-status-positive) 75%, var(--rm-status-positive) 100%)');
+    expect(fill.style.background).toBe('linear-gradient(to top, var(--rm-status-danger) 0%, var(--rm-chart-rose) 10%, var(--rm-chart-orange) 20%, var(--rm-chart-amber) 32%, var(--rm-chart-amber) 42%, var(--rm-chart-emerald) 62%, var(--rm-status-positive) 78%, var(--rm-status-positive) 100%)');
     expect(fill.style.clipPath).toBe(`inset(${100 - batteryLevel}% 0 0 round 0.5rem)`);
     expect(fill.style.height).toBe('');
     expect(fill.style.backgroundSize).toBe('');
