@@ -165,7 +165,7 @@ export function CurrentVehicleStatePanel({
                 data-testid="overview-soc-fill"
                 className="h-full w-full rounded-lg transition-[clip-path]"
                 style={{
-                  background: 'linear-gradient(to top, var(--rm-status-danger) 0%, var(--rm-chart-rose) 10%, var(--rm-chart-orange) 20%, var(--rm-chart-amber) 32%, var(--rm-chart-amber) 50%, var(--rm-chart-emerald) 51%, var(--rm-status-positive) 75%, var(--rm-status-positive) 100%)',
+                  background: 'linear-gradient(to top, var(--rm-status-danger) 0%, var(--rm-chart-rose) 10%, var(--rm-chart-orange) 20%, var(--rm-chart-amber) 32%, var(--rm-chart-amber) 42%, var(--rm-chart-emerald) 62%, var(--rm-status-positive) 78%, var(--rm-status-positive) 100%)',
                   clipPath: `inset(${100 - batteryLevel}% 0 0 round 0.5rem)`,
                 }}
               />
