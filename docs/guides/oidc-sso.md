@@ -57,14 +57,19 @@ Use this order for a first configuration:
 1. Keep `OIDC enabled` off and `Password login enabled` on.
 2. Save the issuer, public base URL, client ID, secret, scopes, and token
    authentication method.
-3. Select **Test configuration**. A successful result proves the stored
-   configuration is structurally valid; it does not prove that every provider,
-   gateway, browser, or user claim is correct.
-4. Sign in with the current local super-user and use the SSO button once.
-5. Confirm that the expected user reaches Riviamigo and that the local account
-   remains usable.
+3. Select **Test configuration**. A successful result proves that provider
+   discovery and JWKS retrieval work for the saved configuration; it does not
+   prove that every gateway, browser, or user claim is correct.
+4. While still signed in as the local super-user, open **Settings > Account**
+   and select **Connect SSO**. This explicit link is available before SSO is
+   exposed on the login page.
+5. Confirm that the expected provider identity is linked and that the local
+   password remains usable.
 6. Enable OIDC. The SSO button is hidden while OIDC is disabled.
-7. Only after a successful SSO test, consider disabling password login.
+7. Sign out and complete one login through the SSO button.
+8. Only after that end-to-end login succeeds, consider disabling password
+   login. The GUI refuses this change until the provider was tested and an
+   enabled super-user has linked an OIDC identity.
 
 The default SSO button label is `Sign in with SSO`; change it with the setting
 or `RIVIAMIGO_OIDC_BUTTON_LABEL`.
@@ -81,15 +86,16 @@ Automatic behavior is intentionally conservative:
 - Auto-signup defaults off.
 - Verified-email auto-linking defaults off.
 - When enabled, auto-linking requires the provider's verified-email claim and
-  the configured domain/claim rules.
+  the configured domain rules.
 - Auto-signup creates a normal basic user. It does not grant administrator,
   vehicle, or manager access from provider claims.
 - Invitations and Riviamigo membership rules remain the authority for access.
 
 Enable these controls only after deciding how your provider verifies email and
 how a user should be admitted to the installation. The optional domain list is
-a comma-separated, case-insensitive list. A required claim is an exact claim
-name/value rule.
+a comma-separated, case-insensitive admission rule for auto-link and
+auto-signup. A required claim is an exact claim name/value rule enforced on
+every OIDC login, including identities that are already linked.
 
 ## Environment-managed fields
 
@@ -110,9 +116,10 @@ recovery. Database settings remain the normal GUI path.
 ## Disabling local password login
 
 Password login can be hidden and rejected with **Password login enabled** set
-to false. Do this only after SSO has been tested with a second administrator or
-after recording the recovery procedure below. The first-owner setup path still
-requires its local setup proof.
+to false. The GUI permits this only after the saved provider configuration has
+passed its test and an enabled super-user has linked OIDC. Still record and
+rehearse the recovery procedure below before changing the policy. The
+first-owner setup path still requires its local setup proof.
 
 For a reversible deployment-level policy, set:
 

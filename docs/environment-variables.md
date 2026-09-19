@@ -84,7 +84,7 @@ and password login on.
 |---|---|---|
 | `RIVIAMIGO_OIDC_ENABLED` | Database/default `false` | Show and enable the OIDC SSO login flow. |
 | `RIVIAMIGO_PASSWORD_LOGIN_ENABLED` | Database/default `true` | Keep the local password form and password endpoint available. Set `false` only after testing SSO and recording break-glass recovery. |
-| `RIVIAMIGO_OIDC_ISSUER_URL` | Database/unset | OIDC issuer URL used for discovery and token validation. Must be an absolute HTTP or HTTPS URL. |
+| `RIVIAMIGO_OIDC_ISSUER_URL` | Database/unset | OIDC issuer URL used for discovery and token validation. The runtime requires an absolute HTTPS URL. |
 | `RIVIAMIGO_OIDC_PUBLIC_BASE_URL` | Database/unset | Public HTTPS base URL used to derive the exact `/v1/auth/oidc/callback` redirect URI. |
 | `RIVIAMIGO_OIDC_CLIENT_ID` | Database/unset | Confidential OIDC client identifier. |
 | `RIVIAMIGO_OIDC_CLIENT_SECRET` | Database/unset | Client secret override. Mutually exclusive with `_FILE`; never returned by the API. |
