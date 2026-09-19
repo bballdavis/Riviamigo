@@ -35,6 +35,12 @@ export default defineConfig({
     },
   },
   plugins: [react()],
+  // MapLibre v6 resolves its worker relative to the package module. Vite's
+  // dependency optimizer moves the entry without the sibling worker, so keep
+  // this package on the normal module path in development.
+  optimizeDeps: {
+    exclude: ['maplibre-gl'],
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
