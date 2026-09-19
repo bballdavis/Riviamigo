@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoute, useNavigate, useSearch } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
@@ -26,7 +26,13 @@ export const loginRoute = createRoute({
 export function LoginPage() {
   const navigate = useNavigate();
   const search = useSearch({ from: '/login' });
-  const { login, register } = useAuth();
+  const {
+    login,
+    register,
+    isAuthenticated,
+    isBootstrapping,
+    resumeSession,
+  } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [setupToken, setSetupToken] = useState('');
@@ -35,10 +41,61 @@ export function LoginPage() {
   const isDark = useDocumentTheme();
   const palette = useDocumentPalette();
   const redirectTarget = normalizeLoginRedirectTarget(search.redirect);
+  const shouldResumeSession = search.password_changed !== '1';
+  const resumeAttempted = useRef(false);
+  const resumePromise = useRef<Promise<boolean> | null>(null);
+  const redirectStarted = useRef(false);
+  const [restoringSession, setRestoringSession] = useState(false);
   const setup = useQuery({ queryKey: ['auth-setup'], queryFn: () => api.setup(), retry: false });
   const setupRequired = setup.data?.setup_required === true;
   const setupProofRequired = setup.data?.setup_proof_required === true;
   const setupProofAvailable = setup.data?.setup_proof_available === true;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const redirectToApp = () => {
+      if (cancelled || redirectStarted.current) return;
+      redirectStarted.current = true;
+      navigate({ to: (redirectTarget ?? '/') as never, replace: true });
+    };
+
+    if (!shouldResumeSession) return () => { cancelled = true; };
+
+    if (isAuthenticated) {
+      redirectToApp();
+      return;
+    }
+
+    // Keep this attempt local to the mounted login page. In particular, the
+    // ref prevents React StrictMode's development-only effect replay from
+    // issuing a second bootstrap request.
+    if (!resumeAttempted.current && !isBootstrapping) return () => { cancelled = true; };
+    if (!resumeAttempted.current) {
+      resumeAttempted.current = true;
+      resumePromise.current = resumeSession();
+    }
+    const pendingResume = resumePromise.current;
+    if (!pendingResume) return () => { cancelled = true; };
+    setRestoringSession(true);
+    void pendingResume
+      .then((resumed) => {
+        if (!cancelled && resumed) redirectToApp();
+      })
+      .finally(() => {
+        if (!cancelled) setRestoringSession(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [isAuthenticated, isBootstrapping, navigate, redirectTarget, resumeSession, shouldResumeSession]);
+
+  if (restoringSession) {
+    return (
+      <div className="min-h-screen bg-bg-page flex items-center justify-center px-4">
+        <p role="status" className="text-sm text-fg-secondary">Restoring your session…</p>
+      </div>
+    );
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

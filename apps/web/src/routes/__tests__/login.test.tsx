@@ -1,15 +1,17 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
 vi.mock('@riviamigo/ui/primitives', async () => import('../../test/mockPrimitives'));
 
 const mockNavigate = vi.fn();
-let mockSearch = {} as { redirect?: string };
+let mockSearch = {} as { redirect?: string; password_changed?: '1' };
 let setupRequired = false;
 let setupProofRequired = false;
 let setupProofAvailable = false;
+let isAuthenticated = false;
+let isBootstrapping = false;
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@tanstack/react-router')>()),
   useNavigate: () => mockNavigate,
@@ -22,8 +24,15 @@ vi.mock('@tanstack/react-query', async (importOriginal) => ({
 
 const mockLogin = vi.fn();
 const mockRegister = vi.fn();
+const mockResumeSession = vi.fn();
 vi.mock('@riviamigo/hooks', () => ({
-  useAuth: () => ({ login: mockLogin, register: mockRegister }),
+  useAuth: () => ({
+    login: mockLogin,
+    register: mockRegister,
+    isAuthenticated,
+    isBootstrapping,
+    resumeSession: mockResumeSession,
+  }),
   useDocumentTheme: () => false,
   api: { setup: vi.fn() },
 }));
@@ -31,8 +40,9 @@ vi.mock('@riviamigo/hooks', () => ({
 import { LoginPage } from '../login';
 
 beforeEach(() => {
-  mockNavigate.mockClear(); mockLogin.mockClear(); mockRegister.mockClear();
+  mockNavigate.mockClear(); mockLogin.mockClear(); mockRegister.mockClear(); mockResumeSession.mockReset();
   mockSearch = {}; setupRequired = false; setupProofRequired = false; setupProofAvailable = false;
+  isAuthenticated = false; isBootstrapping = false;
 });
 
 describe('LoginPage', () => {
@@ -60,6 +70,74 @@ describe('LoginPage', () => {
     await user.type(document.querySelector('input[type="password"]')!, 'password');
     await user.click(screen.getByRole('button', { name: 'Sign in' }));
     await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({ to: '/charging?view=table' }));
+  });
+
+  it('resumes a valid session and preserves the requested redirect', async () => {
+    isBootstrapping = true;
+    mockSearch = { redirect: '/dashboard?vehicle=primary' };
+    mockResumeSession.mockResolvedValue(true);
+
+    render(<LoginPage />);
+
+    expect(screen.getByRole('status')).toHaveTextContent(/restoring your session/i);
+    await waitFor(() => expect(mockResumeSession).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/dashboard?vehicle=primary',
+      replace: true,
+    }));
+  });
+
+  it('shows the sign-in form when no session can be resumed', async () => {
+    isBootstrapping = true;
+    mockResumeSession.mockResolvedValue(false);
+
+    render(<LoginPage />);
+
+    await waitFor(() => expect(mockResumeSession).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('does not resume after a password change', () => {
+    isBootstrapping = true;
+    mockSearch = { password_changed: '1' };
+
+    render(<LoginPage />);
+
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+    expect(mockResumeSession).not.toHaveBeenCalled();
+  });
+
+  it('redirects an already-authenticated visitor', async () => {
+    isAuthenticated = true;
+    mockSearch = { redirect: '/settings' };
+
+    render(<LoginPage />);
+
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({ to: '/settings', replace: true }));
+    expect(mockResumeSession).not.toHaveBeenCalled();
+  });
+
+  it('does not navigate after an in-flight resume is unmounted', async () => {
+    isBootstrapping = true;
+    let resolveResume!: (value: boolean) => void;
+    mockResumeSession.mockImplementation(() => new Promise<boolean>((resolve) => { resolveResume = resolve; }));
+
+    const { unmount } = render(<LoginPage />);
+    expect(screen.getByRole('status')).toHaveTextContent(/restoring your session/i);
+    unmount();
+
+    await act(async () => { resolveResume(true); });
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('drops a nested login redirect instead of creating a login loop', async () => {
+    isAuthenticated = true;
+    mockSearch = { redirect: '/login?redirect=%2Fdashboard' };
+
+    render(<LoginPage />);
+
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({ to: '/', replace: true }));
   });
 
   it('keeps a sign-in failure inline and announces it as an error toast', async () => {
