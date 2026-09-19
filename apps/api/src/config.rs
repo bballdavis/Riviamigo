@@ -607,6 +607,9 @@ impl OidcEnvOverrides {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        if self.required_claim_name.is_some() != self.required_claim_value.is_some() {
+            anyhow::bail!("RIVIAMIGO_OIDC_REQUIRED_CLAIM_NAME and RIVIAMIGO_OIDC_REQUIRED_CLAIM_VALUE must be set together");
+        }
         if let Some(method) = &self.token_auth_method {
             if !matches!(
                 method.as_str(),
@@ -868,6 +871,26 @@ mod tests {
 
         assert_eq!(connection.redis_settings().username(), Some("default"));
         assert_eq!(connection.redis_settings().password(), Some(password));
+    }
+
+    #[test]
+    fn oidc_required_claim_environment_values_must_be_paired() {
+        let name_only = OidcEnvOverrides {
+            required_claim_name: Some("groups".into()),
+            ..Default::default()
+        };
+        assert!(name_only.validate().is_err());
+        let value_only = OidcEnvOverrides {
+            required_claim_value: Some("fleet".into()),
+            ..Default::default()
+        };
+        assert!(value_only.validate().is_err());
+        let paired = OidcEnvOverrides {
+            required_claim_name: Some("groups".into()),
+            required_claim_value: Some("fleet".into()),
+            ..Default::default()
+        };
+        assert!(paired.validate().is_ok());
     }
 
     #[test]

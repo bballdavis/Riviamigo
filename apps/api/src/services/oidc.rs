@@ -111,23 +111,32 @@ pub fn validate_return_to(value: Option<&str>) -> Result<String, AppError> {
     let value = value.unwrap_or("/");
     if !value.starts_with('/')
         || value.starts_with("//")
+        || value.contains('\\')
+        || value.to_ascii_lowercase().contains("%5c")
         || value.starts_with("/login?")
         || value == "/login"
     {
-        return if value == "/login" {
-            Ok(value.to_owned())
-        } else {
-            Err(AppError::Validation(
-                "return_to must be a relative application path".into(),
-            ))
-        };
+        return Err(AppError::Validation(
+            "return_to must be a relative application path".into(),
+        ));
     }
     let parsed = Url::parse(&format!("http://riviamigo.invalid{value}"))
         .map_err(|_| AppError::Validation("invalid return_to".into()))?;
     if parsed.host_str() != Some("riviamigo.invalid") {
         return Err(AppError::Validation("return_to must be internal".into()));
     }
-    Ok(value.to_owned())
+    // Canonicalize dot segments while keeping valid in-app query and fragment
+    // state.  This is the only value later used as a Location header.
+    let mut canonical = parsed.path().to_owned();
+    if let Some(query) = parsed.query() {
+        canonical.push('?');
+        canonical.push_str(query);
+    }
+    if let Some(fragment) = parsed.fragment() {
+        canonical.push('#');
+        canonical.push_str(fragment);
+    }
+    Ok(canonical)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -342,8 +351,12 @@ pub fn claim_matches(
     name: Option<&str>,
     expected: Option<&str>,
 ) -> bool {
-    let (Some(name), Some(expected)) = (name, expected) else {
-        return true;
+    let (name, expected) = match (name, expected) {
+        (None, None) => return true,
+        (Some(name), Some(expected)) if !name.trim().is_empty() && !expected.trim().is_empty() => {
+            (name, expected)
+        }
+        _ => return false,
     };
     match identity.claims.get(name) {
         Some(serde_json::Value::String(v)) => v == expected,
@@ -402,6 +415,17 @@ mod tests {
     fn rejects_external_return_targets() {
         assert!(validate_return_to(Some("https://evil.invalid")).is_err());
         assert!(validate_return_to(Some("//evil.invalid")).is_err());
+        assert!(validate_return_to(Some("/\\attacker.example")).is_err());
+        assert!(validate_return_to(Some("/%5Cattacker.example")).is_err());
+        assert!(validate_return_to(Some("/%5cattacker.example")).is_err());
+    }
+
+    #[test]
+    fn preserves_safe_internal_return_query_and_fragment() {
+        assert_eq!(
+            validate_return_to(Some("/page?next=%2Fdashboard#details")).unwrap(),
+            "/page?next=%2Fdashboard#details"
+        );
     }
 
     #[test]

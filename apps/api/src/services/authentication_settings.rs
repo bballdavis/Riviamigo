@@ -114,6 +114,8 @@ pub async fn load_effective(
 ) -> Result<EffectiveAuthenticationSettings, AppError> {
     let stored = load_stored(pool).await?;
     let env = OidcEnvOverrides::from_env().map_err(|e| AppError::Validation(e.to_string()))?;
+    env.validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
     let db_secret = match stored.client_secret_encrypted.as_deref() {
         Some(bytes) => {
             let identity = age_key
@@ -123,7 +125,7 @@ pub async fn load_effective(
         }
         None => None,
     };
-    Ok(EffectiveAuthenticationSettings {
+    let effective = EffectiveAuthenticationSettings {
         oidc_enabled: env.oidc_enabled.unwrap_or(stored.oidc_enabled),
         password_login_enabled: env
             .password_login_enabled
@@ -154,7 +156,12 @@ pub async fn load_effective(
             .required_claim_value
             .clone()
             .or(stored.required_claim_value),
-    })
+    };
+    validate_required_claim_pair(
+        effective.required_claim_name.as_deref(),
+        effective.required_claim_value.as_deref(),
+    )?;
+    Ok(effective)
 }
 
 pub async fn load(
@@ -163,7 +170,14 @@ pub async fn load(
 ) -> Result<AuthenticationSettingsResponse, AppError> {
     let stored = load_stored(pool).await?;
     let env = OidcEnvOverrides::from_env().map_err(|e| AppError::Validation(e.to_string()))?;
-    Ok(effective(stored, &env))
+    env.validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    let response = effective(stored, &env);
+    validate_required_claim_pair(
+        response.required_claim_name.value.as_deref(),
+        response.required_claim_value.value.as_deref(),
+    )?;
+    Ok(response)
 }
 
 pub async fn update(
@@ -174,6 +188,8 @@ pub async fn update(
 ) -> Result<AuthenticationSettingsResponse, AppError> {
     let current = load_stored(pool).await?;
     let env = OidcEnvOverrides::from_env().map_err(|e| AppError::Validation(e.to_string()))?;
+    env.validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
     reject_environment_owned_update(&body, &env)?;
     let resulting_password_login = body
         .password_login_enabled
@@ -189,6 +205,18 @@ pub async fn update(
         || body.client_secret.is_some()
         || body.scopes.is_some()
         || body.token_auth_method.is_some();
+    let required_claim_name = body
+        .required_claim_name
+        .clone()
+        .unwrap_or_else(|| current.required_claim_name.clone());
+    let required_claim_value = body
+        .required_claim_value
+        .clone()
+        .unwrap_or_else(|| current.required_claim_value.clone());
+    validate_required_claim_pair(
+        required_claim_name.as_deref(),
+        required_claim_value.as_deref(),
+    )?;
     if !resulting_password_login {
         if invalidates_validation {
             return Err(AppError::Validation(
@@ -239,7 +267,7 @@ pub async fn update(
         .bind(body.issuer_url.unwrap_or(current.issuer_url)).bind(body.public_base_url.unwrap_or(current.public_base_url)).bind(body.client_id.unwrap_or(current.client_id)).bind(secret)
         .bind(body.button_label.unwrap_or(current.button_label)).bind(body.scopes.unwrap_or(current.scopes)).bind(body.token_auth_method.unwrap_or(current.token_auth_method))
         .bind(body.auto_signup.unwrap_or(current.auto_signup)).bind(body.auto_link_verified_email.unwrap_or(current.auto_link_verified_email)).bind(body.allowed_email_domains.unwrap_or(current.allowed_email_domains))
-        .bind(body.required_claim_name.unwrap_or(current.required_claim_name)).bind(body.required_claim_value.unwrap_or(current.required_claim_value)).bind(actor).bind(invalidates_validation).execute(pool).await?;
+        .bind(required_claim_name).bind(required_claim_value).bind(actor).bind(invalidates_validation).execute(pool).await?;
     load(pool, age_key).await
 }
 
@@ -317,6 +345,10 @@ pub async fn record_validation(
 }
 
 pub fn validate_effective(settings: &AuthenticationSettingsResponse) -> Result<(), AppError> {
+    validate_required_claim_pair(
+        settings.required_claim_name.value.as_deref(),
+        settings.required_claim_value.value.as_deref(),
+    )?;
     if !settings.oidc_enabled.value {
         return Ok(());
     }
@@ -329,6 +361,19 @@ pub fn validate_effective(settings: &AuthenticationSettingsResponse) -> Result<(
         ));
     }
     Ok(())
+}
+
+fn validate_required_claim_pair(name: Option<&str>, value: Option<&str>) -> Result<(), AppError> {
+    match (
+        name.map(str::trim).filter(|value| !value.is_empty()),
+        value.map(str::trim).filter(|value| !value.is_empty()),
+    ) {
+        (None, None) => Ok(()),
+        (Some(_), Some(_)) => Ok(()),
+        _ => Err(AppError::Validation(
+            "OIDC required claim name and value must be configured together".into(),
+        )),
+    }
 }
 
 async fn load_stored(pool: &PgPool) -> Result<StoredSettings, AppError> {
@@ -484,5 +529,14 @@ mod tests {
         s.client_id.value = Some("client".into());
         s.client_secret.configured = true;
         assert!(validate_effective(&s).is_ok());
+    }
+
+    #[test]
+    fn required_claim_settings_must_be_configured_as_a_pair() {
+        assert!(validate_required_claim_pair(Some("groups"), None).is_err());
+        assert!(validate_required_claim_pair(None, Some("fleet")).is_err());
+        assert!(validate_required_claim_pair(Some(" "), Some("fleet")).is_err());
+        assert!(validate_required_claim_pair(Some("groups"), Some("fleet")).is_ok());
+        assert!(validate_required_claim_pair(None, None).is_ok());
     }
 }

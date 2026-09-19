@@ -142,12 +142,27 @@ async fn oidc_start(
     State(state): State<AppState>,
     Json(body): Json<OidcStartBody>,
 ) -> Result<Response, AppError> {
+    // First-owner setup is deliberately local-only. OIDC auto-provisioning
+    // must not create an unreviewed account before an installation owner
+    // exists to configure and recover authentication.
+    let has_super_user: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM riviamigo.users WHERE role='super_user' AND NOT is_disabled)",
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    if !oidc_public_start_available(has_super_user) {
+        return Err(AppError::NotFound);
+    }
     begin_oidc(
         &state,
         oidc::validate_return_to(body.return_to.as_deref())?,
         None,
     )
     .await
+}
+
+fn oidc_public_start_available(has_super_user: bool) -> bool {
+    has_super_user
 }
 async fn begin_oidc(
     state: &AppState,
@@ -459,6 +474,17 @@ async fn resolve_oidc_identity(
             Some(user_id) if settings.auto_link_verified_email => user_id,
             Some(_) => return Err(AppError::Forbidden),
             None if settings.auto_signup => {
+                // Hold a key-share lock through the passwordless insert so a
+                // concurrent disable/delete cannot remove the last owner
+                // between this first-owner boundary and provisioning.
+                let super_user: Option<Uuid> = sqlx::query_scalar(
+                    "SELECT id FROM riviamigo.users WHERE role='super_user' AND NOT is_disabled LIMIT 1 FOR KEY SHARE",
+                )
+                .fetch_optional(&mut *db)
+                .await?;
+                if super_user.is_none() {
+                    return Err(AppError::Forbidden);
+                }
                 let user_id: Uuid = sqlx::query_scalar("INSERT INTO riviamigo.users(email,password_hash,role) VALUES($1,NULL,'user') RETURNING id").bind(email).fetch_one(&mut *db).await?;
                 sqlx::query("INSERT INTO riviamigo.user_preferences(user_id) VALUES($1)")
                     .bind(user_id)
@@ -1482,6 +1508,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_oidc_requires_a_first_owner() {
+        assert!(!oidc_public_start_available(false));
+        assert!(oidc_public_start_available(true));
+    }
     use axum::body::Body;
     use http::{Request, StatusCode};
     use tower::ServiceExt; // for `oneshot`
