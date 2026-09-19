@@ -149,7 +149,7 @@ function basemapSignature(basemap: BasemapConfig, mode: MapStyleMode, preference
 export async function loadMapLibre() {
   const maplibregl = await import('maplibre-gl');
   await import('maplibre-gl/dist/maplibre-gl.css');
-  return maplibregl.default;
+  return maplibregl;
 }
 
 /**

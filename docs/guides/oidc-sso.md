@@ -57,9 +57,12 @@ Use this order for a first configuration:
 1. Keep `OIDC enabled` off and `Password login enabled` on.
 2. Save the issuer, public base URL, client ID, secret, scopes, and token
    authentication method.
-3. Select **Test configuration**. A successful result proves that provider
-   discovery and JWKS retrieval work for the saved configuration; it does not
-   prove that every gateway, browser, or user claim is correct.
+3. Select **Test provider**. A successful result proves that provider
+   discovery and JWKS retrieval work, that the provider's authorization,
+   token, and JWKS endpoints use HTTPS, and that the configured callback URL
+   is an absolute HTTPS URL. It does not validate the client credentials at
+   the token endpoint or prove that every gateway, browser, or user claim is
+   correct.
 4. While still signed in as the local super-user, open **Settings > Account**
    and select **Connect SSO**. This explicit link is available before SSO is
    exposed on the login page.
@@ -112,7 +115,10 @@ either value or paste it into an issue. See the complete [environment variable
 reference](../environment-variables.md).
 
 Environment overrides are useful for deployment automation and emergency
-recovery. Database settings remain the normal GUI path.
+recovery. Database settings remain the normal GUI path. Changing any effective
+provider connection value, including an environment-supplied client secret,
+invalidates the prior provider test; run **Test provider** again before the GUI
+will permit password login to be disabled.
 
 ## Disabling local password login
 
@@ -171,7 +177,7 @@ isolated installation before relying on it for production recovery.
 | SSO button is absent | OIDC is disabled, not ready, or an environment override hides it. Inspect **Settings > Authentication** as a super-user. |
 | Password form is absent | Password login is disabled. Use the break-glass procedure if SSO is unavailable. |
 | Provider rejects the callback | Check the exact issuer, public base URL, and registered callback URI. |
-| Configuration test says a value is missing | OIDC requires an issuer, client ID, and client secret when enabled. |
+| Configuration test says a value is missing | OIDC requires an issuer, public base URL, client ID, and client secret. Save all four values, confirm the displayed callback URL, and test again. |
 | Existing account is not linked | Verified-email auto-linking is off by default; use explicit signed-in linking. |
 | New user is refused | Auto-signup is off or the verified-email, domain, or required-claim rule failed. |
 | Restore shows SSO disabled | Re-enter the excluded provider settings, test, and then enable OIDC. |

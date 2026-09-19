@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
+use url::Url;
 use uuid::Uuid;
 
 use crate::{
@@ -40,7 +42,6 @@ pub struct AuthenticationSettingsResponse {
     pub required_claim_name: EffectiveValue<Option<String>>,
     pub required_claim_value: EffectiveValue<Option<String>>,
     pub last_validation_at: Option<DateTime<Utc>>,
-    pub last_validation_fingerprint: Option<String>,
     pub callback_url: Option<String>,
 }
 
@@ -191,14 +192,27 @@ pub async fn update(
     env.validate()
         .map_err(|e| AppError::Validation(e.to_string()))?;
     reject_environment_owned_update(&body, &env)?;
-    let resulting_password_login = body
-        .password_login_enabled
-        .unwrap_or(current.password_login_enabled);
-    let resulting_oidc_enabled = body.oidc_enabled.unwrap_or(current.oidc_enabled);
-    let resulting_issuer = body
-        .issuer_url
-        .clone()
-        .unwrap_or_else(|| current.issuer_url.clone());
+    let effective_before = load_effective(pool, age_key).await?;
+    let resulting_password_login = env.password_login_enabled.unwrap_or(
+        body.password_login_enabled
+            .unwrap_or(current.password_login_enabled),
+    );
+    let resulting_oidc_enabled = env
+        .oidc_enabled
+        .unwrap_or(body.oidc_enabled.unwrap_or(current.oidc_enabled));
+    let resulting_issuer = env.issuer_url.clone().or_else(|| {
+        body.issuer_url
+            .clone()
+            .unwrap_or_else(|| current.issuer_url.clone())
+    });
+    let resulting_public_base = env.public_base_url.clone().or_else(|| {
+        body.public_base_url
+            .clone()
+            .unwrap_or_else(|| current.public_base_url.clone())
+    });
+    if resulting_public_base.is_some() {
+        oidc_callback_url(resulting_public_base.as_deref())?;
+    }
     let invalidates_validation = body.issuer_url.is_some()
         || body.public_base_url.is_some()
         || body.client_id.is_some()
@@ -228,9 +242,13 @@ pub async fn update(
                 "password login cannot be disabled without a configured OIDC issuer".into(),
             )
         })?;
-        if !resulting_oidc_enabled || current.last_validation_at.is_none() {
+        let current_fingerprint = validation_fingerprint(&effective_before, age_key);
+        if !resulting_oidc_enabled
+            || current.last_validation_at.is_none()
+            || current.last_validation_fingerprint.as_deref() != Some(current_fingerprint.as_str())
+        {
             return Err(AppError::Validation(
-                "password login cannot be disabled until OIDC has been successfully tested".into(),
+                "password login cannot be disabled until the effective OIDC configuration has been successfully tested".into(),
             ));
         }
         let has_linked_super_user: bool = sqlx::query_scalar(
@@ -328,20 +346,34 @@ fn reject_environment_owned_update(
 pub async fn record_validation(
     pool: &PgPool,
     settings: &EffectiveAuthenticationSettings,
+    age_key: &str,
 ) -> Result<(), AppError> {
-    use sha2::{Digest, Sha256};
-    // Fingerprint configuration only. The client secret must never be retained in
-    // diagnostic state or returned by the settings API.
-    let fingerprint = hex::encode(Sha256::digest(
-        format!(
-            "{:?}|{:?}|{:?}|{}",
-            settings.issuer_url, settings.public_base_url, settings.client_id, settings.scopes
-        )
-        .as_bytes(),
-    ));
+    let fingerprint = validation_fingerprint(settings, age_key);
     sqlx::query("UPDATE riviamigo.authentication_settings SET last_validation_at=now(),last_validation_fingerprint=$1 WHERE id=TRUE")
         .bind(fingerprint).execute(pool).await?;
     Ok(())
+}
+
+fn validation_fingerprint(settings: &EffectiveAuthenticationSettings, age_key: &str) -> String {
+    type HmacSha256 = Hmac<sha2::Sha256>;
+    // The installation key makes this marker unusable as an offline guessing
+    // oracle while still invalidating validation after a secret rotation. It
+    // is never returned by the settings API or included in recovery packages.
+    let mut mac = HmacSha256::new_from_slice(age_key.as_bytes())
+        .expect("HMAC accepts installation keys of any length");
+    mac.update(
+        format!(
+            "riviamigo-oidc-validation-v2|{:?}|{:?}|{:?}|{:?}|{}|{}",
+            settings.issuer_url,
+            settings.public_base_url,
+            settings.client_id,
+            settings.client_secret,
+            settings.scopes,
+            settings.token_auth_method,
+        )
+        .as_bytes(),
+    );
+    hex::encode(mac.finalize().into_bytes())
 }
 
 pub fn validate_effective(settings: &AuthenticationSettingsResponse) -> Result<(), AppError> {
@@ -353,14 +385,43 @@ pub fn validate_effective(settings: &AuthenticationSettingsResponse) -> Result<(
         return Ok(());
     }
     if settings.issuer_url.value.is_none()
+        || settings.public_base_url.value.is_none()
         || settings.client_id.value.is_none()
         || !settings.client_secret.configured
     {
         return Err(AppError::Validation(
-            "OIDC is enabled but issuer, client ID, or client secret is missing".into(),
+            "OIDC is enabled but issuer, public base URL, client ID, or client secret is missing"
+                .into(),
         ));
     }
+    oidc_callback_url(settings.public_base_url.value.as_deref())?;
     Ok(())
+}
+
+/// Builds the exact redirect URI accepted by the OIDC runtime. Keeping this
+/// validation at the settings boundary prevents the UI from advertising a
+/// provider configuration that the callback exchange will reject later.
+pub fn oidc_callback_url(public_base_url: Option<&str>) -> Result<String, AppError> {
+    let base = public_base_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::Validation("OIDC public base URL is not configured".into()))?;
+    let callback = format!("{}/v1/auth/oidc/callback", base.trim_end_matches('/'));
+    let parsed = Url::parse(&callback)
+        .map_err(|_| AppError::Validation("OIDC callback URL is invalid".into()))?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(AppError::Validation(
+            "OIDC callback URL must be absolute HTTPS without credentials, query, or fragment"
+                .into(),
+        ));
+    }
+    Ok(callback)
 }
 
 fn validate_required_claim_pair(name: Option<&str>, value: Option<&str>) -> Result<(), AppError> {
@@ -453,7 +514,6 @@ fn effective(s: StoredSettings, e: &OidcEnvOverrides) -> AuthenticationSettingsR
         required_claim_name: optional_field!(s.required_claim_name, e.required_claim_name),
         required_claim_value: optional_field!(s.required_claim_value, e.required_claim_value),
         last_validation_at: s.last_validation_at,
-        last_validation_fingerprint: s.last_validation_fingerprint,
         callback_url,
     }
 }
@@ -521,11 +581,11 @@ mod tests {
                 source: SettingSource::Default,
             },
             last_validation_at: None,
-            last_validation_fingerprint: None,
             callback_url: None,
         };
         assert!(validate_effective(&s).is_err());
         s.issuer_url.value = Some("https://issuer.example".into());
+        s.public_base_url.value = Some("https://riviamigo.example".into());
         s.client_id.value = Some("client".into());
         s.client_secret.configured = true;
         assert!(validate_effective(&s).is_ok());
@@ -538,5 +598,50 @@ mod tests {
         assert!(validate_required_claim_pair(Some(" "), Some("fleet")).is_err());
         assert!(validate_required_claim_pair(Some("groups"), Some("fleet")).is_ok());
         assert!(validate_required_claim_pair(None, None).is_ok());
+    }
+
+    #[test]
+    fn oidc_callback_url_requires_a_safe_https_base() {
+        assert_eq!(
+            oidc_callback_url(Some("https://riviamigo.example/")).unwrap(),
+            "https://riviamigo.example/v1/auth/oidc/callback"
+        );
+        for invalid in [
+            None,
+            Some("http://riviamigo.example"),
+            Some("https://user:password@riviamigo.example"),
+            Some("https://riviamigo.example?tenant=fleet"),
+            Some("https://riviamigo.example#fragment"),
+            Some("not a URL"),
+        ] {
+            assert!(oidc_callback_url(invalid).is_err(), "accepted {invalid:?}");
+        }
+    }
+
+    #[test]
+    fn validation_fingerprint_changes_when_the_effective_secret_changes() {
+        let mut settings = EffectiveAuthenticationSettings {
+            oidc_enabled: true,
+            password_login_enabled: true,
+            issuer_url: Some("https://issuer.example".into()),
+            public_base_url: Some("https://riviamigo.example".into()),
+            client_id: Some("client".into()),
+            client_secret: Some("first-secret".into()),
+            button_label: "Sign in with SSO".into(),
+            scopes: "openid email profile".into(),
+            token_auth_method: "auto".into(),
+            auto_signup: false,
+            auto_link_verified_email: false,
+            allowed_email_domains: vec![],
+            required_claim_name: None,
+            required_claim_value: None,
+        };
+        let first = validation_fingerprint(&settings, "installation-key");
+        settings.client_secret = Some("rotated-secret".into());
+        assert_ne!(first, validation_fingerprint(&settings, "installation-key"));
+        assert_ne!(
+            validation_fingerprint(&settings, "installation-key"),
+            validation_fingerprint(&settings, "different-installation-key")
+        );
     }
 }

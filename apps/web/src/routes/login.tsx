@@ -158,7 +158,7 @@ export function LoginPage() {
     try {
       const result = await api.startOidc(redirectTarget ?? '/');
       window.location.assign(result.authorization_url);
-    } catch (err) {
+    } catch {
       setError(
         'Single sign-on is temporarily unavailable. Use your password or contact an administrator.'
       );

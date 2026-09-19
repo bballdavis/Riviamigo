@@ -1241,7 +1241,6 @@ export interface AuthenticationSettings {
   required_claim_name: EffectiveSetting<string | null>;
   required_claim_value: EffectiveSetting<string | null>;
   last_validation_at: string | null;
-  last_validation_fingerprint: string | null;
   callback_url: string | null;
 }
 export type AuthenticationSettingsUpdate = Partial<{

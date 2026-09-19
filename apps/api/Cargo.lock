@@ -3964,6 +3964,7 @@ dependencies = [
  "futures",
  "governor",
  "hex",
+ "hmac 0.13.0",
  "http 1.4.2",
  "ipnet",
  "jsonwebtoken",

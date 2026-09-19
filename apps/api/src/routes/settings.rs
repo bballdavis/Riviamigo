@@ -61,7 +61,7 @@ async fn test_authentication(
     // provider and recovery path without exposing SSO on the login page.
     provider_settings.oidc_enabled = true;
     crate::services::oidc::test_provider(&provider_settings).await?;
-    authentication_settings::record_validation(&state.pool, &effective).await?;
+    authentication_settings::record_validation(&state.pool, &effective, &state.age_key).await?;
     Ok(Json(
         serde_json::json!({ "valid": true, "discovery": "validated", "message": "OIDC provider discovery and JWKS retrieval succeeded." }),
     ))

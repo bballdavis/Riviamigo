@@ -163,9 +163,9 @@ export function AuthenticationSection() {
   );
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex-col items-start gap-1 sm:flex-row sm:items-center">
         <CardTitle>Authentication</CardTitle>
-        <p className="text-xs text-fg-tertiary">
+        <p className="text-xs text-fg-tertiary sm:text-right">
           Configure OIDC SSO, test recovery, then enable it for sign-in.
         </p>
       </CardHeader>

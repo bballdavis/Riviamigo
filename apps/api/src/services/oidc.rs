@@ -9,17 +9,22 @@ use openidconnect::{
         CoreRevocableToken, CoreRevocationErrorResponse, CoreTokenIntrospectionResponse,
         CoreTokenType,
     },
-    reqwest as oidc_reqwest, AdditionalClaims, AuthType, AuthorizationCode, Client, ClientId,
-    ClientSecret, EmptyExtraTokenFields, IdTokenFields, IssuerUrl, Nonce, PkceCodeVerifier,
-    RedirectUrl, StandardErrorResponse, StandardTokenResponse,
+    reqwest as oidc_reqwest, AdditionalClaims, AsyncHttpClient, AuthType, AuthorizationCode,
+    Client, ClientId, ClientSecret, EmptyExtraTokenFields, HttpClientError, HttpRequest,
+    HttpResponse, IdTokenFields, IssuerUrl, Nonce, PkceCodeVerifier, RedirectUrl,
+    StandardErrorResponse, StandardTokenResponse,
 };
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::{future::Future, pin::Pin};
 use url::Url;
 
-use crate::{errors::AppError, services::authentication_settings::EffectiveAuthenticationSettings};
+use crate::{
+    errors::AppError,
+    services::authentication_settings::{self, EffectiveAuthenticationSettings},
+};
 
 /// OIDC providers commonly put authorization data such as `groups` or a
 /// tenant marker in non-core ID-token claims.  Flattening preserves those
@@ -40,6 +45,41 @@ type OidcTokenFields = IdTokenFields<
     CoreJwsSigningAlgorithm,
 >;
 type OidcTokenResponse = StandardTokenResponse<OidcTokenFields, CoreTokenType>;
+
+#[derive(Debug, thiserror::Error)]
+enum HttpsOnlyClientError {
+    #[error("OIDC provider attempted a non-HTTPS request")]
+    UnsafeEndpoint,
+    #[error(transparent)]
+    Request(#[from] HttpClientError<oidc_reqwest::Error>),
+}
+
+struct HttpsOnlyClient(oidc_reqwest::Client);
+
+impl<'c> AsyncHttpClient<'c> for HttpsOnlyClient {
+    type Error = HttpsOnlyClientError;
+    type Future =
+        Pin<Box<dyn Future<Output = Result<HttpResponse, Self::Error>> + Send + Sync + 'c>>;
+
+    fn call(&'c self, request: HttpRequest) -> Self::Future {
+        Box::pin(async move {
+            let request_url = request.uri().to_string();
+            validate_https_provider_endpoint("request", &request_url)
+                .map_err(|_| HttpsOnlyClientError::UnsafeEndpoint)?;
+            AsyncHttpClient::call(&self.0, request)
+                .await
+                .map_err(HttpsOnlyClientError::Request)
+        })
+    }
+}
+
+fn https_only_client() -> Result<HttpsOnlyClient, AppError> {
+    oidc_reqwest::ClientBuilder::new()
+        .redirect(oidc_reqwest::redirect::Policy::none())
+        .build()
+        .map(HttpsOnlyClient)
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("failed to create OIDC HTTP client")))
+}
 type OidcClient<
     HasAuthUrl = openidconnect::EndpointNotSet,
     HasDeviceAuthUrl = openidconnect::EndpointNotSet,
@@ -187,6 +227,11 @@ pub async fn discover(
     if metadata.issuer.trim_end_matches('/') != issuer.trim_end_matches('/') {
         return Err(AppError::Validation("OIDC issuer mismatch".into()));
     }
+    validate_https_provider_endpoint("authorization", &metadata.authorization_endpoint)?;
+    validate_https_provider_endpoint("token", &metadata.token_endpoint)?;
+    if let Some(jwks_uri) = metadata.jwks_uri.as_deref() {
+        validate_https_provider_endpoint("JWKS", jwks_uri)?;
+    }
     if !settings.oidc_enabled {
         return Err(AppError::Validation("OIDC is disabled".into()));
     }
@@ -203,23 +248,24 @@ pub async fn discover(
     Ok(metadata)
 }
 
-fn callback_url(settings: &EffectiveAuthenticationSettings) -> Result<RedirectUrl, AppError> {
-    let base = settings
-        .public_base_url
-        .as_deref()
-        .ok_or_else(|| AppError::Validation("OIDC public base URL is not configured".into()))?;
-    let url = format!("{}/v1/auth/oidc/callback", base.trim_end_matches('/'));
-    let parsed = Url::parse(&url)
-        .map_err(|_| AppError::Validation("OIDC callback URL is invalid".into()))?;
+fn validate_https_provider_endpoint(name: &str, value: &str) -> Result<(), AppError> {
+    let parsed = Url::parse(value)
+        .map_err(|_| AppError::Validation(format!("OIDC {name} endpoint is invalid")))?;
     if parsed.scheme() != "https"
         || parsed.host_str().is_none()
-        || parsed.query().is_some()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
         || parsed.fragment().is_some()
     {
-        return Err(AppError::Validation(
-            "OIDC callback URL must be absolute HTTPS without query or fragment".into(),
-        ));
+        return Err(AppError::Validation(format!(
+            "OIDC {name} endpoint must be absolute HTTPS without credentials or fragment"
+        )));
     }
+    Ok(())
+}
+
+fn callback_url(settings: &EffectiveAuthenticationSettings) -> Result<RedirectUrl, AppError> {
+    let url = authentication_settings::oidc_callback_url(settings.public_base_url.as_deref())?;
     RedirectUrl::new(url).map_err(|_| AppError::Validation("OIDC callback URL is invalid".into()))
 }
 
@@ -259,15 +305,22 @@ async fn secure_metadata(
     if issuer.url().scheme() != "https" {
         return Err(AppError::Validation("OIDC issuer must use HTTPS".into()));
     }
-    let http = oidc_reqwest::ClientBuilder::new()
-        .redirect(oidc_reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("failed to create OIDC HTTP client")))?;
-    CoreProviderMetadata::discover_async(issuer, &http)
+    let http = https_only_client()?;
+    let metadata = CoreProviderMetadata::discover_async(issuer, &http)
         .await
         .map_err(|_| {
             AppError::Validation("OIDC provider discovery or JWKS retrieval failed".into())
-        })
+        })?;
+    validate_https_provider_endpoint(
+        "authorization",
+        metadata.authorization_endpoint().url().as_str(),
+    )?;
+    let token_endpoint = metadata
+        .token_endpoint()
+        .ok_or_else(|| AppError::Validation("OIDC provider has no token endpoint".into()))?;
+    validate_https_provider_endpoint("token", token_endpoint.url().as_str())?;
+    validate_https_provider_endpoint("JWKS", metadata.jwks_uri().url().as_str())?;
+    Ok(metadata)
 }
 
 pub async fn exchange_and_verify(
@@ -275,6 +328,7 @@ pub async fn exchange_and_verify(
     transaction: &Transaction,
     code: &str,
 ) -> Result<VerifiedIdentity, AppError> {
+    let redirect = callback_url(settings)?;
     let metadata = secure_metadata(settings).await?;
     let issuer = metadata.issuer().as_str().trim_end_matches('/').to_owned();
     validate_client_configuration(settings)?;
@@ -283,11 +337,7 @@ pub async fn exchange_and_verify(
         .client_secret
         .clone()
         .expect("validated client secret");
-    let redirect = callback_url(settings)?;
-    let http = oidc_reqwest::ClientBuilder::new()
-        .redirect(oidc_reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("failed to create OIDC HTTP client")))?;
+    let http = https_only_client()?;
     macro_rules! verify_with {
         ($client:expr) => {{
             let client = $client;
@@ -341,6 +391,7 @@ pub async fn exchange_and_verify(
 }
 
 pub async fn test_provider(settings: &EffectiveAuthenticationSettings) -> Result<(), AppError> {
+    let _ = callback_url(settings)?;
     let _ = secure_metadata(settings).await?;
     validate_client_configuration(settings)?;
     Ok(())
@@ -470,5 +521,25 @@ mod tests {
             verified_identity_with_claim("groups", serde_json::json!(["users", "fleet"]));
         assert!(claim_matches(&identity, Some("groups"), Some("fleet")));
         assert!(!claim_matches(&identity, Some("groups"), Some("admins")));
+    }
+
+    #[test]
+    fn provider_endpoints_require_safe_https_urls() {
+        assert!(validate_https_provider_endpoint(
+            "authorization",
+            "https://identity.example/authorize?tenant=fleet"
+        )
+        .is_ok());
+        for invalid in [
+            "http://identity.example/authorize",
+            "https://user:password@identity.example/authorize",
+            "https://identity.example/authorize#fragment",
+            "not a URL",
+        ] {
+            assert!(
+                validate_https_provider_endpoint("authorization", invalid).is_err(),
+                "accepted {invalid}"
+            );
+        }
     }
 }

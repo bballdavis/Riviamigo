@@ -627,6 +627,9 @@ async function ensureDevRestoreAgentKey() {
 
 function apiEnv() {
   return {
+    // The checked-in SQLx metadata lets a brand-new development database build
+    // before the API process applies its embedded migrations on first start.
+    SQLX_OFFLINE: 'true',
     DATABASE_URL: `postgresql://riviamigo:devpassword@localhost:${ports.postgres}/riviamigo?options=-c%20search_path%3Driviamigo,timeseries,public`,
     REDIS_URL: `redis://localhost:${ports.redis}`,
     S3_ENDPOINT: `http://localhost:${ports.garageApi}`,
