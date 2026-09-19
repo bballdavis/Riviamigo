@@ -338,6 +338,7 @@ impl Config {
     ///
     /// Hard-rejects insecure configurations when `RIVIAMIGO_ENV=production`.
     pub fn validate(&self) -> anyhow::Result<()> {
+        OidcEnvOverrides::from_env()?.validate()?;
         let is_production = self.is_production();
         let bind_address: IpAddr =
             self.origin_bind
@@ -545,6 +546,106 @@ impl Config {
             });
         Ok(difference == 0)
     }
+}
+
+/// Environment-owned authentication overrides.  These values intentionally
+/// remain separate from [`Config`] so existing configuration fixtures and
+/// database-backed settings keep the same construction contract.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OidcEnvOverrides {
+    pub oidc_enabled: Option<bool>,
+    pub password_login_enabled: Option<bool>,
+    pub issuer_url: Option<String>,
+    pub public_base_url: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub button_label: Option<String>,
+    pub scopes: Option<String>,
+    pub token_auth_method: Option<String>,
+    pub auto_signup: Option<bool>,
+    pub auto_link_verified_email: Option<bool>,
+    pub allowed_email_domains: Option<Vec<String>>,
+    pub required_claim_name: Option<String>,
+    pub required_claim_value: Option<String>,
+}
+
+impl OidcEnvOverrides {
+    pub fn from_env() -> anyhow::Result<Self> {
+        let secret = optional_env("RIVIAMIGO_OIDC_CLIENT_SECRET")?;
+        let secret_file = optional_env("RIVIAMIGO_OIDC_CLIENT_SECRET_FILE")?;
+        if secret.is_some() && secret_file.is_some() {
+            anyhow::bail!("RIVIAMIGO_OIDC_CLIENT_SECRET and RIVIAMIGO_OIDC_CLIENT_SECRET_FILE are mutually exclusive");
+        }
+        let client_secret = match secret_file {
+            Some(path) => Some(std::fs::read_to_string(path)?.trim_end().to_owned()),
+            None => secret,
+        };
+        Ok(Self {
+            oidc_enabled: optional_bool_env("RIVIAMIGO_OIDC_ENABLED")?,
+            password_login_enabled: optional_bool_env("RIVIAMIGO_PASSWORD_LOGIN_ENABLED")?,
+            issuer_url: optional_env("RIVIAMIGO_OIDC_ISSUER_URL")?,
+            public_base_url: optional_env("RIVIAMIGO_OIDC_PUBLIC_BASE_URL")?,
+            client_id: optional_env("RIVIAMIGO_OIDC_CLIENT_ID")?,
+            client_secret,
+            button_label: optional_env("RIVIAMIGO_OIDC_BUTTON_LABEL")?,
+            scopes: optional_env("RIVIAMIGO_OIDC_SCOPES")?,
+            token_auth_method: optional_env("RIVIAMIGO_OIDC_TOKEN_AUTH_METHOD")?,
+            auto_signup: optional_bool_env("RIVIAMIGO_OIDC_AUTO_SIGNUP")?,
+            auto_link_verified_email: optional_bool_env("RIVIAMIGO_OIDC_AUTO_LINK_VERIFIED_EMAIL")?,
+            allowed_email_domains: optional_env("RIVIAMIGO_OIDC_ALLOWED_EMAIL_DOMAINS")?.map(
+                |value| {
+                    value
+                        .split(',')
+                        .map(|v| v.trim().to_ascii_lowercase())
+                        .filter(|v| !v.is_empty())
+                        .collect()
+                },
+            ),
+            required_claim_name: optional_env("RIVIAMIGO_OIDC_REQUIRED_CLAIM_NAME")?,
+            required_claim_value: optional_env("RIVIAMIGO_OIDC_REQUIRED_CLAIM_VALUE")?,
+        })
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(method) = &self.token_auth_method {
+            if !matches!(
+                method.as_str(),
+                "auto" | "client_secret_basic" | "client_secret_post"
+            ) {
+                anyhow::bail!("RIVIAMIGO_OIDC_TOKEN_AUTH_METHOD must be auto, client_secret_basic, or client_secret_post");
+            }
+        }
+        for (name, value) in [
+            ("RIVIAMIGO_OIDC_ISSUER_URL", &self.issuer_url),
+            ("RIVIAMIGO_OIDC_PUBLIC_BASE_URL", &self.public_base_url),
+        ] {
+            if let Some(value) = value {
+                let url = url::Url::parse(value)
+                    .map_err(|e| anyhow::anyhow!("{name} is invalid: {e}"))?;
+                if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+                    anyhow::bail!("{name} must be an absolute HTTP or HTTPS URL");
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn optional_env(name: &str) -> anyhow::Result<Option<String>> {
+    Ok(std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty()))
+}
+
+fn optional_bool_env(name: &str) -> anyhow::Result<Option<bool>> {
+    let Some(value) = optional_env(name)? else {
+        return Ok(None);
+    };
+    value
+        .parse::<bool>()
+        .map(Some)
+        .map_err(|_| anyhow::anyhow!("{name} must be true or false"))
 }
 
 fn is_lan_client_address(address: IpAddr) -> bool {

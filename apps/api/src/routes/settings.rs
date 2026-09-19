@@ -4,15 +4,60 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
+    db::users::require_super_user,
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
+    services::authentication_settings::{
+        self, AuthenticationSettingsResponse, AuthenticationSettingsUpdate,
+    },
     services::{app_settings, security_audit::SecurityAuditEvent},
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/settings/timezone", get(get_timezone).put(update_timezone))
+        .route(
+            "/settings/authentication",
+            get(get_authentication).put(update_authentication),
+        )
+        .route(
+            "/settings/authentication/test",
+            axum::routing::post(test_authentication),
+        )
         .route("/admin/security/status", get(get_security_status))
+}
+
+async fn get_authentication(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<AuthenticationSettingsResponse>, AppError> {
+    require_super_user(&state.pool, auth.user_id).await?;
+    Ok(Json(
+        authentication_settings::load(&state.pool, &state.age_key).await?,
+    ))
+}
+
+async fn update_authentication(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<AuthenticationSettingsUpdate>,
+) -> Result<Json<AuthenticationSettingsResponse>, AppError> {
+    require_super_user(&state.pool, auth.user_id).await?;
+    Ok(Json(
+        authentication_settings::update(&state.pool, &state.age_key, auth.user_id, body).await?,
+    ))
+}
+
+async fn test_authentication(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_super_user(&state.pool, auth.user_id).await?;
+    let settings = authentication_settings::load(&state.pool, &state.age_key).await?;
+    authentication_settings::validate_effective(&settings)?;
+    Ok(Json(
+        serde_json::json!({ "valid": true, "discovery": "not_checked", "message": "OIDC settings are structurally valid; provider discovery will be checked by the login flow." }),
+    ))
 }
 
 #[derive(Debug, Serialize)]

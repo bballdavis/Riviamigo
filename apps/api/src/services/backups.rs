@@ -1654,6 +1654,7 @@ async fn execute_pg_dump(config: &Config, dump_path: &Path) -> Result<(), AppErr
         .arg("--exclude-table-data=riviamigo.vehicle_credentials")
         .arg("--exclude-table-data=riviamigo.external_connection_settings")
         .arg("--exclude-table-data=riviamigo.system_config")
+        .arg("--exclude-table-data=riviamigo.authentication_settings")
         .arg("--exclude-table-data=riviamigo.refresh_tokens")
         // Activity rows reference redacted external connection settings and
         // cannot be restored without the corresponding provider records.
@@ -1838,6 +1839,7 @@ async fn build_recovery_manifest(
                 "vehicle_credentials table data (provider credential tokens)",
                 "external_connection_settings table data (provider bearer tokens and target secrets)",
                 "system_config table data (installation cryptographic keys)",
+                "authentication_settings table data (OIDC provider configuration and client secret)",
                 "refresh_tokens",
                 "backup_settings.secret_key_encrypted"
             ],
@@ -1854,7 +1856,7 @@ async fn build_recovery_manifest(
                 "sha256": database_checksum,
                 "size_bytes": std::fs::metadata(dump_path).map(|metadata| metadata.len()).unwrap_or(0),
                 "restore_policy": "replace_isolated_candidate",
-                "redactions": ["vehicle_credentials", "external_connection_settings", "system_config", "refresh_tokens", "external_connection_activity", "backup_settings", "backup_runs", "backup_artifacts", "backup_restore_requests"]
+                "redactions": ["vehicle_credentials", "external_connection_settings", "system_config", "authentication_settings", "refresh_tokens", "external_connection_activity", "backup_settings", "backup_runs", "backup_artifacts", "backup_restore_requests"]
             },
             "backup_settings": {
                 "version": 1,

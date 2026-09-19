@@ -1,4 +1,5 @@
 pub mod app_settings;
+pub mod authentication_settings;
 pub mod backups;
 pub mod charge_backfill;
 pub mod charge_payload_identity;
