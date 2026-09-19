@@ -13,6 +13,7 @@ pub mod demo_seed;
 pub mod external_connections;
 pub mod geofences;
 pub mod nominatim;
+pub mod oidc;
 pub mod redis_health;
 pub mod restore_compatibility;
 pub mod restore_jobs;

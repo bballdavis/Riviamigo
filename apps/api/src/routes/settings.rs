@@ -53,10 +53,17 @@ async fn test_authentication(
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_super_user(&state.pool, auth.user_id).await?;
-    let settings = authentication_settings::load(&state.pool, &state.age_key).await?;
-    authentication_settings::validate_effective(&settings)?;
+    let visible = authentication_settings::load(&state.pool, &state.age_key).await?;
+    authentication_settings::validate_effective(&visible)?;
+    let effective = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
+    let mut provider_settings = effective.clone();
+    // Test-before-enable is intentional so the administrator can validate the
+    // provider and recovery path without exposing SSO on the login page.
+    provider_settings.oidc_enabled = true;
+    crate::services::oidc::test_provider(&provider_settings).await?;
+    authentication_settings::record_validation(&state.pool, &effective).await?;
     Ok(Json(
-        serde_json::json!({ "valid": true, "discovery": "not_checked", "message": "OIDC settings are structurally valid; provider discovery will be checked by the login flow." }),
+        serde_json::json!({ "valid": true, "discovery": "validated", "message": "OIDC provider discovery and JWKS retrieval succeeded." }),
     ))
 }
 

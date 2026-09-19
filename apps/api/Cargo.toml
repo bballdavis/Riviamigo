@@ -46,6 +46,7 @@ prost           = "0.14"
 
 # Auth
 jsonwebtoken    = { version = "10", default-features = false, features = ["use_pem", "aws_lc_rs"] }
+openidconnect   = "4"
 argon2          = "0.5"
 
 # Encryption
