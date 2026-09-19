@@ -95,8 +95,8 @@ and password login on.
 | `RIVIAMIGO_OIDC_AUTO_SIGNUP` | Database/default `false` | Permit a qualifying new OIDC identity to create a basic user. |
 | `RIVIAMIGO_OIDC_AUTO_LINK_VERIFIED_EMAIL` | Database/default `false` | Permit a verified provider email to link to one matching existing account. |
 | `RIVIAMIGO_OIDC_ALLOWED_EMAIL_DOMAINS` | Database/unset | Comma-separated, case-insensitive email domains allowed by auto-link/auto-signup policy. |
-| `RIVIAMIGO_OIDC_REQUIRED_CLAIM_NAME` | Database/unset | Optional exact claim name required by auto-link/auto-signup policy. |
-| `RIVIAMIGO_OIDC_REQUIRED_CLAIM_VALUE` | Database/unset | Optional exact value for the required claim. |
+| `RIVIAMIGO_OIDC_REQUIRED_CLAIM_NAME` | Database/unset | Optional exact claim name required for OIDC login. Must be set together with the claim value. |
+| `RIVIAMIGO_OIDC_REQUIRED_CLAIM_VALUE` | Database/unset | Optional exact value for the required claim. Must be set together with the claim name. |
 
 The first-owner setup proof remains required for a new production installation.
 For recovery, set `RIVIAMIGO_PASSWORD_LOGIN_ENABLED=true` and

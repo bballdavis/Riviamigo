@@ -95,7 +95,8 @@ Enable these controls only after deciding how your provider verifies email and
 how a user should be admitted to the installation. The optional domain list is
 a comma-separated, case-insensitive admission rule for auto-link and
 auto-signup. A required claim is an exact claim name/value rule enforced on
-every OIDC login, including identities that are already linked.
+every OIDC login, including identities that are already linked. Configure the
+claim name and value together, or leave both empty.
 
 ## Environment-managed fields
 
