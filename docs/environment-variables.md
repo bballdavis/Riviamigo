@@ -71,6 +71,39 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 | `S3_ACCESS_KEY` | Unset | Optional fallback access key used only when a complete saved credential pair is unavailable. |
 | `S3_SECRET_KEY` | Unset | Optional fallback secret key paired with `S3_ACCESS_KEY`; never returned by the API or stored in recovery packages. |
 
+## OIDC and authentication overrides
+
+Database-backed authentication settings under **Settings > Authentication**
+are the primary configuration path. Each value below overrides only the same
+field in the database when set; the settings response identifies the effective
+source. Secrets are write-only and never returned. OIDC and password login are
+independent switches. Both default to the safe local-login posture: OIDC off
+and password login on.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `RIVIAMIGO_OIDC_ENABLED` | Database/default `false` | Show and enable the OIDC SSO login flow. |
+| `RIVIAMIGO_PASSWORD_LOGIN_ENABLED` | Database/default `true` | Keep the local password form and password endpoint available. Set `false` only after testing SSO and recording break-glass recovery. |
+| `RIVIAMIGO_OIDC_ISSUER_URL` | Database/unset | OIDC issuer URL used for discovery and token validation. Must be an absolute HTTP or HTTPS URL. |
+| `RIVIAMIGO_OIDC_PUBLIC_BASE_URL` | Database/unset | Public HTTPS base URL used to derive the exact `/v1/auth/oidc/callback` redirect URI. |
+| `RIVIAMIGO_OIDC_CLIENT_ID` | Database/unset | Confidential OIDC client identifier. |
+| `RIVIAMIGO_OIDC_CLIENT_SECRET` | Database/unset | Client secret override. Mutually exclusive with `_FILE`; never returned by the API. |
+| `RIVIAMIGO_OIDC_CLIENT_SECRET_FILE` | Unset | Path to a mounted file containing the client secret. Mutually exclusive with the direct secret variable. |
+| `RIVIAMIGO_OIDC_BUTTON_LABEL` | `Sign in with SSO` | Text shown on the SSO button. |
+| `RIVIAMIGO_OIDC_SCOPES` | `openid email profile` | Space-separated provider scopes. |
+| `RIVIAMIGO_OIDC_TOKEN_AUTH_METHOD` | `auto` | Token endpoint authentication: `auto`, `client_secret_basic`, or `client_secret_post`. |
+| `RIVIAMIGO_OIDC_AUTO_SIGNUP` | Database/default `false` | Permit a qualifying new OIDC identity to create a basic user. |
+| `RIVIAMIGO_OIDC_AUTO_LINK_VERIFIED_EMAIL` | Database/default `false` | Permit a verified provider email to link to one matching existing account. |
+| `RIVIAMIGO_OIDC_ALLOWED_EMAIL_DOMAINS` | Database/unset | Comma-separated, case-insensitive email domains allowed by auto-link/auto-signup policy. |
+| `RIVIAMIGO_OIDC_REQUIRED_CLAIM_NAME` | Database/unset | Optional exact claim name required by auto-link/auto-signup policy. |
+| `RIVIAMIGO_OIDC_REQUIRED_CLAIM_VALUE` | Database/unset | Optional exact value for the required claim. |
+
+The first-owner setup proof remains required for a new production installation.
+For recovery, set `RIVIAMIGO_PASSWORD_LOGIN_ENABLED=true` and
+`RIVIAMIGO_OIDC_ENABLED=false`, recreate only the app container, repair/test the
+provider as a local super-user, remove the temporary overrides, and recreate
+only the app container again. See [OIDC single sign-on](./guides/oidc-sso.md).
+
 | `CHARGE_IDENTITY_BACKFILL_BATCH_SIZE` | `1000` | Historical charge payloads processed per transaction. Valid range: `100`-`10000`. |
 | `CHARGE_IDENTITY_BACKFILL_PAUSE_MS` | `100` | Delay between successful backfill batches. Valid range: `0`-`5000` milliseconds. |
 

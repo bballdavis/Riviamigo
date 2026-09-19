@@ -39,8 +39,13 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
 
 - The outer tunnel/proxy is self-hoster operated. It must enforce identity,
   public HTTPS, WebSocket forwarding, patching, and client-facing rate limits.
-- No native Authentik/OIDC trust integration is implemented. The gateway is an
-  additive boundary; Riviamigo application login remains mandatory.
+- OIDC SSO is an optional native application login path configured under
+  **Settings > Authentication**. The gateway remains an additive boundary;
+  Riviamigo application login is still required. Provider role mapping,
+  multiple providers, SCIM, and provider logout are not implemented.
+- OIDC settings are field-overridable from the environment for recovery. Client
+  secrets are write-only and excluded from recovery packages; identity mappings
+  remain, so restore requires provider re-entry and a configuration test.
 - The internal origin deliberately does not trust arbitrary forwarded client-IP
   headers. Configure client-IP trust only at the outer gateway after validating
   its network boundary.
@@ -78,6 +83,8 @@ The security-hardening branch additionally requires:
 - `pnpm build`
 - `cargo check`
 - `pnpm docs:check`
+- OIDC settings and recovery documentation must be checked against the exact
+  environment contract in `apps/api/src/config.rs`.
 - `pnpm dashboards:sync-defaults --check`
 - `pnpm audit --prod --audit-level=high`
 - `docker compose --env-file .env -f compose/docker-compose.yml config --quiet`
