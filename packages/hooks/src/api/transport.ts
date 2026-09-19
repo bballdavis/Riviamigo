@@ -672,6 +672,10 @@ export class AuthenticatedTransport {
     return this.request('POST', '/v1/auth/oidc/link/start', returnTo ? { return_to: returnTo } : {});
   }
 
+  async startOidcPasswordSetup(newPassword: string): Promise<{ authorization_url: string }> {
+    return this.request('POST', '/v1/auth/password/oidc/start', { new_password: newPassword });
+  }
+
   async unlinkOidc(currentPassword: string): Promise<void> {
     return this.request('POST', '/v1/auth/oidc/unlink', { current_password: currentPassword });
   }

@@ -131,7 +131,11 @@ pub async fn load_effective(
         password_login_enabled: env
             .password_login_enabled
             .unwrap_or(stored.password_login_enabled),
-        issuer_url: env.issuer_url.clone().or(stored.issuer_url),
+        issuer_url: env
+            .issuer_url
+            .as_deref()
+            .map(canonicalize_issuer)
+            .or(stored.issuer_url),
         public_base_url: env.public_base_url.clone().or(stored.public_base_url),
         client_id: env.client_id.clone().or(stored.client_id),
         client_secret: env.client_secret.clone().or(db_secret),
@@ -162,6 +166,12 @@ pub async fn load_effective(
         effective.required_claim_name.as_deref(),
         effective.required_claim_value.as_deref(),
     )?;
+    validate_auto_link_policy(
+        effective.auto_link_verified_email,
+        &effective.allowed_email_domains,
+        effective.required_claim_name.as_deref(),
+        effective.required_claim_value.as_deref(),
+    )?;
     Ok(effective)
 }
 
@@ -178,6 +188,12 @@ pub async fn load(
         response.required_claim_name.value.as_deref(),
         response.required_claim_value.value.as_deref(),
     )?;
+    validate_auto_link_policy(
+        response.auto_link_verified_email.value,
+        &response.allowed_email_domains.value,
+        response.required_claim_name.value.as_deref(),
+        response.required_claim_value.value.as_deref(),
+    )?;
     Ok(response)
 }
 
@@ -187,6 +203,7 @@ pub async fn update(
     actor: Uuid,
     body: AuthenticationSettingsUpdate,
 ) -> Result<AuthenticationSettingsResponse, AppError> {
+    let body = normalize_update(body)?;
     let current = load_stored(pool).await?;
     let env = OidcEnvOverrides::from_env().map_err(|e| AppError::Validation(e.to_string()))?;
     env.validate()
@@ -227,9 +244,32 @@ pub async fn update(
         .required_claim_value
         .clone()
         .unwrap_or_else(|| current.required_claim_value.clone());
+    let effective_required_claim_name = env
+        .required_claim_name
+        .clone()
+        .or_else(|| required_claim_name.clone());
+    let effective_required_claim_value = env
+        .required_claim_value
+        .clone()
+        .or_else(|| required_claim_value.clone());
     validate_required_claim_pair(
-        required_claim_name.as_deref(),
-        required_claim_value.as_deref(),
+        effective_required_claim_name.as_deref(),
+        effective_required_claim_value.as_deref(),
+    )?;
+    let resulting_auto_link = env.auto_link_verified_email.unwrap_or(
+        body.auto_link_verified_email
+            .unwrap_or(current.auto_link_verified_email),
+    );
+    let resulting_domains = env.allowed_email_domains.clone().unwrap_or_else(|| {
+        body.allowed_email_domains
+            .clone()
+            .unwrap_or_else(|| current.allowed_email_domains.clone())
+    });
+    validate_auto_link_policy(
+        resulting_auto_link,
+        &resulting_domains,
+        effective_required_claim_name.as_deref(),
+        effective_required_claim_value.as_deref(),
     )?;
     if !resulting_password_login {
         if invalidates_validation {
@@ -251,12 +291,8 @@ pub async fn update(
                 "password login cannot be disabled until the effective OIDC configuration has been successfully tested".into(),
             ));
         }
-        let has_linked_super_user: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM riviamigo.user_oidc_identities i JOIN riviamigo.users u ON u.id=i.user_id WHERE u.role='super_user' AND NOT u.is_disabled AND i.issuer=$1)",
-        )
-        .bind(issuer)
-        .fetch_one(pool)
-        .await?;
+        let has_linked_super_user =
+            has_linked_super_user_for_issuer(pool, &canonicalize_issuer(&issuer)).await?;
         if !has_linked_super_user {
             return Err(AppError::Validation(
                 "password login cannot be disabled until a super user has linked OIDC".into(),
@@ -287,6 +323,15 @@ pub async fn update(
         .bind(body.auto_signup.unwrap_or(current.auto_signup)).bind(body.auto_link_verified_email.unwrap_or(current.auto_link_verified_email)).bind(body.allowed_email_domains.unwrap_or(current.allowed_email_domains))
         .bind(required_claim_name).bind(required_claim_value).bind(actor).bind(invalidates_validation).execute(pool).await?;
     load(pool, age_key).await
+}
+
+async fn has_linked_super_user_for_issuer(pool: &PgPool, issuer: &str) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM riviamigo.user_oidc_identities i JOIN riviamigo.users u ON u.id=i.user_id WHERE u.role='super_user' AND NOT u.is_disabled AND rtrim(i.issuer, '/')=rtrim($1, '/'))",
+    )
+    .bind(canonicalize_issuer(issuer))
+    .fetch_one(pool)
+    .await?)
 }
 
 /// Environment values are emergency/operator overrides, so the UI must not
@@ -381,6 +426,12 @@ pub fn validate_effective(settings: &AuthenticationSettingsResponse) -> Result<(
         settings.required_claim_name.value.as_deref(),
         settings.required_claim_value.value.as_deref(),
     )?;
+    validate_auto_link_policy(
+        settings.auto_link_verified_email.value,
+        &settings.allowed_email_domains.value,
+        settings.required_claim_name.value.as_deref(),
+        settings.required_claim_value.value.as_deref(),
+    )?;
     if !settings.oidc_enabled.value {
         return Ok(());
     }
@@ -394,7 +445,26 @@ pub fn validate_effective(settings: &AuthenticationSettingsResponse) -> Result<(
                 .into(),
         ));
     }
+    normalize_oidc_scopes(&settings.scopes.value)?;
     oidc_callback_url(settings.public_base_url.value.as_deref())?;
+    Ok(())
+}
+
+fn validate_auto_link_policy(
+    auto_link_verified_email: bool,
+    allowed_email_domains: &[String],
+    required_claim_name: Option<&str>,
+    required_claim_value: Option<&str>,
+) -> Result<(), AppError> {
+    if auto_link_verified_email
+        && allowed_email_domains.is_empty()
+        && !(required_claim_name.is_some() && required_claim_value.is_some())
+    {
+        return Err(AppError::Validation(
+            "OIDC verified-email auto-link requires allowed email domains or a required claim restriction"
+                .into(),
+        ));
+    }
     Ok(())
 }
 
@@ -437,13 +507,105 @@ fn validate_required_claim_pair(name: Option<&str>, value: Option<&str>) -> Resu
     }
 }
 
+/// Normalize human-entered settings before they are compared, validated, or
+/// persisted. In particular, an empty optional field means "clear it" rather
+/// than a configured-but-unusable empty string.
+fn normalize_update(
+    mut body: AuthenticationSettingsUpdate,
+) -> Result<AuthenticationSettingsUpdate, AppError> {
+    body.issuer_url = normalize_optional_update(body.issuer_url);
+    body.issuer_url = body
+        .issuer_url
+        .map(|value| value.map(|value| canonicalize_issuer(&value)));
+    body.public_base_url = normalize_optional_update(body.public_base_url);
+    body.client_id = normalize_optional_update(body.client_id);
+    body.required_claim_name = normalize_optional_update(body.required_claim_name);
+    body.required_claim_value = normalize_optional_update(body.required_claim_value);
+
+    if let Some(label) = body.button_label.take() {
+        let label = label.trim();
+        if label.is_empty() {
+            return Err(AppError::Validation(
+                "OIDC button label cannot be empty".into(),
+            ));
+        }
+        body.button_label = Some(label.to_owned());
+    }
+    if let Some(scopes) = body.scopes.take() {
+        body.scopes = Some(normalize_oidc_scopes(&scopes)?);
+    }
+    if let Some(method) = body.token_auth_method.take() {
+        let method = method.trim();
+        if !matches!(
+            method,
+            "auto" | "client_secret_basic" | "client_secret_post"
+        ) {
+            return Err(AppError::Validation(
+                "OIDC token authentication method is invalid".into(),
+            ));
+        }
+        body.token_auth_method = Some(method.to_owned());
+    }
+    if let Some(domains) = body.allowed_email_domains.take() {
+        let mut normalized = domains
+            .into_iter()
+            .map(|domain| domain.trim().trim_start_matches('@').to_ascii_lowercase())
+            .filter(|domain| !domain.is_empty())
+            .collect::<Vec<_>>();
+        normalized.sort();
+        normalized.dedup();
+        body.allowed_email_domains = Some(normalized);
+    }
+    Ok(body)
+}
+
+fn normalize_optional_update(value: Option<Option<String>>) -> Option<Option<String>> {
+    value.map(|value| {
+        value
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+/// Treat an issuer's trailing slash as presentation-only. OIDC discovery and
+/// identity mappings use the same canonical issuer, while accepting the
+/// slash variation commonly shown by provider documentation.
+pub fn canonicalize_issuer(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_owned()
+}
+
+pub fn normalize_oidc_scopes(scopes: &str) -> Result<String, AppError> {
+    let mut normalized = Vec::new();
+    for scope in scopes.split_whitespace() {
+        let valid = scope.bytes().all(|byte| {
+            byte == 0x21 || (0x23..=0x5b).contains(&byte) || (0x5d..=0x7e).contains(&byte)
+        });
+        if !valid {
+            return Err(AppError::Validation(
+                "OIDC scopes contain an invalid character".into(),
+            ));
+        }
+        if !normalized.contains(&scope) {
+            normalized.push(scope);
+        }
+    }
+    if !normalized.contains(&"openid") {
+        return Err(AppError::Validation(
+            "OIDC scopes must include openid".into(),
+        ));
+    }
+    Ok(normalized.join(" "))
+}
+
 async fn load_stored(pool: &PgPool) -> Result<StoredSettings, AppError> {
     let row = sqlx::query("SELECT oidc_enabled,password_login_enabled,issuer_url,public_base_url,client_id,client_secret_encrypted,button_label,scopes,token_auth_method,auto_signup,auto_link_verified_email,allowed_email_domains,required_claim_name,required_claim_value,last_validation_at,last_validation_fingerprint FROM riviamigo.authentication_settings WHERE id=TRUE")
         .fetch_optional(pool).await?.ok_or_else(|| AppError::Internal(anyhow::anyhow!("authentication settings row is missing")))?;
     Ok(StoredSettings {
         oidc_enabled: row.try_get("oidc_enabled")?,
         password_login_enabled: row.try_get("password_login_enabled")?,
-        issuer_url: row.try_get("issuer_url")?,
+        issuer_url: row
+            .try_get::<Option<String>, _>("issuer_url")?
+            .map(|value| canonicalize_issuer(&value)),
         public_base_url: row.try_get("public_base_url")?,
         client_id: row.try_get("client_id")?,
         client_secret_encrypted: row.try_get("client_secret_encrypted")?,
@@ -485,7 +647,18 @@ fn effective(s: StoredSettings, e: &OidcEnvOverrides) -> AuthenticationSettingsR
             }
         };
     }
-    let issuer = optional_field!(s.issuer_url, e.issuer_url);
+    let issuer = EffectiveValue {
+        value: e
+            .issuer_url
+            .as_deref()
+            .map(canonicalize_issuer)
+            .or(s.issuer_url),
+        source: if e.issuer_url.is_some() {
+            SettingSource::Environment
+        } else {
+            SettingSource::Database
+        },
+    };
     let public_base = optional_field!(s.public_base_url, e.public_base_url);
     let callback_url = public_base
         .value
@@ -601,6 +774,64 @@ mod tests {
     }
 
     #[test]
+    fn update_normalization_clears_empty_optional_fields() {
+        let normalized = normalize_update(AuthenticationSettingsUpdate {
+            issuer_url: Some(Some("  ".into())),
+            client_id: Some(Some(" client ".into())),
+            required_claim_name: Some(Some("".into())),
+            required_claim_value: Some(Some(" ".into())),
+            scopes: Some("openid  email openid".into()),
+            allowed_email_domains: Some(vec![
+                " Example.COM ".into(),
+                "@example.com".into(),
+                "".into(),
+            ]),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert_eq!(normalized.issuer_url, Some(None));
+        assert_eq!(normalized.client_id, Some(Some("client".into())));
+        assert_eq!(normalized.required_claim_name, Some(None));
+        assert_eq!(normalized.required_claim_value, Some(None));
+        assert_eq!(normalized.scopes.as_deref(), Some("openid email"));
+        assert_eq!(
+            normalized.allowed_email_domains,
+            Some(vec!["example.com".into()])
+        );
+    }
+
+    #[test]
+    fn oidc_scopes_require_openid_and_valid_scope_tokens() {
+        assert_eq!(
+            normalize_oidc_scopes(" profile  openid email ").unwrap(),
+            "profile openid email"
+        );
+        assert!(normalize_oidc_scopes("email profile").is_err());
+        assert!(normalize_oidc_scopes("openid bad\\scope").is_err());
+    }
+
+    #[test]
+    fn canonicalize_issuer_ignores_documentation_trailing_slashes() {
+        assert_eq!(
+            canonicalize_issuer(" https://issuer.example/ "),
+            "https://issuer.example"
+        );
+        assert_eq!(
+            canonicalize_issuer("https://issuer.example"),
+            "https://issuer.example"
+        );
+    }
+
+    #[test]
+    fn auto_link_requires_an_explicit_admission_boundary() {
+        assert!(validate_auto_link_policy(true, &[], None, None).is_err());
+        assert!(validate_auto_link_policy(true, &["example.com".into()], None, None).is_ok());
+        assert!(validate_auto_link_policy(true, &[], Some("groups"), Some("rivian")).is_ok());
+        assert!(validate_auto_link_policy(false, &[], None, None).is_ok());
+    }
+
+    #[test]
     fn oidc_callback_url_requires_a_safe_https_base() {
         assert_eq!(
             oidc_callback_url(Some("https://riviamigo.example/")).unwrap(),
@@ -643,5 +874,49 @@ mod tests {
             validation_fingerprint(&settings, "installation-key"),
             validation_fingerprint(&settings, "different-installation-key")
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a migrated PostgreSQL database"]
+    async fn linked_super_user_lookup_accepts_a_trailing_slash_issuer() {
+        let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .expect("database connection");
+        let user_id = Uuid::new_v4();
+        let email = format!("oidc_issuer_{}@example.com", user_id);
+        let issuer = format!("https://issuer-{}.example", Uuid::new_v4());
+        sqlx::query(
+            "INSERT INTO riviamigo.users(id,email,password_hash,role) VALUES($1,$2,NULL,'super_user')",
+        )
+        .bind(user_id)
+        .bind(&email)
+        .execute(&pool)
+        .await
+        .expect("seed super user");
+        sqlx::query(
+            "INSERT INTO riviamigo.user_oidc_identities(user_id,issuer,subject,email) VALUES($1,$2,$3,$4)",
+        )
+        .bind(user_id)
+        .bind(&issuer)
+        .bind(Uuid::new_v4().to_string())
+        .bind(&email)
+        .execute(&pool)
+        .await
+        .expect("seed linked identity");
+
+        assert!(
+            has_linked_super_user_for_issuer(&pool, &format!("{issuer}/"))
+                .await
+                .expect("lookup linked super user")
+        );
+
+        sqlx::query("DELETE FROM riviamigo.users WHERE id=$1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .expect("delete test user");
     }
 }

@@ -6,7 +6,14 @@ import { dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const sourceExtensions = ['.ts', '.tsx'];
-const ignoredPathSegment = new Set(['node_modules', 'dist', 'coverage', '.turbo', '__tests__']);
+const ignoredPathSegment = new Set([
+  'node_modules',
+  'dist',
+  'coverage',
+  '.turbo',
+  '__tests__',
+  'test',
+]);
 const packageRoots = new Map([
   ['@riviamigo/ui', 'packages/ui/src'],
   ['@riviamigo/hooks', 'packages/hooks/src'],

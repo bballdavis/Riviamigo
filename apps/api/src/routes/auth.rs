@@ -63,6 +63,7 @@ pub fn metadata_router() -> Router<AppState> {
 pub fn protected_router() -> Router<AppState> {
     Router::new()
         .route("/auth/password", post(change_password))
+        .route("/auth/password/oidc/start", post(oidc_password_start))
         .route("/auth/oidc/link/start", post(oidc_link_start))
         .route("/auth/oidc/unlink", post(oidc_unlink))
 }
@@ -94,6 +95,11 @@ struct AcceptAccountInvitationBody {
 #[derive(Deserialize)]
 struct ChangePasswordBody {
     current_password: String,
+    new_password: String,
+}
+
+#[derive(Deserialize)]
+struct SetPasswordWithOidcBody {
     new_password: String,
 }
 
@@ -129,11 +135,7 @@ struct OidcStartBody {
 }
 async fn auth_config(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
     let s = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
-    let oidc_ready = s.oidc_enabled
-        && s.issuer_url.is_some()
-        && s.client_id.is_some()
-        && s.client_secret.is_some()
-        && authentication_settings::oidc_callback_url(s.public_base_url.as_deref()).is_ok();
+    let oidc_ready = s.oidc_enabled && oidc::provider_configuration_ready(&s);
     Ok(Json(
         serde_json::json!({"oidc_enabled":oidc_ready,"password_login_enabled":s.password_login_enabled,"oidc_ready":oidc_ready,"button_label":s.button_label}),
     ))
@@ -157,6 +159,7 @@ async fn oidc_start(
         &state,
         oidc::validate_return_to(body.return_to.as_deref())?,
         None,
+        None,
     )
     .await
 }
@@ -168,6 +171,7 @@ async fn begin_oidc(
     state: &AppState,
     return_to: String,
     link_user: Option<Uuid>,
+    pending_password_hash: Option<String>,
 ) -> Result<Response, AppError> {
     let s = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
     if !s.oidc_enabled && link_user.is_none() {
@@ -189,6 +193,7 @@ async fn begin_oidc(
         return_to,
         user_id: link_user,
         link: link_user.is_some(),
+        pending_password_hash,
     };
     let mut c = state.redis.get_multiplexed_async_connection().await?;
     c.set_ex::<_, _, ()>(
@@ -295,19 +300,26 @@ async fn oidc_callback(
         if disabled {
             return Err(AppError::Forbidden);
         }
+        if let Some(password_hash) = tx.pending_password_hash.as_deref() {
+            set_initial_password_after_oidc(&state.pool, user_id, password_hash, &headers).await?;
+        }
         let refresh = issue_refresh_token(&state.pool, user_id).await?;
-        SecurityAuditEvent::success(
-            if tx.link {
-                "oidc_identity_linked"
-            } else {
-                "oidc_login"
-            },
-            Some(user_id),
-        )
-        .target("oidc")
-        .record(&state.pool)
-        .await?;
-        let destination = if tx.link {
+        if tx.pending_password_hash.is_none() {
+            SecurityAuditEvent::success(
+                if tx.link {
+                    "oidc_identity_linked"
+                } else {
+                    "oidc_login"
+                },
+                Some(user_id),
+            )
+            .target("oidc")
+            .record(&state.pool)
+            .await?;
+        }
+        let destination = if tx.pending_password_hash.is_some() {
+            "/settings?section=account&password=set"
+        } else if tx.link {
             "/settings?section=account&oidc=linked"
         } else {
             &tx.return_to
@@ -383,6 +395,43 @@ async fn oidc_link_start(
         &state,
         oidc::validate_return_to(body.return_to.as_deref())?,
         Some(auth.user_id),
+        None,
+    )
+    .await
+}
+
+async fn oidc_password_start(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<SetPasswordWithOidcBody>,
+) -> Result<Response, AppError> {
+    if !password_meets_minimum(&body.new_password) {
+        return Err(AppError::Validation("password min 12 chars".into()));
+    }
+    let status: (bool, bool) = sqlx::query_as(
+        "SELECT password_hash IS NOT NULL, \
+         EXISTS(SELECT 1 FROM riviamigo.user_oidc_identities WHERE user_id=$1) \
+         FROM riviamigo.users WHERE id=$1 AND NOT is_disabled",
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    if status.0 {
+        return Err(AppError::Conflict(
+            "this account already has a password".into(),
+        ));
+    }
+    if !status.1 {
+        return Err(AppError::Conflict(
+            "link SSO before setting an initial password".into(),
+        ));
+    }
+    begin_oidc(
+        &state,
+        "/settings?section=account".into(),
+        Some(auth.user_id),
+        Some(hash_password(&body.new_password)?),
     )
     .await
 }
@@ -392,10 +441,7 @@ async fn identities(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let r=sqlx::query("SELECT password_hash IS NOT NULL AS p, EXISTS(SELECT 1 FROM riviamigo.user_oidc_identities WHERE user_id=$1) AS o FROM riviamigo.users WHERE id=$1").bind(auth.user_id).fetch_one(&state.pool).await?;
     let settings = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
-    let oidc_link_available = settings.issuer_url.is_some()
-        && settings.client_id.is_some()
-        && settings.client_secret.is_some()
-        && authentication_settings::oidc_callback_url(settings.public_base_url.as_deref()).is_ok();
+    let oidc_link_available = oidc::provider_configuration_ready(&settings);
     Ok(Json(
         serde_json::json!({"password_configured":r.get::<bool,_>("p"),"oidc_linked":r.get::<bool,_>("o"),"oidc_link_available":oidc_link_available,"button_label":settings.button_label}),
     ))
@@ -463,6 +509,12 @@ async fn resolve_oidc_identity(
         sqlx::query("UPDATE riviamigo.user_oidc_identities SET last_login_at=now(), email=$3 WHERE issuer=$1 AND subject=$2").bind(&identity.issuer).bind(&identity.subject).bind(&identity.email).execute(&mut *db).await?;
         user_id
     } else if transaction.link {
+        // An initial-password operation is OIDC reauthentication, not a link
+        // operation. It must use the exact identity already attached to this
+        // account; a different provider subject cannot be introduced here.
+        if transaction.pending_password_hash.is_some() {
+            return Err(AppError::Forbidden);
+        }
         let user_id = transaction.user_id.ok_or(AppError::Unauthorized)?;
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM riviamigo.users WHERE id=$1 AND NOT is_disabled)",
@@ -1051,6 +1103,47 @@ async fn change_password(
 
     let clear_cookie = refresh_cookie("", 0, state.config.allows_insecure_refresh_cookies());
     Ok(([(SET_COOKIE, clear_cookie)], StatusCode::NO_CONTENT).into_response())
+}
+
+async fn set_initial_password_after_oidc(
+    pool: &sqlx::PgPool,
+    user_id: Uuid,
+    password_hash: &str,
+    headers: &axum::http::HeaderMap,
+) -> Result<(), AppError> {
+    let mut tx = pool.begin().await?;
+    let current_password_hash: Option<String> =
+        sqlx::query_scalar("SELECT password_hash FROM riviamigo.users WHERE id=$1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    if current_password_hash.is_some() {
+        return Err(AppError::Conflict(
+            "this account already has a password".into(),
+        ));
+    }
+    sqlx::query("UPDATE riviamigo.users SET password_hash=$1 WHERE id=$2")
+        .bind(password_hash)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE riviamigo.refresh_tokens \
+         SET revoked_at=now() \
+         WHERE user_id=$1 AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    SecurityAuditEvent::success("password_set_with_oidc", Some(user_id))
+        .target(format!("user:{user_id}"))
+        .metadata(serde_json::json!({ "refresh_sessions_revoked": true }))
+        .request_id_from_headers(headers)
+        .record_tx(&mut tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 async fn me(State(state): State<AppState>, auth: AuthUser) -> Result<impl IntoResponse, AppError> {
@@ -1707,6 +1800,37 @@ mod tests {
         app.oneshot(req).await.unwrap()
     }
 
+    async fn seed_oidc_callback_transaction(transaction: &oidc::Transaction) {
+        let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
+        let client = redis::Client::open(redis_url).expect("redis client");
+        let mut connection = client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("redis connection");
+        connection
+            .set_ex::<_, _, ()>(
+                format!("riviamigo:oidc:tx:{}", transaction.state),
+                serde_json::to_string(transaction).expect("serialize OIDC transaction"),
+                600,
+            )
+            .await
+            .expect("seed OIDC transaction");
+    }
+
+    async fn oidc_callback_request(
+        app: axum::Router,
+        uri: &str,
+        cookie: Option<&str>,
+    ) -> axum::response::Response {
+        let mut request = Request::builder().method("GET").uri(uri);
+        if let Some(cookie) = cookie {
+            request = request.header("cookie", format!("oidc_state={cookie}"));
+        }
+        app.oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
     async fn login_access_token(app: axum::Router, email: &str) -> String {
         let resp = post_json(
             app,
@@ -1825,6 +1949,7 @@ mod tests {
             return_to: "/".into(),
             user_id: None,
             link: false,
+            pending_password_hash: None,
         }
     }
 
@@ -1976,6 +2101,78 @@ mod tests {
 
     // ── integration tests (require DATABASE_URL) ─────────────────────────────
     // Run with: cargo test -- --ignored
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL and REDIS_URL"]
+    async fn oidc_callback_wrong_browser_cookie_consumes_the_one_time_transaction() {
+        let mut transaction = test_oidc_transaction();
+        transaction.state = format!("wrong-cookie-{}", Uuid::new_v4());
+        transaction.browser_binding = oidc::browser_binding("expected-browser");
+        seed_oidc_callback_transaction(&transaction).await;
+        let app = make_app().await;
+
+        let wrong_cookie = oidc_callback_request(
+            app.clone(),
+            &format!("/v1/auth/oidc/callback?state={}", transaction.state),
+            Some("different-browser"),
+        )
+        .await;
+        assert_eq!(wrong_cookie.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            wrong_cookie.headers().get("location").unwrap(),
+            "/login?error=oidc_failed"
+        );
+
+        let replay = oidc_callback_request(
+            app,
+            &format!("/v1/auth/oidc/callback?state={}", transaction.state),
+            Some("expected-browser"),
+        )
+        .await;
+        assert_eq!(replay.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            replay.headers().get("location").unwrap(),
+            "/login?error=oidc_expired"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL and REDIS_URL"]
+    async fn oidc_provider_denial_consumes_the_transaction_without_token_exchange() {
+        let browser_cookie = "denied-browser";
+        let mut transaction = test_oidc_transaction();
+        transaction.state = format!("provider-denial-{}", Uuid::new_v4());
+        transaction.browser_binding = oidc::browser_binding(browser_cookie);
+        seed_oidc_callback_transaction(&transaction).await;
+        let app = make_app().await;
+
+        let denied = oidc_callback_request(
+            app.clone(),
+            &format!(
+                "/v1/auth/oidc/callback?state={}&error=access_denied",
+                transaction.state
+            ),
+            Some(browser_cookie),
+        )
+        .await;
+        assert_eq!(denied.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            denied.headers().get("location").unwrap(),
+            "/login?error=oidc_denied"
+        );
+
+        let replay = oidc_callback_request(
+            app,
+            &format!("/v1/auth/oidc/callback?state={}", transaction.state),
+            Some(browser_cookie),
+        )
+        .await;
+        assert_eq!(replay.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            replay.headers().get("location").unwrap(),
+            "/login?error=oidc_expired"
+        );
+    }
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
@@ -2373,5 +2570,88 @@ mod tests {
 
         delete_test_user(&user_email).await;
         delete_test_user(&owner_email).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn oidc_reauthentication_sets_initial_password_and_revokes_refresh_sessions() {
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
+        let pool = crate::db::pool::create_pool(&database_url)
+            .await
+            .expect("create_pool");
+        let email = format!("oidc_password_{}@example.com", Uuid::new_v4());
+        let user_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO riviamigo.users(email,password_hash,role) \
+             VALUES($1,NULL,'user') RETURNING id",
+        )
+        .bind(&email)
+        .fetch_one(&pool)
+        .await
+        .expect("seed passwordless user");
+        sqlx::query(
+            "INSERT INTO riviamigo.user_oidc_identities(user_id,issuer,subject,email) \
+             VALUES($1,'https://issuer.example','linked-subject',$2)",
+        )
+        .bind(user_id)
+        .bind(&email)
+        .execute(&pool)
+        .await
+        .expect("seed linked identity");
+        issue_refresh_token(&pool, user_id)
+            .await
+            .expect("seed refresh session");
+
+        let hash = hash_password("newrecoverypassword123").expect("hash recovery password");
+        set_initial_password_after_oidc(&pool, user_id, &hash, &axum::http::HeaderMap::new())
+            .await
+            .expect("set initial password after OIDC reauthentication");
+
+        let stored_hash: String =
+            sqlx::query_scalar("SELECT password_hash FROM riviamigo.users WHERE id=$1")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .expect("load stored password hash");
+        verify_password("newrecoverypassword123", &stored_hash)
+            .expect("new recovery password should verify");
+        let active_refresh_sessions: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM riviamigo.refresh_tokens \
+             WHERE user_id=$1 AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .expect("count active refresh sessions");
+        assert_eq!(active_refresh_sessions, 0);
+
+        let second_attempt =
+            set_initial_password_after_oidc(&pool, user_id, &hash, &axum::http::HeaderMap::new())
+                .await;
+        assert!(matches!(second_attempt, Err(AppError::Conflict(_))));
+
+        let mut password_setup = test_oidc_transaction();
+        password_setup.link = true;
+        password_setup.user_id = Some(user_id);
+        password_setup.pending_password_hash = Some(hash);
+        let different_identity = test_oidc_identity(&email);
+        let result = resolve_oidc_identity(
+            &pool,
+            &test_oidc_settings(false, false),
+            &password_setup,
+            &different_identity,
+        )
+        .await;
+        assert!(matches!(result, Err(AppError::Forbidden)));
+        let unexpected_mapping: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM riviamigo.user_oidc_identities WHERE subject=$1",
+        )
+        .bind(&different_identity.subject)
+        .fetch_one(&pool)
+        .await
+        .expect("count unexpected identity mappings");
+        assert_eq!(unexpected_mapping, 0);
+
+        delete_test_user(&email).await;
     }
 }

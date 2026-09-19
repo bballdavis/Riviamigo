@@ -45,7 +45,10 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
   multiple providers, SCIM, and provider logout are not implemented.
 - OIDC settings are field-overridable from the environment for recovery. Client
   secrets are write-only and excluded from recovery packages; identity mappings
-  remain, so restore requires provider re-entry and a configuration test.
+  remain, so restore requires provider re-entry and a configuration test. The
+  supplied Compose overlay mounts the client secret read-only and refuses a
+  missing host source path; production provider requests use bounded connect
+  and total timeouts.
 - The internal origin deliberately does not trust arbitrary forwarded client-IP
   headers. Configure client-IP trust only at the outer gateway after validating
   its network boundary.

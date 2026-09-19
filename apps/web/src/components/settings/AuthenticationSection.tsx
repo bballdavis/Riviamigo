@@ -63,6 +63,7 @@ export function AuthenticationSection() {
   const [secret, setSecret] = React.useState('');
   const [secretAction, setSecretAction] = React.useState<'keep' | 'replace' | 'clear'>('keep');
   const [message, setMessage] = React.useState('');
+  const [messageRole, setMessageRole] = React.useState<'status' | 'alert'>('status');
   React.useEffect(() => {
     if (!settings.data) return;
     const next = { ...defaults };
@@ -78,17 +79,26 @@ export function AuthenticationSection() {
       client.setQueryData(queryKeys.auth.authenticationSettings, data);
       setSecret('');
       setSecretAction('keep');
+      setMessageRole('status');
       setMessage('Authentication settings saved.');
     },
-    onError: () => setMessage('Unable to save authentication settings.'),
+    onError: (error) => {
+      const detail = (error as { detail?: { message?: string } }).detail?.message;
+      setMessageRole('alert');
+      setMessage(detail ?? 'Unable to save authentication settings.');
+    },
   });
   const test = useMutation({
     mutationFn: () => api.testAuthenticationSettings(),
     onSuccess: () => {
+      setMessageRole('status');
       setMessage('Provider discovery and signing keys validated.');
       void client.invalidateQueries({ queryKey: queryKeys.auth.authenticationSettings });
     },
-    onError: () => setMessage('Provider validation failed. Check the issuer and client settings.'),
+    onError: () => {
+      setMessageRole('alert');
+      setMessage('Provider validation failed. Check the issuer and client settings.');
+    },
   });
   if (settings.isLoading)
     return (
@@ -120,8 +130,11 @@ export function AuthenticationSection() {
   };
   const environmentOwned = (key: keyof AuthenticationSettingsUpdate) =>
     source(key) === 'environment';
-  const update = (key: keyof AuthenticationSettingsUpdate, value: unknown) =>
+  const update = (key: keyof AuthenticationSettingsUpdate, value: unknown) => {
+    setMessageRole('status');
+    setMessage('');
     setForm((current) => ({ ...current, [key]: value }));
+  };
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     const body: AuthenticationSettingsUpdate = {};
@@ -141,7 +154,10 @@ export function AuthenticationSection() {
   };
   const textField = (key: keyof AuthenticationSettingsUpdate, label: string) => (
     <label className="grid gap-1 text-sm text-fg">
-      {label} <Source source={source(key)} />
+      <span className="flex items-center justify-between gap-2">
+        <span>{label}</span>
+        <Source source={source(key)} />
+      </span>
       <Input
         value={typeof form[key] === 'string' ? (form[key] as string) : ''}
         disabled={environmentOwned(key)}
@@ -191,6 +207,8 @@ export function AuthenticationSection() {
                 value={secret}
                 disabled={data.client_secret.source === 'environment'}
                 onChange={(event) => {
+                  setMessageRole('status');
+                  setMessage('');
                   setSecret(event.target.value);
                   setSecretAction('replace');
                 }}
@@ -201,6 +219,8 @@ export function AuthenticationSection() {
                   size="sm"
                   variant="secondary"
                   onClick={() => {
+                    setMessageRole('status');
+                    setMessage('');
                     setSecret('');
                     setSecretAction('keep');
                   }}
@@ -212,7 +232,11 @@ export function AuthenticationSection() {
                   size="sm"
                   variant="secondary"
                   disabled={data.client_secret.source === 'environment'}
-                  onClick={() => setSecretAction('clear')}
+                  onClick={() => {
+                    setMessageRole('status');
+                    setMessage('');
+                    setSecretAction('clear');
+                  }}
                 >
                   Clear secret
                 </Button>
@@ -238,11 +262,23 @@ export function AuthenticationSection() {
             {toggle('auto_signup', 'Allow automatic signup')}
             {toggle('auto_link_verified_email', 'Link verified existing emails')}
           </div>
+          {form.auto_link_verified_email === true && (
+            <div className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-3 text-xs text-fg-secondary">
+              <strong className="text-fg">Verified-email linking is security-sensitive.</strong>{' '}
+              Prefer each user connecting SSO from their signed-in account. Enable automatic
+              linking only for a single-tenant provider whose verified email addresses are unique
+              and cannot be reassigned. Riviamigo requires either allowed domains or a required
+              claim before this can be saved.
+            </div>
+          )}
           <div className="grid gap-4 md:grid-cols-2">
             {textField('button_label', 'Button label')}
             {textField('scopes', 'Scopes')}
             <label className="grid gap-1 text-sm text-fg">
-              Token auth method <Source source={source('token_auth_method')} />
+              <span className="flex items-center justify-between gap-2">
+                <span>Token auth method</span>
+                <Source source={source('token_auth_method')} />
+              </span>
               <SelectPicker
                 value={String(form.token_auth_method ?? 'auto')}
                 disabled={environmentOwned('token_auth_method')}
@@ -255,7 +291,10 @@ export function AuthenticationSection() {
               />
             </label>
             <label className="grid gap-1 text-sm text-fg">
-              Allowed email domains <Source source={source('allowed_email_domains')} />
+              <span className="flex items-center justify-between gap-2">
+                <span>Allowed email domains</span>
+                <Source source={source('allowed_email_domains')} />
+              </span>
               <Input
                 value={(form.allowed_email_domains ?? []).join(', ')}
                 disabled={environmentOwned('allowed_email_domains')}
@@ -293,8 +332,8 @@ export function AuthenticationSection() {
           )}
           {message && (
             <p
-              role={message.includes('failed') || message.includes('Unable') ? 'alert' : 'status'}
-              className="text-sm text-fg-secondary"
+              role={messageRole}
+              className={messageRole === 'alert' ? 'text-sm text-status-danger' : 'text-sm text-fg-secondary'}
             >
               {message}
             </p>

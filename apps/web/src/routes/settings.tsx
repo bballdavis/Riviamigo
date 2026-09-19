@@ -27,6 +27,7 @@ export const settingsRoute = createRoute({
       ])
       .optional(),
     oidc: z.enum(['linked']).optional(),
+    password: z.enum(['set']).optional(),
     error: z.enum(['oidc_cancelled', 'oidc_failed', 'oidc_denied', 'oidc_expired']).optional(),
   }),
   component: SettingsPage,
@@ -38,14 +39,19 @@ function SettingsPage() {
     <ProtectedRoute>
       <SettingsContent
         {...(search.section ? { initialSection: search.section } : {})}
-        {...(search.oidc
-          ? { oidcFeedback: 'SSO identity linked.', oidcFeedbackKind: 'success' as const }
-          : search.error
-            ? {
-                oidcFeedback: 'SSO connection was cancelled or could not be completed.',
-                oidcFeedbackKind: 'error' as const,
-              }
-            : {})}
+        {...(search.password
+          ? {
+              oidcFeedback: 'Recovery password set. Other refresh sessions were revoked.',
+              oidcFeedbackKind: 'success' as const,
+            }
+          : search.oidc
+            ? { oidcFeedback: 'SSO identity linked.', oidcFeedbackKind: 'success' as const }
+            : search.error
+              ? {
+                  oidcFeedback: 'SSO connection was cancelled or could not be completed.',
+                  oidcFeedbackKind: 'error' as const,
+                }
+              : {})}
       />
     </ProtectedRoute>
   );

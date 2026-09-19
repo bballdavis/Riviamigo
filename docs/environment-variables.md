@@ -88,12 +88,13 @@ and password login on.
 | `RIVIAMIGO_OIDC_PUBLIC_BASE_URL` | Database/unset | Public HTTPS base URL used to derive the exact `/v1/auth/oidc/callback` redirect URI. |
 | `RIVIAMIGO_OIDC_CLIENT_ID` | Database/unset | Confidential OIDC client identifier. |
 | `RIVIAMIGO_OIDC_CLIENT_SECRET` | Database/unset | Client secret override. Mutually exclusive with `_FILE`; never returned by the API. |
-| `RIVIAMIGO_OIDC_CLIENT_SECRET_FILE` | Unset | Path to a mounted file containing the client secret. Mutually exclusive with the direct secret variable. |
+| `RIVIAMIGO_OIDC_CLIENT_SECRET_FILE` | Unset | Path to a mounted file containing the client secret. Mutually exclusive with the direct secret variable. The supplied OIDC secret Compose overlay sets this path automatically. |
+| `RIVIAMIGO_OIDC_CLIENT_SECRET_SOURCE` | Unset | Host file mounted by `compose/docker-compose.oidc-secret.yml`. Compose also passes this non-secret path through the shared dotenv environment, but Riviamigo does not read it. |
 | `RIVIAMIGO_OIDC_BUTTON_LABEL` | `Sign in with SSO` | Text shown on the SSO button. |
-| `RIVIAMIGO_OIDC_SCOPES` | `openid email profile` | Space-separated provider scopes. |
+| `RIVIAMIGO_OIDC_SCOPES` | `openid email profile` | Space-separated provider scopes. `openid` is mandatory; Riviamigo rejects or hides an OIDC configuration that omits it. |
 | `RIVIAMIGO_OIDC_TOKEN_AUTH_METHOD` | `auto` | Token endpoint authentication: `auto`, `client_secret_basic`, or `client_secret_post`. |
 | `RIVIAMIGO_OIDC_AUTO_SIGNUP` | Database/default `false` | Permit a qualifying new OIDC identity to create a basic user. |
-| `RIVIAMIGO_OIDC_AUTO_LINK_VERIFIED_EMAIL` | Database/default `false` | Permit a verified provider email to link to one matching existing account. |
+| `RIVIAMIGO_OIDC_AUTO_LINK_VERIFIED_EMAIL` | Database/default `false` | Permit a verified provider email to link to one matching existing account. Enabling this requires either allowed email domains or a required claim pair. |
 | `RIVIAMIGO_OIDC_ALLOWED_EMAIL_DOMAINS` | Database/unset | Comma-separated, case-insensitive email domains allowed by auto-link/auto-signup policy. |
 | `RIVIAMIGO_OIDC_REQUIRED_CLAIM_NAME` | Database/unset | Optional exact claim name required for OIDC login. Must be set together with the claim value. |
 | `RIVIAMIGO_OIDC_REQUIRED_CLAIM_VALUE` | Database/unset | Optional exact value for the required claim. Must be set together with the claim name. |

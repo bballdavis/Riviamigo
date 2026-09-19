@@ -40,4 +40,31 @@ describe('AuthenticationSection', () => {
     const user = userEvent.setup(); renderSection(); await user.click(await screen.findByRole('button', { name: 'Test provider' }));
     expect(await screen.findByRole('status')).toHaveTextContent(/validated/i);
   });
+
+  it('warns before verified-email account linking is enabled', async () => {
+    const user = userEvent.setup(); renderSection();
+    const toggle = await screen.findByRole('switch', { name: 'Link verified existing emails' });
+    expect(screen.queryByText(/security-sensitive/i)).not.toBeInTheDocument();
+    await user.click(toggle);
+    expect(screen.getByText(/security-sensitive/i)).toBeInTheDocument();
+    expect(screen.getByText(/cannot be reassigned/i)).toBeInTheDocument();
+  });
+
+  it('clears stale save feedback when the form changes', async () => {
+    updateSettings.mockRejectedValueOnce(new Error('invalid settings'));
+    const user = userEvent.setup(); renderSection();
+    await user.click(await screen.findByRole('button', { name: 'Save settings' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/unable to save/i);
+    await user.type(screen.getByRole('textbox', { name: /button label/i }), ' updated');
+    expect(screen.queryByText(/unable to save/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the server validation reason when settings are rejected', async () => {
+    updateSettings.mockRejectedValueOnce({
+      detail: { message: 'Auto-link requires an admission restriction.' },
+    });
+    const user = userEvent.setup(); renderSection();
+    await user.click(await screen.findByRole('button', { name: 'Save settings' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/admission restriction/i);
+  });
 });

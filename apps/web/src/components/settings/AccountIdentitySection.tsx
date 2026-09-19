@@ -10,6 +10,8 @@ export function AccountIdentitySection() {
     retry: false,
   });
   const [password, setPassword] = React.useState('');
+  const [newPassword, setNewPassword] = React.useState('');
+  const [confirmPassword, setConfirmPassword] = React.useState('');
   const [message, setMessage] = React.useState('');
   const link = useMutation({
     mutationFn: () => api.startOidcLink('/settings?section=account'),
@@ -23,6 +25,11 @@ export function AccountIdentitySection() {
       void qc.invalidateQueries({ queryKey: queryKeys.auth.identities });
     },
     onError: () => setMessage('Unable to disconnect SSO. Check your current password.'),
+  });
+  const setInitialPassword = useMutation({
+    mutationFn: () => api.startOidcPasswordSetup(newPassword),
+    onSuccess: (r) => window.location.assign(r.authorization_url),
+    onError: () => setMessage('Unable to start SSO verification for the recovery password.'),
   });
   if (q.isLoading)
     return (
@@ -70,10 +77,46 @@ export function AccountIdentitySection() {
         )}
       </div>
       {data.oidc_linked && !data.password_configured && (
-        <p className="text-xs text-fg-tertiary">
-          SSO is this account’s only sign-in method, so it cannot be disconnected here. Contact an
-          administrator if recovery is needed.
-        </p>
+        <div className="grid max-w-sm gap-3 rounded-lg border border-border bg-surface-subtle p-4">
+          <div>
+            <p className="text-sm font-medium text-fg">Set a recovery password</p>
+            <p className="mt-1 text-xs text-fg-tertiary">
+              SSO is currently this account’s only sign-in method. Riviamigo will ask the provider
+              to verify you again before saving this password.
+            </p>
+          </div>
+          <Input
+            label="New recovery password"
+            type="password"
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+            autoComplete="new-password"
+            minLength={12}
+          />
+          <Input
+            label="Confirm recovery password"
+            type="password"
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+            autoComplete="new-password"
+            minLength={12}
+            {...(confirmPassword && confirmPassword !== newPassword
+              ? { error: 'Passwords do not match.' }
+              : {})}
+          />
+          <p className="text-xs text-fg-tertiary">
+            Use at least 12 characters. Other refresh sessions are revoked when the password is
+            set; existing short-lived access tokens expire normally.
+          </p>
+          <Button
+            size="sm"
+            loading={setInitialPassword.isPending}
+            disabled={newPassword.length < 12 || newPassword !== confirmPassword}
+            onClick={() => setInitialPassword.mutate()}
+          >
+            Verify SSO and set password
+          </Button>
+        </div>
       )}
       {data.oidc_linked && data.password_configured && (
         <div className="grid max-w-sm gap-2">

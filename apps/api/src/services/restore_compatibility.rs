@@ -2,7 +2,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use sqlx::{postgres::PgPoolOptions, AssertSqlSafe, PgPool};
+use sqlx::{postgres::PgPoolOptions, AssertSqlSafe, Executor, PgPool, Postgres};
 use std::path::{Path, PathBuf};
 use tokio::{fs, process::Command};
 use url::Url;
@@ -546,6 +546,7 @@ pub async fn prepare_candidate_schema(
     MIGRATOR
         .run_direct(None, &mut *migration_connection, false)
         .await?;
+    ensure_sanitized_authentication_settings(&mut *migration_connection).await?;
     drop(migration_connection);
 
     let target_profile = runtime_database_profile(pool).await?;
@@ -569,6 +570,25 @@ pub async fn prepare_candidate_schema(
         applied_transforms: Vec::new(),
         migrations_applied,
     })
+}
+
+/// Recreate the redacted authentication singleton after a package restore.
+///
+/// Provider credentials and OIDC settings are intentionally excluded from
+/// backups. A restored candidate must nevertheless have the migration's safe
+/// defaults so startup and break-glass password recovery remain available.
+/// `DO NOTHING` is important: this helper must never overwrite settings that a
+/// restore package or a prior compatibility step already supplied.
+async fn ensure_sanitized_authentication_settings<'c, E>(executor: E) -> Result<(), sqlx::Error>
+where
+    E: Executor<'c, Database = Postgres>,
+{
+    sqlx::query(
+        "INSERT INTO riviamigo.authentication_settings (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING",
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
 }
 
 /// Create an empty sibling database and fingerprint only the immutable
@@ -908,6 +928,7 @@ fn parse_version_triplet(value: &str) -> Option<(u32, u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::Row;
 
     #[test]
     fn schema_contract_requires_chart_relation() {
@@ -993,5 +1014,60 @@ mod tests {
 
         validate_source_schema_metadata(&profile).expect("schema metadata remains valid");
         assert!(validate_source_identity(&profile).is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a migrated PostgreSQL database"]
+    async fn sanitized_authentication_settings_restore_defaults_without_overwriting() {
+        let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .expect("database connection");
+
+        let mut transaction = pool.begin().await.expect("transaction");
+        sqlx::query("DELETE FROM riviamigo.authentication_settings")
+            .execute(&mut *transaction)
+            .await
+            .expect("delete singleton");
+        ensure_sanitized_authentication_settings(&mut *transaction)
+            .await
+            .expect("recreate safe defaults");
+        let defaults = sqlx::query(
+            "SELECT oidc_enabled,password_login_enabled,client_secret_encrypted,scopes FROM riviamigo.authentication_settings WHERE id=TRUE",
+        )
+        .fetch_one(&mut *transaction)
+        .await
+        .expect("safe defaults");
+        assert!(!defaults.get::<bool, _>("oidc_enabled"));
+        assert!(defaults.get::<bool, _>("password_login_enabled"));
+        assert!(defaults
+            .get::<Option<Vec<u8>>, _>("client_secret_encrypted")
+            .is_none());
+        assert_eq!(defaults.get::<String, _>("scopes"), "openid email profile");
+
+        sqlx::query(
+            "UPDATE riviamigo.authentication_settings SET oidc_enabled=TRUE,password_login_enabled=FALSE,client_secret_encrypted=decode('c2VjcmV0','base64') WHERE id=TRUE",
+        )
+        .execute(&mut *transaction)
+        .await
+        .expect("seed existing settings");
+        ensure_sanitized_authentication_settings(&mut *transaction)
+            .await
+            .expect("preserve existing settings");
+        let preserved = sqlx::query(
+            "SELECT oidc_enabled,password_login_enabled,client_secret_encrypted FROM riviamigo.authentication_settings WHERE id=TRUE",
+        )
+        .fetch_one(&mut *transaction)
+        .await
+        .expect("preserved settings");
+        assert!(preserved.get::<bool, _>("oidc_enabled"));
+        assert!(!preserved.get::<bool, _>("password_login_enabled"));
+        assert_eq!(
+            preserved.get::<Option<Vec<u8>>, _>("client_secret_encrypted"),
+            Some(b"secret".to_vec())
+        );
+        transaction.rollback().await.expect("rollback test data");
     }
 }

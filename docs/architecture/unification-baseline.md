@@ -60,6 +60,17 @@ Counts below exclude test and story files. A match count is reported separately 
 
 The initial guard configuration allowlists the current production locations and caps each pattern at its measured match count. Follow-up foundation and query-factory PRs must remove those allowlists and lower those caps as consumers migrate. The six Rust time-range definitions are likewise capped by the guard until A1 consolidates them.
 
+Test-support directories such as `apps/web/src/test` and `__tests__` are
+excluded from production pattern counts. The OIDC feature integration records
+`authentication_settings.rs` as the database/environment precedence and
+lockout-policy boundary and `oidc.rs` as the protocol-verification boundary.
+Both exceed the generic 500-line orchestration threshold and therefore carry
+explicit exceptions until they can be split with database-backed settings and
+real confidential-provider integration coverage. The same integration
+ratchets the current settings page, backup service, and API transport facade at
+1,930 lines/101,387 bytes, 2,675 lines/98,964 bytes, and 2,355 lines/80,897
+bytes respectively; further growth remains blocked.
+
 ## Guard ownership
 
 `pnpm architecture:check` is now the single named verification entry point for:
