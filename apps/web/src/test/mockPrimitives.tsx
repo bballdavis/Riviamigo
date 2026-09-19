@@ -220,6 +220,10 @@ export const Input = ({ label, error, id, ...props }: {
   );
 };
 
+export const Switch = ({ checked, onChange, ...props }: { checked: boolean; onChange?: (checked: boolean) => void; [key: string]: unknown }) => (
+  <button type="button" role="switch" aria-checked={checked} onClick={() => onChange?.(!checked)} {...props} />
+);
+
 export const Skeleton = ({ className }: { className?: string }) => <div className={className} />;
 export const ChartSkeleton = ({ className }: { className?: string }) => <div className={className} />;
 

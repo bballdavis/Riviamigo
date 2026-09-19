@@ -24,6 +24,10 @@ import type {
   PaginatedResponse,
   AuthTokens,
   AuthMeResponse,
+  AuthConfigResponse,
+  AuthenticationSettings,
+  AuthenticationSettingsUpdate,
+  OidcIdentityStatus,
   ConnectResult,
   RefreshVehicleCredentialsResult,
   ApiError,
@@ -257,6 +261,8 @@ interface ApiFailureDetail {
 
 const AUTH_REFRESH_EXCLUDED_PATHS = new Set([
   '/v1/auth/login',
+  '/v1/auth/config',
+  '/v1/auth/oidc/start',
   '/v1/auth/register',
   '/v1/auth/setup',
   '/v1/auth/account-invitations/preview',
@@ -636,6 +642,38 @@ export class AuthenticatedTransport {
 
   async me(): Promise<AuthMeResponse> {
     return this.request('GET', '/v1/auth/me');
+  }
+
+  async getAuthConfig(): Promise<AuthConfigResponse> {
+    return this.request('GET', '/v1/auth/config', undefined, undefined, true, false);
+  }
+
+  async getAuthenticationSettings(): Promise<AuthenticationSettings> {
+    return this.request('GET', '/v1/settings/authentication');
+  }
+
+  async updateAuthenticationSettings(body: AuthenticationSettingsUpdate): Promise<AuthenticationSettings> {
+    return this.request('PUT', '/v1/settings/authentication', body);
+  }
+
+  async testAuthenticationSettings(): Promise<{ valid: boolean; discovery: string; message: string }> {
+    return this.request('POST', '/v1/settings/authentication/test');
+  }
+
+  async getOidcIdentities(): Promise<OidcIdentityStatus & { oidc_link_available?: boolean; button_label?: string }> {
+    return this.request('GET', '/v1/auth/identities');
+  }
+
+  async startOidc(returnTo?: string): Promise<{ authorization_url: string }> {
+    return this.request('POST', '/v1/auth/oidc/start', returnTo ? { return_to: returnTo } : {} , undefined, true, false);
+  }
+
+  async startOidcLink(returnTo?: string): Promise<{ authorization_url: string }> {
+    return this.request('POST', '/v1/auth/oidc/link/start', returnTo ? { return_to: returnTo } : {});
+  }
+
+  async unlinkOidc(currentPassword: string): Promise<void> {
+    return this.request('POST', '/v1/auth/oidc/unlink', { current_password: currentPassword });
   }
 
   async getUnitPreferences(): Promise<UserPreferencesResponse> { return this.request('GET', '/v1/auth/preferences'); }
@@ -2231,6 +2269,8 @@ function inferClientRateLimitClass(method: string, path: string) {
 function isPublicAuthPath(path: string) {
   return (
     path.startsWith('/v1/auth/login') ||
+    path.startsWith('/v1/auth/config') ||
+    path.startsWith('/v1/auth/oidc/start') ||
     path.startsWith('/v1/auth/register') ||
     path.startsWith('/v1/auth/setup') ||
     path.startsWith('/v1/auth/account-invitations/') ||

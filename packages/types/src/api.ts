@@ -1219,7 +1219,40 @@ export interface AuthMeResponse {
   email: string;
   role: UserRole;
   default_vehicle_id: string | null;
+  password_configured: boolean;
+  oidc_linked: boolean;
 }
+
+export type SettingSource = 'default' | 'database' | 'environment';
+export interface EffectiveSetting<T> { value: T; source: SettingSource }
+export interface AuthenticationSettings {
+  oidc_enabled: EffectiveSetting<boolean>;
+  password_login_enabled: EffectiveSetting<boolean>;
+  issuer_url: EffectiveSetting<string | null>;
+  public_base_url: EffectiveSetting<string | null>;
+  client_id: EffectiveSetting<string | null>;
+  client_secret: { configured: boolean; source: SettingSource };
+  button_label: EffectiveSetting<string>;
+  scopes: EffectiveSetting<string>;
+  token_auth_method: EffectiveSetting<string>;
+  auto_signup: EffectiveSetting<boolean>;
+  auto_link_verified_email: EffectiveSetting<boolean>;
+  allowed_email_domains: EffectiveSetting<string[]>;
+  required_claim_name: EffectiveSetting<string | null>;
+  required_claim_value: EffectiveSetting<string | null>;
+  last_validation_at: string | null;
+  last_validation_fingerprint: string | null;
+  callback_url: string | null;
+}
+export type AuthenticationSettingsUpdate = Partial<{
+  oidc_enabled: boolean; password_login_enabled: boolean;
+  issuer_url: string | null; public_base_url: string | null; client_id: string | null;
+  client_secret: string | null; button_label: string; scopes: string; token_auth_method: string;
+  auto_signup: boolean; auto_link_verified_email: boolean; allowed_email_domains: string[];
+  required_claim_name: string | null; required_claim_value: string | null;
+}>;
+export interface AuthConfigResponse { oidc_enabled: boolean; password_login_enabled: boolean; oidc_ready: boolean; button_label: string }
+export interface OidcIdentityStatus { password_configured: boolean; oidc_linked: boolean; oidc_link_available?: boolean; button_label?: string }
 
 export interface AuthSetupResponse {
   setup_required: boolean;

@@ -16,6 +16,7 @@ function client<const Keys extends readonly MethodName[]>(...keys: Keys) {
 export const authClient = client(
   'login', 'register', 'logout', 'changePassword', 'refresh', 'setup',
   'previewAccountInvitation', 'acceptAccountInvitation', 'resumeSession', 'me',
+  'getAuthConfig', 'getOidcIdentities', 'startOidc', 'startOidcLink', 'unlinkOidc',
   'getUnitPreferences', 'updateUnitPreferences', 'updateThemePreferences', 'getDashboardChartFavorites',
   'updateDashboardChartFavorite', 'getAppTimezone', 'updateAppTimezone',
 );
@@ -58,6 +59,7 @@ export const analyticsClient = client(
 );
 
 export const systemClient = client(
+  'getAuthenticationSettings', 'updateAuthenticationSettings', 'testAuthenticationSettings',
   'listUsers', 'listAdminVehicleOptions', 'listAccountInvitations',
   'createAccountInvitation', 'revokeAccountInvitation', 'updateUser', 'deleteUser',
   'listUserVehicleMemberships', 'getUserDetail', 'listUserInvites', 'revokeUserInvite',

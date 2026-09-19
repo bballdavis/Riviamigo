@@ -19,6 +19,7 @@ export const loginRoute = createRoute({
   validateSearch: z.object({
     redirect: z.string().optional(),
     password_changed: z.literal('1').optional(),
+    error: z.enum(['oidc_cancelled', 'oidc_expired', 'oidc_denied', 'oidc_failed']).optional(),
   }),
   component: LoginPage,
 });
@@ -50,6 +51,15 @@ export function LoginPage() {
   const setupRequired = setup.data?.setup_required === true;
   const setupProofRequired = setup.data?.setup_proof_required === true;
   const setupProofAvailable = setup.data?.setup_proof_available === true;
+  const authConfig = useQuery({
+    queryKey: ['auth-config'],
+    queryFn: () => api.getAuthConfig(),
+    retry: false,
+    enabled: setup.isSuccess && !setupRequired,
+  });
+  const config = authConfig.data;
+  const ssoReady = !setupRequired && config?.oidc_enabled === true && config.oidc_ready === true;
+  const passwordEnabled = setupRequired || config?.password_login_enabled !== false;
 
   useEffect(() => {
     let cancelled = false;
@@ -118,11 +128,12 @@ export function LoginPage() {
     } catch (err) {
       const status = (err as { status?: number }).status;
       let message: string;
+      const code = (err as { code?: string }).code;
       if (status === 401) {
         message = 'Incorrect email or password. Please try again.';
       } else if (status === 429) {
         message = 'Too many sign-in attempts. Please wait a moment and try again.';
-      } else if ((err as { code?: string }).code === 'SETUP_PROOF_REQUIRED') {
+      } else if (code === 'SETUP_PROOF_REQUIRED') {
         message = 'Enter the instance setup token before creating the owner account.';
       } else if ((err as { code?: string }).code === 'SETUP_PROOF_INVALID') {
         message = 'The instance setup token is invalid. Check it and try again.';
@@ -136,6 +147,22 @@ export function LoginPage() {
       }
       setError(message);
       emitAuthError('Sign-in failed', message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSso() {
+    setError('');
+    setLoading(true);
+    try {
+      const result = await api.startOidc(redirectTarget ?? '/');
+      window.location.assign(result.authorization_url);
+    } catch (err) {
+      setError(
+        'Single sign-on is temporarily unavailable. Use your password or contact an administrator.'
+      );
+      emitAuthError('SSO sign-in failed', 'Single sign-on is temporarily unavailable.');
     } finally {
       setLoading(false);
     }
@@ -189,8 +216,20 @@ export function LoginPage() {
               Password changed. Sign in with your new password.
             </p>
           )}
+          {search.error && (
+            <p role="alert" className="mb-4 rounded-lg border border-status-warning/30 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
+              {search.error === 'oidc_cancelled' || search.error === 'oidc_denied'
+                ? 'Single sign-on was cancelled or denied.'
+                : search.error === 'oidc_expired'
+                  ? 'This single sign-on attempt expired.'
+                  : 'Single sign-on could not be completed.'}{' '}
+              You can try again or use your password.
+            </p>
+          )}
 
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          {ssoReady && <Button type="button" size="lg" className="w-full" loading={loading} onClick={handleSso}>{config?.button_label || 'Sign in with SSO'}</Button>}
+          {ssoReady && passwordEnabled && <div className="my-1 flex items-center gap-3 text-[11px] text-fg-tertiary"><span className="h-px flex-1 bg-border" /><span>or</span><span className="h-px flex-1 bg-border" /></div>}
+          {passwordEnabled && <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <Input
               label="Email"
               type="email"
@@ -235,7 +274,8 @@ export function LoginPage() {
             <Button type="submit" loading={loading} size="lg" className="mt-1 w-full">
               {setupRequired ? 'Create owner account' : 'Sign in'}
             </Button>
-          </form>
+          </form>}
+          {!passwordEnabled && !ssoReady && <p role="status" className="text-xs text-fg-secondary">Sign-in is temporarily unavailable. Ask an administrator to restore an authentication method.</p>}
           {!setupRequired && <p className="mt-5 pt-5 border-t border-border text-center text-xs text-fg-tertiary">Need access? Ask an administrator for an activation link.</p>}
         </div>
 
