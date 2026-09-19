@@ -3,16 +3,69 @@
 //! authorization transactions.
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use openidconnect::{
-    core::{CoreClient, CoreProviderMetadata},
-    reqwest as oidc_reqwest, AuthType, AuthorizationCode, ClientId, ClientSecret, IssuerUrl, Nonce,
-    PkceCodeVerifier, RedirectUrl,
+    core::{
+        CoreAuthDisplay, CoreAuthPrompt, CoreErrorResponseType, CoreGenderClaim, CoreJsonWebKey,
+        CoreJweContentEncryptionAlgorithm, CoreJwsSigningAlgorithm, CoreProviderMetadata,
+        CoreRevocableToken, CoreRevocationErrorResponse, CoreTokenIntrospectionResponse,
+        CoreTokenType,
+    },
+    reqwest as oidc_reqwest, AdditionalClaims, AuthType, AuthorizationCode, Client, ClientId,
+    ClientSecret, EmptyExtraTokenFields, IdTokenFields, IssuerUrl, Nonce, PkceCodeVerifier,
+    RedirectUrl, StandardErrorResponse, StandardTokenResponse,
 };
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use url::Url;
 
 use crate::{errors::AppError, services::authentication_settings::EffectiveAuthenticationSettings};
+
+/// OIDC providers commonly put authorization data such as `groups` or a
+/// tenant marker in non-core ID-token claims.  Flattening preserves those
+/// values while the surrounding `openidconnect` types still verify the token
+/// before this map is ever exposed to policy evaluation.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+struct ProviderClaims {
+    #[serde(flatten)]
+    values: BTreeMap<String, serde_json::Value>,
+}
+impl AdditionalClaims for ProviderClaims {}
+
+type OidcTokenFields = IdTokenFields<
+    ProviderClaims,
+    EmptyExtraTokenFields,
+    CoreGenderClaim,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJwsSigningAlgorithm,
+>;
+type OidcTokenResponse = StandardTokenResponse<OidcTokenFields, CoreTokenType>;
+type OidcClient<
+    HasAuthUrl = openidconnect::EndpointNotSet,
+    HasDeviceAuthUrl = openidconnect::EndpointNotSet,
+    HasIntrospectionUrl = openidconnect::EndpointNotSet,
+    HasRevocationUrl = openidconnect::EndpointNotSet,
+    HasTokenUrl = openidconnect::EndpointNotSet,
+    HasUserInfoUrl = openidconnect::EndpointNotSet,
+> = Client<
+    ProviderClaims,
+    CoreAuthDisplay,
+    CoreGenderClaim,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJsonWebKey,
+    CoreAuthPrompt,
+    StandardErrorResponse<CoreErrorResponseType>,
+    OidcTokenResponse,
+    CoreTokenIntrospectionResponse,
+    CoreRevocableToken,
+    CoreRevocationErrorResponse,
+    HasAuthUrl,
+    HasDeviceAuthUrl,
+    HasIntrospectionUrl,
+    HasRevocationUrl,
+    HasTokenUrl,
+    HasUserInfoUrl,
+>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transaction {
@@ -255,12 +308,13 @@ pub async fn exchange_and_verify(
                 subject: claims.subject().as_str().to_owned(),
                 email,
                 email_verified: claims.email_verified() == Some(true),
-                claims: serde_json::to_value(claims).map_err(|_| AppError::Unauthorized)?,
+                claims: serde_json::to_value(&claims.additional_claims().values)
+                    .map_err(|_| AppError::Unauthorized)?,
             })
         }};
     }
     let base = || {
-        CoreClient::from_provider_metadata(
+        OidcClient::from_provider_metadata(
             metadata.clone(),
             ClientId::new(id.clone()),
             Some(ClientSecret::new(secret.clone())),
@@ -367,5 +421,30 @@ mod tests {
             Url::parse(&discovery).unwrap().path(),
             "/realms/riviamigo/.well-known/openid-configuration"
         );
+    }
+
+    fn verified_identity_with_claim(name: &str, value: serde_json::Value) -> VerifiedIdentity {
+        VerifiedIdentity {
+            issuer: "https://issuer.example.test".into(),
+            subject: "subject".into(),
+            email: None,
+            email_verified: false,
+            claims: serde_json::json!({ name: value }),
+        }
+    }
+
+    #[test]
+    fn required_claim_matches_verified_scalar_claim() {
+        let identity = verified_identity_with_claim("tenant", serde_json::json!("rivian"));
+        assert!(claim_matches(&identity, Some("tenant"), Some("rivian")));
+        assert!(!claim_matches(&identity, Some("tenant"), Some("other")));
+    }
+
+    #[test]
+    fn required_claim_matches_verified_array_claim() {
+        let identity =
+            verified_identity_with_claim("groups", serde_json::json!(["users", "fleet"]));
+        assert!(claim_matches(&identity, Some("groups"), Some("fleet")));
+        assert!(!claim_matches(&identity, Some("groups"), Some("admins")));
     }
 }

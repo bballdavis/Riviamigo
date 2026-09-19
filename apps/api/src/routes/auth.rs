@@ -1,7 +1,7 @@
 use axum::{
     extract::State,
     http::{header::SET_COOKIE, StatusCode},
-    response::{IntoResponse, Redirect, Response},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -211,7 +211,9 @@ async fn oidc_callback(
     headers: axum::http::HeaderMap,
     axum::extract::Query(q): axum::extract::Query<OidcCallback>,
 ) -> Result<Response, AppError> {
-    let st = q.state.ok_or(AppError::Unauthorized)?;
+    let Some(st) = q.state else {
+        return Ok(oidc_callback_error_response(false, "oidc_expired"));
+    };
     let cs = headers
         .get("cookie")
         .and_then(|v| v.to_str().ok())
@@ -222,85 +224,122 @@ async fn oidc_callback(
         });
     let mut c = state.redis.get_multiplexed_async_connection().await?;
     let raw: Option<String> = c.get_del(format!("riviamigo:oidc:tx:{st}")).await?;
-    let tx: oidc::Transaction = serde_json::from_str(&raw.ok_or(AppError::Unauthorized)?)
-        .map_err(|_| AppError::Unauthorized)?;
+    let Some(raw) = raw else {
+        return Ok(oidc_callback_error_response(false, "oidc_expired"));
+    };
+    let tx: oidc::Transaction = match serde_json::from_str(&raw) {
+        Ok(tx) => tx,
+        Err(_) => return Ok(oidc_callback_error_response(false, "oidc_expired")),
+    };
     if cs.as_deref().map(oidc::browser_binding).as_deref() != Some(tx.browser_binding.as_str()) {
-        return Err(AppError::Unauthorized);
+        return Ok(oidc_callback_error_response(tx.link, "oidc_failed"));
     }
     if q.error.is_some() {
-        let destination = if tx.link {
-            "/settings?section=account&error=oidc_cancelled"
-        } else {
-            "/login?error=oidc_cancelled"
-        };
-        return Ok((
-            [(
-                SET_COOKIE,
-                "oidc_state=; Path=/v1/auth; Max-Age=0; HttpOnly; Secure; SameSite=Lax",
-            )],
-            Redirect::to(destination),
-        )
-            .into_response());
+        return Ok(oidc_callback_error_response(tx.link, "oidc_denied"));
     }
-    let settings = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
-    let code = q.code.ok_or(AppError::Unauthorized)?;
-    let mut provider_settings = settings.clone();
-    if tx.link {
-        provider_settings.oidc_enabled = true;
-    }
-    let identity = oidc::exchange_and_verify(&provider_settings, &tx, &code).await?;
-    if !oidc::claim_matches(
-        &identity,
-        settings.required_claim_name.as_deref(),
-        settings.required_claim_value.as_deref(),
-    ) {
-        return Err(AppError::Forbidden);
-    }
-    let user_id = resolve_oidc_identity(&state.pool, &settings, &tx, &identity).await?;
-    let disabled: bool = sqlx::query_scalar("SELECT is_disabled FROM riviamigo.users WHERE id=$1")
-        .bind(user_id)
-        .fetch_optional(&state.pool)
-        .await?
-        .unwrap_or(true);
-    if disabled {
-        return Err(AppError::Forbidden);
-    }
-    let refresh = issue_refresh_token(&state.pool, user_id).await?;
-    SecurityAuditEvent::success(
+    let completion: Result<Response, AppError> = async {
+        let settings = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
+        let code = q.code.ok_or(AppError::Unauthorized)?;
+        let mut provider_settings = settings.clone();
         if tx.link {
-            "oidc_identity_linked"
+            provider_settings.oidc_enabled = true;
+        }
+        let identity = oidc::exchange_and_verify(&provider_settings, &tx, &code).await?;
+        if !oidc::claim_matches(
+            &identity,
+            settings.required_claim_name.as_deref(),
+            settings.required_claim_value.as_deref(),
+        ) {
+            return Err(AppError::Forbidden);
+        }
+        let user_id = resolve_oidc_identity(&state.pool, &settings, &tx, &identity).await?;
+        let disabled: bool =
+            sqlx::query_scalar("SELECT is_disabled FROM riviamigo.users WHERE id=$1")
+                .bind(user_id)
+                .fetch_optional(&state.pool)
+                .await?
+                .unwrap_or(true);
+        if disabled {
+            return Err(AppError::Forbidden);
+        }
+        let refresh = issue_refresh_token(&state.pool, user_id).await?;
+        SecurityAuditEvent::success(
+            if tx.link {
+                "oidc_identity_linked"
+            } else {
+                "oidc_login"
+            },
+            Some(user_id),
+        )
+        .target("oidc")
+        .record(&state.pool)
+        .await?;
+        let destination = if tx.link {
+            "/settings?section=account&oidc=linked"
         } else {
-            "oidc_login"
-        },
-        Some(user_id),
-    )
-    .target("oidc")
-    .record(&state.pool)
-    .await?;
-    let destination = if tx.link {
-        "/settings?section=account&oidc=linked"
-    } else {
-        &tx.return_to
-    };
-    Ok((
-        StatusCode::SEE_OTHER,
-        [
-            (
-                SET_COOKIE,
-                refresh_cookie(
-                    &refresh,
-                    2592000,
-                    state.config.allows_insecure_refresh_cookies(),
+            &tx.return_to
+        };
+        Ok((
+            StatusCode::SEE_OTHER,
+            [
+                (
+                    SET_COOKIE,
+                    refresh_cookie(
+                        &refresh,
+                        2592000,
+                        state.config.allows_insecure_refresh_cookies(),
+                    ),
                 ),
-            ),
-            (
-                SET_COOKIE,
-                "oidc_state=; Path=/v1/auth; Max-Age=0; HttpOnly; Secure; SameSite=Lax".to_owned(),
-            ),
-        ],
+                (
+                    SET_COOKIE,
+                    "oidc_state=; Path=/v1/auth; Max-Age=0; HttpOnly; Secure; SameSite=Lax"
+                        .to_owned(),
+                ),
+            ],
+            [(axum::http::header::LOCATION, destination)],
+        )
+            .into_response())
+    }
+    .await;
+    match completion {
+        Ok(response) => Ok(response),
+        Err(_) => {
+            // Never log provider errors, codes, tokens, or claims. This static
+            // stage is enough to correlate an audit event with a browser-safe
+            // failure redirect without recording identity data.
+            tracing::warn!(
+                stage = "verified_callback_completion",
+                link = tx.link,
+                "OIDC callback failed"
+            );
+            if let Err(audit_error) =
+                SecurityAuditEvent::failure("oidc_callback_failed", tx.user_id)
+                    .target("oidc")
+                    .record(&state.pool)
+                    .await
+            {
+                tracing::warn!(stage = "oidc_callback_failure_audit", error = %audit_error, "failed to record OIDC callback audit event");
+            }
+            Ok(oidc_callback_error_response(tx.link, "oidc_failed"))
+        }
+    }
+}
+
+fn oidc_callback_error_response(link: bool, code: &str) -> Response {
+    let destination = if link {
+        format!("/settings?section=account&error={code}")
+    } else {
+        format!("/login?error={code}")
+    };
+    (
+        StatusCode::SEE_OTHER,
+        [(
+            SET_COOKIE,
+            "oidc_state=; Path=/v1/auth; Max-Age=0; HttpOnly; Secure; SameSite=Lax",
+        )],
         [(axum::http::header::LOCATION, destination)],
     )
-        .into_response())
+        .into_response()
 }
 async fn oidc_link_start(
     State(state): State<AppState>,
@@ -319,8 +358,13 @@ async fn identities(
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let r=sqlx::query("SELECT password_hash IS NOT NULL AS p, EXISTS(SELECT 1 FROM riviamigo.user_oidc_identities WHERE user_id=$1) AS o FROM riviamigo.users WHERE id=$1").bind(auth.user_id).fetch_one(&state.pool).await?;
+    let settings = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
+    let oidc_link_available = settings.issuer_url.is_some()
+        && settings.public_base_url.is_some()
+        && settings.client_id.is_some()
+        && settings.client_secret.is_some();
     Ok(Json(
-        serde_json::json!({"password_configured":r.get::<bool,_>("p"),"oidc_linked":r.get::<bool,_>("o")}),
+        serde_json::json!({"password_configured":r.get::<bool,_>("p"),"oidc_linked":r.get::<bool,_>("o"),"oidc_link_available":oidc_link_available,"button_label":settings.button_label}),
     ))
 }
 async fn oidc_unlink(
