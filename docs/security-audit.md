@@ -66,10 +66,15 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
   the PR with an owner, expiry, and remediation link. Local
   dependency validation in this audit found no unignored high-severity
   production npm vulnerabilities after updating MapLibre and pinned transitive
-  dependencies to their patched releases; the Rust/secret/SAST tools were not
-  installed locally. The four RustSec exceptions are listed with owners,
-  evidence, and expiry in the
-  [maintenance register](./runbooks/dependency-maintenance.md#maintenance-register).
+  dependencies to their patched releases. RustSec warning exceptions are
+  listed in the [maintenance register](./runbooks/dependency-maintenance.md#maintenance-register).
+- `RUSTSEC-2023-0071` is temporarily ignored for `openidconnect`'s transitive
+  `rsa` dependency. The OIDC callback verifies provider ID-token signatures
+  with public keys and does not use RSA private-key signing or decryption. The
+  [RustSec advisory](https://rustsec.org/advisories/RUSTSEC-2023-0071.html)
+  reports no fixed release. **Owner:** release maintainer. **Expiry:**
+  2026-12-31. Remove the ignore when upstream publishes a fixed release or the
+  OIDC verifier no longer depends on `rsa`; then rerun `cargo audit`.
 - Before a wider exposure or multi-tenant use case, commission an independent
   authenticated penetration test and review gateway, host, backup, and secret
   manager configuration in the target environment.

@@ -50,7 +50,15 @@ jobs:
             echo "RUSTSEC-2026-0173 exception expired; upgrade age/i18n-embed-fl"
             exit 1
           fi
-          cargo audit --deny warnings --ignore RUSTSEC-2026-0173
+          # openidconnect 4.0.1 includes rsa for provider ID-token signature
+          # verification. Riviamigo uses only public-key verification; the
+          # Marvin advisory affects private-key operations and has no fixed
+          # release. Reassess this narrow exception before it expires.
+          if [[ "$(date -u +%F)" > "2026-12-31" ]]; then
+            echo "RUSTSEC-2023-0071 exception expired; reevaluate OIDC RSA verification"
+            exit 1
+          fi
+          cargo audit --deny warnings --ignore RUSTSEC-2026-0173 --ignore RUSTSEC-2023-0071
       - name: pnpm audit
         if: github.event_name != 'pull_request'
         shell: bash
