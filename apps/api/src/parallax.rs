@@ -16,19 +16,29 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::{
-    sync::{broadcast, watch},
+    sync::{broadcast, mpsc, watch},
     task::JoinHandle,
 };
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 use uuid::Uuid;
 
 use crate::ingestion::session_store::{decrypt_tokens, RivianTokenBundle};
+use crate::models::telemetry::{PowerState, TelemetryEvent};
 
 const WS_URL: &str = "wss://api.rivian.com/gql-consumer-subscriptions/graphql";
 const SUBSCRIPTION_ID: &str = "riviamigo-parallax-collector";
 const SCHEMA_VERSION: i32 = 1;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const TOPICS: &[&str] = &[
+    "vehicle.power.state",
+    "dynamics.vehicle.gnss",
+    "dynamics.vehicle.odometer",
+    "body.closures.states",
+    "body.locks.states",
+    "dynamics.tires.state",
+    "comfort.cabin.cabin_temperatures",
+    "comfort.cabin.cabin_preconditioning_status",
+    "comfort.cabin.defrost_defog_status",
     "vehicle.network.state",
     "dynamics.vehicle.efficiency",
     "dynamics.vehicle.mass_estimate",
@@ -59,6 +69,7 @@ pub fn spawn_in_process(
     vehicle_id: Uuid,
     rivian_vehicle_id: String,
     age_key: String,
+    telemetry_tx: mpsc::Sender<(String, TelemetryEvent)>,
     mut active_sessions: watch::Receiver<crate::ingestion::worker::ActiveSessionContext>,
     mut shutdown: broadcast::Receiver<()>,
 ) -> JoinHandle<()> {
@@ -109,7 +120,7 @@ pub fn spawn_in_process(
                     let _ = set_collector_state(&pool, vehicle_id, "disconnected", Some("shutdown")).await;
                     break;
                 }
-                result = collect_connection_with_context(&pool, &session, &mut active_sessions) => result
+                result = collect_connection_with_context(&pool, &session, &mut active_sessions, Some(&telemetry_tx)) => result
             };
             if result.is_ok() {
                 backoff = 2;
@@ -316,6 +327,296 @@ struct HvChargeState {
 }
 
 #[derive(Clone, PartialEq, ProstMessage)]
+struct PowerStateMessage {
+    #[prost(int32, optional, tag = "1")]
+    state: Option<i32>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct GnssState {
+    #[prost(double, optional, tag = "1")]
+    latitude: Option<f64>,
+    #[prost(double, optional, tag = "2")]
+    longitude: Option<f64>,
+    #[prost(double, optional, tag = "3")]
+    altitude_m: Option<f64>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct OdometerState {
+    #[prost(uint64, optional, tag = "1")]
+    kilometers: Option<u64>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct ClosureStates {
+    #[prost(message, repeated, tag = "1")]
+    states: Vec<ClosureState>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct ClosureState {
+    #[prost(int32, optional, tag = "1")]
+    position: Option<i32>,
+    #[prost(int32, optional, tag = "2")]
+    state: Option<i32>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct LockStates {
+    #[prost(message, repeated, tag = "1")]
+    states: Vec<LockState>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct LockState {
+    #[prost(int32, optional, tag = "1")]
+    position: Option<i32>,
+    #[prost(int32, optional, tag = "2")]
+    state: Option<i32>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct TireStates {
+    #[prost(message, repeated, tag = "2")]
+    states: Vec<TireState>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct TireState {
+    #[prost(int32, optional, tag = "1")]
+    position: Option<i32>,
+    #[prost(int32, optional, tag = "2")]
+    status: Option<i32>,
+    #[prost(double, optional, tag = "3")]
+    pressure_bar: Option<f64>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct CabinTemperatures {
+    #[prost(float, optional, tag = "3")]
+    cabin_c: Option<f32>,
+    #[prost(float, optional, tag = "4")]
+    driver_c: Option<f32>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct PreconditioningState {
+    #[prost(int32, optional, tag = "1")]
+    status: Option<i32>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct DefrostState {
+    #[prost(int32, optional, tag = "1")]
+    status: Option<i32>,
+}
+
+/// Decode one allowlisted Parallax RVM into the canonical partial event.
+///
+/// This is deliberately pure: callers decide how to merge and persist the
+/// partial event. Unknown RVMs return `Ok(None)`, while malformed payloads or
+/// values outside the documented physical/enum ranges are rejected.
+pub(crate) fn decode_vehicle_telemetry(
+    topic: &str,
+    payload: &[u8],
+    source_at: DateTime<Utc>,
+    vehicle_id: Uuid,
+) -> Result<Option<TelemetryEvent>> {
+    let mut event = TelemetryEvent::empty(vehicle_id, source_at);
+    let mut meaningful = false;
+    match topic {
+        "vehicle.power.state" => {
+            let value = PowerStateMessage::decode(payload)?;
+            let state = match value.state.context("missing power state")? {
+                1 => PowerState::Sleep,
+                2 => PowerState::Unknown, // Rivian's standby has no canonical field.
+                3 => PowerState::Ready,
+                4 => PowerState::Go,
+                state => anyhow::bail!("unknown Parallax power state {state}"),
+            };
+            event.power_state = Some(state);
+            event.power_state_ts = Some(source_at);
+            meaningful = true;
+        }
+        "dynamics.vehicle.gnss" => {
+            let value = GnssState::decode(payload)?;
+            let latitude = value.latitude.context("missing GNSS latitude")?;
+            let longitude = value.longitude.context("missing GNSS longitude")?;
+            if !latitude.is_finite()
+                || !(-90.0..=90.0).contains(&latitude)
+                || !longitude.is_finite()
+                || !(-180.0..=180.0).contains(&longitude)
+            {
+                anyhow::bail!("invalid GNSS coordinates");
+            }
+            event.latitude = Some(latitude);
+            event.longitude = Some(longitude);
+            event.location_ts = Some(source_at);
+            if let Some(altitude) = value.altitude_m {
+                if !altitude.is_finite() || !(-1_000.0..=20_000.0).contains(&altitude) {
+                    anyhow::bail!("invalid GNSS altitude");
+                }
+                event.altitude_m = Some(altitude);
+            }
+            meaningful = true;
+        }
+        "dynamics.vehicle.odometer" => {
+            let value = OdometerState::decode(payload)?;
+            let kilometers = value.kilometers.context("missing odometer")?;
+            if kilometers > 2_000_000 {
+                anyhow::bail!("invalid odometer");
+            }
+            event.odometer_miles = Some(kilometers as f64 * 0.621_371_192);
+            event.odometer_miles_ts = Some(source_at);
+            meaningful = true;
+        }
+        "body.closures.states" => {
+            let value = ClosureStates::decode(payload)?;
+            for state in value.states {
+                let position = state.position.context("missing closure position")?;
+                let closed = match state.state.context("missing closure state")? {
+                    1 => false,
+                    2 => true,
+                    other => anyhow::bail!("unknown closure state {other}"),
+                };
+                meaningful |= set_closure(&mut event, position, closed)?;
+            }
+        }
+        "body.locks.states" => {
+            let value = LockStates::decode(payload)?;
+            for state in value.states {
+                let position = state.position.context("missing lock position")?;
+                let locked = match state.state.context("missing lock state")? {
+                    1 => true,
+                    2 => false,
+                    other => anyhow::bail!("unknown lock state {other}"),
+                };
+                meaningful |= set_lock(&mut event, position, locked)?;
+            }
+        }
+        "dynamics.tires.state" => {
+            let value = TireStates::decode(payload)?;
+            for state in value.states {
+                let position = state.position.context("missing tire position")?;
+                let status = state.status.context("missing tire status")?;
+                if !matches!(status, 1 | 2) {
+                    anyhow::bail!("unknown tire status {status}");
+                }
+                let pressure_bar = state.pressure_bar.context("missing tire pressure")?;
+                if !pressure_bar.is_finite() || !(0.0..=10.0).contains(&pressure_bar) {
+                    anyhow::bail!("invalid tire pressure");
+                }
+                meaningful |= set_tire(&mut event, position, pressure_bar, status == 1)?;
+            }
+        }
+        "comfort.cabin.cabin_temperatures" => {
+            let value = CabinTemperatures::decode(payload)?;
+            if let Some(cabin) = value.cabin_c {
+                event.cabin_temp_c = Some(valid_temperature(cabin as f64)?);
+                meaningful = true;
+            }
+            if let Some(driver) = value.driver_c {
+                event.driver_temp_c = Some(valid_temperature(driver as f64)?);
+                meaningful = true;
+            }
+        }
+        "comfort.cabin.cabin_preconditioning_status" => {
+            let value = PreconditioningState::decode(payload)?;
+            let status = match value.status.context("missing preconditioning status")? {
+                1 | 2 => "initiate",
+                4 => "active",
+                0 | 3 => "off",
+                other => anyhow::bail!("unknown preconditioning status {other}"),
+            };
+            event.cabin_precon_status = Some(status.into());
+            meaningful = true;
+        }
+        "comfort.cabin.defrost_defog_status" => {
+            let value = DefrostState::decode(payload)?;
+            let status = match value.status.context("missing defrost status")? {
+                0 | 1 => false,
+                2 => true,
+                other => anyhow::bail!("unknown defrost status {other}"),
+            };
+            event.defrost_active = Some(status);
+            meaningful = true;
+        }
+        _ => return Ok(None),
+    }
+    Ok(meaningful.then_some(event))
+}
+
+fn valid_temperature(value: f64) -> Result<f64> {
+    if value.is_finite() && (-80.0..=100.0).contains(&value) {
+        Ok(value)
+    } else {
+        anyhow::bail!("invalid cabin temperature")
+    }
+}
+
+fn set_closure(event: &mut TelemetryEvent, position: i32, closed: bool) -> Result<bool> {
+    match position {
+        1 => event.door_front_left_closed = Some(closed),
+        2 => event.door_front_right_closed = Some(closed),
+        3 => event.door_rear_left_closed = Some(closed),
+        4 => event.door_rear_right_closed = Some(closed),
+        5 => event.closure_frunk_closed = Some(closed),
+        6 => event.side_bin_left_closed = Some(closed),
+        7 => event.closure_liftgate_closed = Some(closed),
+        other => anyhow::bail!("unknown closure position {other}"),
+    }
+    Ok(true)
+}
+
+fn set_lock(event: &mut TelemetryEvent, position: i32, locked: bool) -> Result<bool> {
+    match position {
+        1 => event.door_front_left_locked = Some(locked),
+        2 => event.door_front_right_locked = Some(locked),
+        3 => event.door_rear_left_locked = Some(locked),
+        4 => event.door_rear_right_locked = Some(locked),
+        5 => event.closure_frunk_locked = Some(locked),
+        7 => event.closure_liftgate_locked = Some(locked),
+        other => anyhow::bail!("unknown lock position {other}"),
+    }
+    Ok(true)
+}
+
+fn set_tire(
+    event: &mut TelemetryEvent,
+    position: i32,
+    pressure_bar: f64,
+    ok: bool,
+) -> Result<bool> {
+    let pressure_psi = pressure_bar * 14.503_773_8;
+    let status = if ok { "OK" } else { "Warning" }.to_string();
+    match position {
+        1 => {
+            event.tire_fl_psi = Some(pressure_psi);
+            event.tire_fl_status = Some(status);
+            event.tire_fl_valid = Some(true);
+        }
+        2 => {
+            event.tire_fr_psi = Some(pressure_psi);
+            event.tire_fr_status = Some(status);
+            event.tire_fr_valid = Some(true);
+        }
+        3 => {
+            event.tire_rl_psi = Some(pressure_psi);
+            event.tire_rl_status = Some(status);
+            event.tire_rl_valid = Some(true);
+        }
+        4 => {
+            event.tire_rr_psi = Some(pressure_psi);
+            event.tire_rr_status = Some(status);
+            event.tire_rr_valid = Some(true);
+        }
+        other => anyhow::bail!("unknown tire position {other}"),
+    }
+    Ok(true)
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
 struct ChargingGraphGlobal {
     #[prost(message, repeated, tag = "1")]
     segments: Vec<ChargingGraphSegment>,
@@ -450,13 +751,14 @@ async fn run_vehicle(pool: PgPool, session: CollectorSession) -> Result<()> {
 async fn collect_connection(pool: &PgPool, session: &CollectorSession) -> Result<()> {
     let (_tx, mut context) =
         watch::channel(crate::ingestion::worker::ActiveSessionContext::default());
-    collect_connection_with_context(pool, session, &mut context).await
+    collect_connection_with_context(pool, session, &mut context, None).await
 }
 
 async fn collect_connection_with_context(
     pool: &PgPool,
     session: &CollectorSession,
     active_sessions: &mut watch::Receiver<crate::ingestion::worker::ActiveSessionContext>,
+    telemetry_tx: Option<&mpsc::Sender<(String, TelemetryEvent)>>,
 ) -> Result<()> {
     let mut request = WS_URL.into_client_request()?;
     request
@@ -538,7 +840,7 @@ async fn collect_connection_with_context(
                                     continue;
                                 };
                                 let context = active_sessions.borrow_and_update().clone();
-                                if let Err(error) = persist_envelope(pool, session.vehicle_id, envelope, &context).await {
+                                if let Err(error) = persist_envelope(pool, session.vehicle_id, envelope, &context, telemetry_tx).await {
                                     tracing::debug!(vehicle_id=%session.vehicle_id, err=%error, "Parallax frame rejected by typed decoder");
                                     let _ = sqlx::query("UPDATE riviamigo.parallax_collector_state SET decode_error_count=decode_error_count+1,last_frame_at=now(),updated_at=now() WHERE vehicle_id=$1")
                                         .bind(session.vehicle_id).execute(pool).await;
@@ -625,6 +927,7 @@ async fn persist_envelope(
     vehicle_id: Uuid,
     envelope: &Value,
     active_session: &crate::ingestion::worker::ActiveSessionContext,
+    telemetry_tx: Option<&mpsc::Sender<(String, TelemetryEvent)>>,
 ) -> Result<()> {
     let topic = envelope
         .get("rvm")
@@ -639,6 +942,29 @@ async fn persist_envelope(
     let received_at = Utc::now();
     let source_at = parse_source_at(envelope.get("timestamp")).unwrap_or(received_at);
     let associated_session = matching_active_session(active_session, source_at);
+
+    // The canonical worker owns merging and persistence. A full or closed
+    // channel must never interrupt this companion's independent storage path.
+    if let Some(telemetry_tx) = telemetry_tx.filter(|_| {
+        source_at >= received_at - chrono::Duration::minutes(5)
+            && source_at <= received_at + chrono::Duration::seconds(30)
+    }) {
+        match decode_vehicle_telemetry(topic, &payload, source_at, vehicle_id) {
+            Ok(Some(event)) => {
+                let _ = telemetry_tx.try_send((topic.to_owned(), event));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let diagnostics_enabled = sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicle_ingestion_diagnostics WHERE vehicle_id=$1 AND enabled_until>now())",
+                ).bind(vehicle_id).fetch_one(pool).await.unwrap_or(false);
+                if diagnostics_enabled {
+                    tracing::info!(vehicle_id=%vehicle_id, topic=%topic, reason=%error, "typed Parallax frame rejected");
+                }
+                anyhow::bail!("typed Parallax decoder rejected topic {topic}");
+            }
+        }
+    }
 
     match topic {
         "vehicle.network.state" => {
@@ -1070,6 +1396,72 @@ fn f64_opt(value: Option<f32>) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingestion::{
+        trip_detector::{compute_distance_odometer_or_gps, TripDetectorState, TripEvent},
+        trip_signals::TripSignalFusion,
+    };
+
+    #[test]
+    fn decoded_r2_power_and_sparse_gnss_complete_a_trip() {
+        let vehicle_id = Uuid::new_v4();
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(true);
+        let mut detector = TripDetectorState::new(vehicle_id);
+        let power = decode_vehicle_telemetry(
+            "vehicle.power.state",
+            &PowerStateMessage { state: Some(4) }.encode_to_vec(),
+            at,
+            vehicle_id,
+        )
+        .unwrap()
+        .unwrap();
+        detector.process(&fusion.fuse(&power));
+        for (seconds, longitude) in [
+            (10, -97.0),
+            (40, -96.999),
+            (70, -96.998),
+            (100, -96.997),
+            (130, -96.996),
+        ] {
+            let ts = at + chrono::Duration::seconds(seconds);
+            let fix = decode_vehicle_telemetry(
+                "dynamics.vehicle.gnss",
+                &GnssState {
+                    latitude: Some(30.0),
+                    longitude: Some(longitude),
+                    altitude_m: None,
+                }
+                .encode_to_vec(),
+                ts,
+                vehicle_id,
+            )
+            .unwrap()
+            .unwrap();
+            let transition = detector.process(&fusion.fuse(&fix));
+            if seconds == 70 {
+                assert!(matches!(transition, TripEvent::TripStarted { .. }));
+            }
+        }
+        let stopped_at = at + chrono::Duration::seconds(140);
+        let sleep = decode_vehicle_telemetry(
+            "vehicle.power.state",
+            &PowerStateMessage { state: Some(1) }.encode_to_vec(),
+            stopped_at,
+            vehicle_id,
+        )
+        .unwrap()
+        .unwrap();
+        let TripEvent::TripEnded { trip } = detector.process(&fusion.fuse(&sleep)) else {
+            panic!("expected completed R2 trip")
+        };
+        assert!(
+            compute_distance_odometer_or_gps(
+                trip.start_odometer_mi,
+                trip.end_odometer_mi,
+                &trip.points
+            ) >= 0.1
+        );
+    }
 
     #[test]
     fn parked_energy_wire_contract_decodes_units() {
@@ -1207,6 +1599,141 @@ mod tests {
         assert_eq!(graph.segments[0].start_unix_ms, Some(1000));
         assert_eq!(graph.segments[0].power_kw, Some(11.0));
         assert_eq!(graph.segments[0].soc, Some(50));
+    }
+
+    #[test]
+    fn r2_vehicle_topics_decode_into_timestamped_partial_events() {
+        let vehicle_id = Uuid::new_v4();
+        let source_at = Utc::now();
+        let power = decode_vehicle_telemetry(
+            "vehicle.power.state",
+            &PowerStateMessage { state: Some(4) }.encode_to_vec(),
+            source_at,
+            vehicle_id,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(power.vehicle_id, vehicle_id);
+        assert_eq!(power.ts, source_at);
+        assert_eq!(power.power_state, Some(PowerState::Go));
+        assert_eq!(power.power_state_ts, Some(source_at));
+
+        let gnss = decode_vehicle_telemetry(
+            "dynamics.vehicle.gnss",
+            &GnssState {
+                latitude: Some(40.0),
+                longitude: Some(-105.0),
+                altitude_m: Some(1_600.0),
+            }
+            .encode_to_vec(),
+            source_at,
+            vehicle_id,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(gnss.latitude, Some(40.0));
+        assert_eq!(gnss.longitude, Some(-105.0));
+        assert_eq!(gnss.altitude_m, Some(1_600.0));
+        assert_eq!(gnss.location_ts, Some(source_at));
+
+        let odometer = decode_vehicle_telemetry(
+            "dynamics.vehicle.odometer",
+            &OdometerState {
+                kilometers: Some(100),
+            }
+            .encode_to_vec(),
+            source_at,
+            vehicle_id,
+        )
+        .unwrap()
+        .unwrap();
+        assert!((odometer.odometer_miles.unwrap() - 62.1371).abs() < 0.001);
+        assert_eq!(odometer.odometer_miles_ts, Some(source_at));
+    }
+
+    #[test]
+    fn r2_body_climate_and_tire_topics_map_public_fixture_shapes() {
+        let vehicle_id = Uuid::new_v4();
+        let source_at = Utc::now();
+        let body = decode_vehicle_telemetry(
+            "body.closures.states",
+            &ClosureStates {
+                states: vec![ClosureState {
+                    position: Some(1),
+                    state: Some(2),
+                }],
+            }
+            .encode_to_vec(),
+            source_at,
+            vehicle_id,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(body.door_front_left_closed, Some(true));
+
+        let tire = decode_vehicle_telemetry(
+            "dynamics.tires.state",
+            &TireStates {
+                states: vec![TireState {
+                    position: Some(1),
+                    status: Some(1),
+                    pressure_bar: Some(2.5),
+                }],
+            }
+            .encode_to_vec(),
+            source_at,
+            vehicle_id,
+        )
+        .unwrap()
+        .unwrap();
+        assert!((tire.tire_fl_psi.unwrap() - 36.2594).abs() < 0.001);
+        assert_eq!(tire.tire_fl_status.as_deref(), Some("OK"));
+        assert_eq!(tire.tire_fl_valid, Some(true));
+
+        let climate = decode_vehicle_telemetry(
+            "comfort.cabin.cabin_temperatures",
+            &CabinTemperatures {
+                cabin_c: Some(21.5),
+                driver_c: Some(20.0),
+            }
+            .encode_to_vec(),
+            source_at,
+            vehicle_id,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(climate.cabin_temp_c, Some(21.5));
+        assert_eq!(climate.driver_temp_c, Some(20.0));
+    }
+
+    #[test]
+    fn r2_decoder_rejects_bad_values_and_ignores_unknown_topics() {
+        let vehicle_id = Uuid::new_v4();
+        let source_at = Utc::now();
+        assert!(decode_vehicle_telemetry(
+            "dynamics.vehicle.gnss",
+            &GnssState {
+                latitude: Some(91.0),
+                longitude: Some(0.0),
+                altitude_m: None
+            }
+            .encode_to_vec(),
+            source_at,
+            vehicle_id,
+        )
+        .is_err());
+        assert!(decode_vehicle_telemetry(
+            "vehicle.power.state",
+            &PowerStateMessage { state: Some(99) }.encode_to_vec(),
+            source_at,
+            vehicle_id,
+        )
+        .is_err());
+        assert!(
+            decode_vehicle_telemetry("unlisted.topic", &[], source_at, vehicle_id)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

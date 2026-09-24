@@ -89,6 +89,10 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/{id}/telemetry/lanes", get(telemetry_lanes))
         .route("/vehicles/{id}/raw-events", get(raw_vehicle_events))
         .route(
+            "/vehicles/{id}/ingestion-diagnostics",
+            get(get_ingestion_diagnostics).put(set_ingestion_diagnostics),
+        )
+        .route(
             "/vehicles/{id}/raw-events/{event_id}",
             get(raw_vehicle_event),
         )
@@ -129,6 +133,63 @@ struct RawEventParams {
 }
 
 #[derive(Deserialize)]
+struct IngestionDiagnosticsBody {
+    enabled: bool,
+}
+
+async fn get_ingestion_diagnostics(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(vehicle_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_access(&auth, vehicle_id)?;
+    require_raw_event_access(&state, &auth, vehicle_id).await?;
+    let enabled_until = sqlx::query_scalar::<_, chrono::DateTime<Utc>>(
+        "SELECT enabled_until FROM riviamigo.vehicle_ingestion_diagnostics WHERE vehicle_id=$1 AND enabled_until>now()",
+    )
+    .bind(vehicle_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(Json(serde_json::json!({
+        "enabled": enabled_until.is_some(),
+        "enabled_until": enabled_until
+    })))
+}
+
+async fn set_ingestion_diagnostics(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(vehicle_id): Path<Uuid>,
+    Json(body): Json<IngestionDiagnosticsBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_access(&auth, vehicle_id)?;
+    require_raw_event_access(&state, &auth, vehicle_id).await?;
+    require_remote_backed_vehicle(&state.pool, vehicle_id).await?;
+    let enabled_until = if body.enabled {
+        Some(sqlx::query_scalar::<_, chrono::DateTime<Utc>>(
+            "INSERT INTO riviamigo.vehicle_ingestion_diagnostics(vehicle_id,enabled_until,enabled_by) \
+             VALUES($1,now()+interval '1 hour',$2) \
+             ON CONFLICT(vehicle_id) DO UPDATE SET enabled_until=EXCLUDED.enabled_until,enabled_by=EXCLUDED.enabled_by,updated_at=now() \
+             RETURNING enabled_until",
+        )
+        .bind(vehicle_id)
+        .bind(auth.user_id)
+        .fetch_one(&state.pool)
+        .await?)
+    } else {
+        sqlx::query("DELETE FROM riviamigo.vehicle_ingestion_diagnostics WHERE vehicle_id=$1")
+            .bind(vehicle_id)
+            .execute(&state.pool)
+            .await?;
+        None
+    };
+    Ok(Json(serde_json::json!({
+        "enabled": enabled_until.is_some(),
+        "enabled_until": enabled_until
+    })))
+}
+
+#[derive(Deserialize)]
 struct ConnectBody {
     email: String,
     password: String,
@@ -159,6 +220,14 @@ struct CreateDemoVehicleBody {
 
 fn is_demo_vehicle_key(value: &str) -> bool {
     value.starts_with("demo-")
+}
+
+fn canonical_vehicle_model(model: &str) -> &str {
+    if model.eq_ignore_ascii_case("R2S") || model.eq_ignore_ascii_case("R2-S") {
+        "R2"
+    } else {
+        model
+    }
 }
 
 async fn require_remote_backed_vehicle(
@@ -1301,7 +1370,9 @@ async fn add_vehicle(
         )
         .bind(auth.user_id)
         .bind(&rivian_vehicle_id)
-        .bind(body.model.as_deref().unwrap_or("R1T"))
+        .bind(canonical_vehicle_model(
+            body.model.as_deref().unwrap_or("R1T"),
+        ))
         .bind(body.trim.as_deref())
         .bind(body.vin.as_deref())
         .bind(body.name.as_deref())
@@ -2193,7 +2264,7 @@ async fn list_vehicles(
             "rivian_vehicle_id":        r.rivian_vehicle_id,
             "is_demo":                  is_demo,
             "vin":                      r.vin,
-            "model":                    r.model,
+            "model":                    canonical_vehicle_model(&r.model),
             "year":                     serde_json::Value::Null,
             "trim":                     r.trim,
             "color":                    r.color,
@@ -2206,7 +2277,9 @@ async fn list_vehicles(
             "battery_capacity_kwh":     r.battery_capacity_wh.map(|w| w / 1000.0),
             "target_tire_pressure_psi": r.target_tire_pressure_psi,
             "battery_config":           r.battery_config,
-            "display_name":             r.name.as_deref().unwrap_or(&r.model),
+            "display_name":             r.name.as_deref().map(|name| {
+                if is_demo && name == "Demo R2S" { "Demo R2" } else { name }
+            }).unwrap_or_else(|| canonical_vehicle_model(&r.model)),
             "membership_role":          r.membership_role,
             "created_at":               r.created_at,
             "images":                   images,
@@ -2233,32 +2306,39 @@ async fn create_demo_vehicle(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
     let mut tx = state.pool.begin().await?;
-    let model = body
+    let requested_model = body
         .as_ref()
         .map(|payload| payload.model.trim().to_uppercase())
         .unwrap_or_else(|| "R1T".to_string());
-    if !matches!(model.as_str(), "R1T" | "R1S" | "R2S") {
+    let model = canonical_vehicle_model(&requested_model);
+    if !matches!(model, "R1T" | "R1S" | "R2") {
         return Err(AppError::Validation(
-            "model must be one of R1T, R1S, R2S".into(),
+            "model must be one of R1T, R1S, R2".into(),
         ));
     }
     let demo_key = format!("demo-{}-local", model.to_lowercase());
     let display_name = format!("Demo {model}");
-    let (trim, battery_config, battery_capacity_wh, _range_mi) = match model.as_str() {
+    let (trim, battery_config, battery_capacity_wh, _range_mi) = match model {
         "R1S" => ("Adventure", "r1_large_g1", 135_000.0_f64, 260.0_f64),
-        "R2S" => ("Adventure", "r2s", 82_000.0_f64, 300.0_f64),
+        "R2" => ("Adventure", "r2", 82_000.0_f64, 300.0_f64),
         _ => ("Adventure", "r1_large_g1", 135_000.0_f64, 248.0_f64),
+    };
+
+    let matching_demo_keys = if model == "R2" {
+        vec![demo_key.clone(), "demo-r2s-local".to_string()]
+    } else {
+        vec![demo_key.clone()]
     };
 
     let existing_vehicle_id = sqlx::query_scalar::<_, Option<Uuid>>(
         "SELECT v.id
          FROM riviamigo.vehicles v
          JOIN riviamigo.vehicle_memberships vm ON vm.vehicle_id = v.id
-         WHERE vm.user_id = $1 AND v.rivian_vehicle_id = $2
+         WHERE vm.user_id = $1 AND v.rivian_vehicle_id = ANY($2::text[])
          LIMIT 1",
     )
     .bind(auth.user_id)
-    .bind(&demo_key)
+    .bind(&matching_demo_keys)
     .fetch_optional(&mut *tx)
     .await?;
 
@@ -2286,7 +2366,7 @@ async fn create_demo_vehicle(
         )
         .bind(auth.user_id)
         .bind(&demo_key)
-        .bind(&model)
+        .bind(model)
         .bind(trim)
         .bind("Limestone")
         .bind(battery_config)

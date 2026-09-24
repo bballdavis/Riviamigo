@@ -41,7 +41,8 @@ function renderArtwork(node: React.ReactNode) {
 describe('vehicle artwork fallback contract', () => {
   it('resolves supported model variants to semantic fallback canvases', () => {
     expect(normalizeVehicleArtworkModel('Gen 2 R1T Adventure')).toBe('r1t');
-    expect(normalizeVehicleArtworkModel('R2S Launch Edition')).toBe('r2s');
+    expect(normalizeVehicleArtworkModel('R2S Launch Edition')).toBe('r2');
+    expect(normalizeVehicleArtworkModel('R2 Launch Edition')).toBe('r2');
     expect(getVehicleArtworkFallback('R1S', 'overview')).toBe(
       '/vehicle-images/fallbacks/r1s/overview.webp',
     );
@@ -54,7 +55,7 @@ describe('vehicle artwork fallback contract', () => {
     expect(getVehicleArtworkFallback('R1T', 'vehicle-card')).toBe(
       '/vehicle-images/fallbacks/r1t/side.webp',
     );
-    expect(getVehicleArtworkFallback('R2', 'health')).toBeNull();
+    expect(getVehicleArtworkFallback('R2', 'health')).toBe('/vehicle-images/fallbacks/r2s/health.webp');
   });
 
   it('resolves API artwork by surface priority before model fallbacks', () => {
@@ -151,7 +152,7 @@ describe('vehicle artwork fallback contract', () => {
       ).not.toThrow();
     }
 
-    for (const model of ['R1T', 'R2S']) {
+    for (const model of ['R1T', 'R2']) {
       const chargingAsset = manifest.assets.find((asset) => asset.model === model && asset.usage === 'charging');
       expect(chargingAsset?.visible_bbox).not.toBeNull();
       expect(chargingAsset?.visible_bbox?.[0]).toBeLessThanOrEqual(chargingAsset!.width * 0.05);

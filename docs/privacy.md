@@ -8,6 +8,8 @@ Vehicle telemetry, account records, dashboards, and application data are stored 
 
 Your host, reverse proxy, identity provider, and backup provider have their own logs and retention policies. Configure them to match your privacy expectations.
 
+Vehicle ingestion diagnostics are off by default and can be enabled by an owner or manager for one hour at a time. They record field coverage, timestamps, and decode outcomes for troubleshooting; they do not record raw upstream payloads, credentials, or precise coordinates.
+
 ## Requests to other services
 
 Riviamigo still needs to communicate with services that make its features work:
@@ -34,7 +36,7 @@ automatic signup or verified-email account linking.
 
 ## Bundled demo data
 
-Administrators can create R1T, R1S, and R2S demo vehicles without Rivian credentials. Their rolling 14-day history is illustrative and read-only: it uses aggregate density measured from a human-reviewed development sample, generated sensor values, and deterministic routes between public landmarks around Washington, DC. It does not contain source VINs, account identifiers, payloads, addresses, timestamps, coordinates, or route geometry.
+Administrators can create R1T, R1S, and R2 demo vehicles without Rivian credentials. Their rolling 14-day history is illustrative and read-only: it uses aggregate density measured from a human-reviewed development sample, generated sensor values, and deterministic routes between public landmarks around Washington, DC. It does not contain source VINs, account identifiers, payloads, addresses, timestamps, coordinates, or route geometry.
 
 Demo trips include stored route previews, reserved fixture addresses, and completed weather records. Viewing or refreshing a demo therefore does not call Rivian, Nominatim, or Open-Meteo. Refresh replaces only that demo vehicle's generated history, runtime status, and fixture artwork records; memberships, sharing, display names, preferences, and dashboard customizations remain intact.
 

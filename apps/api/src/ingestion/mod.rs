@@ -7,6 +7,7 @@ pub mod rivian_poll;
 pub mod session_store;
 pub mod supervisor;
 pub mod trip_detector;
+pub mod trip_signals;
 pub mod worker;
 pub mod ws_client;
 

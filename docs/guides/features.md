@@ -15,7 +15,7 @@ Riviamigo is a private dashboard for the Rivian data you already have access to.
 - **External connections:** installation-wide remote, self-hosted, or disabled policies for weather, geocoding, basemaps, and other optional providers.
 - **Dashboards:** compose saved views from the available widgets.
 - **Accounts:** the first account owns the instance; owners can create activation links for other people they choose to invite. Each invitation can allow password sign-in, SSO, or both, according to the site's available methods. During invitation, an owner can assign any number of vehicles, including none; the invited account receives viewer access for every selected vehicle after activation.
-- **Demo vehicles:** administrators can create an R1T, R1S, or R2S with a realistic rolling 14-day history, including sparse telemetry, trips and maps, stored weather, charging sessions and a DC curve, software and battery history, health signals, and phantom-drain periods. No Rivian credentials or optional provider calls are required.
+- **Demo vehicles:** administrators can create an R1T, R1S, or R2 with a realistic rolling 14-day history, including sparse telemetry, trips and maps, stored weather, charging sessions and a DC curve, software and battery history, health signals, and phantom-drain periods. No Rivian credentials or optional provider calls are required. Existing R2S demo records continue to resolve as R2.
 
 The exact information Rivian exposes can change, and a sleeping vehicle may not update immediately. Riviamigo presents what it receives rather than inventing missing values.
 

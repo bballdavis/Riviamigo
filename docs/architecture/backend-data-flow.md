@@ -12,7 +12,7 @@ This document is canonical for the high-level backend flow. Update it when the A
 
 1. User authenticates with Riviamigo through the auth routes.
 2. Vehicle credentials and session state are stored by the API.
-3. Per-vehicle ingestion workers maintain Rivian connectivity through WebSocket and supporting poll flows, with a watchdog that restarts a collector if the WebSocket stream goes silent while still holding the worker lock. The authenticated socket carries both `vehicleState` and the documented `chargingSession` subscription.
+3. Per-vehicle ingestion workers maintain Rivian connectivity through WebSocket and supporting poll flows, with a watchdog that restarts a collector if the WebSocket stream goes silent while still holding the worker lock. The authenticated socket carries both `vehicleState` and the documented `chargingSession` subscription. A small one-shot `GetVehicleState` query at startup supplies a baseline for fields that have not changed since subscription.
 4. Parsed telemetry updates a canonical `vehicle_latest_status` row using per-field Rivian timestamps so older partial payloads cannot overwrite fresher SoC, range, charge-state, or odometer values.
 5. Supporting poll flows reconcile charging sessions and post-session history into canonical `charge_sessions`, preserving telemetry-backed windows as the public session timeline while storing Rivian aliases and API-only history as enrichment evidence. Canonical `vehicleState` owns charge lifecycle and UUID identity. Fresh, fixture-proven Parallax fields enrich power, curve, energy-breakdown, and time estimates; meaningful legacy `chargingSession` values update the provisional active-session projection before canonical finalization. Empty, stale, or terminal legacy frames never extend the live projection, and canonical termination deletes Redis state immediately. Final cost is computed only after the session has an authoritative end time.
 6. API routes expose typed data to the frontend through `packages/types` and `packages/hooks`.
@@ -36,11 +36,9 @@ tail. `odometer_daily` has a separate hourly, materialized-only policy.
 Optional outbound services are governed by `external_connection_settings`, not environment variables. Weather and Nominatim execute on the server. Basemap and Iconify browser requests terminate at authenticated same-origin proxy routes. Custom endpoints are validated before storage, secrets are age-encrypted and write-only, and disabling a provider is enforced at the shared service seam.
 
 Parallax collection runs as an integrated, isolated Tokio acquisition subsystem inside each production
-vehicle worker. It opens its own allowlisted GraphQL WebSocket and writes only normalized,
-typed readings to the `timeseries.parallax_*` tables. It never writes raw
-payloads, network identifiers, credentials, or canonical
-`vehicle_runtime_state`. This separation means collector failure cannot stall
-the main telemetry worker. The API reads the normalized tables for the Health
+vehicle worker. It opens its own allowlisted GraphQL WebSocket and writes normalized,
+typed readings to the `timeseries.parallax_*` tables. A bounded channel also passes validated R2-relevant power, GNSS, odometer, closure, tire, and cabin readings to the canonical worker, where they enter latest status and telemetry history. Parallax frames cannot create or end charge sessions. The collector never stores raw payloads, network identifiers, or credentials. Its failure cannot stall
+the main telemetry worker. For R2 and legacy R2S models, trip detection joins recent power state with sparse GNSS fixes and may infer speed after two plausible moving segments; invalid, stale, and jumping fixes are rejected. The original telemetry values remain unmodified in storage. The API reads the normalized tables for the Health
 page and Rivian-reported Parked Energy panel; the existing Phantom Drain
 battery-change estimate remains an independent derived data source.
 The subsystem is integrated and enabled by default, shares only the latest canonical active-session
