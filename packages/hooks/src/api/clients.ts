@@ -15,7 +15,7 @@ function client<const Keys extends readonly MethodName[]>(...keys: Keys) {
 /** Domain-oriented client views. They share the authenticated transport and never own request logic. */
 export const authClient = client(
   'login', 'register', 'logout', 'changePassword', 'refresh', 'setup',
-  'previewAccountInvitation', 'acceptAccountInvitation', 'resumeSession', 'me',
+  'previewAccountInvitation', 'acceptAccountInvitation', 'startAccountInvitationOidc', 'resumeSession', 'me',
   'getAuthConfig', 'getOidcIdentities', 'startOidc', 'startOidcLink', 'startOidcPasswordSetup', 'unlinkOidc',
   'getUnitPreferences', 'updateUnitPreferences', 'updateThemePreferences', 'getDashboardChartFavorites',
   'updateDashboardChartFavorite', 'getAppTimezone', 'updateAppTimezone',

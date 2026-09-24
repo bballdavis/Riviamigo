@@ -38,6 +38,7 @@ pub struct AuthenticationSettingsResponse {
     pub token_auth_method: EffectiveValue<String>,
     pub auto_signup: EffectiveValue<bool>,
     pub auto_link_verified_email: EffectiveValue<bool>,
+    pub oidc_auto_login: EffectiveValue<bool>,
     pub allowed_email_domains: EffectiveValue<Vec<String>>,
     pub required_claim_name: EffectiveValue<Option<String>>,
     pub required_claim_value: EffectiveValue<Option<String>>,
@@ -64,6 +65,7 @@ pub struct AuthenticationSettingsUpdate {
     pub token_auth_method: Option<String>,
     pub auto_signup: Option<bool>,
     pub auto_link_verified_email: Option<bool>,
+    pub oidc_auto_login: Option<bool>,
     pub allowed_email_domains: Option<Vec<String>>,
     pub required_claim_name: Option<Option<String>>,
     pub required_claim_value: Option<Option<String>>,
@@ -82,6 +84,7 @@ struct StoredSettings {
     token_auth_method: String,
     auto_signup: bool,
     auto_link_verified_email: bool,
+    oidc_auto_login: bool,
     allowed_email_domains: Vec<String>,
     required_claim_name: Option<String>,
     required_claim_value: Option<String>,
@@ -104,6 +107,7 @@ pub struct EffectiveAuthenticationSettings {
     pub token_auth_method: String,
     pub auto_signup: bool,
     pub auto_link_verified_email: bool,
+    pub oidc_auto_login: bool,
     pub allowed_email_domains: Vec<String>,
     pub required_claim_name: Option<String>,
     pub required_claim_value: Option<String>,
@@ -149,6 +153,7 @@ pub async fn load_effective(
         auto_link_verified_email: env
             .auto_link_verified_email
             .unwrap_or(stored.auto_link_verified_email),
+        oidc_auto_login: env.oidc_auto_login.unwrap_or(stored.oidc_auto_login),
         allowed_email_domains: env
             .allowed_email_domains
             .clone()
@@ -166,12 +171,6 @@ pub async fn load_effective(
         effective.required_claim_name.as_deref(),
         effective.required_claim_value.as_deref(),
     )?;
-    validate_auto_link_policy(
-        effective.auto_link_verified_email,
-        &effective.allowed_email_domains,
-        effective.required_claim_name.as_deref(),
-        effective.required_claim_value.as_deref(),
-    )?;
     Ok(effective)
 }
 
@@ -185,12 +184,6 @@ pub async fn load(
         .map_err(|e| AppError::Validation(e.to_string()))?;
     let response = effective(stored, &env);
     validate_required_claim_pair(
-        response.required_claim_name.value.as_deref(),
-        response.required_claim_value.value.as_deref(),
-    )?;
-    validate_auto_link_policy(
-        response.auto_link_verified_email.value,
-        &response.allowed_email_domains.value,
         response.required_claim_name.value.as_deref(),
         response.required_claim_value.value.as_deref(),
     )?;
@@ -256,21 +249,6 @@ pub async fn update(
         effective_required_claim_name.as_deref(),
         effective_required_claim_value.as_deref(),
     )?;
-    let resulting_auto_link = env.auto_link_verified_email.unwrap_or(
-        body.auto_link_verified_email
-            .unwrap_or(current.auto_link_verified_email),
-    );
-    let resulting_domains = env.allowed_email_domains.clone().unwrap_or_else(|| {
-        body.allowed_email_domains
-            .clone()
-            .unwrap_or_else(|| current.allowed_email_domains.clone())
-    });
-    validate_auto_link_policy(
-        resulting_auto_link,
-        &resulting_domains,
-        effective_required_claim_name.as_deref(),
-        effective_required_claim_value.as_deref(),
-    )?;
     if !resulting_password_login {
         if invalidates_validation {
             return Err(AppError::Validation(
@@ -316,11 +294,11 @@ pub async fn update(
         Some(None) => None,
         None => current.client_secret_encrypted,
     };
-    sqlx::query("UPDATE riviamigo.authentication_settings SET oidc_enabled=$1,password_login_enabled=$2,issuer_url=$3,public_base_url=$4,client_id=$5,client_secret_encrypted=$6,button_label=$7,scopes=$8,token_auth_method=$9,auto_signup=$10,auto_link_verified_email=$11,allowed_email_domains=$12,required_claim_name=$13,required_claim_value=$14,last_validation_at=CASE WHEN $16 THEN NULL ELSE last_validation_at END,last_validation_fingerprint=CASE WHEN $16 THEN NULL ELSE last_validation_fingerprint END,updated_at=now(),updated_by=$15 WHERE id=TRUE")
+    sqlx::query("UPDATE riviamigo.authentication_settings SET oidc_enabled=$1,password_login_enabled=$2,issuer_url=$3,public_base_url=$4,client_id=$5,client_secret_encrypted=$6,button_label=$7,scopes=$8,token_auth_method=$9,auto_signup=$10,auto_link_verified_email=$11,oidc_auto_login=$12,allowed_email_domains=$13,required_claim_name=$14,required_claim_value=$15,last_validation_at=CASE WHEN $17 THEN NULL ELSE last_validation_at END,last_validation_fingerprint=CASE WHEN $17 THEN NULL ELSE last_validation_fingerprint END,updated_at=now(),updated_by=$16 WHERE id=TRUE")
         .bind(body.oidc_enabled.unwrap_or(current.oidc_enabled)).bind(body.password_login_enabled.unwrap_or(current.password_login_enabled))
         .bind(body.issuer_url.unwrap_or(current.issuer_url)).bind(body.public_base_url.unwrap_or(current.public_base_url)).bind(body.client_id.unwrap_or(current.client_id)).bind(secret)
         .bind(body.button_label.unwrap_or(current.button_label)).bind(body.scopes.unwrap_or(current.scopes)).bind(body.token_auth_method.unwrap_or(current.token_auth_method))
-        .bind(body.auto_signup.unwrap_or(current.auto_signup)).bind(body.auto_link_verified_email.unwrap_or(current.auto_link_verified_email)).bind(body.allowed_email_domains.unwrap_or(current.allowed_email_domains))
+        .bind(body.auto_signup.unwrap_or(current.auto_signup)).bind(body.auto_link_verified_email.unwrap_or(current.auto_link_verified_email)).bind(body.oidc_auto_login.unwrap_or(current.oidc_auto_login)).bind(body.allowed_email_domains.unwrap_or(current.allowed_email_domains))
         .bind(required_claim_name).bind(required_claim_value).bind(actor).bind(invalidates_validation).execute(pool).await?;
     load(pool, age_key).await
 }
@@ -363,6 +341,10 @@ fn reject_environment_owned_update(
         (
             body.auto_link_verified_email.is_some(),
             env.auto_link_verified_email.is_some(),
+        ),
+        (
+            body.oidc_auto_login.is_some(),
+            env.oidc_auto_login.is_some(),
         ),
         (
             body.allowed_email_domains.is_some(),
@@ -426,12 +408,6 @@ pub fn validate_effective(settings: &AuthenticationSettingsResponse) -> Result<(
         settings.required_claim_name.value.as_deref(),
         settings.required_claim_value.value.as_deref(),
     )?;
-    validate_auto_link_policy(
-        settings.auto_link_verified_email.value,
-        &settings.allowed_email_domains.value,
-        settings.required_claim_name.value.as_deref(),
-        settings.required_claim_value.value.as_deref(),
-    )?;
     if !settings.oidc_enabled.value {
         return Ok(());
     }
@@ -447,24 +423,6 @@ pub fn validate_effective(settings: &AuthenticationSettingsResponse) -> Result<(
     }
     normalize_oidc_scopes(&settings.scopes.value)?;
     oidc_callback_url(settings.public_base_url.value.as_deref())?;
-    Ok(())
-}
-
-fn validate_auto_link_policy(
-    auto_link_verified_email: bool,
-    allowed_email_domains: &[String],
-    required_claim_name: Option<&str>,
-    required_claim_value: Option<&str>,
-) -> Result<(), AppError> {
-    if auto_link_verified_email
-        && allowed_email_domains.is_empty()
-        && !(required_claim_name.is_some() && required_claim_value.is_some())
-    {
-        return Err(AppError::Validation(
-            "OIDC verified-email auto-link requires allowed email domains or a required claim restriction"
-                .into(),
-        ));
-    }
     Ok(())
 }
 
@@ -598,7 +556,7 @@ pub fn normalize_oidc_scopes(scopes: &str) -> Result<String, AppError> {
 }
 
 async fn load_stored(pool: &PgPool) -> Result<StoredSettings, AppError> {
-    let row = sqlx::query("SELECT oidc_enabled,password_login_enabled,issuer_url,public_base_url,client_id,client_secret_encrypted,button_label,scopes,token_auth_method,auto_signup,auto_link_verified_email,allowed_email_domains,required_claim_name,required_claim_value,last_validation_at,last_validation_fingerprint FROM riviamigo.authentication_settings WHERE id=TRUE")
+    let row = sqlx::query("SELECT oidc_enabled,password_login_enabled,issuer_url,public_base_url,client_id,client_secret_encrypted,button_label,scopes,token_auth_method,auto_signup,auto_link_verified_email,oidc_auto_login,allowed_email_domains,required_claim_name,required_claim_value,last_validation_at,last_validation_fingerprint FROM riviamigo.authentication_settings WHERE id=TRUE")
         .fetch_optional(pool).await?.ok_or_else(|| AppError::Internal(anyhow::anyhow!("authentication settings row is missing")))?;
     Ok(StoredSettings {
         oidc_enabled: row.try_get("oidc_enabled")?,
@@ -614,6 +572,7 @@ async fn load_stored(pool: &PgPool) -> Result<StoredSettings, AppError> {
         token_auth_method: row.try_get("token_auth_method")?,
         auto_signup: row.try_get("auto_signup")?,
         auto_link_verified_email: row.try_get("auto_link_verified_email")?,
+        oidc_auto_login: row.try_get("oidc_auto_login")?,
         allowed_email_domains: row.try_get("allowed_email_domains")?,
         required_claim_name: row.try_get("required_claim_name")?,
         required_claim_value: row.try_get("required_claim_value")?,
@@ -683,6 +642,7 @@ fn effective(s: StoredSettings, e: &OidcEnvOverrides) -> AuthenticationSettingsR
         token_auth_method: field!(s.token_auth_method, e.token_auth_method),
         auto_signup: field!(s.auto_signup, e.auto_signup),
         auto_link_verified_email: field!(s.auto_link_verified_email, e.auto_link_verified_email),
+        oidc_auto_login: field!(s.oidc_auto_login, e.oidc_auto_login),
         allowed_email_domains: field!(s.allowed_email_domains, e.allowed_email_domains),
         required_claim_name: optional_field!(s.required_claim_name, e.required_claim_name),
         required_claim_value: optional_field!(s.required_claim_value, e.required_claim_value),
@@ -741,6 +701,10 @@ mod tests {
                 value: false,
                 source: SettingSource::Default,
             },
+            oidc_auto_login: EffectiveValue {
+                value: false,
+                source: SettingSource::Default,
+            },
             allowed_email_domains: EffectiveValue {
                 value: vec![],
                 source: SettingSource::Default,
@@ -761,6 +725,8 @@ mod tests {
         s.public_base_url.value = Some("https://riviamigo.example".into());
         s.client_id.value = Some("client".into());
         s.client_secret.configured = true;
+        assert!(validate_effective(&s).is_ok());
+        s.auto_link_verified_email.value = true;
         assert!(validate_effective(&s).is_ok());
     }
 
@@ -802,6 +768,22 @@ mod tests {
     }
 
     #[test]
+    fn oidc_auto_login_environment_override_cannot_be_changed_by_settings_update() {
+        let env = OidcEnvOverrides {
+            oidc_auto_login: Some(true),
+            ..Default::default()
+        };
+        let body = AuthenticationSettingsUpdate {
+            oidc_auto_login: Some(false),
+            ..Default::default()
+        };
+        assert!(matches!(
+            reject_environment_owned_update(&body, &env),
+            Err(AppError::Conflict(_))
+        ));
+    }
+
+    #[test]
     fn oidc_scopes_require_openid_and_valid_scope_tokens() {
         assert_eq!(
             normalize_oidc_scopes(" profile  openid email ").unwrap(),
@@ -821,14 +803,6 @@ mod tests {
             canonicalize_issuer("https://issuer.example"),
             "https://issuer.example"
         );
-    }
-
-    #[test]
-    fn auto_link_requires_an_explicit_admission_boundary() {
-        assert!(validate_auto_link_policy(true, &[], None, None).is_err());
-        assert!(validate_auto_link_policy(true, &["example.com".into()], None, None).is_ok());
-        assert!(validate_auto_link_policy(true, &[], Some("groups"), Some("rivian")).is_ok());
-        assert!(validate_auto_link_policy(false, &[], None, None).is_ok());
     }
 
     #[test]
@@ -863,6 +837,7 @@ mod tests {
             token_auth_method: "auto".into(),
             auto_signup: false,
             auto_link_verified_email: false,
+            oidc_auto_login: false,
             allowed_email_domains: vec![],
             required_claim_name: None,
             required_claim_value: None,

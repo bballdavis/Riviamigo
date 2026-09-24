@@ -10,7 +10,7 @@ let mockSearch = {} as { redirect?: string; password_changed?: '1'; error?: 'oid
 let setupRequired = false;
 let setupProofRequired = false;
 let setupProofAvailable = false;
-let authConfig: { oidc_enabled: boolean; oidc_ready: boolean; password_login_enabled: boolean; button_label: string } | undefined;
+let authConfig: { oidc_enabled: boolean; oidc_ready: boolean; password_login_enabled: boolean; oidc_auto_login?: boolean; button_label: string } | undefined;
 let isAuthenticated = false;
 let isBootstrapping = false;
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
@@ -46,7 +46,7 @@ import { LoginPage } from '../login';
 beforeEach(() => {
   mockNavigate.mockClear(); mockLogin.mockClear(); mockRegister.mockClear(); mockResumeSession.mockReset(); mockStartOidc.mockReset();
   mockSearch = {}; setupRequired = false; setupProofRequired = false; setupProofAvailable = false;
-  authConfig = undefined;
+  authConfig = { oidc_enabled: false, oidc_ready: false, password_login_enabled: true, oidc_auto_login: false, button_label: 'Sign in with SSO' };
   isAuthenticated = false; isBootstrapping = false;
 });
 
@@ -83,6 +83,81 @@ describe('LoginPage', () => {
     render(<LoginPage />);
     expect(screen.getByRole('button', { name: 'Company SSO' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument();
+  });
+
+  it('starts SSO once when automatic sign-in is enabled and password login is disabled', async () => {
+    authConfig = { oidc_enabled: true, oidc_ready: true, password_login_enabled: false, oidc_auto_login: true, button_label: 'Company SSO' };
+    mockSearch = { redirect: '/charging?view=table' };
+    mockStartOidc.mockRejectedValue(new Error('provider unavailable'));
+    render(<LoginPage />);
+    await waitFor(() => expect(mockStartOidc).toHaveBeenCalledTimes(1));
+    expect(mockStartOidc).toHaveBeenCalledWith('/charging?view=table');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Contact an administrator');
+    expect(screen.getByRole('button', { name: 'Company SSO' })).toBeInTheDocument();
+  });
+
+  it('starts SSO with password login enabled and leaves the password form after a failed start', async () => {
+    authConfig = { oidc_enabled: true, oidc_ready: true, password_login_enabled: true, oidc_auto_login: true, button_label: 'Company SSO' };
+    mockStartOidc.mockRejectedValue(new Error('provider unavailable'));
+    const { rerender } = render(<LoginPage />);
+    await waitFor(() => expect(mockStartOidc).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Use your password');
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+    rerender(<LoginPage />);
+    await act(async () => {});
+    expect(mockStartOidc).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for session restoration before starting automatic SSO', async () => {
+    authConfig = { oidc_enabled: true, oidc_ready: true, password_login_enabled: false, oidc_auto_login: true, button_label: 'Company SSO' };
+    isBootstrapping = true;
+    let resolveResume!: (resumed: boolean) => void;
+    mockResumeSession.mockImplementation(() => new Promise<boolean>((resolve) => { resolveResume = resolve; }));
+    mockStartOidc.mockRejectedValue(new Error('provider unavailable'));
+
+    const { rerender } = render(<LoginPage />);
+    expect(screen.getByRole('status')).toHaveTextContent(/restoring your session/i);
+    expect(mockStartOidc).not.toHaveBeenCalled();
+
+    isBootstrapping = false;
+    await act(async () => { resolveResume(false); });
+    rerender(<LoginPage />);
+    await waitFor(() => expect(mockStartOidc).toHaveBeenCalledTimes(1));
+  });
+
+  it('waits until the provider is ready before starting automatic SSO', async () => {
+    authConfig = { oidc_enabled: false, oidc_ready: false, password_login_enabled: false, oidc_auto_login: true, button_label: 'Company SSO' };
+    mockStartOidc.mockRejectedValue(new Error('provider unavailable'));
+    const { rerender } = render(<LoginPage />);
+    await act(async () => {});
+    expect(mockStartOidc).not.toHaveBeenCalled();
+    authConfig = { ...authConfig, oidc_enabled: true, oidc_ready: true };
+    rerender(<LoginPage />);
+    await waitFor(() => expect(mockStartOidc).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not restart SSO after a provider callback error or during first-owner setup', async () => {
+    authConfig = { oidc_enabled: true, oidc_ready: true, password_login_enabled: false, oidc_auto_login: true, button_label: 'Company SSO' };
+    mockSearch = { error: 'oidc_failed' };
+    const { rerender } = render(<LoginPage />);
+    await act(async () => {});
+    expect(mockStartOidc).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('contact an administrator');
+    setupRequired = true;
+    mockSearch = {};
+    rerender(<LoginPage />);
+    await act(async () => {});
+    expect(mockStartOidc).not.toHaveBeenCalled();
+  });
+
+  it('keeps a failed callback on the login page without automatic restart when password login is enabled', async () => {
+    authConfig = { oidc_enabled: true, oidc_ready: true, password_login_enabled: true, oidc_auto_login: true, button_label: 'Company SSO' };
+    mockSearch = { error: 'oidc_failed' };
+    render(<LoginPage />);
+    await act(async () => {});
+    expect(mockStartOidc).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('use your password');
   });
 
   it('preserves a safe redirect when starting SSO', async () => {

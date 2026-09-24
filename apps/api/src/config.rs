@@ -564,6 +564,7 @@ pub struct OidcEnvOverrides {
     pub token_auth_method: Option<String>,
     pub auto_signup: Option<bool>,
     pub auto_link_verified_email: Option<bool>,
+    pub oidc_auto_login: Option<bool>,
     pub allowed_email_domains: Option<Vec<String>>,
     pub required_claim_name: Option<String>,
     pub required_claim_value: Option<String>,
@@ -592,6 +593,7 @@ impl OidcEnvOverrides {
             token_auth_method: optional_env("RIVIAMIGO_OIDC_TOKEN_AUTH_METHOD")?,
             auto_signup: optional_bool_env("RIVIAMIGO_OIDC_AUTO_SIGNUP")?,
             auto_link_verified_email: optional_bool_env("RIVIAMIGO_OIDC_AUTO_LINK_VERIFIED_EMAIL")?,
+            oidc_auto_login: optional_bool_env("RIVIAMIGO_OIDC_AUTO_LOGIN")?,
             allowed_email_domains: optional_env("RIVIAMIGO_OIDC_ALLOWED_EMAIL_DOMAINS")?.map(
                 |value| {
                     value

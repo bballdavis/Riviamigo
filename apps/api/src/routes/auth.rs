@@ -1,7 +1,7 @@
 use axum::{
     extract::State,
     http::{header::SET_COOKIE, StatusCode},
-    response::{IntoResponse, Response},
+    response::{AppendHeaders, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -32,6 +32,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/auth/account-invitations/accept",
             post(accept_account_invitation),
+        )
+        .route(
+            "/auth/account-invitations/oidc/start",
+            post(oidc_invitation_start),
         )
         .route("/auth/login", post(login))
         .route("/auth/bootstrap", post(bootstrap))
@@ -87,6 +91,11 @@ struct InvitationTokenBody {
 }
 
 #[derive(Deserialize)]
+struct OidcInvitationStartBody {
+    token: String,
+}
+
+#[derive(Deserialize)]
 struct AcceptAccountInvitationBody {
     token: String,
     password: String,
@@ -137,7 +146,7 @@ async fn auth_config(State(state): State<AppState>) -> Result<Json<serde_json::V
     let s = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
     let oidc_ready = s.oidc_enabled && oidc::provider_configuration_ready(&s);
     Ok(Json(
-        serde_json::json!({"oidc_enabled":oidc_ready,"password_login_enabled":s.password_login_enabled,"oidc_ready":oidc_ready,"button_label":s.button_label}),
+        serde_json::json!({"oidc_enabled":oidc_ready,"password_login_enabled":s.password_login_enabled,"oidc_ready":oidc_ready,"oidc_auto_login":s.oidc_auto_login,"button_label":s.button_label}),
     ))
 }
 async fn oidc_start(
@@ -160,6 +169,7 @@ async fn oidc_start(
         oidc::validate_return_to(body.return_to.as_deref())?,
         None,
         None,
+        None,
     )
     .await
 }
@@ -167,12 +177,44 @@ async fn oidc_start(
 fn oidc_public_start_available(has_super_user: bool) -> bool {
     has_super_user
 }
+
+async fn oidc_invitation_start(
+    State(state): State<AppState>,
+    Json(body): Json<OidcInvitationStartBody>,
+) -> Result<Response, AppError> {
+    let settings = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
+    if !(settings.oidc_enabled && oidc::provider_configuration_ready(&settings)) {
+        return Err(AppError::NotFound);
+    }
+    let token_hash = sha2_hash(body.token.trim());
+    let row = sqlx::query(
+        "SELECT id, auth_methods, expires_at, accepted_at, revoked_at
+         FROM riviamigo.account_invitations WHERE token_hash=$1",
+    )
+    .bind(token_hash)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    validate_account_invitation(&row)?;
+    let methods: String = row.get("auth_methods");
+    if methods == "password" {
+        return Err(AppError::Validation("invitation does not allow SSO".into()));
+    }
+    begin_oidc(&state, "/".into(), None, None, Some(row.get("id"))).await
+}
 async fn begin_oidc(
     state: &AppState,
     return_to: String,
     link_user: Option<Uuid>,
     pending_password_hash: Option<String>,
+    invitation_id: Option<Uuid>,
 ) -> Result<Response, AppError> {
+    tracing::info!(
+        target = "auth.oidc",
+        stage = "start",
+        link = link_user.is_some(),
+        "OIDC flow started"
+    );
     let s = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
     if !s.oidc_enabled && link_user.is_none() {
         return Err(AppError::NotFound);
@@ -194,6 +236,7 @@ async fn begin_oidc(
         user_id: link_user,
         link: link_user.is_some(),
         pending_password_hash,
+        invitation_id,
     };
     let mut c = state.redis.get_multiplexed_async_connection().await?;
     c.set_ex::<_, _, ()>(
@@ -203,6 +246,12 @@ async fn begin_oidc(
     )
     .await?;
     let u = oidc::authorization_url(&metadata, &provider_settings, &tx, &callback)?;
+    tracing::info!(
+        target = "auth.oidc",
+        stage = "authorization_prepared",
+        link = tx.link,
+        "OIDC authorization prepared"
+    );
     Ok((
         [(
             SET_COOKIE,
@@ -228,6 +277,12 @@ async fn oidc_callback(
     axum::extract::Query(q): axum::extract::Query<OidcCallback>,
 ) -> Result<Response, AppError> {
     let Some(st) = q.state else {
+        tracing::warn!(
+            target = "auth.oidc",
+            stage = "callback_input",
+            reason = "state_missing",
+            "OIDC callback rejected"
+        );
         return Ok(oidc_callback_error_response(
             false,
             "oidc_expired",
@@ -242,9 +297,38 @@ async fn oidc_callback(
                 .find_map(|p| p.trim().strip_prefix("oidc_state="))
                 .map(str::to_owned)
         });
-    let mut c = state.redis.get_multiplexed_async_connection().await?;
-    let raw: Option<String> = c.get_del(format!("riviamigo:oidc:tx:{st}")).await?;
+    let mut c = state
+        .redis
+        .get_multiplexed_async_connection()
+        .await
+        .map_err(|error| {
+            tracing::warn!(
+                target = "auth.oidc",
+                stage = "transaction_load",
+                reason = "redis_connection_failed",
+                "OIDC callback failed"
+            );
+            error
+        })?;
+    let raw: Option<String> =
+        c.get_del(format!("riviamigo:oidc:tx:{st}"))
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    target = "auth.oidc",
+                    stage = "transaction_load",
+                    reason = "redis_read_failed",
+                    "OIDC callback failed"
+                );
+                error
+            })?;
     let Some(raw) = raw else {
+        tracing::warn!(
+            target = "auth.oidc",
+            stage = "transaction_load",
+            reason = "transaction_missing",
+            "OIDC callback rejected"
+        );
         return Ok(oidc_callback_error_response(
             false,
             "oidc_expired",
@@ -254,14 +338,26 @@ async fn oidc_callback(
     let tx: oidc::Transaction = match serde_json::from_str(&raw) {
         Ok(tx) => tx,
         Err(_) => {
+            tracing::warn!(
+                target = "auth.oidc",
+                stage = "transaction_load",
+                reason = "transaction_invalid",
+                "OIDC callback rejected"
+            );
             return Ok(oidc_callback_error_response(
                 false,
                 "oidc_expired",
                 state.config.allows_insecure_refresh_cookies(),
-            ))
+            ));
         }
     };
     if cs.as_deref().map(oidc::browser_binding).as_deref() != Some(tx.browser_binding.as_str()) {
+        tracing::warn!(
+            target = "auth.oidc",
+            stage = "callback_binding",
+            reason = "browser_binding_mismatch",
+            "OIDC callback rejected"
+        );
         return Ok(oidc_callback_error_response(
             tx.link,
             "oidc_failed",
@@ -269,6 +365,12 @@ async fn oidc_callback(
         ));
     }
     if q.error.is_some() {
+        tracing::info!(
+            target = "auth.oidc",
+            stage = "provider_response",
+            reason = "provider_denied",
+            "OIDC provider denied callback"
+        );
         return Ok(oidc_callback_error_response(
             tx.link,
             "oidc_denied",
@@ -276,34 +378,139 @@ async fn oidc_callback(
         ));
     }
     let completion: Result<Response, AppError> = async {
-        let settings = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
-        let code = q.code.ok_or(AppError::Unauthorized)?;
+        let settings = authentication_settings::load_effective(&state.pool, &state.age_key)
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    target = "auth.oidc",
+                    stage = "settings_load",
+                    reason = "load_failed",
+                    "OIDC callback failed"
+                );
+                error
+            })?;
+        let code = q.code.ok_or_else(|| {
+            tracing::warn!(
+                target = "auth.oidc",
+                stage = "callback_input",
+                reason = "code_missing",
+                "OIDC callback failed"
+            );
+            AppError::Unauthorized
+        })?;
         let mut provider_settings = settings.clone();
         if tx.link {
             provider_settings.oidc_enabled = true;
         }
-        let identity = oidc::exchange_and_verify(&provider_settings, &tx, &code).await?;
+        let identity = oidc::exchange_and_verify(&provider_settings, &tx, &code)
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    target = "auth.oidc",
+                    stage = "exchange_verify",
+                    reason = "exchange_or_verify_failed",
+                    "OIDC callback failed"
+                );
+                error
+            })?;
+        tracing::info!(
+            target = "auth.oidc",
+            stage = "exchange_verify",
+            reason = "verified",
+            "OIDC identity verified"
+        );
         if !oidc::claim_matches(
             &identity,
             settings.required_claim_name.as_deref(),
             settings.required_claim_value.as_deref(),
         ) {
+            tracing::warn!(
+                target = "auth.oidc",
+                stage = "required_claim",
+                reason = "claim_mismatch",
+                "OIDC callback rejected"
+            );
             return Err(AppError::Forbidden);
         }
-        let user_id = resolve_oidc_identity(&state.pool, &settings, &tx, &identity).await?;
+        let user_id = if tx.invitation_id.is_some() {
+            accept_oidc_invitation(&state.pool, tx.invitation_id.unwrap(), &identity).await
+        } else {
+            resolve_oidc_identity(&state.pool, &settings, &tx, &identity).await
+        }
+        .map_err(|error| {
+            if !matches!(
+                &error,
+                AppError::Forbidden | AppError::Unauthorized | AppError::Conflict(_)
+            ) {
+                tracing::warn!(
+                    target = "auth.oidc",
+                    stage = "identity_resolution",
+                    reason = "resolution_failed",
+                    "OIDC callback failed"
+                );
+            }
+            error
+        })?;
+        tracing::info!(
+            target = "auth.oidc",
+            stage = "identity_resolution",
+            reason = "resolved",
+            "OIDC identity resolved"
+        );
         let disabled: bool =
             sqlx::query_scalar("SELECT is_disabled FROM riviamigo.users WHERE id=$1")
                 .bind(user_id)
                 .fetch_optional(&state.pool)
-                .await?
+                .await
+                .map_err(|error| {
+                    tracing::warn!(
+                        target = "auth.oidc",
+                        stage = "account_status",
+                        reason = "lookup_failed",
+                        "OIDC callback failed"
+                    );
+                    error
+                })?
                 .unwrap_or(true);
         if disabled {
+            tracing::warn!(
+                target = "auth.oidc",
+                stage = "account_status",
+                reason = "account_disabled",
+                "OIDC callback rejected"
+            );
             return Err(AppError::Forbidden);
         }
         if let Some(password_hash) = tx.pending_password_hash.as_deref() {
-            set_initial_password_after_oidc(&state.pool, user_id, password_hash, &headers).await?;
+            set_initial_password_after_oidc(&state.pool, user_id, password_hash, &headers)
+                .await
+                .map_err(|error| {
+                    tracing::warn!(
+                        target = "auth.oidc",
+                        stage = "password_setup",
+                        reason = "setup_failed",
+                        "OIDC callback failed"
+                    );
+                    error
+                })?;
         }
-        let refresh = issue_refresh_token(&state.pool, user_id).await?;
+        let refresh = issue_refresh_token(&state.pool, user_id)
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    target = "auth.oidc",
+                    stage = "refresh_issue",
+                    reason = "issue_failed",
+                    "OIDC callback failed"
+                );
+                error
+            })?;
+        tracing::info!(
+            target = "auth.oidc",
+            stage = "refresh_issue",
+            reason = "issued",
+            "OIDC refresh session issued"
+        );
         if tx.pending_password_hash.is_none() {
             SecurityAuditEvent::success(
                 if tx.link {
@@ -315,8 +522,24 @@ async fn oidc_callback(
             )
             .target("oidc")
             .record(&state.pool)
-            .await?;
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    target = "auth.oidc",
+                    stage = "success_audit",
+                    reason = "record_failed",
+                    "OIDC callback completed but success audit failed"
+                );
+                error
+            })?;
         }
+        tracing::info!(
+            target = "auth.oidc",
+            stage = "success",
+            reason = "callback_complete",
+            link = tx.link,
+            "OIDC callback completed"
+        );
         let destination = if tx.pending_password_hash.is_some() {
             "/settings?section=account&password=set"
         } else if tx.link {
@@ -324,45 +547,27 @@ async fn oidc_callback(
         } else {
             &tx.return_to
         };
-        Ok((
-            StatusCode::SEE_OTHER,
-            [
-                (
-                    SET_COOKIE,
-                    refresh_cookie(
-                        &refresh,
-                        2592000,
-                        state.config.allows_insecure_refresh_cookies(),
-                    ),
-                ),
-                (
-                    SET_COOKIE,
-                    oidc_state_cookie("", 0, state.config.allows_insecure_refresh_cookies()),
-                ),
-            ],
-            [(axum::http::header::LOCATION, destination)],
-        )
-            .into_response())
+        Ok(oidc_callback_success_response(
+            &refresh,
+            destination,
+            state.config.allows_insecure_refresh_cookies(),
+        ))
     }
     .await;
     match completion {
         Ok(response) => Ok(response),
         Err(_) => {
-            // Never log provider errors, codes, tokens, or claims. This static
-            // stage is enough to correlate an audit event with a browser-safe
-            // failure redirect without recording identity data.
-            tracing::warn!(
-                stage = "verified_callback_completion",
-                link = tx.link,
-                "OIDC callback failed"
-            );
-            if let Err(audit_error) =
-                SecurityAuditEvent::failure("oidc_callback_failed", tx.user_id)
-                    .target("oidc")
-                    .record(&state.pool)
-                    .await
+            if let Err(_) = SecurityAuditEvent::failure("oidc_callback_failed", tx.user_id)
+                .target("oidc")
+                .record(&state.pool)
+                .await
             {
-                tracing::warn!(stage = "oidc_callback_failure_audit", error = %audit_error, "failed to record OIDC callback audit event");
+                tracing::warn!(
+                    target = "auth.oidc",
+                    stage = "failure_audit",
+                    reason = "record_failed",
+                    "failed to record OIDC callback audit event"
+                );
             }
             Ok(oidc_callback_error_response(
                 tx.link,
@@ -371,6 +576,22 @@ async fn oidc_callback(
             ))
         }
     }
+}
+
+fn oidc_callback_success_response(
+    refresh: &str,
+    destination: &str,
+    allow_insecure: bool,
+) -> Response {
+    (
+        StatusCode::SEE_OTHER,
+        AppendHeaders([
+            (SET_COOKIE, refresh_cookie(refresh, 2592000, allow_insecure)),
+            (SET_COOKIE, oidc_state_cookie("", 0, allow_insecure)),
+        ]),
+        [(axum::http::header::LOCATION, destination)],
+    )
+        .into_response()
 }
 
 fn oidc_callback_error_response(link: bool, code: &str, allow_insecure: bool) -> Response {
@@ -391,10 +612,21 @@ async fn oidc_link_start(
     auth: AuthUser,
     Json(body): Json<OidcStartBody>,
 ) -> Result<Response, AppError> {
+    let methods: String = sqlx::query_scalar(
+        "SELECT auth_methods FROM riviamigo.users WHERE id=$1 AND NOT is_disabled",
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    if methods == "password" {
+        return Err(AppError::Forbidden);
+    }
     begin_oidc(
         &state,
         oidc::validate_return_to(body.return_to.as_deref())?,
         Some(auth.user_id),
+        None,
         None,
     )
     .await
@@ -408,8 +640,8 @@ async fn oidc_password_start(
     if !password_meets_minimum(&body.new_password) {
         return Err(AppError::Validation("password min 12 chars".into()));
     }
-    let status: (bool, bool) = sqlx::query_as(
-        "SELECT password_hash IS NOT NULL, \
+    let status: (bool, String, bool) = sqlx::query_as(
+        "SELECT password_hash IS NOT NULL, auth_methods, \
          EXISTS(SELECT 1 FROM riviamigo.user_oidc_identities WHERE user_id=$1) \
          FROM riviamigo.users WHERE id=$1 AND NOT is_disabled",
     )
@@ -417,12 +649,12 @@ async fn oidc_password_start(
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
-    if status.0 {
+    if status.0 || status.1 == "sso" {
         return Err(AppError::Conflict(
             "this account already has a password".into(),
         ));
     }
-    if !status.1 {
+    if !status.2 {
         return Err(AppError::Conflict(
             "link SSO before setting an initial password".into(),
         ));
@@ -432,6 +664,7 @@ async fn oidc_password_start(
         "/settings?section=account".into(),
         Some(auth.user_id),
         Some(hash_password(&body.new_password)?),
+        None,
     )
     .await
 }
@@ -439,11 +672,11 @@ async fn identities(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let r=sqlx::query("SELECT password_hash IS NOT NULL AS p, EXISTS(SELECT 1 FROM riviamigo.user_oidc_identities WHERE user_id=$1) AS o FROM riviamigo.users WHERE id=$1").bind(auth.user_id).fetch_one(&state.pool).await?;
+    let r=sqlx::query("SELECT password_hash IS NOT NULL AS p, auth_methods, EXISTS(SELECT 1 FROM riviamigo.user_oidc_identities WHERE user_id=$1) AS o FROM riviamigo.users WHERE id=$1").bind(auth.user_id).fetch_one(&state.pool).await?;
     let settings = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
     let oidc_link_available = oidc::provider_configuration_ready(&settings);
     Ok(Json(
-        serde_json::json!({"password_configured":r.get::<bool,_>("p"),"oidc_linked":r.get::<bool,_>("o"),"oidc_link_available":oidc_link_available,"button_label":settings.button_label}),
+        serde_json::json!({"password_configured":r.get::<bool,_>("p"),"oidc_linked":r.get::<bool,_>("o"),"password_setup_allowed":r.get::<String,_>("auth_methods") != "sso", "oidc_link_allowed":r.get::<String,_>("auth_methods") != "password", "oidc_link_available":oidc_link_available,"button_label":settings.button_label}),
     ))
 }
 async fn oidc_unlink(
@@ -488,6 +721,95 @@ struct UnlinkOidcBody {
     current_password: String,
 }
 
+async fn accept_oidc_invitation(
+    pool: &sqlx::PgPool,
+    invitation_id: Uuid,
+    identity: &oidc::VerifiedIdentity,
+) -> Result<Uuid, AppError> {
+    let email = identity
+        .email
+        .as_deref()
+        .filter(|_| identity.email_verified)
+        .ok_or(AppError::Forbidden)?;
+    let mut db = pool.begin().await?;
+    let invitation = sqlx::query(
+        "SELECT invitee_email, auth_methods, vehicle_id, expires_at, accepted_at, revoked_at
+         FROM riviamigo.account_invitations WHERE id=$1 FOR UPDATE",
+    )
+    .bind(invitation_id)
+    .fetch_optional(&mut *db)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    validate_account_invitation(&invitation)?;
+    let methods: String = invitation.get("auth_methods");
+    if methods == "password"
+        || !invitation
+            .get::<String, _>("invitee_email")
+            .eq_ignore_ascii_case(email)
+    {
+        return Err(AppError::Forbidden);
+    }
+    let existing: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM riviamigo.users WHERE lower(email)=lower($1) FOR UPDATE",
+    )
+    .bind(email)
+    .fetch_optional(&mut *db)
+    .await?;
+    if existing.is_some() {
+        return Err(AppError::Conflict("email already registered".into()));
+    }
+    let linked_identity: Option<Uuid> = sqlx::query_scalar(
+        "SELECT user_id FROM riviamigo.user_oidc_identities
+         WHERE issuer=$1 AND subject=$2 FOR UPDATE",
+    )
+    .bind(&identity.issuer)
+    .bind(&identity.subject)
+    .fetch_optional(&mut *db)
+    .await?;
+    if linked_identity.is_some() {
+        return Err(AppError::Conflict(
+            "this SSO identity is already linked to another account".into(),
+        ));
+    }
+    let user_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO riviamigo.users(email, password_hash, auth_methods, role) VALUES($1,NULL,$2,'user') RETURNING id",
+    )
+    .bind(email)
+    .bind(&methods)
+    .fetch_one(&mut *db)
+    .await?;
+    sqlx::query("INSERT INTO riviamigo.user_preferences(user_id) VALUES($1)")
+        .bind(user_id)
+        .execute(&mut *db)
+        .await?;
+    let mut vehicle_ids: Vec<Uuid> = sqlx::query_scalar("SELECT vehicle_id FROM riviamigo.account_invitation_vehicles WHERE invitation_id=$1 ORDER BY vehicle_id")
+        .bind(invitation_id).fetch_all(&mut *db).await?;
+    if vehicle_ids.is_empty() {
+        vehicle_ids.extend(invitation.get::<Option<Uuid>, _>("vehicle_id"));
+    }
+    for vehicle_id in vehicle_ids {
+        sqlx::query("INSERT INTO riviamigo.vehicle_memberships(vehicle_id,user_id,role,is_default) VALUES($1,$2,'viewer',FALSE)")
+            .bind(vehicle_id).bind(user_id).execute(&mut *db).await?;
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_user_settings(vehicle_id,user_id) VALUES($1,$2)",
+        )
+        .bind(vehicle_id)
+        .bind(user_id)
+        .execute(&mut *db)
+        .await?;
+    }
+    sqlx::query("INSERT INTO riviamigo.user_oidc_identities(user_id,issuer,subject,email,last_login_at) VALUES($1,$2,$3,$4,now())")
+        .bind(user_id).bind(&identity.issuer).bind(&identity.subject).bind(email).execute(&mut *db).await?;
+    sqlx::query("UPDATE riviamigo.account_invitations SET accepted_at=now(),created_user_id=$2,updated_at=now() WHERE id=$1")
+        .bind(invitation_id).bind(user_id).execute(&mut *db).await?;
+    SecurityAuditEvent::success("account_invitation_accepted", Some(user_id))
+        .target(format!("account_invitation:{invitation_id}"))
+        .record_tx(&mut db)
+        .await?;
+    db.commit().await?;
+    Ok(user_id)
+}
+
 async fn resolve_oidc_identity(
     pool: &sqlx::PgPool,
     settings: &authentication_settings::EffectiveAuthenticationSettings,
@@ -495,13 +817,33 @@ async fn resolve_oidc_identity(
     identity: &oidc::VerifiedIdentity,
 ) -> Result<Uuid, AppError> {
     let mut db = pool.begin().await?;
-    let linked: Option<(Uuid, bool)> = sqlx::query_as("SELECT i.user_id,u.is_disabled FROM riviamigo.user_oidc_identities i JOIN riviamigo.users u ON u.id=i.user_id WHERE i.issuer=$1 AND i.subject=$2 FOR UPDATE OF i,u")
+    let lock_key = identity.email.as_deref().unwrap_or(&identity.subject);
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(lower($1), 0))")
+        .bind(lock_key)
+        .execute(&mut *db)
+        .await?;
+    let linked: Option<(Uuid, bool, String)> = sqlx::query_as("SELECT i.user_id,u.is_disabled,u.auth_methods FROM riviamigo.user_oidc_identities i JOIN riviamigo.users u ON u.id=i.user_id WHERE i.issuer=$1 AND i.subject=$2 FOR UPDATE OF i,u")
         .bind(&identity.issuer).bind(&identity.subject).fetch_optional(&mut *db).await?;
-    let user_id = if let Some((user_id, is_disabled)) = linked {
+    let user_id = if let Some((user_id, is_disabled, auth_methods)) = linked {
         if is_disabled {
+            tracing::warn!(
+                target = "auth.oidc",
+                stage = "identity_resolution",
+                reason = "linked_account_disabled",
+                "OIDC identity rejected"
+            );
+            return Err(AppError::Forbidden);
+        }
+        if auth_methods == "password" {
             return Err(AppError::Forbidden);
         }
         if transaction.link && transaction.user_id != Some(user_id) {
+            tracing::warn!(
+                target = "auth.oidc",
+                stage = "identity_resolution",
+                reason = "identity_linked_to_other_account",
+                "OIDC identity rejected"
+            );
             return Err(AppError::Conflict(
                 "this SSO identity is already linked to another account".into(),
             ));
@@ -513,16 +855,39 @@ async fn resolve_oidc_identity(
         // operation. It must use the exact identity already attached to this
         // account; a different provider subject cannot be introduced here.
         if transaction.pending_password_hash.is_some() {
+            tracing::warn!(
+                target = "auth.oidc",
+                stage = "identity_resolution",
+                reason = "reauthentication_identity_not_linked",
+                "OIDC identity rejected"
+            );
             return Err(AppError::Forbidden);
         }
-        let user_id = transaction.user_id.ok_or(AppError::Unauthorized)?;
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM riviamigo.users WHERE id=$1 AND NOT is_disabled)",
+        let user_id = transaction.user_id.ok_or_else(|| {
+            tracing::warn!(
+                target = "auth.oidc",
+                stage = "identity_resolution",
+                reason = "link_account_missing",
+                "OIDC identity rejected"
+            );
+            AppError::Unauthorized
+        })?;
+        let account: Option<String> = sqlx::query_scalar(
+            "SELECT auth_methods FROM riviamigo.users WHERE id=$1 AND NOT is_disabled",
         )
         .bind(user_id)
-        .fetch_one(&mut *db)
+        .fetch_optional(&mut *db)
         .await?;
-        if !exists {
+        if account.as_deref() == Some("password") {
+            return Err(AppError::Forbidden);
+        }
+        if account.is_none() {
+            tracing::warn!(
+                target = "auth.oidc",
+                stage = "identity_resolution",
+                reason = "link_account_disabled_or_missing",
+                "OIDC identity rejected"
+            );
             return Err(AppError::Forbidden);
         }
         sqlx::query("INSERT INTO riviamigo.user_oidc_identities(user_id,issuer,subject,email,last_login_at) VALUES($1,$2,$3,$4,now())")
@@ -533,21 +898,69 @@ async fn resolve_oidc_identity(
             .email
             .as_deref()
             .filter(|_| identity.email_verified)
-            .ok_or(AppError::Forbidden)?;
+            .ok_or_else(|| {
+                tracing::warn!(
+                    target = "auth.oidc",
+                    stage = "identity_resolution",
+                    reason = "email_missing_or_unverified",
+                    "OIDC identity rejected"
+                );
+                AppError::Forbidden
+            })?;
         if !oidc::domain_allowed(email, &settings.allowed_email_domains) {
+            tracing::warn!(
+                target = "auth.oidc",
+                stage = "identity_resolution",
+                reason = "email_domain_denied",
+                "OIDC identity rejected"
+            );
             return Err(AppError::Forbidden);
         }
-        let existing: Option<(Uuid, bool)> = sqlx::query_as(
-            "SELECT id,is_disabled FROM riviamigo.users WHERE lower(email)=lower($1) FOR UPDATE",
+        let existing: Option<(Uuid, bool, String)> = sqlx::query_as(
+            "SELECT id,is_disabled,auth_methods FROM riviamigo.users WHERE lower(email)=lower($1) FOR UPDATE",
         )
         .bind(email)
         .fetch_optional(&mut *db)
         .await?;
         let user_id = match existing {
-            Some((_, true)) => return Err(AppError::Forbidden),
-            Some((user_id, false)) if settings.auto_link_verified_email => user_id,
-            Some(_) => return Err(AppError::Forbidden),
+            Some((_, true, _)) => {
+                tracing::warn!(
+                    target = "auth.oidc",
+                    stage = "identity_resolution",
+                    reason = "existing_account_disabled",
+                    "OIDC identity rejected"
+                );
+                return Err(AppError::Forbidden);
+            }
+            Some((_, false, ref methods)) if methods == "password" => {
+                return Err(AppError::Forbidden)
+            }
+            Some((user_id, false, _)) if settings.auto_link_verified_email => user_id,
+            Some(_) => {
+                tracing::warn!(
+                    target = "auth.oidc",
+                    stage = "identity_resolution",
+                    reason = "existing_account_auto_link_disabled",
+                    "OIDC identity rejected"
+                );
+                return Err(AppError::Forbidden);
+            }
             None if settings.auto_signup => {
+                // A pending invitation must be redeemed through its token-bound
+                // activation flow. Lock the invitation row while checking so
+                // ordinary OIDC auto-signup cannot consume or strand it.
+                let pending_invitation: Option<Uuid> = sqlx::query_scalar(
+                    "SELECT id FROM riviamigo.account_invitations
+                     WHERE lower(invitee_email)=lower($1)
+                       AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at>now()
+                     ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
+                )
+                .bind(email)
+                .fetch_optional(&mut *db)
+                .await?;
+                if pending_invitation.is_some() {
+                    return Err(AppError::Forbidden);
+                }
                 // Hold a key-share lock through the passwordless insert so a
                 // concurrent disable/delete cannot remove the last owner
                 // between this first-owner boundary and provisioning.
@@ -557,6 +970,12 @@ async fn resolve_oidc_identity(
                 .fetch_optional(&mut *db)
                 .await?;
                 if super_user.is_none() {
+                    tracing::warn!(
+                        target = "auth.oidc",
+                        stage = "identity_resolution",
+                        reason = "no_active_owner_for_signup",
+                        "OIDC identity rejected"
+                    );
                     return Err(AppError::Forbidden);
                 }
                 let user_id: Uuid = sqlx::query_scalar("INSERT INTO riviamigo.users(email,password_hash,role) VALUES($1,NULL,'user') RETURNING id").bind(email).fetch_one(&mut *db).await?;
@@ -564,17 +983,17 @@ async fn resolve_oidc_identity(
                     .bind(user_id)
                     .execute(&mut *db)
                     .await?;
-                if let Some(invite) = sqlx::query("SELECT id,vehicle_id FROM riviamigo.account_invitations WHERE lower(invitee_email)=lower($1) AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at>now() FOR UPDATE").bind(email).fetch_optional(&mut *db).await? {
-                    let invitation_id: Uuid = invite.get("id");
-                    if let Some(vehicle_id) = invite.get::<Option<Uuid>, _>("vehicle_id") {
-                        sqlx::query("INSERT INTO riviamigo.vehicle_memberships(vehicle_id,user_id,role,is_default) VALUES($1,$2,'viewer',FALSE) ON CONFLICT DO NOTHING").bind(vehicle_id).bind(user_id).execute(&mut *db).await?;
-                        sqlx::query("INSERT INTO riviamigo.vehicle_user_settings(vehicle_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING").bind(vehicle_id).bind(user_id).execute(&mut *db).await?;
-                    }
-                    sqlx::query("UPDATE riviamigo.account_invitations SET accepted_at=now(),created_user_id=$2,updated_at=now() WHERE id=$1").bind(invitation_id).bind(user_id).execute(&mut *db).await?;
-                }
                 user_id
             }
-            None => return Err(AppError::Forbidden),
+            None => {
+                tracing::warn!(
+                    target = "auth.oidc",
+                    stage = "identity_resolution",
+                    reason = "account_missing_auto_signup_disabled",
+                    "OIDC identity rejected"
+                );
+                return Err(AppError::Forbidden);
+            }
         };
         sqlx::query("INSERT INTO riviamigo.user_oidc_identities(user_id,issuer,subject,email,last_login_at) VALUES($1,$2,$3,$4,now())")
             .bind(user_id).bind(&identity.issuer).bind(&identity.subject).bind(email).execute(&mut *db).await?;
@@ -734,7 +1153,7 @@ async fn preview_account_invitation(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let token_hash = sha2_hash(body.token.trim());
     let invitation = sqlx::query(
-        "SELECT invitee_email, expires_at, accepted_at, revoked_at
+        "SELECT invitee_email, auth_methods, expires_at, accepted_at, revoked_at
          FROM riviamigo.account_invitations WHERE token_hash = $1",
     )
     .bind(token_hash)
@@ -742,9 +1161,15 @@ async fn preview_account_invitation(
     .await?
     .ok_or(AppError::NotFound)?;
     validate_account_invitation(&invitation)?;
+    let settings = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
+    let methods: String = invitation.get("auth_methods");
     Ok(Json(serde_json::json!({
         "email": invitation.get::<String, _>("invitee_email"),
         "expires_at": invitation.get::<chrono::DateTime<chrono::Utc>, _>("expires_at"),
+        "auth_methods": methods,
+        "password_available": settings.password_login_enabled,
+        "sso_available": settings.oidc_enabled && oidc::provider_configuration_ready(&settings),
+        "button_label": settings.button_label,
     })))
 }
 
@@ -760,7 +1185,7 @@ async fn accept_account_invitation(
     let password_hash = hash_password(&body.password)?;
     let mut tx = state.pool.begin().await?;
     let invitation = sqlx::query(
-        "SELECT id, invitee_email, vehicle_id, expires_at, accepted_at, revoked_at
+        "SELECT id, invitee_email, vehicle_id, auth_methods, expires_at, accepted_at, revoked_at
          FROM riviamigo.account_invitations WHERE token_hash = $1 FOR UPDATE",
     )
     .bind(token_hash)
@@ -768,14 +1193,31 @@ async fn accept_account_invitation(
     .await?
     .ok_or(AppError::NotFound)?;
     validate_account_invitation(&invitation)?;
+    let settings = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
+    let methods: String = invitation.get("auth_methods");
+    if methods == "sso" || !settings.password_login_enabled {
+        return Err(AppError::Validation(
+            "invitation does not allow password activation".into(),
+        ));
+    }
     let invitation_id: Uuid = invitation.get("id");
     let email: String = invitation.get("invitee_email");
     let vehicle_id: Option<Uuid> = invitation.get("vehicle_id");
+    let mut vehicle_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT vehicle_id FROM riviamigo.account_invitation_vehicles WHERE invitation_id=$1 ORDER BY vehicle_id",
+    )
+    .bind(invitation_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    if vehicle_ids.is_empty() {
+        vehicle_ids.extend(vehicle_id);
+    }
     let user_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO riviamigo.users (email, password_hash, role) VALUES ($1, $2, 'user') RETURNING id",
+        "INSERT INTO riviamigo.users (email, password_hash, auth_methods, role) VALUES ($1, $2, $3, 'user') RETURNING id",
     )
     .bind(&email)
     .bind(password_hash)
+    .bind(&methods)
     .fetch_one(&mut *tx)
     .await
     .map_err(|error| match error {
@@ -788,7 +1230,7 @@ async fn accept_account_invitation(
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
-    if let Some(vehicle_id) = vehicle_id {
+    for vehicle_id in vehicle_ids {
         sqlx::query(
             "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
              VALUES ($1, $2, 'viewer', FALSE)",
@@ -878,11 +1320,12 @@ async fn login(
         return Err(AppError::Validation("PASSWORD_LOGIN_DISABLED".into()));
     }
     let email = body.email.trim().to_lowercase();
-    let row =
-        sqlx::query("SELECT id, password_hash, is_disabled FROM riviamigo.users WHERE email = $1")
-            .bind(&email)
-            .fetch_optional(&state.pool)
-            .await?;
+    let row = sqlx::query(
+        "SELECT id, password_hash, auth_methods, is_disabled FROM riviamigo.users WHERE email = $1",
+    )
+    .bind(&email)
+    .fetch_optional(&state.pool)
+    .await?;
 
     // Always run the Argon2 verification to avoid timing oracle for user enumeration.
     let password_hash = row
@@ -905,6 +1348,9 @@ async fn login(
     }
 
     let row = row.ok_or(AppError::Unauthorized)?;
+    if row.get::<String, _>("auth_methods") == "sso" {
+        return Err(AppError::Unauthorized);
+    }
     if row.get::<bool, _>("is_disabled") {
         tracing::warn!(
             email = %email,
@@ -1067,12 +1513,17 @@ async fn change_password(
     }
 
     let mut tx = state.pool.begin().await?;
-    let current_password_hash: Option<String> =
-        sqlx::query_scalar("SELECT password_hash FROM riviamigo.users WHERE id = $1 FOR UPDATE")
-            .bind(auth.user_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or(AppError::NotFound)?;
+    let account = sqlx::query(
+        "SELECT password_hash, auth_methods FROM riviamigo.users WHERE id = $1 FOR UPDATE",
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    if account.get::<String, _>("auth_methods") == "sso" {
+        return Err(AppError::Forbidden);
+    }
+    let current_password_hash: Option<String> = account.get("password_hash");
 
     let current_password_hash = current_password_hash
         .ok_or_else(|| AppError::Validation("set a password before changing it".into()))?;
@@ -1112,12 +1563,17 @@ async fn set_initial_password_after_oidc(
     headers: &axum::http::HeaderMap,
 ) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
-    let current_password_hash: Option<String> =
-        sqlx::query_scalar("SELECT password_hash FROM riviamigo.users WHERE id=$1 FOR UPDATE")
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or(AppError::NotFound)?;
+    let account = sqlx::query(
+        "SELECT password_hash, auth_methods FROM riviamigo.users WHERE id=$1 FOR UPDATE",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    if account.get::<String, _>("auth_methods") == "sso" {
+        return Err(AppError::Forbidden);
+    }
+    let current_password_hash: Option<String> = account.get("password_hash");
     if current_password_hash.is_some() {
         return Err(AppError::Conflict(
             "this account already has a password".into(),
@@ -1934,6 +2390,7 @@ mod tests {
             token_auth_method: "auto".into(),
             auto_signup,
             auto_link_verified_email,
+            oidc_auto_login: false,
             allowed_email_domains: vec!["example.com".into()],
             required_claim_name: None,
             required_claim_value: None,
@@ -1950,6 +2407,7 @@ mod tests {
             user_id: None,
             link: false,
             pending_password_hash: None,
+            invitation_id: None,
         }
     }
 
@@ -2053,6 +2511,42 @@ mod tests {
             cookie.contains("refresh_token="),
             "clearing cookie must have empty value"
         );
+    }
+
+    #[test]
+    fn oidc_callback_success_response_preserves_both_session_cookies() {
+        let response = oidc_callback_success_response("issued-refresh", "/dashboard", false);
+        let cookies: Vec<&str> = response
+            .headers()
+            .get_all(SET_COOKIE)
+            .iter()
+            .map(|value| value.to_str().expect("Set-Cookie is valid ASCII"))
+            .collect();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.headers().get("location").unwrap(), "/dashboard");
+        assert_eq!(cookies.len(), 2);
+        assert_eq!(
+            cookies
+                .iter()
+                .filter(|cookie| cookie.starts_with("refresh_token="))
+                .count(),
+            1
+        );
+        assert_eq!(
+            cookies
+                .iter()
+                .filter(|cookie| cookie.starts_with("oidc_state="))
+                .count(),
+            1
+        );
+        assert!(cookies.iter().any(|cookie| {
+            cookie.starts_with("refresh_token=issued-refresh;")
+                && cookie.contains("Max-Age=2592000")
+        }));
+        assert!(cookies
+            .iter()
+            .any(|cookie| cookie.starts_with("oidc_state=;") && cookie.contains("Max-Age=0")));
     }
 
     #[test]
@@ -2460,14 +2954,12 @@ mod tests {
             .await
             .expect("disable test user");
         let identity = test_oidc_identity(&email);
+        let mut broad_settings = test_oidc_settings(false, true);
+        broad_settings.allowed_email_domains.clear();
 
-        let result = resolve_oidc_identity(
-            &pool,
-            &test_oidc_settings(false, true),
-            &test_oidc_transaction(),
-            &identity,
-        )
-        .await;
+        let result =
+            resolve_oidc_identity(&pool, &broad_settings, &test_oidc_transaction(), &identity)
+                .await;
         assert!(matches!(result, Err(AppError::Forbidden)));
         let mapping_count: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM riviamigo.user_oidc_identities WHERE issuer=$1 AND subject=$2",
@@ -2484,14 +2976,10 @@ mod tests {
             .execute(&pool)
             .await
             .expect("enable test user");
-        let linked_user = resolve_oidc_identity(
-            &pool,
-            &test_oidc_settings(false, true),
-            &test_oidc_transaction(),
-            &identity,
-        )
-        .await
-        .expect("verified email should link an enabled account");
+        let linked_user =
+            resolve_oidc_identity(&pool, &broad_settings, &test_oidc_transaction(), &identity)
+                .await
+                .expect("verified email should link an enabled account");
         let expected_user: Uuid =
             sqlx::query_scalar("SELECT id FROM riviamigo.users WHERE email=$1")
                 .bind(&email)
@@ -2504,7 +2992,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
-    async fn oidc_auto_signup_creates_passwordless_basic_user_and_identity() {
+    async fn oidc_auto_signup_rejects_pending_invitation_without_token() {
         let database_url =
             std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
         let pool = crate::db::pool::create_pool(&database_url)
@@ -2532,43 +3020,147 @@ mod tests {
         .expect("seed account invitation");
         let identity = test_oidc_identity(&user_email);
 
-        let user_id = resolve_oidc_identity(
+        let result = resolve_oidc_identity(
             &pool,
             &test_oidc_settings(true, false),
             &test_oidc_transaction(),
             &identity,
         )
-        .await
-        .expect("auto signup should succeed");
-        let account: (String, Option<String>, String) =
-            sqlx::query_as("SELECT email,password_hash,role FROM riviamigo.users WHERE id=$1")
-                .bind(user_id)
+        .await;
+        assert!(matches!(result, Err(AppError::Forbidden)));
+        let user_count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM riviamigo.users WHERE lower(email)=lower($1)")
+                .bind(&user_email)
                 .fetch_one(&pool)
                 .await
-                .expect("load auto-signup account");
-        assert_eq!(account.0, user_email);
-        assert!(account.1.is_none());
-        assert_eq!(account.2, "user");
-        let linked_user: Uuid = sqlx::query_scalar(
-            "SELECT user_id FROM riviamigo.user_oidc_identities WHERE issuer=$1 AND subject=$2",
-        )
-        .bind(&identity.issuer)
-        .bind(&identity.subject)
-        .fetch_one(&pool)
-        .await
-        .expect("load identity mapping");
-        assert_eq!(linked_user, user_id);
+                .expect("count blocked auto-signup account");
+        assert_eq!(user_count, 0);
         let invitation: (Option<chrono::DateTime<chrono::Utc>>, Option<Uuid>) = sqlx::query_as(
             "SELECT accepted_at,created_user_id FROM riviamigo.account_invitations WHERE id=$1",
         )
         .bind(invitation_id)
         .fetch_one(&pool)
         .await
-        .expect("load accepted invitation");
-        assert!(invitation.0.is_some());
-        assert_eq!(invitation.1, Some(user_id));
+        .expect("load pending invitation");
+        assert!(invitation.0.is_none());
+        assert!(invitation.1.is_none());
 
         delete_test_user(&user_email).await;
+        delete_test_user(&owner_email).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn oidc_invitation_requires_matching_email_and_accepts_once_with_access_and_audit() {
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
+        let pool = crate::db::pool::create_pool(&database_url)
+            .await
+            .expect("create_pool");
+        let owner_email = format!("oidc_invite_owner_{}@example.com", Uuid::new_v4());
+        let invitee_email = format!("oidc_invitee_{}@example.com", Uuid::new_v4());
+        let owner_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO riviamigo.users(email,password_hash,role) VALUES($1,$2,'super_user') RETURNING id",
+        )
+        .bind(&owner_email)
+        .bind(argon2_hash("correctpassword123").expect("hash owner password"))
+        .fetch_one(&pool)
+        .await
+        .expect("seed owner");
+        let vehicle_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO riviamigo.vehicles(user_id,rivian_vehicle_id,model,name) VALUES($1,$2,'R1T','Invited R1T') RETURNING id",
+        )
+        .bind(owner_id)
+        .bind(format!("oidc-invite-{}", Uuid::new_v4()))
+        .fetch_one(&pool)
+        .await
+        .expect("seed vehicle");
+        let invitation_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO riviamigo.account_invitations(invited_by,invitee_email,vehicle_id,token_hash,expires_at,auth_methods) VALUES($1,$2,$3,$4,now()+interval '1 day','sso') RETURNING id",
+        )
+        .bind(owner_id)
+        .bind(&invitee_email)
+        .bind(vehicle_id)
+        .bind(sha2_hash(&format!("oidc-invite-{}", Uuid::new_v4())))
+        .fetch_one(&pool)
+        .await
+        .expect("seed SSO invitation");
+        let mut wrong_identity = test_oidc_identity("other@example.com");
+        assert!(matches!(
+            accept_oidc_invitation(&pool, invitation_id, &wrong_identity).await,
+            Err(AppError::Forbidden)
+        ));
+        let still_pending: bool = sqlx::query_scalar(
+            "SELECT accepted_at IS NULL FROM riviamigo.account_invitations WHERE id=$1",
+        )
+        .bind(invitation_id)
+        .fetch_one(&pool)
+        .await
+        .expect("pending invitation");
+        assert!(still_pending);
+
+        wrong_identity.email = Some(invitee_email.clone());
+        let user_id = accept_oidc_invitation(&pool, invitation_id, &wrong_identity)
+            .await
+            .expect("accept SSO invitation");
+        let account: (Option<String>, String) =
+            sqlx::query_as("SELECT password_hash,auth_methods FROM riviamigo.users WHERE id=$1")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .expect("created account");
+        assert!(account.0.is_none());
+        assert_eq!(account.1, "sso");
+        let linked_user: Uuid = sqlx::query_scalar(
+            "SELECT user_id FROM riviamigo.user_oidc_identities WHERE issuer=$1 AND subject=$2",
+        )
+        .bind(&wrong_identity.issuer)
+        .bind(&wrong_identity.subject)
+        .fetch_one(&pool)
+        .await
+        .expect("linked identity");
+        assert_eq!(linked_user, user_id);
+        let role: String = sqlx::query_scalar(
+            "SELECT role FROM riviamigo.vehicle_memberships WHERE vehicle_id=$1 AND user_id=$2",
+        )
+        .bind(vehicle_id)
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .expect("viewer membership");
+        assert_eq!(role, "viewer");
+        let vehicle_settings: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM riviamigo.vehicle_user_settings WHERE vehicle_id=$1 AND user_id=$2",
+        )
+        .bind(vehicle_id)
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .expect("vehicle settings");
+        assert_eq!(vehicle_settings, 1);
+        let accepted_user: Uuid = sqlx::query_scalar(
+            "SELECT created_user_id FROM riviamigo.account_invitations WHERE id=$1 AND accepted_at IS NOT NULL",
+        )
+        .bind(invitation_id)
+        .fetch_one(&pool)
+        .await
+        .expect("accepted invitation");
+        assert_eq!(accepted_user, user_id);
+        let audit_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM riviamigo.security_events WHERE event_type='account_invitation_accepted' AND user_id=$1",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .expect("acceptance audit");
+        assert_eq!(audit_count, 1);
+        assert!(
+            accept_oidc_invitation(&pool, invitation_id, &wrong_identity)
+                .await
+                .is_err()
+        );
+
+        delete_test_user(&invitee_email).await;
         delete_test_user(&owner_email).await;
     }
 

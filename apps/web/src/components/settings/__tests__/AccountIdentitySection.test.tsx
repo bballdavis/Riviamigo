@@ -77,4 +77,16 @@ describe('AccountIdentitySection', () => {
     await waitFor(() => expect(startPasswordSetup).toHaveBeenCalledWith('newrecoverypassword123'));
     expect(window.location.assign).toHaveBeenCalledWith('https://idp.example/reauth');
   });
+  it('does not offer password setup to an SSO-only account', async () => {
+    identities.mockResolvedValue({
+      password_configured: false,
+      oidc_linked: true,
+      oidc_link_available: true,
+      password_setup_allowed: false,
+      oidc_link_allowed: true,
+    });
+    renderSection();
+    expect(await screen.findByText('Not allowed for this account')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Verify SSO and set password' })).not.toBeInTheDocument();
+  });
 });

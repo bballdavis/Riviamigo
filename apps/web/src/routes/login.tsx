@@ -44,6 +44,7 @@ export function LoginPage() {
   const redirectTarget = normalizeLoginRedirectTarget(search.redirect);
   const shouldResumeSession = search.password_changed !== '1';
   const resumeAttempted = useRef(false);
+  const autoSsoAttempted = useRef(false);
   const resumePromise = useRef<Promise<boolean> | null>(null);
   const redirectStarted = useRef(false);
   const [restoringSession, setRestoringSession] = useState(false);
@@ -59,7 +60,24 @@ export function LoginPage() {
   });
   const config = authConfig.data;
   const ssoReady = !setupRequired && config?.oidc_enabled === true && config.oidc_ready === true;
-  const passwordEnabled = setupRequired || config?.password_login_enabled !== false;
+  const passwordEnabled = setupRequired || config?.password_login_enabled === true;
+
+  const startSso = React.useCallback(async () => {
+    setError('');
+    setLoading(true);
+    try {
+      const result = await api.startOidc(redirectTarget ?? '/');
+      window.location.assign(result.authorization_url);
+    } catch {
+      const message = passwordEnabled
+        ? 'Single sign-on is temporarily unavailable. Use your password or contact an administrator.'
+        : 'Single sign-on is temporarily unavailable. Contact an administrator.';
+      setError(message);
+      emitAuthError('SSO sign-in failed', 'Single sign-on is temporarily unavailable.');
+    } finally {
+      setLoading(false);
+    }
+  }, [passwordEnabled, redirectTarget]);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,6 +116,13 @@ export function LoginPage() {
 
     return () => { cancelled = true; };
   }, [isAuthenticated, isBootstrapping, navigate, redirectTarget, resumeSession, shouldResumeSession]);
+
+  useEffect(() => {
+    if (autoSsoAttempted.current || !config?.oidc_auto_login || !ssoReady ||
+        isAuthenticated || isBootstrapping || restoringSession || search.error || search.password_changed) return;
+    autoSsoAttempted.current = true;
+    void startSso();
+  }, [config?.oidc_auto_login, ssoReady, isAuthenticated, isBootstrapping, restoringSession, search.error, search.password_changed, startSso]);
 
   if (restoringSession) {
     return (
@@ -147,22 +172,6 @@ export function LoginPage() {
       }
       setError(message);
       emitAuthError('Sign-in failed', message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleSso() {
-    setError('');
-    setLoading(true);
-    try {
-      const result = await api.startOidc(redirectTarget ?? '/');
-      window.location.assign(result.authorization_url);
-    } catch {
-      setError(
-        'Single sign-on is temporarily unavailable. Use your password or contact an administrator.'
-      );
-      emitAuthError('SSO sign-in failed', 'Single sign-on is temporarily unavailable.');
     } finally {
       setLoading(false);
     }
@@ -223,11 +232,13 @@ export function LoginPage() {
                 : search.error === 'oidc_expired'
                   ? 'This single sign-on attempt expired.'
                   : 'Single sign-on could not be completed.'}{' '}
-              You can try again or use your password.
+              {passwordEnabled ? 'You can try again or use your password.' : 'You can try again or contact an administrator.'}
             </p>
           )}
 
-          {ssoReady && <Button type="button" size="lg" className="w-full" loading={loading} onClick={handleSso}>{config?.button_label || 'Sign in with SSO'}</Button>}
+          {!setupRequired && !config && <p role="status" className="text-xs text-fg-secondary">Loading sign-in options…</p>}
+          {ssoReady && <Button type="button" size="lg" className="w-full" loading={loading} onClick={startSso}>{config?.button_label || 'Sign in with SSO'}</Button>}
+          {error && !passwordEnabled && <p role="alert" className="mt-4 text-xs text-status-danger bg-status-danger/10 border border-status-danger/20 rounded-lg px-3 py-2">{error}</p>}
           {ssoReady && passwordEnabled && <div className="my-1 flex items-center gap-3 text-[11px] text-fg-tertiary"><span className="h-px flex-1 bg-border" /><span>or</span><span className="h-px flex-1 bg-border" /></div>}
           {passwordEnabled && <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <Input
@@ -267,7 +278,7 @@ export function LoginPage() {
             )}
             {setupRequired && <PasswordRequirements password={password} />}
             {error && (
-              <p className="text-xs text-status-danger bg-status-danger/10 border border-status-danger/20 rounded-lg px-3 py-2">
+              <p role="alert" className="text-xs text-status-danger bg-status-danger/10 border border-status-danger/20 rounded-lg px-3 py-2">
                 {error}
               </p>
             )}
@@ -275,7 +286,7 @@ export function LoginPage() {
               {setupRequired ? 'Create owner account' : 'Sign in'}
             </Button>
           </form>}
-          {!passwordEnabled && !ssoReady && <p role="status" className="text-xs text-fg-secondary">Sign-in is temporarily unavailable. Ask an administrator to restore an authentication method.</p>}
+          {!passwordEnabled && !ssoReady && config && <p role="status" className="text-xs text-fg-secondary">Sign-in is temporarily unavailable. Ask an administrator to restore an authentication method.</p>}
           {!setupRequired && <p className="mt-5 pt-5 border-t border-border text-center text-xs text-fg-tertiary">Need access? Ask an administrator for an activation link.</p>}
         </div>
 

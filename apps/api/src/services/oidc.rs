@@ -125,6 +125,8 @@ pub struct Transaction {
     /// OIDC identity that is already linked to `user_id`.
     #[serde(default)]
     pub pending_password_hash: Option<String>,
+    #[serde(default)]
+    pub invitation_id: Option<uuid::Uuid>,
 }
 
 /// Identity information is constructed only after `openidconnect` has verified
@@ -631,6 +633,7 @@ mod tests {
             token_auth_method: "auto".into(),
             auto_signup: false,
             auto_link_verified_email: false,
+            oidc_auto_login: false,
             allowed_email_domains: vec![],
             required_claim_name: None,
             required_claim_value: None,

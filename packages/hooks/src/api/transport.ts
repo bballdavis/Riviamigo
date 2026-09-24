@@ -245,7 +245,7 @@ export function setApiBaseUrl(url: string | undefined): void {
 }
 
 interface ApiFailureDetail {
-  status: number;
+  status?: number;
   code: string;
   message: string;
   method: string;
@@ -493,17 +493,35 @@ export class AuthenticatedTransport {
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
     } catch (error) {
-      if (reportErrors) {
-        reportClientError(error, {
-          event: 'api.request_failed',
-          area: 'api',
-          operation: classifyClientRequestSource(path),
-          method,
-          path,
-          severity: 'warn',
-        });
+      if (!isFetchConnectionError(error)) {
+        if (reportErrors) {
+          reportClientError(error, {
+            event: 'api.request_failed',
+            area: 'api',
+            operation: classifyClientRequestSource(path),
+            method,
+            path,
+            severity: 'warn',
+          });
+        }
+        throw error;
       }
-      throw error;
+
+      const detail: ApiFailureDetail = {
+        code: 'NETWORK_ERROR',
+        message: 'Unable to reach the server. Check your connection and try again.',
+        method,
+        path,
+      };
+      const networkError = Object.assign(new Error(formatApiError(detail)), {
+        code: detail.code,
+        detail,
+        cause: error,
+      });
+      if (reportErrors) {
+        this.reportFailure(detail, error instanceof Error ? error : networkError);
+      }
+      throw networkError;
     }
 
     if (!res.ok) {
@@ -519,7 +537,22 @@ export class AuthenticatedTransport {
           const tokens = await this.refreshAccessToken();
           this.applyTokens(tokens);
           return this.requestResponse(method, path, body, params, false, reportErrors, extraHeaders);
-        } catch {
+        } catch (refreshError) {
+          const refreshFailure = apiFailureDetailFrom(refreshError);
+          if (
+            refreshFailure &&
+            (refreshFailure.code === 'NETWORK_ERROR' ||
+              (refreshFailure.status != null && refreshFailure.status >= 500))
+          ) {
+            if (reportErrors) {
+              this.reportFailure(
+                refreshFailure,
+                refreshError instanceof Error ? refreshError : new Error(refreshFailure.message)
+              );
+            }
+            throw refreshError;
+          }
+
           this.clearTokens();
           const detail: ApiFailureDetail = {
             status: res.status,
@@ -625,6 +658,10 @@ export class AuthenticatedTransport {
       true,
       false
     );
+  }
+
+  async startAccountInvitationOidc(token: string): Promise<{ authorization_url: string }> {
+    return this.request('POST', '/v1/auth/account-invitations/oidc/start', { token }, undefined, true, false);
   }
 
   async resumeSession(): Promise<AuthTokens | null> {
@@ -884,6 +921,8 @@ export class AuthenticatedTransport {
     id: string;
     invitee_email: string;
     vehicle_id: string | null;
+    vehicle_ids: string[];
+    auth_methods: AccountInvitation['auth_methods'];
     expires_at: string;
     activation_token: string;
   }> {
@@ -2308,11 +2347,19 @@ function tripPowerSource(value: unknown): TripPowerSource | undefined {
 }
 
 function formatApiError(detail: ApiFailureDetail) {
+  if (detail.status == null) return detail.message;
   return `${detail.status} ${detail.code}: ${truncate(detail.message, 160)}`;
 }
 
 function friendlyApiError(detail: ApiFailureDetail): { title: string; message: string } {
   const { status, code } = detail;
+  if (code === 'NETWORK_ERROR') {
+    return {
+      title: 'Connection lost',
+      message: 'Unable to reach the server. Check your connection and try again.',
+    };
+  }
+
   if (code === 'AUTH_EXPIRED')
     return { title: 'Session expired', message: 'Please sign in again to continue.' };
   if (status === 401)
@@ -2338,6 +2385,12 @@ function friendlyApiError(detail: ApiFailureDetail): { title: string; message: s
       message: `Please wait a moment and try again.${waitHint}`,
     };
   }
+  if (status != null && [502, 503, 504].includes(status)) {
+    return {
+      title: 'Server unavailable',
+      message: 'The server is currently unavailable. Please try again in a moment.',
+    };
+  }
   if (status != null && status >= 500)
     return {
       title: 'Server error',
@@ -2347,6 +2400,17 @@ function friendlyApiError(detail: ApiFailureDetail): { title: string; message: s
     title: 'Something went wrong',
     message: truncate(detail.message, 120) || 'An unexpected error occurred.',
   };
+}
+
+function isFetchConnectionError(error: unknown): boolean {
+  return error instanceof TypeError || (error instanceof Error && error.name === 'NetworkError');
+}
+
+function apiFailureDetailFrom(error: unknown): ApiFailureDetail | undefined {
+  if (!(error instanceof Error) || !('detail' in error)) return undefined;
+  const detail = (error as Error & { detail?: ApiFailureDetail }).detail;
+  if (typeof detail?.code !== 'string' || typeof detail.message !== 'string') return undefined;
+  return detail;
 }
 
 function truncate(value: string, maxLength: number) {

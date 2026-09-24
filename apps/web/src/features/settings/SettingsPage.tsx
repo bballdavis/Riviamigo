@@ -509,9 +509,10 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
       const available = canManageBackups
         ? [...baseSections.slice(0, 6), { id: 'backup' as const, label: 'Backups', icon: DatabaseBackup }, ...baseSections.slice(6)]
         : [...baseSections];
-      return canManageAuthentication
+      const withAuthentication = canManageAuthentication
         ? [...available, { id: 'authentication' as const, label: 'Authentication', icon: Lock }]
         : available;
+      return withAuthentication.sort((left, right) => left.label.localeCompare(right.label));
     },
     [canManageAuthentication, canManageBackups],
   );
@@ -927,15 +928,17 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                   key={section.id}
                   type="button"
                   onClick={() => selectSettingsSection(section.id)}
+                  aria-current={active ? 'page' : undefined}
                   className={[
                     'flex h-9 shrink-0 items-center gap-2 rounded-lg px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent',
                     active
-                      ? 'bg-bg-elevated text-fg shadow-sm'
+                      ? 'bg-accent-muted text-accent'
                       : 'text-fg-secondary hover:bg-bg-elevated/70 hover:text-fg',
                   ].join(' ')}
                 >
                   <Icon className="h-4 w-4" />
                   <span>{section.label}</span>
+                  {active && <span className="ml-auto h-4 w-1 rounded-full bg-accent" aria-hidden="true" />}
                 </button>
               );
             })}

@@ -45,11 +45,11 @@ export function AccountIdentitySection() {
         <div>
           <p className="text-sm font-medium text-fg">Password sign-in</p>
           <p className="text-xs text-fg-tertiary">
-            {data.password_configured ? 'Configured' : 'Not configured'}
+            {data.password_setup_allowed === false ? 'Not allowed for this account' : data.password_configured ? 'Configured' : 'Not configured'}
           </p>
         </div>
         <Badge variant={data.password_configured ? 'success' : 'warning'}>
-          {data.password_configured ? 'Active' : 'Missing'}
+          {data.password_setup_allowed === false ? 'Unavailable' : data.password_configured ? 'Active' : 'Missing'}
         </Badge>
       </div>
       <div className="flex items-center justify-between gap-3">
@@ -58,12 +58,16 @@ export function AccountIdentitySection() {
           <p className="text-xs text-fg-tertiary">
             {data.oidc_linked
               ? 'This account is linked to the configured provider.'
-              : data.oidc_link_available
+              : data.oidc_link_allowed === false
+                ? 'Not allowed for this account.'
+                : data.oidc_link_available
                 ? 'Connect the configured provider to this account.'
                 : 'SSO has not been configured by an administrator.'}
           </p>
         </div>
-        {data.oidc_linked ? (
+        {data.oidc_link_allowed === false ? (
+          <Badge variant="warning">Unavailable</Badge>
+        ) : data.oidc_linked ? (
           <Badge variant="success">Linked</Badge>
         ) : (
           <Button
@@ -76,7 +80,7 @@ export function AccountIdentitySection() {
           </Button>
         )}
       </div>
-      {data.oidc_linked && !data.password_configured && (
+      {data.oidc_linked && !data.password_configured && data.password_setup_allowed !== false && (
         <div className="grid max-w-sm gap-3 rounded-lg border border-border bg-surface-subtle p-4">
           <div>
             <p className="text-sm font-medium text-fg">Set a recovery password</p>
