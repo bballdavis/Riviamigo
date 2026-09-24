@@ -68,6 +68,17 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
   production npm vulnerabilities after updating MapLibre and pinned transitive
   dependencies to their patched releases. RustSec warning exceptions are
   listed in the [maintenance register](./runbooks/dependency-maintenance.md#maintenance-register).
+- Gitleaks suppressions remain exact commit/path/rule/line fingerprints in
+  `.gitleaksignore`. The OIDC security run surfaced two historical false
+  positives: a `JWT_PUBLIC_KEY` placeholder in a [removed environment-variable
+  draft](https://github.com/bballdavis/Riviamigo/commit/22c9a5b558e54f19dc5b56cfeed54f0767b097a1)
+  and the `13-API-Keys.md` documentation-manifest filename in an [older
+  script](https://github.com/bballdavis/Riviamigo/commit/97933a8cbffbc0b6ea327e90829ff7b20f8f0d1f).
+  The first line contains no key value; the second is a path string. These
+  entries do not suppress current OIDC files. The release maintainer will
+  review them by 2026-12-31 against the [Gitleaks run report](https://github.com/bballdavis/Riviamigo/actions/runs/36056391392)
+  and remove them if source history is rewritten or the scanner no longer
+  reports those exact lines.
 - `RUSTSEC-2023-0071` is temporarily ignored for `openidconnect`'s transitive
   `rsa` dependency. The OIDC callback verifies provider ID-token signatures
   with public keys and does not use RSA private-key signing or decryption. The
