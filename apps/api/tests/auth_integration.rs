@@ -1401,7 +1401,10 @@ async fn account_invitation_can_assign_viewer_vehicle_access_on_acceptance() {
         )
         .await;
     assert_eq!(invalid.status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(invalid.body["error"]["message"], "vehicle not found");
+    assert_eq!(
+        invalid.body["error"]["message"],
+        "one or more vehicles not found"
+    );
 
     let created = app
         .request(
@@ -1413,6 +1416,7 @@ async fn account_invitation_can_assign_viewer_vehicle_access_on_acceptance() {
         )
         .await;
     assert_eq!(created.status, StatusCode::OK);
+    assert_eq!(created.body["auth_methods"], "password");
     let activation_token = created.body["activation_token"]
         .as_str()
         .expect("activation token");
@@ -1435,6 +1439,7 @@ async fn account_invitation_can_assign_viewer_vehicle_access_on_acceptance() {
         .expect("listed invitation");
     assert_eq!(listed_invitation["vehicle_id"], json!(vehicle_id));
     assert_eq!(listed_invitation["vehicle_name"], "Family R1S");
+    assert_eq!(listed_invitation["auth_methods"], "password");
 
     let accepted = app
         .request(
@@ -1453,6 +1458,13 @@ async fn account_invitation_can_assign_viewer_vehicle_access_on_acceptance() {
     .fetch_one(&app.pool)
     .await
     .expect("invitee id");
+    let auth_methods: String =
+        sqlx::query_scalar("SELECT auth_methods FROM riviamigo.users WHERE id=$1")
+            .bind(invitee_id)
+            .fetch_one(&app.pool)
+            .await
+            .expect("invited account policy");
+    assert_eq!(auth_methods, "password");
     let membership: (String, bool) = sqlx::query_as(
         "SELECT role, is_default FROM riviamigo.vehicle_memberships WHERE vehicle_id = $1 AND user_id = $2",
     )

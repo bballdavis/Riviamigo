@@ -18,6 +18,7 @@ This section begins after the first installation works. It owns ongoing availabi
 | Update, inspect, stop, or recover the Compose stack | [Deployment and updates](./guides/deployment.md) |
 | Add an authenticated remote-access boundary | [Secure remote access](./guides/secure-deployment.md) |
 | Create or restore a complete recovery package | [Backup and restore](./guides/backup-and-restore.md) |
+| Configure or recover SSO | [OIDC single sign-on](./guides/oidc-sso.md) |
 | Diagnose an unhealthy first installation | [Verify the installation](./guides/verify-installation.md) |
 | Perform a repeatable maintainer procedure | [Runbook index](./runbooks/README.md) |
 

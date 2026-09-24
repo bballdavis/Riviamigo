@@ -14,15 +14,16 @@ This is a prioritized direction, not a promise of dates. Rivian's service is uno
 
 ### OIDC and SSO
 
-Add native OpenID Connect support for self-hosters using providers such as Authentik, Keycloak, Entra ID, or another standards-compliant provider:
+The first OIDC configuration surface is implemented for self-hosters using
+Authentik, Keycloak, Entra ID, or another standards-compliant provider. Use the
+[OIDC single sign-on guide](./guides/oidc-sso.md) for the supported settings,
+account-linking defaults, environment overrides, and break-glass recovery.
 
-- Authorization Code + PKCE with server-side callback handling and strict issuer/audience validation.
-- Configurable discovery URL, client credentials, redirect allowlist, scopes, and claim-to-user/role mapping.
-- Local break-glass administrator access, explicit account-linking rules, session revocation, and audit events.
-- Safe migration from local accounts, no trust in arbitrary forwarded identity headers, and clear proxy deployment guidance.
-- Provider integration tests using a local mock OIDC server plus one documented real-provider validation path.
-
-SSO should complement the existing secure reverse-proxy guidance, not turn an unprotected origin into a safe public service by itself.
+Remaining validation work is provider-specific: run a local mock-provider flow
+and record real-provider evidence before claiming a deployment is certified.
+Provider role mapping, multiple providers, SCIM, and provider logout remain
+outside this first configuration surface. SSO complements secure reverse-proxy
+guidance; it does not make an unprotected origin safe by itself.
 
 ### R1T, R1S, and R2/R2S test coverage
 

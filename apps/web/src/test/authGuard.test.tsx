@@ -178,6 +178,7 @@ describe('AuthGuard auth-expired handling', () => {
       isBootstrapping: false,
       isAuthenticated: true,
       accessToken: makeToken('user-7'),
+      resumeSession: vi.fn().mockResolvedValue(false),
       clearSession,
     });
     render(<AuthGuard><span>content</span></AuthGuard>);
@@ -190,6 +191,86 @@ describe('AuthGuard auth-expired handling', () => {
     expect(mockClearQueryCache).toHaveBeenCalledWith('user-7');
     expect(clearSession).toHaveBeenCalled();
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { redirect: '/' } });
+  });
+
+  it('keeps the protected route when auth-expired recovery succeeds', async () => {
+    const clearSession = vi.fn();
+    const resumeSession = vi.fn().mockResolvedValue(true);
+    setAuth({
+      isBootstrapping: false,
+      isAuthenticated: true,
+      accessToken: makeToken('user-8'),
+      clearSession,
+      resumeSession,
+    });
+    render(<AuthGuard><span>content</span></AuthGuard>);
+
+    await act(async () => { window.dispatchEvent(new CustomEvent('riviamigo:auth-expired')); });
+
+    expect(resumeSession).toHaveBeenCalledTimes(1);
+    expect(clearSession).not.toHaveBeenCalled();
+    expect(mockClearQueryCache).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['returns false', false],
+    ['rejects', 'rejects'],
+  ])('clears and redirects when auth-expired recovery %s', async (_label, result) => {
+    const clearSession = vi.fn();
+    const resumeSession = vi.fn().mockImplementation(() => result === 'rejects'
+      ? Promise.reject(new Error('bootstrap failed'))
+      : Promise.resolve(result));
+    setAuth({
+      isBootstrapping: false,
+      isAuthenticated: true,
+      accessToken: makeToken('user-9'),
+      clearSession,
+      resumeSession,
+    });
+    render(<AuthGuard><span>content</span></AuthGuard>);
+
+    await act(async () => { window.dispatchEvent(new CustomEvent('riviamigo:auth-expired')); });
+
+    expect(resumeSession).toHaveBeenCalledTimes(1);
+    expect(mockClearQueryCache).toHaveBeenCalledWith('user-9');
+    expect(clearSession).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { redirect: '/' } });
+  });
+
+  it('coalesces duplicate auth-expired events during recovery', async () => {
+    let resolveRecovery!: (value: boolean) => void;
+    const resumeSession = vi.fn().mockImplementation(() => new Promise<boolean>((resolve) => { resolveRecovery = resolve; }));
+    const clearSession = vi.fn();
+    setAuth({ isBootstrapping: false, isAuthenticated: true, accessToken: makeToken('user-10'), resumeSession, clearSession });
+    render(<AuthGuard><span>content</span></AuthGuard>);
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('riviamigo:auth-expired'));
+      window.dispatchEvent(new CustomEvent('riviamigo:auth-expired'));
+    });
+    expect(resumeSession).toHaveBeenCalledTimes(1);
+
+    await act(async () => { resolveRecovery(false); });
+    expect(clearSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not redirect from an auth state transition while recovery is pending', async () => {
+    let resolveRecovery!: (value: boolean) => void;
+    const resumeSession = vi.fn().mockImplementation(() => new Promise<boolean>((resolve) => { resolveRecovery = resolve; }));
+    const clearSession = vi.fn();
+    setAuth({ isBootstrapping: false, isAuthenticated: true, accessToken: makeToken('user-11'), resumeSession, clearSession });
+    const view = render(<AuthGuard><span>content</span></AuthGuard>);
+    await act(async () => { window.dispatchEvent(new CustomEvent('riviamigo:auth-expired')); });
+
+    setAuth({ isAuthenticated: false, isBootstrapping: false });
+    view.rerender(<AuthGuard><span>content</span></AuthGuard>);
+    await act(async () => {});
+    expect(mockNavigate).not.toHaveBeenCalled();
+
+    await act(async () => { resolveRecovery(true); });
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(clearSession).not.toHaveBeenCalled();
   });
 
   it('does not call clearQueryCacheForUser if the user was never hydrated', async () => {
@@ -267,5 +348,6 @@ describe('normalizeLoginRedirectTarget', () => {
     expect(normalizeLoginRedirectTarget('https://example.com')).toBeNull();
     expect(normalizeLoginRedirectTarget('//example.com')).toBeNull();
     expect(normalizeLoginRedirectTarget('charging')).toBeNull();
+    expect(normalizeLoginRedirectTarget('/login?redirect=%2Fdashboard')).toBeNull();
   });
 });

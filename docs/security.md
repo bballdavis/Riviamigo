@@ -31,6 +31,15 @@ precise vehicle locations in public issues.
   and backfills, and `owner` alone manages credentials and membership.
 - Protected-route bootstrap uses `POST /v1/auth/bootstrap`, which returns fresh tokens when a valid refresh cookie exists and `204 No Content` when no resumable session exists, so first-load logged-out state does not depend on a visible refresh 401.
 - The web app attempts one refresh on protected 401s, then emits a single auth-expired flow: toast, session clear, redirect to `/login`, and resume to the original in-app route after successful sign-in.
+- Optional OIDC SSO is configured by a super-user under **Settings > Authentication**.
+  It uses the provider issuer/subject identity rather than email alone; local
+  password login remains enabled by default and can be restored with the
+  documented environment break-glass override.
+- OIDC client secrets are write-only and encrypted when stored in the database.
+  Authentication settings data is excluded from recovery packages; identity
+  mappings remain, so operators must re-enter and test the provider after restore.
+- OIDC does not replace the authenticated HTTPS gateway, add provider-driven
+  role mapping, or make a directly exposed origin safe.
 
 ## Transport Security
 

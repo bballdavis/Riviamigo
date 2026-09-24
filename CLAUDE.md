@@ -40,6 +40,11 @@ Compose identity metadata fails closed and reports that
 project still requires compatible migration and data/schema revisions;
 preserving its active bindings does not reconcile incompatible callers.
 
+The launcher compiles the host-run Rust targets with the checked-in SQLx query
+metadata. This allows a fresh database to build before the API applies its
+embedded migrations; refresh the metadata whenever a compile-time query
+changes.
+
 ### Workspace
 
 ```bash

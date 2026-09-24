@@ -18,10 +18,19 @@ Riviamigo still needs to communicate with services that make its features work:
 - **OpenFreeMap/CARTO basemap resources:** exact tile coordinates reveal the requested map area. Style JSON, vector tiles, sprites, glyphs, or raster tiles are fetched by an authenticated Riviamigo server proxy, so providers see the server connection rather than each viewer's browser identity.
 - **Iconify:** explicit icon searches and missing icon resources, through the Riviamigo server proxy.
 - **Your configured S3-compatible backup service:** backup uploads, only when you enable it.
+- **Your configured OIDC provider:** when SSO is enabled, Riviamigo sends the
+  server-side authorization-code exchange and receives the claims required for
+  login or explicit account linking. The provider's issuer, subject, email, and
+  claim data are governed by that provider's privacy policy and logs. Riviamigo
+  does not send vehicle telemetry or Rivian credentials to the OIDC provider.
 
 These are feature requests, not product analytics. Their operators may have their own privacy policies and server logs. **Settings > External Connections** shows the exact disclosure and feature loss for each service. Administrators can disable optional connections or use self-hosted weather, Nominatim, and XYZ tile endpoints. Disabling a connection preserves data already stored. The connection verifier uses synthetic payloads and stores its outcome separately from normal runtime health; it does not expose secrets or provider query strings.
 
 Riviamigo does not forward browser cookies, authorization headers, referrers, usernames, vehicle names, VINs, or unrelated telemetry to optional providers. Connection-health logs do not store coordinates, addresses, search text, or provider query strings. Persistent address-search cache keys use a digest rather than storing the search text in Redis. Proxying removes unnecessary browser identity, but it cannot hide an exact address query or map area without breaking the requested feature.
+
+OIDC client secrets are write-only in the UI and are excluded from recovery
+packages. Review the provider's claim and retention settings before enabling
+automatic signup or verified-email account linking.
 
 ## Bundled demo data
 

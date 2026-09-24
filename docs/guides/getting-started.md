@@ -69,6 +69,7 @@ Other Compose variants are available when you need them:
 
 - [`docker-compose.build.yml`](../../compose/docker-compose.build.yml) — build the unified production image from the local checkout.
 - [`docker-compose.dev.yml`](../../compose/docker-compose.dev.yml) — start development infrastructure for `pnpm dev:stack`.
+- [`docker-compose.oidc-secret.yml`](../../compose/docker-compose.oidc-secret.yml) — optionally mount the OIDC client secret as a read-only file for the production container.
 
 ## Next steps
 

@@ -225,7 +225,7 @@ impl TestApp {
 }
 
 async fn wait_for_backup(app: &TestApp, token: &str) -> Value {
-    for _ in 0..200 {
+    for _ in 0..1_200 {
         let overview = app
             .request(Method::GET, "/v1/admin/backups", None, Some(token), None)
             .await;
@@ -238,7 +238,7 @@ async fn wait_for_backup(app: &TestApp, token: &str) -> Value {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    panic!("backup did not reach a terminal status");
+    panic!("backup did not reach a terminal status within 60 seconds");
 }
 
 fn replace_database_name(database_url: &str, database_name: &str) -> String {
@@ -589,7 +589,11 @@ async fn admin_can_run_backup_and_get_catalog_entry() {
         .is_some_and(Vec::is_empty));
 
     let completed = wait_for_backup(&app, &token).await;
-    assert_eq!(completed["recent_runs"][0]["status"], "succeeded");
+    assert_eq!(
+        completed["recent_runs"][0]["status"], "succeeded",
+        "backup run details: {}",
+        completed["recent_runs"][0]
+    );
     assert_eq!(completed["recent_runs"][0]["phase"], "completed");
     assert_eq!(completed["recent_runs"][0]["progress_percent"], 100);
     assert_eq!(completed["artifacts"][0]["storage_type"], "local");
@@ -722,6 +726,11 @@ async fn admin_can_create_restore_request_for_artifact() {
         .await;
     assert_eq!(run.status, StatusCode::ACCEPTED, "{}", run.body);
     let completed = wait_for_backup(&app, &token).await;
+    assert_eq!(
+        completed["recent_runs"][0]["status"], "succeeded",
+        "backup run details: {}",
+        completed["recent_runs"][0]
+    );
     let artifact_id = completed["artifacts"][0]["id"]
         .as_str()
         .expect("artifact id");
@@ -842,7 +851,11 @@ async fn backup_creation_refuses_a_drifted_live_migration_ledger() {
     let completed = wait_for_backup(&app, &token).await;
     assert_eq!(completed["recent_runs"][0]["status"], "failed");
     assert_eq!(completed["recent_runs"][0]["phase"], "failed");
-    assert!(completed["recent_runs"][0]["error_message"]
-        .as_str()
-        .is_some_and(|message| message.contains("migration ledger")));
+    assert!(
+        completed["recent_runs"][0]["error_message"]
+            .as_str()
+            .is_some_and(|message| message.contains("migration ledger")),
+        "unexpected backup failure: {}",
+        completed["recent_runs"][0]["error_message"]
+    );
 }

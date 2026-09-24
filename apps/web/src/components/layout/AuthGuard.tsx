@@ -14,6 +14,7 @@ export function normalizeLoginRedirectTarget(value: string | null | undefined): 
   try {
     const url = new URL(trimmed, 'https://riviamigo.local');
     if (url.origin !== 'https://riviamigo.local') return null;
+    if (url.pathname === '/login') return null;
     return `${url.pathname}${url.search}${url.hash}`;
   } catch {
     return null;
@@ -95,6 +96,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const hydratedForRef = useRef<string | null>(null);
   const bootstrapStartedRef = useRef(false);
   const loginRedirectStartedRef = useRef(false);
+  const authExpiredRecoveryRef = useRef<Promise<void> | null>(null);
+  const mountedRef = useRef(false);
 
   const redirectToLogin = useCallback(() => {
     if (loginRedirectStartedRef.current) return;
@@ -131,7 +134,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   }, [isAuthenticated, accessToken]);
 
   useEffect(() => {
-    if (!isBootstrapping && !isAuthenticated) {
+    if (!isBootstrapping && !isAuthenticated && !authExpiredRecoveryRef.current) {
       // Clear stale cache when user is no longer authenticated.
       if (hydratedForRef.current) {
         clearQueryCacheForUser(hydratedForRef.current);
@@ -142,18 +145,40 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   }, [isAuthenticated, isBootstrapping, redirectToLogin]);
 
   useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  useEffect(() => {
     function handleAuthExpired() {
-      if (hydratedForRef.current) {
-        clearQueryCacheForUser(hydratedForRef.current);
-        hydratedForRef.current = null;
-      }
-      clearSession();
-      redirectToLogin();
+      if (!mountedRef.current || authExpiredRecoveryRef.current) return;
+
+      const finishExpiredSession = () => {
+        if (!mountedRef.current) return;
+        if (hydratedForRef.current) {
+          clearQueryCacheForUser(hydratedForRef.current);
+          hydratedForRef.current = null;
+        }
+        clearSession();
+        redirectToLogin();
+      };
+
+      const recovery = (async () => {
+        try {
+          const resumed = await resumeSession();
+          if (!resumed) finishExpiredSession();
+        } catch {
+          finishExpiredSession();
+        } finally {
+          authExpiredRecoveryRef.current = null;
+        }
+      })();
+      authExpiredRecoveryRef.current = recovery;
     }
 
     window.addEventListener('riviamigo:auth-expired', handleAuthExpired);
     return () => window.removeEventListener('riviamigo:auth-expired', handleAuthExpired);
-  }, [clearSession, redirectToLogin]);
+  }, [clearSession, redirectToLogin, resumeSession]);
 
   if (isBootstrapping) return null;
   if (!isAuthenticated) return null;

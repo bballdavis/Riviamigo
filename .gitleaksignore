@@ -5,3 +5,9 @@ cf23c33248b5cfe7b15cb77bd8e74bd9c966bc88:docs/wiki-drafts/10-Environment-Variabl
 # Historical docs-manifest filename, introduced and then carried by a merge.
 3c92dbb5f2f2ebbe94fe190781ecbad21f6bcb33:scripts/check-docs.mjs:generic-api-key:76
 d7d75af6438fc7115734310182118236787530c4:scripts/check-docs.mjs:generic-api-key:76
+
+# Historical JWT_PUBLIC_KEY placeholder in a removed draft; no key value was present.
+22c9a5b558e54f19dc5b56cfeed54f0767b097a1:docs/wiki-drafts/10-Environment-Variables.md:generic-api-key:136
+
+# Historical documentation-manifest filename, not a credential.
+97933a8cbffbc0b6ea327e90829ff7b20f8f0d1f:scripts/check-docs.mjs:generic-api-key:76

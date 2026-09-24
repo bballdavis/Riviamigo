@@ -63,6 +63,13 @@ docker compose --env-file .env -f compose/docker-compose.yml pull
 docker compose --env-file .env -f compose/docker-compose.yml up -d
 ```
 
+The production nginx origin does not cache `index.html` or SPA fallbacks, so
+new deployments can select the current Vite asset manifest. Existing files
+under `/assets/` are content-hashed and receive one year of immutable caching;
+vehicle fallback images retain a one-day cache. After the first upgrade that
+introduced this policy, perform one hard refresh in each browser that may have
+cached the previous SPA shell.
+
 The app applies immutable, forward-only database migrations on startup. Set
 `RIVIAMIGO_IMAGE` to the digest-qualified reference in the release's
 `images.lock` for an exact deployment, or pin `IMAGE_TAG` to a Calendar Version

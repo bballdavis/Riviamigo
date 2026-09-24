@@ -39,8 +39,16 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
 
 - The outer tunnel/proxy is self-hoster operated. It must enforce identity,
   public HTTPS, WebSocket forwarding, patching, and client-facing rate limits.
-- No native Authentik/OIDC trust integration is implemented. The gateway is an
-  additive boundary; Riviamigo application login remains mandatory.
+- OIDC SSO is an optional native application login path configured under
+  **Settings > Authentication**. The gateway remains an additive boundary;
+  Riviamigo application login is still required. Provider role mapping,
+  multiple providers, SCIM, and provider logout are not implemented.
+- OIDC settings are field-overridable from the environment for recovery. Client
+  secrets are write-only and excluded from recovery packages; identity mappings
+  remain, so restore requires provider re-entry and a configuration test. The
+  supplied Compose overlay mounts the client secret read-only and refuses a
+  missing host source path; production provider requests use bounded connect
+  and total timeouts.
 - The internal origin deliberately does not trust arbitrary forwarded client-IP
   headers. Configure client-IP trust only at the outer gateway after validating
   its network boundary.
@@ -56,10 +64,28 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
   high/critical Trivy image scans. Fork pull requests run the separate
   secret-free blocking Semgrep scan. Reviewed exceptions must be documented in
   the PR with an owner, expiry, and remediation link. Local
-  dependency validation in this audit found no high-severity production npm
-  vulnerabilities; the Rust/secret/SAST tools were not installed locally. The
-  four RustSec exceptions are listed with owners, evidence, and expiry in the
-  [maintenance register](./runbooks/dependency-maintenance.md#maintenance-register).
+  dependency validation in this audit found no unignored high-severity
+  production npm vulnerabilities after updating MapLibre and pinned transitive
+  dependencies to their patched releases. RustSec warning exceptions are
+  listed in the [maintenance register](./runbooks/dependency-maintenance.md#maintenance-register).
+- Gitleaks suppressions remain exact commit/path/rule/line fingerprints in
+  `.gitleaksignore`. The OIDC security run surfaced two historical false
+  positives: a `JWT_PUBLIC_KEY` placeholder in a [removed environment-variable
+  draft](https://github.com/bballdavis/Riviamigo/commit/22c9a5b558e54f19dc5b56cfeed54f0767b097a1)
+  and the `13-API-Keys.md` documentation-manifest filename in an [older
+  script](https://github.com/bballdavis/Riviamigo/commit/97933a8cbffbc0b6ea327e90829ff7b20f8f0d1f).
+  The first line contains no key value; the second is a path string. These
+  entries do not suppress current OIDC files. The release maintainer will
+  review them by 2026-12-31 against the [Gitleaks run report](https://github.com/bballdavis/Riviamigo/actions/runs/36056391392)
+  and remove them if source history is rewritten or the scanner no longer
+  reports those exact lines.
+- `RUSTSEC-2023-0071` is temporarily ignored for `openidconnect`'s transitive
+  `rsa` dependency. The OIDC callback verifies provider ID-token signatures
+  with public keys and does not use RSA private-key signing or decryption. The
+  [RustSec advisory](https://rustsec.org/advisories/RUSTSEC-2023-0071.html)
+  reports no fixed release. **Owner:** release maintainer. **Expiry:**
+  2026-12-31. Remove the ignore when upstream publishes a fixed release or the
+  OIDC verifier no longer depends on `rsa`; then rerun `cargo audit`.
 - Before a wider exposure or multi-tenant use case, commission an independent
   authenticated penetration test and review gateway, host, backup, and secret
   manager configuration in the target environment.
@@ -78,6 +104,16 @@ The security-hardening branch additionally requires:
 - `pnpm build`
 - `cargo check`
 - `pnpm docs:check`
+- OIDC settings and recovery documentation must be checked against the exact
+  environment contract in `apps/api/src/config.rs`.
+- OIDC release review must exercise a fresh migrated PostgreSQL/Redis stack,
+  provider discovery and JWKS retrieval, browser state-cookie attributes,
+  denial and replay handling, password-plus-SSO coexistence, password-disable
+  lockout protection, and the `RIVIAMIGO_OIDC_ENABLED=false` recovery override.
+- Provider discovery alone is not end-to-end OIDC certification. A release
+  candidate still needs a real confidential client to prove token exchange,
+  ID-token signature/issuer/audience/nonce validation, explicit account
+  linking, and auto-signup policy against a supported provider.
 - `pnpm dashboards:sync-defaults --check`
 - `pnpm audit --prod --audit-level=high`
 - `docker compose --env-file .env -f compose/docker-compose.yml config --quiet`
