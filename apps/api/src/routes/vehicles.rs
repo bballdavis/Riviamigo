@@ -223,10 +223,32 @@ fn is_demo_vehicle_key(value: &str) -> bool {
 }
 
 fn canonical_vehicle_model(model: &str) -> &str {
-    if model.eq_ignore_ascii_case("R2S") || model.eq_ignore_ascii_case("R2-S") {
+    let model = model.trim();
+    if model.eq_ignore_ascii_case("R2")
+        || model.eq_ignore_ascii_case("R2S")
+        || model.eq_ignore_ascii_case("R2-S")
+    {
         "R2"
     } else {
         model
+    }
+}
+
+fn canonical_battery_config(config: &str) -> &str {
+    let config = config.trim();
+    if config.eq_ignore_ascii_case("r2s") {
+        "r2"
+    } else {
+        config
+    }
+}
+
+fn canonical_vehicle_name(name: &str) -> &str {
+    let name = name.trim();
+    if name.eq_ignore_ascii_case("R2S") || name.eq_ignore_ascii_case("R2-S") {
+        "R2"
+    } else {
+        name
     }
 }
 
@@ -1357,7 +1379,7 @@ async fn add_vehicle(
         )
         .bind(existing_vehicle_id)
         .bind(auth.user_id)
-        .bind(body.name.as_deref())
+        .bind(body.name.as_deref().map(canonical_vehicle_name))
         .execute(&mut *tx)
         .await?;
 
@@ -1375,7 +1397,7 @@ async fn add_vehicle(
         ))
         .bind(body.trim.as_deref())
         .bind(body.vin.as_deref())
-        .bind(body.name.as_deref())
+        .bind(body.name.as_deref().map(canonical_vehicle_name))
         .bind(body.home_lat)
         .bind(body.home_lng)
         .fetch_one(&mut *tx)
@@ -1400,7 +1422,7 @@ async fn add_vehicle(
         )
         .bind(vehicle_id)
         .bind(auth.user_id)
-        .bind(body.name.as_deref())
+        .bind(body.name.as_deref().map(canonical_vehicle_name))
         .execute(&mut *tx)
         .await?;
 
@@ -1722,7 +1744,7 @@ async fn update_vehicle_settings_impl(
     )
     .bind(vid)
     .bind(capacity_wh)
-    .bind(body.battery_config)
+    .bind(body.battery_config.as_deref().map(canonical_battery_config))
     .bind(target_tire_pressure_psi)
     .execute(&state.pool)
     .await?;
@@ -1781,7 +1803,7 @@ async fn update_vehicle_name(
     Json(body): Json<UpdateVehicleNameBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_role(&state.pool, auth.user_id, vid, &["owner", "manager"]).await?;
-    let trimmed = body.name.trim().to_string();
+    let trimmed = body.name.trim();
     if trimmed.is_empty() {
         return Err(AppError::Validation("name must not be blank".into()));
     }
@@ -1794,7 +1816,7 @@ async fn update_vehicle_name(
     )
     .bind(vid)
     .bind(auth.user_id)
-    .bind(trimmed)
+    .bind(canonical_vehicle_name(trimmed))
     .execute(&state.pool)
     .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -5433,8 +5455,19 @@ mod tests {
     #[test]
     fn demo_vehicle_keys_are_detected_explicitly() {
         assert!(super::is_demo_vehicle_key("demo-r1t-local"));
+        assert!(super::is_demo_vehicle_key("demo-r2-local"));
         assert!(super::is_demo_vehicle_key("demo-r2s-local"));
         assert!(!super::is_demo_vehicle_key("rivian-1234"));
+    }
+
+    #[test]
+    fn r2_model_aliases_canonicalize_before_storage_and_response() {
+        assert_eq!(super::canonical_vehicle_model("R2"), "R2");
+        assert_eq!(super::canonical_vehicle_model(" r2s "), "R2");
+        assert_eq!(super::canonical_vehicle_model("R2-S"), "R2");
+        assert_eq!(super::canonical_vehicle_model("R1S"), "R1S");
+        assert_eq!(super::canonical_battery_config("R2S"), "r2");
+        assert_eq!(super::canonical_vehicle_name("R2S"), "R2");
     }
 
     #[test]
