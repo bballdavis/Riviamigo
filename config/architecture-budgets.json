@@ -1,6 +1,6 @@
 {
   "hotspots": {
-    "apps/web/src/features/settings/SettingsPage.tsx": { "maxLines": 1930, "maxBytes": 101387 },
+    "apps/web/src/features/settings/SettingsPage.tsx": { "maxLines": 1933, "maxBytes": 101666 },
     "apps/web/src/components/settings/BackupSection.tsx": { "maxLines": 1700, "maxBytes": 71666 },
     "apps/web/src/components/layout/AppLayout.tsx": { "maxLines": 485, "maxBytes": 18642 },
     "apps/web/src/components/dashboard/DashboardPageShell.tsx": { "maxLines": 485, "maxBytes": 18178 },
@@ -9,7 +9,7 @@
     "apps/api/src/routes/trips.rs": { "maxLines": 1833, "maxBytes": 65504 },
     "apps/api/src/services/backups.rs": { "maxLines": 2675, "maxBytes": 98964 },
     "apps/api/src/services/charge_sessions.rs": { "maxLines": 1949, "maxBytes": 73563 },
-    "packages/hooks/src/api/transport.ts": { "maxLines": 2355, "maxBytes": 80897 }
+    "packages/hooks/src/api/transport.ts": { "maxLines": 2419, "maxBytes": 83235 }
   },
   "orchestration": {
     "maxLines": 500,
@@ -56,6 +56,7 @@
       "packages/dashboards/src/widgets/sensor/SensorChipWidget.tsx": "Existing custom widget renderer; preserve shared chrome.",
       "apps/api/src/routes/api_keys.rs": "Existing API access route; split with settings/API ownership work.",
       "apps/api/src/routes/users.rs": "Existing account route; split with settings/account ownership work.",
+      "apps/web/src/components/users/UserManagementPage.tsx": "Existing account management and invitation orchestration; split with settings/account ownership work.",
       "packages/ui/src/charts/DailyChargeSessionsChart.tsx": "Existing specialized renderer; preserve chart behavior.",
       "apps/api/src/services/weather_enrichment.rs": "Existing external enrichment service; split after route extraction.",
       "packages/ui/src/primitives/DateRangePicker.tsx": "Existing responsive picker; migrate mechanics in F1.",

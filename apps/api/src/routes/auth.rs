@@ -301,27 +301,25 @@ async fn oidc_callback(
         .redis
         .get_multiplexed_async_connection()
         .await
-        .map_err(|error| {
+        .inspect_err(|_| {
             tracing::warn!(
                 target = "auth.oidc",
                 stage = "transaction_load",
                 reason = "redis_connection_failed",
                 "OIDC callback failed"
             );
-            error
         })?;
-    let raw: Option<String> =
-        c.get_del(format!("riviamigo:oidc:tx:{st}"))
-            .await
-            .map_err(|error| {
-                tracing::warn!(
-                    target = "auth.oidc",
-                    stage = "transaction_load",
-                    reason = "redis_read_failed",
-                    "OIDC callback failed"
-                );
-                error
-            })?;
+    let raw: Option<String> = c
+        .get_del(format!("riviamigo:oidc:tx:{st}"))
+        .await
+        .inspect_err(|_| {
+            tracing::warn!(
+                target = "auth.oidc",
+                stage = "transaction_load",
+                reason = "redis_read_failed",
+                "OIDC callback failed"
+            );
+        })?;
     let Some(raw) = raw else {
         tracing::warn!(
             target = "auth.oidc",
@@ -380,14 +378,13 @@ async fn oidc_callback(
     let completion: Result<Response, AppError> = async {
         let settings = authentication_settings::load_effective(&state.pool, &state.age_key)
             .await
-            .map_err(|error| {
+            .inspect_err(|_| {
                 tracing::warn!(
                     target = "auth.oidc",
                     stage = "settings_load",
                     reason = "load_failed",
                     "OIDC callback failed"
                 );
-                error
             })?;
         let code = q.code.ok_or_else(|| {
             tracing::warn!(
@@ -404,14 +401,13 @@ async fn oidc_callback(
         }
         let identity = oidc::exchange_and_verify(&provider_settings, &tx, &code)
             .await
-            .map_err(|error| {
+            .inspect_err(|_| {
                 tracing::warn!(
                     target = "auth.oidc",
                     stage = "exchange_verify",
                     reason = "exchange_or_verify_failed",
                     "OIDC callback failed"
                 );
-                error
             })?;
         tracing::info!(
             target = "auth.oidc",
@@ -432,14 +428,14 @@ async fn oidc_callback(
             );
             return Err(AppError::Forbidden);
         }
-        let user_id = if tx.invitation_id.is_some() {
-            accept_oidc_invitation(&state.pool, tx.invitation_id.unwrap(), &identity).await
+        let user_id = if let Some(invitation_id) = tx.invitation_id {
+            accept_oidc_invitation(&state.pool, invitation_id, &identity).await
         } else {
             resolve_oidc_identity(&state.pool, &settings, &tx, &identity).await
         }
-        .map_err(|error| {
+        .inspect_err(|error| {
             if !matches!(
-                &error,
+                error,
                 AppError::Forbidden | AppError::Unauthorized | AppError::Conflict(_)
             ) {
                 tracing::warn!(
@@ -449,7 +445,6 @@ async fn oidc_callback(
                     "OIDC callback failed"
                 );
             }
-            error
         })?;
         tracing::info!(
             target = "auth.oidc",
@@ -462,14 +457,13 @@ async fn oidc_callback(
                 .bind(user_id)
                 .fetch_optional(&state.pool)
                 .await
-                .map_err(|error| {
+                .inspect_err(|_| {
                     tracing::warn!(
                         target = "auth.oidc",
                         stage = "account_status",
                         reason = "lookup_failed",
                         "OIDC callback failed"
                     );
-                    error
                 })?
                 .unwrap_or(true);
         if disabled {
@@ -484,26 +478,24 @@ async fn oidc_callback(
         if let Some(password_hash) = tx.pending_password_hash.as_deref() {
             set_initial_password_after_oidc(&state.pool, user_id, password_hash, &headers)
                 .await
-                .map_err(|error| {
+                .inspect_err(|_| {
                     tracing::warn!(
                         target = "auth.oidc",
                         stage = "password_setup",
                         reason = "setup_failed",
                         "OIDC callback failed"
                     );
-                    error
                 })?;
         }
         let refresh = issue_refresh_token(&state.pool, user_id)
             .await
-            .map_err(|error| {
+            .inspect_err(|_| {
                 tracing::warn!(
                     target = "auth.oidc",
                     stage = "refresh_issue",
                     reason = "issue_failed",
                     "OIDC callback failed"
                 );
-                error
             })?;
         tracing::info!(
             target = "auth.oidc",
@@ -523,14 +515,13 @@ async fn oidc_callback(
             .target("oidc")
             .record(&state.pool)
             .await
-            .map_err(|error| {
+            .inspect_err(|_| {
                 tracing::warn!(
                     target = "auth.oidc",
                     stage = "success_audit",
                     reason = "record_failed",
                     "OIDC callback completed but success audit failed"
                 );
-                error
             })?;
         }
         tracing::info!(
@@ -557,10 +548,11 @@ async fn oidc_callback(
     match completion {
         Ok(response) => Ok(response),
         Err(_) => {
-            if let Err(_) = SecurityAuditEvent::failure("oidc_callback_failed", tx.user_id)
+            if SecurityAuditEvent::failure("oidc_callback_failed", tx.user_id)
                 .target("oidc")
                 .record(&state.pool)
                 .await
+                .is_err()
             {
                 tracing::warn!(
                     target = "auth.oidc",
@@ -1193,7 +1185,7 @@ async fn accept_account_invitation(
     .await?
     .ok_or(AppError::NotFound)?;
     validate_account_invitation(&invitation)?;
-    let settings = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
+    let settings = authentication_settings::load_effective(&mut *tx, &state.age_key).await?;
     let methods: String = invitation.get("auth_methods");
     if methods == "sso" || !settings.password_login_enabled {
         return Err(AppError::Validation(

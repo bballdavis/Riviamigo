@@ -213,7 +213,7 @@ async fn create_account_invitation(
             "expires_in_days must be between 1 and 30".into(),
         ));
     }
-    let settings = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
+    let settings = authentication_settings::load_effective(&mut *tx, &state.age_key).await?;
     let password_available = settings.password_login_enabled;
     let sso_available = settings.oidc_enabled && oidc::provider_configuration_ready(&settings);
     let auth_methods = match body.auth_methods.as_deref().map(str::trim) {

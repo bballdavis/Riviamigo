@@ -113,11 +113,14 @@ pub struct EffectiveAuthenticationSettings {
     pub required_claim_value: Option<String>,
 }
 
-pub async fn load_effective(
-    pool: &PgPool,
+pub async fn load_effective<'e, E>(
+    executor: E,
     age_key: &str,
-) -> Result<EffectiveAuthenticationSettings, AppError> {
-    let stored = load_stored(pool).await?;
+) -> Result<EffectiveAuthenticationSettings, AppError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let stored = load_stored(executor).await?;
     let env = OidcEnvOverrides::from_env().map_err(|e| AppError::Validation(e.to_string()))?;
     env.validate()
         .map_err(|e| AppError::Validation(e.to_string()))?;
@@ -555,9 +558,12 @@ pub fn normalize_oidc_scopes(scopes: &str) -> Result<String, AppError> {
     Ok(normalized.join(" "))
 }
 
-async fn load_stored(pool: &PgPool) -> Result<StoredSettings, AppError> {
+async fn load_stored<'e, E>(executor: E) -> Result<StoredSettings, AppError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let row = sqlx::query("SELECT oidc_enabled,password_login_enabled,issuer_url,public_base_url,client_id,client_secret_encrypted,button_label,scopes,token_auth_method,auto_signup,auto_link_verified_email,oidc_auto_login,allowed_email_domains,required_claim_name,required_claim_value,last_validation_at,last_validation_fingerprint FROM riviamigo.authentication_settings WHERE id=TRUE")
-        .fetch_optional(pool).await?.ok_or_else(|| AppError::Internal(anyhow::anyhow!("authentication settings row is missing")))?;
+        .fetch_optional(executor).await?.ok_or_else(|| AppError::Internal(anyhow::anyhow!("authentication settings row is missing")))?;
     Ok(StoredSettings {
         oidc_enabled: row.try_get("oidc_enabled")?,
         password_login_enabled: row.try_get("password_login_enabled")?,

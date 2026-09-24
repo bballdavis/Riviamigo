@@ -96,7 +96,7 @@ export function AuthenticationSection() {
     mutationFn: (body: AuthenticationSettingsUpdate) => api.updateAuthenticationSettings(body),
     onSuccess: (data) => {
       client.setQueryData(queryKeys.auth.authenticationSettings, data);
-      void client.invalidateQueries({ queryKey: ['auth-config'] });
+      void client.invalidateQueries({ queryKey: queryKeys.auth.config });
       setSecret('');
       setRemoveSecret(false);
       setMessageRole('status');
