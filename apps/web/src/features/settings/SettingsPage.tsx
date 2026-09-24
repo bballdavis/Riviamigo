@@ -34,6 +34,8 @@ import {
   Button, Badge, Input, SelectPicker, Tooltip,
 } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../../components/layout/AppLayout';
+import { AccountIdentitySection } from '../../components/settings/AccountIdentitySection';
+import { AuthenticationSection } from '../../components/settings/AuthenticationSection';
 import { BackupSection } from '../../components/settings/BackupSection';
 import { ExternalConnectionsSection } from '../../components/settings/ExternalConnectionsSection';
 import { JobsSection } from '../../components/settings/JobsSection';
@@ -78,7 +80,7 @@ const RIVIAN_BATTERY_PRESETS: Record<BatteryGen, Array<{ key: string; label: str
 const ALL_PRESETS = [...RIVIAN_BATTERY_PRESETS.gen1, ...RIVIAN_BATTERY_PRESETS.gen2];
 const R2S_PRESET = { key: 'r2s', label: 'R2S', kwh: 82 };
 
-type SettingsSection = 'vehicles' | 'dashboards' | 'charts' | 'units' | 'places' | 'charging' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account';
+type SettingsSection = 'vehicles' | 'dashboards' | 'charts' | 'units' | 'places' | 'charging' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account' | 'authentication';
 
 const baseSections: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
   { id: 'vehicles', label: 'Vehicles', icon: Car },
@@ -463,7 +465,7 @@ function DashboardSettingsList({
   );
 }
 
-export function SettingsContent({ initialSection }: { initialSection?: SettingsSection } = {}) {
+export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind }: { initialSection?: SettingsSection; oidcFeedback?: string; oidcFeedbackKind?: 'success' | 'error' } = {}) {
   const { accessToken, clearSession, logout, defaultVehicleId, setDefaultVehicleId, setActiveVehicleId } = useAuth();
   const authReady = useAuthReady();
   const navigate = useNavigate();
@@ -501,11 +503,18 @@ export function SettingsContent({ initialSection }: { initialSection?: SettingsS
   const canCreateDemoVehicle = me.data?.role === 'admin' || me.data?.role === 'super_user';
   const isAdmin = canManageSystemDashboards(me.data?.role);
   const canManageBackups = me.data?.role === 'admin' || me.data?.role === 'super_user';
+  const canManageAuthentication = me.data?.role === 'super_user';
   const sections = React.useMemo(
-    () => canManageBackups
-      ? [...baseSections.slice(0, 6), { id: 'backup' as const, label: 'Backups', icon: DatabaseBackup }, ...baseSections.slice(6)]
-      : baseSections,
-    [canManageBackups],
+    () => {
+      const available = canManageBackups
+        ? [...baseSections.slice(0, 6), { id: 'backup' as const, label: 'Backups', icon: DatabaseBackup }, ...baseSections.slice(6)]
+        : [...baseSections];
+      const withAuthentication = canManageAuthentication
+        ? [...available, { id: 'authentication' as const, label: 'Authentication', icon: Lock }]
+        : available;
+      return withAuthentication.sort((left, right) => left.label.localeCompare(right.label));
+    },
+    [canManageAuthentication, canManageBackups],
   );
 
   React.useEffect(() => {
@@ -882,6 +891,14 @@ export function SettingsContent({ initialSection }: { initialSection?: SettingsS
   return (
     <AppLayout activeKey="settings">
       <PageLayout title="Settings" subtitle="Account, vehicle, and API controls for local troubleshooting.">
+        {oidcFeedback && (
+          <p
+            role={oidcFeedbackKind === 'error' ? 'alert' : 'status'}
+            className={`mb-4 rounded-lg border px-3 py-2 text-sm ${oidcFeedbackKind === 'error' ? 'border-status-warning/30 bg-status-warning/10 text-status-warning' : 'border-status-positive/30 bg-status-positive/10 text-status-positive'}`}
+          >
+            {oidcFeedback}
+          </p>
+        )}
         <div className="grid gap-5 lg:grid-cols-[13rem_minmax(0,1fr)]">
           <div className="rounded-xl border border-accent/30 bg-accent/10 p-3 shadow-sm lg:hidden">
             <label
@@ -911,15 +928,17 @@ export function SettingsContent({ initialSection }: { initialSection?: SettingsS
                   key={section.id}
                   type="button"
                   onClick={() => selectSettingsSection(section.id)}
+                  aria-current={active ? 'page' : undefined}
                   className={[
                     'flex h-9 shrink-0 items-center gap-2 rounded-lg px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent',
                     active
-                      ? 'bg-bg-elevated text-fg shadow-sm'
+                      ? 'bg-accent-muted text-accent'
                       : 'text-fg-secondary hover:bg-bg-elevated/70 hover:text-fg',
                   ].join(' ')}
                 >
                   <Icon className="h-4 w-4" />
                   <span>{section.label}</span>
+                  {active && <span className="ml-auto h-4 w-1 rounded-full bg-accent" aria-hidden="true" />}
                 </button>
               );
             })}
@@ -1851,7 +1870,9 @@ export function SettingsContent({ initialSection }: { initialSection?: SettingsS
                   <CardTitle>Account</CardTitle>
                 </CardHeader>
                 <CardContent className="grid gap-6">
-                  <form className="grid max-w-md gap-4" onSubmit={handlePasswordChange}>
+                  <AccountIdentitySection />
+                  <div className="border-t border-border pt-5" />
+                  {me.data?.password_configured !== false && <form className="grid max-w-md gap-4" onSubmit={handlePasswordChange}>
                     <div>
                       <p className="text-sm font-medium text-fg">Change password</p>
                       <p className="mt-0.5 text-xs text-fg-tertiary">Changing your password signs out every active browser session.</p>
@@ -1892,7 +1913,7 @@ export function SettingsContent({ initialSection }: { initialSection?: SettingsS
                     >
                       Change password
                     </Button>
-                  </form>
+                  </form>}
                   <div className="border-t border-border pt-5">
                     <Button variant="danger" size="sm" iconLeft={<LogOut className="h-3.5 w-3.5" />}
                       onClick={handleLogout}>
@@ -1902,6 +1923,8 @@ export function SettingsContent({ initialSection }: { initialSection?: SettingsS
                 </CardContent>
               </Card>
             )}
+
+            {activeSection === 'authentication' && canManageAuthentication && <AuthenticationSection />}
           </div>
         </div>
       </PageLayout>

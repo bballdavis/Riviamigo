@@ -762,3 +762,29 @@ describe('api client dashboard contracts', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('api client OIDC account contracts', () => {
+  beforeEach(() => {
+    api.setToken('test-token');
+    vi.restoreAllMocks();
+  });
+
+  it('posts an initial password only to the protected OIDC setup endpoint', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ authorization_url: 'https://idp.example/authorize' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response
+    );
+
+    const result = await api.startOidcPasswordSetup('newrecoverypassword123');
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toContain('/v1/auth/password/oidc/start');
+    expect(init).toMatchObject({ method: 'POST' });
+    expect(JSON.parse(String((init as RequestInit).body))).toEqual({
+      new_password: 'newrecoverypassword123',
+    });
+    expect(result.authorization_url).toBe('https://idp.example/authorize');
+  });
+});

@@ -39,8 +39,16 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
 
 - The outer tunnel/proxy is self-hoster operated. It must enforce identity,
   public HTTPS, WebSocket forwarding, patching, and client-facing rate limits.
-- No native Authentik/OIDC trust integration is implemented. The gateway is an
-  additive boundary; Riviamigo application login remains mandatory.
+- OIDC SSO is an optional native application login path configured under
+  **Settings > Authentication**. The gateway remains an additive boundary;
+  Riviamigo application login is still required. Provider role mapping,
+  multiple providers, SCIM, and provider logout are not implemented.
+- OIDC settings are field-overridable from the environment for recovery. Client
+  secrets are write-only and excluded from recovery packages; identity mappings
+  remain, so restore requires provider re-entry and a configuration test. The
+  supplied Compose overlay mounts the client secret read-only and refuses a
+  missing host source path; production provider requests use bounded connect
+  and total timeouts.
 - The internal origin deliberately does not trust arbitrary forwarded client-IP
   headers. Configure client-IP trust only at the outer gateway after validating
   its network boundary.
@@ -56,9 +64,11 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
   high/critical Trivy image scans. Fork pull requests run the separate
   secret-free blocking Semgrep scan. Reviewed exceptions must be documented in
   the PR with an owner, expiry, and remediation link. Local
-  dependency validation in this audit found no high-severity production npm
-  vulnerabilities; the Rust/secret/SAST tools were not installed locally. The
-  four RustSec exceptions are listed with owners, evidence, and expiry in the
+  dependency validation in this audit found no unignored high-severity
+  production npm vulnerabilities after updating MapLibre and pinned transitive
+  dependencies to their patched releases; the Rust/secret/SAST tools were not
+  installed locally. The four RustSec exceptions are listed with owners,
+  evidence, and expiry in the
   [maintenance register](./runbooks/dependency-maintenance.md#maintenance-register).
 - Before a wider exposure or multi-tenant use case, commission an independent
   authenticated penetration test and review gateway, host, backup, and secret
@@ -78,6 +88,16 @@ The security-hardening branch additionally requires:
 - `pnpm build`
 - `cargo check`
 - `pnpm docs:check`
+- OIDC settings and recovery documentation must be checked against the exact
+  environment contract in `apps/api/src/config.rs`.
+- OIDC release review must exercise a fresh migrated PostgreSQL/Redis stack,
+  provider discovery and JWKS retrieval, browser state-cookie attributes,
+  denial and replay handling, password-plus-SSO coexistence, password-disable
+  lockout protection, and the `RIVIAMIGO_OIDC_ENABLED=false` recovery override.
+- Provider discovery alone is not end-to-end OIDC certification. A release
+  candidate still needs a real confidential client to prove token exchange,
+  ID-token signature/issuer/audience/nonce validation, explicit account
+  linking, and auto-signup policy against a supported provider.
 - `pnpm dashboards:sync-defaults --check`
 - `pnpm audit --prod --audit-level=high`
 - `docker compose --env-file .env -f compose/docker-compose.yml config --quiet`

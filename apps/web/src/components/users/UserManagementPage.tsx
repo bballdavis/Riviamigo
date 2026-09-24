@@ -12,7 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { api, useAuth, useAuthReady, useMe } from '@riviamigo/hooks';
-import type { AdminVehicleOption, UserRole } from '@riviamigo/types';
+import type { AdminVehicleOption, AuthConfigResponse, InvitationAuthMethods, UserRole } from '@riviamigo/types';
 import {
   Badge,
   Button,
@@ -52,6 +52,22 @@ function invitationStatus(invitation: { accepted_at: string | null; revoked_at: 
   if (invitation.revoked_at) return 'revoked';
   return 'pending';
 }
+
+function availableInviteMethods(config: AuthConfigResponse | undefined): InvitationAuthMethods[] {
+  if (!config) return [];
+  const password = config.password_login_enabled;
+  const sso = config.oidc_enabled && config.oidc_ready;
+  if (password && sso) return ['both', 'password', 'sso'];
+  if (password) return ['password'];
+  if (sso) return ['sso'];
+  return [];
+}
+
+const AUTH_METHOD_LABELS: Record<InvitationAuthMethods, string> = {
+  password: 'Password only',
+  sso: 'SSO only',
+  both: 'Password and SSO',
+};
 
 function IconAction({
   label,
@@ -133,9 +149,14 @@ function ConfirmationDialog({
 function InviteUserDialog({
   email,
   setEmail,
-  vehicleId,
-  setVehicleId,
+  vehicleIds,
+  setVehicleIds,
   vehicleOptions,
+  authMethods,
+  setAuthMethods,
+  availableMethods,
+  authOptionsLoading,
+  authOptionsError,
   activationLink,
   pending,
   onClose,
@@ -144,9 +165,14 @@ function InviteUserDialog({
 }: {
   email: string;
   setEmail: (email: string) => void;
-  vehicleId: string;
-  setVehicleId: (vehicleId: string) => void;
+  vehicleIds: string[];
+  setVehicleIds: (vehicleIds: string[]) => void;
   vehicleOptions: AdminVehicleOption[];
+  authMethods: InvitationAuthMethods;
+  setAuthMethods: (methods: InvitationAuthMethods) => void;
+  availableMethods: InvitationAuthMethods[];
+  authOptionsLoading: boolean;
+  authOptionsError: boolean;
   activationLink: string | null;
   pending: boolean;
   onClose: () => void;
@@ -185,26 +211,30 @@ function InviteUserDialog({
         ) : (
           <form className="mt-5 grid gap-4" onSubmit={(event) => { event.preventDefault(); if (step === 'email') setStep('vehicle'); else onSubmit(); }}>
             {step === 'email' ? (
-              <div className="grid gap-1.5">
-                <label className="text-sm font-medium text-fg-secondary" htmlFor="invite-email">Email address</label>
-                <input id="invite-email" autoFocus value={email} onChange={(event) => setEmail(event.target.value)} placeholder="email@example.com" className={CONTROL_CLASS} />
+              <div className="grid gap-4">
+                <div className="grid gap-1.5">
+                  <label className="text-sm font-medium text-fg-secondary" htmlFor="invite-email">Email address</label>
+                  <input id="invite-email" autoFocus value={email} onChange={(event) => setEmail(event.target.value)} placeholder="email@example.com" className={`${CONTROL_CLASS} w-full`} />
+                </div>
+                <div className="grid gap-1.5">
+                  <label className="text-sm font-medium text-fg-secondary" htmlFor="invite-auth-methods">Sign-in methods</label>
+                  {availableMethods.length > 0 ? <SelectPicker id="invite-auth-methods" aria-label="Sign-in methods" value={authMethods} onChange={setAuthMethods} disabled={availableMethods.length === 1} options={availableMethods.map((method) => ({ value: method, label: AUTH_METHOD_LABELS[method] }))} /> : <p role="status" className="text-sm text-fg-tertiary">{authOptionsLoading ? 'Checking sign-in options…' : authOptionsError ? 'Could not load sign-in options. Close this dialog and try again.' : 'No sign-in method is available. Check the authentication settings.'}</p>}
+                  {availableMethods.length > 0 && <p className="text-xs text-fg-tertiary">{authMethods === 'sso' ? 'The recipient must use the invited email address with the SSO provider. They cannot create a password.' : authMethods === 'password' ? 'The recipient creates a password and cannot connect SSO to this account.' : 'The recipient can activate with either method and add the other later.'}</p>}
+                </div>
               </div>
             ) : (
               <div className="grid gap-1.5">
-                <label className="text-sm font-medium text-fg-secondary" htmlFor="invite-vehicle">Vehicle access</label>
-                <SelectPicker
-                  id="invite-vehicle"
-                  aria-label="Vehicle access"
-                  value={vehicleId}
-                  onChange={setVehicleId}
-                  options={[{ value: '', label: 'No vehicle access' }, ...vehicleOptions.map((vehicle) => ({ value: vehicle.id, label: `${vehicle.display_name} · ${vehicle.model}` }))]}
-                />
-                <p className="text-xs text-fg-tertiary">The selected vehicle will be added with viewer access after the account is activated.</p>
+                <span className="text-sm font-medium text-fg-secondary">Vehicle access</span>
+                <div className="grid gap-2" role="group" aria-label="Vehicle access">
+                  <p className="text-xs text-fg-tertiary">Choose any vehicles to grant viewer access after activation. Leave all unchecked for no vehicle access.</p>
+                  {vehicleOptions.map((vehicle) => { const checked = vehicleIds.includes(vehicle.id); return <label key={vehicle.id} className="flex min-w-0 items-start gap-3 rounded-lg border border-border px-3 py-2 text-sm text-fg transition-colors hover:border-border-strong has-[:focus-visible]:border-accent has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-accent"><input type="checkbox" checked={checked} onChange={() => setVehicleIds(checked ? vehicleIds.filter((id) => id !== vehicle.id) : [...vehicleIds, vehicle.id])} className="mt-0.5 h-4 w-4 shrink-0 accent-accent" /><span className="min-w-0"><span className="block truncate">{vehicle.display_name}</span><span className="block text-xs text-fg-tertiary">{vehicle.model}</span></span></label>; })}
+                  {vehicleOptions.length === 0 ? <p className="text-xs text-fg-tertiary">No vehicles are available.</p> : null}
+                </div>
               </div>
             )}
             <div className="flex justify-end gap-2">
               <Button type="button" variant="secondary" size="md" onClick={step === 'email' ? onClose : () => setStep('email')}>{step === 'email' ? 'Cancel' : 'Back'}</Button>
-              <Button type="submit" size="md" iconLeft={step === 'vehicle' ? <MailPlus className="h-4 w-4" /> : undefined} loading={pending} disabled={!email.trim()}>{step === 'email' ? 'Continue' : 'Create invitation'}</Button>
+              <Button type="submit" size="md" iconLeft={step === 'vehicle' ? <MailPlus className="h-4 w-4" /> : undefined} loading={pending} disabled={!email.trim() || availableMethods.length === 0}>{step === 'email' ? 'Continue' : 'Create invitation'}</Button>
             </div>
           </form>
         )}
@@ -231,7 +261,8 @@ export function UserManagementPage() {
   const [grantRole, setGrantRole] = React.useState<'owner' | 'manager' | 'viewer'>('viewer');
   const [inviteOpen, setInviteOpen] = React.useState(false);
   const [inviteEmail, setInviteEmail] = React.useState('');
-  const [inviteVehicleId, setInviteVehicleId] = React.useState('');
+  const [inviteVehicleIds, setInviteVehicleIds] = React.useState<string[]>([]);
+  const [inviteAuthMethods, setInviteAuthMethods] = React.useState<InvitationAuthMethods | null>(null);
   const [activationLink, setActivationLink] = React.useState<string | null>(null);
   const [confirmation, setConfirmation] = React.useState<Confirmation | null>(null);
 
@@ -253,6 +284,16 @@ export function UserManagementPage() {
     enabled: authReady && isPrivileged && !!accessToken,
     refetchOnMount: 'always',
   });
+  const authConfig = useQuery({
+    queryKey: ['auth-config'],
+    queryFn: () => api.getAuthConfig(),
+    enabled: authReady && isPrivileged,
+    refetchOnMount: 'always',
+  });
+  const availableMethods = availableInviteMethods(authConfig.data);
+  const selectedInviteMethods = inviteAuthMethods && availableMethods.includes(inviteAuthMethods)
+    ? inviteAuthMethods
+    : availableMethods[0] ?? 'password';
 
   React.useEffect(() => {
     if (!users.data?.length) {
@@ -280,7 +321,7 @@ export function UserManagementPage() {
   }, [detail.data?.user.id, detail.data?.user.email, detail.data?.user.role]);
 
   const createInvitation = useMutation({
-    mutationFn: () => api.createAccountInvitation({ email: inviteEmail.trim(), vehicle_id: inviteVehicleId || null }),
+    mutationFn: () => api.createAccountInvitation({ email: inviteEmail.trim(), vehicle_ids: inviteVehicleIds, auth_methods: selectedInviteMethods }),
     onSuccess: (result) => {
       setActivationLink(`${window.location.origin}/activate#${result.activation_token}`);
       void queryClient.invalidateQueries({ queryKey: ['admin-account-invitations'] });
@@ -389,7 +430,7 @@ export function UserManagementPage() {
         title="Users"
         subtitle="Manage accounts, vehicle access, and invitations."
         actions={isPrivileged ? (
-          <Button type="button" size="md" iconLeft={<MailPlus className="h-4 w-4" />} onClick={() => { setActivationLink(null); setInviteEmail(''); setInviteVehicleId(''); setInviteOpen(true); }}>
+          <Button type="button" size="md" iconLeft={<MailPlus className="h-4 w-4" />} onClick={() => { setActivationLink(null); setInviteEmail(''); setInviteVehicleIds([]); setInviteAuthMethods(null); setInviteOpen(true); }}>
             Invite user
           </Button>
         ) : undefined}
@@ -478,16 +519,16 @@ export function UserManagementPage() {
             ) : (
               <Card padding="none" className="overflow-hidden">
                 <section className="p-4 sm:p-5" aria-label="Account invitations">
-                  <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-base font-semibold text-fg">Account invitations</h2><p className="mt-1 text-sm text-fg-tertiary">Pending invitations are actionable; completed invitations remain available as history.</p></div><Button type="button" size="md" iconLeft={<MailPlus className="h-4 w-4" />} onClick={() => { setActivationLink(null); setInviteEmail(''); setInviteVehicleId(''); setInviteOpen(true); }}>Invite user</Button></div>
-                  <div className="mt-5 divide-y divide-border overflow-hidden rounded-xl border border-border">{pendingInvitations.length === 0 ? <p className="p-4 text-sm text-fg-tertiary">No pending account invitations.</p> : pendingInvitations.map((invitation) => <div key={invitation.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><p className="text-sm font-medium text-fg">{invitation.invitee_email}</p><p className="mt-1 text-xs text-fg-tertiary">Expires {formatAppDateTime(invitation.expires_at)}</p><p className="mt-1 text-xs text-fg-tertiary">Vehicle access: {invitation.vehicle_name ?? 'None'}</p></div><div className="flex items-center gap-2"><Badge size="sm" variant="warning">pending</Badge><IconAction label={`Revoke invitation for ${invitation.invitee_email}`} variant="danger" onClick={() => setConfirmation({ kind: 'revoke-account-invitation', invitationId: invitation.id, email: invitation.invitee_email })}><Trash2 className="h-4 w-4" /></IconAction></div></div>)}</div>
-                  {invitationHistory.length > 0 ? <details className="mt-4 rounded-xl border border-border bg-bg-elevated/35"><summary className="cursor-pointer px-4 py-3 text-sm font-medium text-fg">Invitation history ({invitationHistory.length})</summary><div className="divide-y divide-border border-t border-border">{invitationHistory.map((invitation) => { const status = invitationStatus(invitation); return <div key={invitation.id} className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm"><div><span className="text-fg">{invitation.invitee_email}</span><p className="mt-1 text-xs text-fg-tertiary">Vehicle access: {invitation.vehicle_name ?? 'None'}</p></div><Badge size="sm" variant={status === 'accepted' ? 'success' : 'danger'}>{status}</Badge></div>; })}</div></details> : null}
+                  <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-base font-semibold text-fg">Account invitations</h2><p className="mt-1 text-sm text-fg-tertiary">Pending invitations are actionable; completed invitations remain available as history.</p></div><Button type="button" size="md" iconLeft={<MailPlus className="h-4 w-4" />} onClick={() => { setActivationLink(null); setInviteEmail(''); setInviteVehicleIds([]); setInviteAuthMethods(null); setInviteOpen(true); }}>Invite user</Button></div>
+                  <div className="mt-5 divide-y divide-border overflow-hidden rounded-xl border border-border">{pendingInvitations.length === 0 ? <p className="p-4 text-sm text-fg-tertiary">No pending account invitations.</p> : pendingInvitations.map((invitation) => <div key={invitation.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><p className="text-sm font-medium text-fg">{invitation.invitee_email}</p><p className="mt-1 text-xs text-fg-tertiary">Expires {formatAppDateTime(invitation.expires_at)}</p><p className="mt-1 text-xs text-fg-tertiary">Sign-in: {AUTH_METHOD_LABELS[invitation.auth_methods]}</p><p className="mt-1 text-xs text-fg-tertiary">Vehicle access: {invitation.vehicle_names.length > 0 ? invitation.vehicle_names.join(', ') : 'None'}</p></div><div className="flex items-center gap-2"><Badge size="sm" variant="warning">pending</Badge><IconAction label={`Revoke invitation for ${invitation.invitee_email}`} variant="danger" onClick={() => setConfirmation({ kind: 'revoke-account-invitation', invitationId: invitation.id, email: invitation.invitee_email })}><Trash2 className="h-4 w-4" /></IconAction></div></div>)}</div>
+                  {invitationHistory.length > 0 ? <details className="mt-4 rounded-xl border border-border bg-bg-elevated/35"><summary className="cursor-pointer px-4 py-3 text-sm font-medium text-fg">Invitation history ({invitationHistory.length})</summary><div className="divide-y divide-border border-t border-border">{invitationHistory.map((invitation) => { const status = invitationStatus(invitation); return <div key={invitation.id} className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm"><div><span className="text-fg">{invitation.invitee_email}</span><p className="mt-1 text-xs text-fg-tertiary">Sign-in: {AUTH_METHOD_LABELS[invitation.auth_methods]}</p><p className="mt-1 text-xs text-fg-tertiary">Vehicle access: {invitation.vehicle_names.length > 0 ? invitation.vehicle_names.join(', ') : 'None'}</p></div><Badge size="sm" variant={status === 'accepted' ? 'success' : 'danger'}>{status}</Badge></div>; })}</div></details> : null}
                 </section>
               </Card>
             )}
           </div>
         )}
       </PageLayout>
-      {inviteOpen ? <InviteUserDialog email={inviteEmail} setEmail={setInviteEmail} vehicleId={inviteVehicleId} setVehicleId={setInviteVehicleId} vehicleOptions={vehicleOptions.data ?? []} activationLink={activationLink} pending={createInvitation.isPending} onClose={() => setInviteOpen(false)} onSubmit={() => void handleInviteSubmit()} onCopy={() => { if (activationLink) { void navigator.clipboard?.writeText(activationLink); emitToast('Activation link copied', 'The invitation link is ready to share.', 'success'); } }} /> : null}
+      {inviteOpen ? <InviteUserDialog email={inviteEmail} setEmail={setInviteEmail} vehicleIds={inviteVehicleIds} setVehicleIds={setInviteVehicleIds} vehicleOptions={vehicleOptions.data ?? []} authMethods={selectedInviteMethods} setAuthMethods={setInviteAuthMethods} availableMethods={availableMethods} authOptionsLoading={authConfig.isPending} authOptionsError={authConfig.isError} activationLink={activationLink} pending={createInvitation.isPending} onClose={() => setInviteOpen(false)} onSubmit={() => void handleInviteSubmit()} onCopy={() => { if (activationLink) { void navigator.clipboard?.writeText(activationLink); emitToast('Activation link copied', 'The invitation link is ready to share.', 'success'); } }} /> : null}
       {confirmation ? <ConfirmationDialog confirmation={confirmation} pending={confirmationPending} onCancel={() => setConfirmation(null)} onConfirm={() => void handleConfirmation()} /> : null}
     </AppLayout>
   );

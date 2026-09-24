@@ -16,6 +16,7 @@ use crate::{
     middleware::auth::{AppState, AuthUser},
     routes::users_support::{parse_membership_role, parse_role},
     services::security_audit::SecurityAuditEvent,
+    services::{authentication_settings, oidc},
 };
 
 pub fn router() -> Router<AppState> {
@@ -57,8 +58,12 @@ struct ListUsersQuery {
 #[derive(Deserialize)]
 struct CreateAccountInvitationBody {
     email: String,
+    #[serde(default)]
+    vehicle_ids: Option<Vec<Uuid>>,
+    /// Legacy clients may continue sending one vehicle.
     vehicle_id: Option<Uuid>,
     expires_in_days: Option<i32>,
+    auth_methods: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -152,10 +157,13 @@ struct AccountInvitationPayload {
     invitee_email: String,
     vehicle_id: Option<Uuid>,
     vehicle_name: Option<String>,
+    vehicle_ids: Vec<Uuid>,
+    vehicle_names: Vec<String>,
     expires_at: chrono::DateTime<chrono::Utc>,
     accepted_at: Option<chrono::DateTime<chrono::Utc>>,
     revoked_at: Option<chrono::DateTime<chrono::Utc>>,
     created_at: chrono::DateTime<chrono::Utc>,
+    auth_methods: String,
 }
 
 async fn create_account_invitation(
@@ -168,23 +176,36 @@ async fn create_account_invitation(
     if email.is_empty() || !email.contains('@') {
         return Err(AppError::Validation("valid email required".into()));
     }
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(lower($1), 0))")
+        .bind(&email)
+        .execute(&mut *tx)
+        .await?;
+    let mut vehicle_ids = body.vehicle_ids.unwrap_or_default();
+    if vehicle_ids.is_empty() {
+        if let Some(vehicle_id) = body.vehicle_id {
+            vehicle_ids.push(vehicle_id);
+        }
+    }
+    vehicle_ids.sort_unstable();
+    vehicle_ids.dedup();
     let exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM riviamigo.users WHERE lower(email) = $1)")
             .bind(&email)
-            .fetch_one(&state.pool)
+            .fetch_one(&mut *tx)
             .await?;
     if exists {
         return Err(AppError::Validation("email already registered".into()));
     }
-    if let Some(vehicle_id) = body.vehicle_id {
-        let vehicle_exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id = $1)")
-                .bind(vehicle_id)
-                .fetch_one(&state.pool)
-                .await?;
-        if !vehicle_exists {
-            return Err(AppError::Validation("vehicle not found".into()));
-        }
+    let valid_vehicle_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM riviamigo.vehicles WHERE id = ANY($1)")
+            .bind(&vehicle_ids)
+            .fetch_one(&mut *tx)
+            .await?;
+    if valid_vehicle_count != vehicle_ids.len() as i64 {
+        return Err(AppError::Validation(
+            "one or more vehicles not found".into(),
+        ));
     }
     let days = body.expires_in_days.unwrap_or(7);
     if !(1..=30).contains(&days) {
@@ -192,19 +213,44 @@ async fn create_account_invitation(
             "expires_in_days must be between 1 and 30".into(),
         ));
     }
+    let settings = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
+    let password_available = settings.password_login_enabled;
+    let sso_available = settings.oidc_enabled && oidc::provider_configuration_ready(&settings);
+    let auth_methods = match body.auth_methods.as_deref().map(str::trim) {
+        None => match (password_available, sso_available) {
+            (true, true) => "both",
+            (true, false) => "password",
+            (false, true) => "sso",
+            (false, false) => {
+                return Err(AppError::Validation(
+                    "no authentication method is available".into(),
+                ))
+            }
+        },
+        Some("password") if password_available => "password",
+        Some("sso") if sso_available => "sso",
+        Some("both") if password_available && sso_available => "both",
+        Some(_) => {
+            return Err(AppError::Validation(
+                "requested authentication method is unavailable".into(),
+            ))
+        }
+    };
     let token = random_invitation_token();
     let token_hash = hash_token(&token);
     let expires_at = chrono::Utc::now() + chrono::Duration::days(i64::from(days));
+    let legacy_vehicle_id = vehicle_ids.first().copied();
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO riviamigo.account_invitations (invited_by, invitee_email, vehicle_id, token_hash, expires_at)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id",
+        "INSERT INTO riviamigo.account_invitations (invited_by, invitee_email, vehicle_id, token_hash, expires_at, auth_methods)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
     )
     .bind(auth.user_id)
     .bind(&email)
-    .bind(body.vehicle_id)
+    .bind(legacy_vehicle_id)
     .bind(token_hash)
     .bind(expires_at)
-    .fetch_one(&state.pool)
+    .bind(auth_methods)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|error| match error {
         sqlx::Error::Database(ref db) if db.constraint() == Some("account_invitations_active_email_idx") => {
@@ -212,6 +258,14 @@ async fn create_account_invitation(
         }
         other => AppError::Database(other),
     })?;
+    for vehicle_id in &vehicle_ids {
+        sqlx::query("INSERT INTO riviamigo.account_invitation_vehicles (invitation_id, vehicle_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+            .bind(id)
+            .bind(vehicle_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
     audit_log(
         &state.pool,
         "account_invitation_created",
@@ -219,7 +273,7 @@ async fn create_account_invitation(
         format!("invite_id={id} email={email}"),
     );
     Ok(Json(
-        serde_json::json!({ "id": id, "invitee_email": email, "vehicle_id": body.vehicle_id, "expires_at": expires_at, "activation_token": token }),
+        serde_json::json!({ "id": id, "invitee_email": email, "vehicle_id": legacy_vehicle_id, "vehicle_ids": vehicle_ids, "expires_at": expires_at, "auth_methods": auth_methods, "activation_token": token }),
     ))
 }
 
@@ -231,9 +285,14 @@ async fn list_account_invitations(
     let invitations = sqlx::query_as::<_, AccountInvitationPayload>(
         "SELECT ai.id, ai.invitee_email, ai.vehicle_id,
                 COALESCE(v.name, v.model) AS vehicle_name,
-                ai.expires_at, ai.accepted_at, ai.revoked_at, ai.created_at
+                COALESCE(array_agg(aiv.vehicle_id ORDER BY aiv.vehicle_id) FILTER (WHERE aiv.vehicle_id IS NOT NULL), ARRAY[]::uuid[]) AS vehicle_ids,
+                COALESCE(array_agg(COALESCE(v2.name, v2.model) ORDER BY aiv.vehicle_id) FILTER (WHERE v2.id IS NOT NULL), ARRAY[]::text[]) AS vehicle_names,
+                ai.expires_at, ai.accepted_at, ai.revoked_at, ai.created_at, ai.auth_methods
          FROM riviamigo.account_invitations ai
          LEFT JOIN riviamigo.vehicles v ON v.id = ai.vehicle_id
+         LEFT JOIN riviamigo.account_invitation_vehicles aiv ON aiv.invitation_id = ai.id
+         LEFT JOIN riviamigo.vehicles v2 ON v2.id = aiv.vehicle_id
+         GROUP BY ai.id, v.name, v.model
          ORDER BY ai.created_at DESC",
     )
     .fetch_all(&state.pool)

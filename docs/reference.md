@@ -16,6 +16,7 @@ Reference pages answer exact questions without requiring a reader to follow an i
 | Reference | Use it when |
 |---|---|
 | [Environment variables](./environment-variables.md) | Looking up every production, Compose, development, or frontend setting and its default |
+| [OIDC single sign-on](./guides/oidc-sso.md) | Configuring SSO, account linking, environment overrides, and recovery |
 | [Integration API](./api-access.md) | Creating, securing, or debugging a read-only integration key |
 | [Metrics reference](./metrics-reference.md) | Checking units, definitions, parity goals, or metric availability |
 | [Dashboard data map](./dashboard-data-map.md) | Tracing a dashboard requirement to telemetry, storage, API, and UI ownership |

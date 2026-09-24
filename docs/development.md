@@ -70,6 +70,10 @@ file. Production must use HTTPS and leave `COOKIE_INSECURE` unset.
 
 The launcher builds only the API and restore-supervisor binaries that it runs;
 maintenance binaries remain available through their explicit Cargo commands.
+The build uses the checked-in SQLx query metadata so a brand-new development
+database can compile before the API process applies its embedded migrations.
+When a compile-time query changes, refresh and commit the SQLx metadata before
+expecting a clean `pnpm dev:stack` startup to pass.
 On Windows it limits that build to four concurrent Cargo jobs to keep the host
 responsive. Set `DEV_CARGO_BUILD_JOBS` to a positive integer when a different
 limit is appropriate for the machine.

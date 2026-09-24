@@ -1,4 +1,5 @@
 pub mod app_settings;
+pub mod authentication_settings;
 pub mod backups;
 pub mod charge_backfill;
 pub mod charge_payload_identity;
@@ -12,6 +13,7 @@ pub mod demo_seed;
 pub mod external_connections;
 pub mod geofences;
 pub mod nominatim;
+pub mod oidc;
 pub mod redis_health;
 pub mod restore_compatibility;
 pub mod restore_jobs;

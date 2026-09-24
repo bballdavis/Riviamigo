@@ -24,6 +24,10 @@ import type {
   PaginatedResponse,
   AuthTokens,
   AuthMeResponse,
+  AuthConfigResponse,
+  AuthenticationSettings,
+  AuthenticationSettingsUpdate,
+  OidcIdentityStatus,
   ConnectResult,
   RefreshVehicleCredentialsResult,
   ApiError,
@@ -241,7 +245,7 @@ export function setApiBaseUrl(url: string | undefined): void {
 }
 
 interface ApiFailureDetail {
-  status: number;
+  status?: number;
   code: string;
   message: string;
   method: string;
@@ -257,6 +261,8 @@ interface ApiFailureDetail {
 
 const AUTH_REFRESH_EXCLUDED_PATHS = new Set([
   '/v1/auth/login',
+  '/v1/auth/config',
+  '/v1/auth/oidc/start',
   '/v1/auth/register',
   '/v1/auth/setup',
   '/v1/auth/account-invitations/preview',
@@ -487,17 +493,35 @@ export class AuthenticatedTransport {
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
     } catch (error) {
-      if (reportErrors) {
-        reportClientError(error, {
-          event: 'api.request_failed',
-          area: 'api',
-          operation: classifyClientRequestSource(path),
-          method,
-          path,
-          severity: 'warn',
-        });
+      if (!isFetchConnectionError(error)) {
+        if (reportErrors) {
+          reportClientError(error, {
+            event: 'api.request_failed',
+            area: 'api',
+            operation: classifyClientRequestSource(path),
+            method,
+            path,
+            severity: 'warn',
+          });
+        }
+        throw error;
       }
-      throw error;
+
+      const detail: ApiFailureDetail = {
+        code: 'NETWORK_ERROR',
+        message: 'Unable to reach the server. Check your connection and try again.',
+        method,
+        path,
+      };
+      const networkError = Object.assign(new Error(formatApiError(detail)), {
+        code: detail.code,
+        detail,
+        cause: error,
+      });
+      if (reportErrors) {
+        this.reportFailure(detail, error instanceof Error ? error : networkError);
+      }
+      throw networkError;
     }
 
     if (!res.ok) {
@@ -513,7 +537,22 @@ export class AuthenticatedTransport {
           const tokens = await this.refreshAccessToken();
           this.applyTokens(tokens);
           return this.requestResponse(method, path, body, params, false, reportErrors, extraHeaders);
-        } catch {
+        } catch (refreshError) {
+          const refreshFailure = apiFailureDetailFrom(refreshError);
+          if (
+            refreshFailure &&
+            (refreshFailure.code === 'NETWORK_ERROR' ||
+              (refreshFailure.status != null && refreshFailure.status >= 500))
+          ) {
+            if (reportErrors) {
+              this.reportFailure(
+                refreshFailure,
+                refreshError instanceof Error ? refreshError : new Error(refreshFailure.message)
+              );
+            }
+            throw refreshError;
+          }
+
           this.clearTokens();
           const detail: ApiFailureDetail = {
             status: res.status,
@@ -621,6 +660,10 @@ export class AuthenticatedTransport {
     );
   }
 
+  async startAccountInvitationOidc(token: string): Promise<{ authorization_url: string }> {
+    return this.request('POST', '/v1/auth/account-invitations/oidc/start', { token }, undefined, true, false);
+  }
+
   async resumeSession(): Promise<AuthTokens | null> {
     const res = await this.requestResponse(
       'POST',
@@ -636,6 +679,42 @@ export class AuthenticatedTransport {
 
   async me(): Promise<AuthMeResponse> {
     return this.request('GET', '/v1/auth/me');
+  }
+
+  async getAuthConfig(): Promise<AuthConfigResponse> {
+    return this.request('GET', '/v1/auth/config', undefined, undefined, true, false);
+  }
+
+  async getAuthenticationSettings(): Promise<AuthenticationSettings> {
+    return this.request('GET', '/v1/settings/authentication');
+  }
+
+  async updateAuthenticationSettings(body: AuthenticationSettingsUpdate): Promise<AuthenticationSettings> {
+    return this.request('PUT', '/v1/settings/authentication', body);
+  }
+
+  async testAuthenticationSettings(): Promise<{ valid: boolean; discovery: string; message: string }> {
+    return this.request('POST', '/v1/settings/authentication/test');
+  }
+
+  async getOidcIdentities(): Promise<OidcIdentityStatus & { oidc_link_available?: boolean; button_label?: string }> {
+    return this.request('GET', '/v1/auth/identities');
+  }
+
+  async startOidc(returnTo?: string): Promise<{ authorization_url: string }> {
+    return this.request('POST', '/v1/auth/oidc/start', returnTo ? { return_to: returnTo } : {} , undefined, true, false);
+  }
+
+  async startOidcLink(returnTo?: string): Promise<{ authorization_url: string }> {
+    return this.request('POST', '/v1/auth/oidc/link/start', returnTo ? { return_to: returnTo } : {});
+  }
+
+  async startOidcPasswordSetup(newPassword: string): Promise<{ authorization_url: string }> {
+    return this.request('POST', '/v1/auth/password/oidc/start', { new_password: newPassword });
+  }
+
+  async unlinkOidc(currentPassword: string): Promise<void> {
+    return this.request('POST', '/v1/auth/oidc/unlink', { current_password: currentPassword });
   }
 
   async getUnitPreferences(): Promise<UserPreferencesResponse> { return this.request('GET', '/v1/auth/preferences'); }
@@ -842,6 +921,8 @@ export class AuthenticatedTransport {
     id: string;
     invitee_email: string;
     vehicle_id: string | null;
+    vehicle_ids: string[];
+    auth_methods: AccountInvitation['auth_methods'];
     expires_at: string;
     activation_token: string;
   }> {
@@ -2231,6 +2312,8 @@ function inferClientRateLimitClass(method: string, path: string) {
 function isPublicAuthPath(path: string) {
   return (
     path.startsWith('/v1/auth/login') ||
+    path.startsWith('/v1/auth/config') ||
+    path.startsWith('/v1/auth/oidc/start') ||
     path.startsWith('/v1/auth/register') ||
     path.startsWith('/v1/auth/setup') ||
     path.startsWith('/v1/auth/account-invitations/') ||
@@ -2264,11 +2347,19 @@ function tripPowerSource(value: unknown): TripPowerSource | undefined {
 }
 
 function formatApiError(detail: ApiFailureDetail) {
+  if (detail.status == null) return detail.message;
   return `${detail.status} ${detail.code}: ${truncate(detail.message, 160)}`;
 }
 
 function friendlyApiError(detail: ApiFailureDetail): { title: string; message: string } {
   const { status, code } = detail;
+  if (code === 'NETWORK_ERROR') {
+    return {
+      title: 'Connection lost',
+      message: 'Unable to reach the server. Check your connection and try again.',
+    };
+  }
+
   if (code === 'AUTH_EXPIRED')
     return { title: 'Session expired', message: 'Please sign in again to continue.' };
   if (status === 401)
@@ -2294,6 +2385,12 @@ function friendlyApiError(detail: ApiFailureDetail): { title: string; message: s
       message: `Please wait a moment and try again.${waitHint}`,
     };
   }
+  if (status != null && [502, 503, 504].includes(status)) {
+    return {
+      title: 'Server unavailable',
+      message: 'The server is currently unavailable. Please try again in a moment.',
+    };
+  }
   if (status != null && status >= 500)
     return {
       title: 'Server error',
@@ -2303,6 +2400,17 @@ function friendlyApiError(detail: ApiFailureDetail): { title: string; message: s
     title: 'Something went wrong',
     message: truncate(detail.message, 120) || 'An unexpected error occurred.',
   };
+}
+
+function isFetchConnectionError(error: unknown): boolean {
+  return error instanceof TypeError || (error instanceof Error && error.name === 'NetworkError');
+}
+
+function apiFailureDetailFrom(error: unknown): ApiFailureDetail | undefined {
+  if (!(error instanceof Error) || !('detail' in error)) return undefined;
+  const detail = (error as Error & { detail?: ApiFailureDetail }).detail;
+  if (typeof detail?.code !== 'string' || typeof detail.message !== 'string') return undefined;
+  return detail;
 }
 
 function truncate(value: string, maxLength: number) {

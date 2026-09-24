@@ -87,6 +87,10 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@riviamigo/hooks', () => ({
   queryKeys: {
+    auth: {
+      identities: ['auth-identities'],
+      authenticationSettings: ['authentication-settings'],
+    },
     apiKeys: { all: ['api-keys'] },
     apiCatalog: { all: ['api-catalog'] },
     appTimezone: { current: ['app-timezone'] },
@@ -139,6 +143,14 @@ vi.mock('@riviamigo/hooks', () => ({
       return settingsMocks.preferences;
     }),
     changePassword: hooksMocks.changePassword,
+    getOidcIdentities: vi.fn().mockResolvedValue({
+      password_configured: true,
+      oidc_linked: false,
+      oidc_link_available: false,
+      button_label: 'Sign in with SSO',
+    }),
+    startOidcLink: vi.fn(),
+    unlinkOidc: vi.fn(),
     listApiKeys: vi.fn().mockResolvedValue([]),
     getApiCatalog: vi.fn().mockResolvedValue({
       endpoints: [
@@ -1503,6 +1515,30 @@ describe('Settings page', () => {
     });
   });
 
+  it('shows Authentication only to super users', async () => {
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'admin@example.com',
+      role: 'admin',
+      default_vehicle_id: 'v1',
+    };
+    const admin = renderSettings();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Backups' })).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Authentication' })).not.toBeInTheDocument();
+    admin.unmount();
+
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'super@example.com',
+      role: 'super_user',
+      default_vehicle_id: 'v1',
+    };
+    renderSettings();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Authentication' })).toBeInTheDocument()
+    );
+  });
+
   it('shows active vehicle state for the connected vehicle', () => {
     renderSettings();
     // Status text now appears inside the vehicle chip ('Active' when worker_health is ok/connected)
@@ -1585,7 +1621,7 @@ describe('Settings page', () => {
 
     const submit = screen.getByRole('button', { name: 'Change password' });
     expect(submit).toBeDisabled();
-    expect(screen.getByRole('status')).toHaveTextContent('0/12');
+    expect(screen.getByRole('status', { name: /password requires at least 12 characters/i })).toHaveTextContent('0/12');
 
     fireEvent.change(screen.getByLabelText('Current password'), {
       target: { value: 'current-password' },

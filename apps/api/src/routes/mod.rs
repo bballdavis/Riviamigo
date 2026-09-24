@@ -408,12 +408,15 @@ fn classify_rate_limit_class(method: &http::Method, path: &str) -> RateLimitClas
         || path.starts_with("/v1/auth/account-invitations/")
         || path.starts_with("/v1/auth/bootstrap")
         || path.starts_with("/v1/auth/refresh")
+        || path.starts_with("/v1/auth/oidc/start")
+        || path.starts_with("/v1/auth/oidc/callback")
     {
         return RateLimitClass::AuthPublic;
     }
 
     if path.starts_with("/v1/auth/me")
         || path.starts_with("/v1/auth/preferences")
+        || path.starts_with("/v1/auth/identities")
         || path.starts_with("/v2/auth/preferences")
         || path.starts_with("/v2/themes")
         || path == "/v1/settings/timezone"
