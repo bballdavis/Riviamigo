@@ -93,6 +93,20 @@ describe('AuthenticationSection', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(/validated/i);
   });
 
+  it('shows an actionable error when authentication settings cannot be loaded', async () => {
+    getSettings.mockRejectedValueOnce(new Error('settings unavailable'));
+    renderSection();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not be loaded/i);
+  });
+
+  it('shows provider validation failure feedback', async () => {
+    testSettings.mockRejectedValueOnce(new Error('provider unavailable'));
+    const user = userEvent.setup();
+    renderSection();
+    await user.click(await screen.findByRole('button', { name: 'Test provider' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/provider validation failed/i);
+  });
+
   it('explains the broad verified-email account linking policy', async () => {
     const user = userEvent.setup(); renderSection();
     const toggle = await screen.findByRole('switch', { name: 'Link verified existing emails' });
