@@ -26,8 +26,9 @@ Riviamigo is designed to stay private. Its standard Compose origin publishes por
 1. [Prerequisites](./prerequisites.md) — confirm host, Docker, storage, browser, and network expectations.
 2. [Install Riviamigo](./getting-started.md) — clone the repository, prepare the environment, and start the production stack.
 3. [Configuration](./configuration.md) — understand required secrets and optional production settings.
-4. [Rivian account setup](./rivian-account.md) — connect the vehicle account and handle MFA or login repair.
-5. [Verify the installation](./verify-installation.md) — check container health, application access, ownership, and telemetry.
+4. [OIDC single sign-on](./oidc-sso.md) — optionally configure SSO, account linking, and recovery.
+5. [Rivian account setup](./rivian-account.md) — connect the vehicle account and handle MFA or login repair.
+6. [Verify the installation](./verify-installation.md) — check container health, application access, ownership, and telemetry.
 
 After verification, continue to [Using Riviamigo](../using-riviamigo.md) for dashboards and external services or [Operations](../operations.md) for deployment, security, updates, and recovery.
 

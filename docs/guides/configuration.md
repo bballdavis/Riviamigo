@@ -70,6 +70,10 @@ Weather, geocoding, basemap, and Iconify policies are configured in **Settings >
 - `TZ` sets the Docker/container timezone for nginx and other runtime processes. It is separate from the shared user-facing application timezone configured under **Settings > Units**.
 - Reconnect, telemetry-retention, logging, and rate-limit settings are available in the [complete reference](../environment-variables.md).
 
+For optional single sign-on, follow the [OIDC single sign-on guide](./oidc-sso.md).
+It explains the **Settings > Authentication** workflow, field-level environment
+overrides, and the break-glass recovery path before password login is disabled.
+
 ## Local HTTP development
 
 The local development stack is started with `pnpm dev:stack` and uses

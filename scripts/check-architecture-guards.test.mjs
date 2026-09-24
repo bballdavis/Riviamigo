@@ -114,6 +114,29 @@ test('reports configured duplicate interaction patterns outside their allowlists
   assert.match(failures, /query key forbidden/);
 });
 
+test('does not count test-support controls as production interaction patterns', () => {
+  const root = fixture({
+    'apps/web/src/test/mockPrimitives.tsx': '<button role="switch" />;',
+    'apps/web/src/Production.tsx': 'export const Production = () => null;',
+    'config/architecture-budgets.json': JSON.stringify({
+      patterns: {
+        roleSwitch: {
+          pattern: String.raw`role\s*=\s*["']switch["']`,
+          directories: ['apps/web/src'],
+          maxMatches: 0,
+          message: 'switch forbidden',
+        },
+      },
+    }),
+    'packages/ui/src/index.ts': 'export {};',
+    'packages/hooks/src/index.ts': 'export {};',
+    'packages/dashboards/src/index.ts': 'export {};',
+    'packages/types/src/index.ts': 'export {};',
+  });
+
+  assert.doesNotMatch(architectureGuardFailures(root).join('\n'), /switch forbidden/);
+});
+
 test('enforces hotspot line and byte ratchets', () => {
   const root = fixture({
     'apps/web/src/TooLarge.tsx': 'one\ntwo\nthree\n',

@@ -4,15 +4,67 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
+    db::users::require_super_user,
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
+    services::authentication_settings::{
+        self, AuthenticationSettingsResponse, AuthenticationSettingsUpdate,
+    },
     services::{app_settings, security_audit::SecurityAuditEvent},
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/settings/timezone", get(get_timezone).put(update_timezone))
+        .route(
+            "/settings/authentication",
+            get(get_authentication).put(update_authentication),
+        )
+        .route(
+            "/settings/authentication/test",
+            axum::routing::post(test_authentication),
+        )
         .route("/admin/security/status", get(get_security_status))
+}
+
+async fn get_authentication(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<AuthenticationSettingsResponse>, AppError> {
+    require_super_user(&state.pool, auth.user_id).await?;
+    Ok(Json(
+        authentication_settings::load(&state.pool, &state.age_key).await?,
+    ))
+}
+
+async fn update_authentication(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<AuthenticationSettingsUpdate>,
+) -> Result<Json<AuthenticationSettingsResponse>, AppError> {
+    require_super_user(&state.pool, auth.user_id).await?;
+    Ok(Json(
+        authentication_settings::update(&state.pool, &state.age_key, auth.user_id, body).await?,
+    ))
+}
+
+async fn test_authentication(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_super_user(&state.pool, auth.user_id).await?;
+    let visible = authentication_settings::load(&state.pool, &state.age_key).await?;
+    authentication_settings::validate_effective(&visible)?;
+    let effective = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
+    let mut provider_settings = effective.clone();
+    // Test-before-enable is intentional so the administrator can validate the
+    // provider and recovery path without exposing SSO on the login page.
+    provider_settings.oidc_enabled = true;
+    crate::services::oidc::test_provider(&provider_settings).await?;
+    authentication_settings::record_validation(&state.pool, &effective, &state.age_key).await?;
+    Ok(Json(
+        serde_json::json!({ "valid": true, "discovery": "validated", "message": "OIDC provider discovery and JWKS retrieval succeeded." }),
+    ))
 }
 
 #[derive(Debug, Serialize)]

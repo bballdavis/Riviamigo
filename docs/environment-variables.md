@@ -7,7 +7,7 @@ sidebar_label: Environment variables
 
 # Environment variables
 
-Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED_ORIGINS`. Copy `compose/.env.example` to the repository-root `.env`; use `compose/.env.full.example` only as an override template. The standard production container reads that file directly, so supported optional values do not need matching entries in Compose.
+Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED_ORIGINS`. Copy `compose/.env.example` to the repository-root `.env`; use `compose/.env.full.example` as the complete override template. The standard production service passes that root `.env` through its `env_file`, so supported optional values do not need matching entries in `compose/docker-compose.yml`.
 
 ## Standard production values
 
@@ -70,6 +70,46 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 | `S3_ENDPOINT` | Unset | Optional fallback endpoint when the saved S3 endpoint is empty. Custom endpoints use path-style addressing. |
 | `S3_ACCESS_KEY` | Unset | Optional fallback access key used only when a complete saved credential pair is unavailable. |
 | `S3_SECRET_KEY` | Unset | Optional fallback secret key paired with `S3_ACCESS_KEY`; never returned by the API or stored in recovery packages. |
+
+## OIDC and authentication overrides
+
+Database-backed authentication settings under **Settings > Authentication**
+are the primary configuration path. Each value below overrides only the same
+field in the database when set; the settings response identifies the effective
+source. Secrets are write-only and never returned. OIDC and password login are
+independent switches. Both default to the safe local-login posture: OIDC off
+and password login on. Automatic SSO starts are off by default.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `RIVIAMIGO_OIDC_ENABLED` | Database/default `false` | Show and enable the OIDC SSO login flow. |
+| `RIVIAMIGO_PASSWORD_LOGIN_ENABLED` | Database/default `true` | Keep the local password form and password endpoint available. Set `false` only after testing SSO and recording break-glass recovery. |
+| `RIVIAMIGO_OIDC_AUTO_LOGIN` | Database/default `false` | Automatically start SSO from the login page when the provider is ready, regardless of the password-login setting. A failed or cancelled callback stays on the login page for a manual retry. |
+| `RIVIAMIGO_OIDC_ISSUER_URL` | Database/unset | OIDC issuer URL used for discovery and token validation. The runtime requires an absolute HTTPS URL. |
+| `RIVIAMIGO_OIDC_PUBLIC_BASE_URL` | Database/unset | Public HTTPS base URL used to derive the exact `/v1/auth/oidc/callback` redirect URI. |
+| `RIVIAMIGO_OIDC_CLIENT_ID` | Database/unset | Confidential OIDC client identifier. |
+| `RIVIAMIGO_OIDC_CLIENT_SECRET` | Database/unset | Client secret override. Mutually exclusive with `_FILE`; never returned by the API. |
+| `RIVIAMIGO_OIDC_CLIENT_SECRET_FILE` | Unset | Optional overlay-only path to a mounted file containing the client secret. Mutually exclusive with the direct secret variable; the standard Compose file does not mount this path, so setting it without the overlay fails startup. The supplied OIDC secret Compose overlay sets it automatically. |
+| `RIVIAMIGO_OIDC_CLIENT_SECRET_SOURCE` | Unset | Optional overlay-only host file consumed by `compose/docker-compose.oidc-secret.yml`. Compose also passes this non-secret path through the shared dotenv environment, but Riviamigo does not read it; setting it without the overlay is inert. |
+| `RIVIAMIGO_OIDC_BUTTON_LABEL` | `Sign in with SSO` | Text shown on the SSO button. |
+| `RIVIAMIGO_OIDC_SCOPES` | `openid email profile` | Space-separated provider scopes. `openid` is mandatory; Riviamigo rejects or hides an OIDC configuration that omits it. |
+| `RIVIAMIGO_OIDC_TOKEN_AUTH_METHOD` | `auto` | Token endpoint authentication: `auto`, `client_secret_basic`, or `client_secret_post`. |
+| `RIVIAMIGO_OIDC_AUTO_SIGNUP` | Database/default `false` | Permit a qualifying new OIDC identity to create a basic user. |
+| `RIVIAMIGO_OIDC_AUTO_LINK_VERIFIED_EMAIL` | Database/default `false` | Permit a verified provider email to link to one matching existing account. With no domain or extra claim restriction, any verified email domain from this provider qualifies. |
+| `RIVIAMIGO_OIDC_ALLOWED_EMAIL_DOMAINS` | Database/unset | Optional comma-separated, case-insensitive email domains allowed by auto-link/auto-signup policy. Unset accepts all verified email domains. |
+| `RIVIAMIGO_OIDC_REQUIRED_CLAIM_NAME` | Database/unset | Optional exact claim name required for OIDC login. Must be set together with the claim value. |
+| `RIVIAMIGO_OIDC_REQUIRED_CLAIM_VALUE` | Database/unset | Optional exact value for the required claim. Must be set together with the claim name. |
+
+The first-owner setup proof remains required for a new production installation.
+For recovery, remove malformed or stale OIDC overrides from the root `.env`,
+including any `RIVIAMIGO_OIDC_CLIENT_SECRET_FILE` and
+`RIVIAMIGO_OIDC_CLIENT_SECRET_SOURCE` values, then set
+`RIVIAMIGO_PASSWORD_LOGIN_ENABLED=true` and
+`RIVIAMIGO_OIDC_ENABLED=false`. Recreate only the app container without
+including the optional OIDC secret overlay: committed startup code parses OIDC
+environment values before the application can serve the recovery login. Repair
+and test the provider as a local super-user, remove the temporary overrides,
+and recreate only the app container again. See [OIDC single sign-on](./guides/oidc-sso.md).
 
 | `CHARGE_IDENTITY_BACKFILL_BATCH_SIZE` | `1000` | Historical charge payloads processed per transaction. Valid range: `100`-`10000`. |
 | `CHARGE_IDENTITY_BACKFILL_PAUSE_MS` | `100` | Delay between successful backfill batches. Valid range: `0`-`5000` milliseconds. |

@@ -1219,7 +1219,40 @@ export interface AuthMeResponse {
   email: string;
   role: UserRole;
   default_vehicle_id: string | null;
+  password_configured: boolean;
+  oidc_linked: boolean;
 }
+
+export type SettingSource = 'default' | 'database' | 'environment';
+export interface EffectiveSetting<T> { value: T; source: SettingSource }
+export interface AuthenticationSettings {
+  oidc_enabled: EffectiveSetting<boolean>;
+  password_login_enabled: EffectiveSetting<boolean>;
+  oidc_auto_login: EffectiveSetting<boolean>;
+  issuer_url: EffectiveSetting<string | null>;
+  public_base_url: EffectiveSetting<string | null>;
+  client_id: EffectiveSetting<string | null>;
+  client_secret: { configured: boolean; source: SettingSource };
+  button_label: EffectiveSetting<string>;
+  scopes: EffectiveSetting<string>;
+  token_auth_method: EffectiveSetting<string>;
+  auto_signup: EffectiveSetting<boolean>;
+  auto_link_verified_email: EffectiveSetting<boolean>;
+  allowed_email_domains: EffectiveSetting<string[]>;
+  required_claim_name: EffectiveSetting<string | null>;
+  required_claim_value: EffectiveSetting<string | null>;
+  last_validation_at: string | null;
+  callback_url: string | null;
+}
+export type AuthenticationSettingsUpdate = Partial<{
+  oidc_enabled: boolean; password_login_enabled: boolean; oidc_auto_login: boolean;
+  issuer_url: string | null; public_base_url: string | null; client_id: string | null;
+  client_secret: string | null; button_label: string; scopes: string; token_auth_method: string;
+  auto_signup: boolean; auto_link_verified_email: boolean; allowed_email_domains: string[];
+  required_claim_name: string | null; required_claim_value: string | null;
+}>;
+export interface AuthConfigResponse { oidc_enabled: boolean; password_login_enabled: boolean; oidc_auto_login: boolean; oidc_ready: boolean; button_label: string }
+export interface OidcIdentityStatus { password_configured: boolean; oidc_linked: boolean; oidc_link_available?: boolean; password_setup_allowed?: boolean; oidc_link_allowed?: boolean; button_label?: string }
 
 export interface AuthSetupResponse {
   setup_required: boolean;
@@ -1235,7 +1268,13 @@ export interface ChangePasswordBody {
 export interface AccountInvitationPreview {
   email: string;
   expires_at: string;
+  auth_methods: InvitationAuthMethods;
+  password_available: boolean;
+  sso_available: boolean;
+  button_label: string;
 }
+
+export type InvitationAuthMethods = 'password' | 'sso' | 'both';
 
 export type UserRole = 'super_user' | 'admin' | 'user';
 
@@ -1352,7 +1391,10 @@ export interface AdminVehicleOption {
 
 export interface CreateAccountInvitationBody {
   email: string;
-  vehicle_id: string | null;
+  vehicle_ids: string[];
+  auth_methods?: InvitationAuthMethods;
+  /** Legacy singular field retained for older clients. */
+  vehicle_id?: string | null;
   expires_in_days?: number;
 }
 
@@ -1361,6 +1403,9 @@ export interface AccountInvitation {
   invitee_email: string;
   vehicle_id: string | null;
   vehicle_name: string | null;
+  vehicle_ids: string[];
+  vehicle_names: string[];
+  auth_methods: InvitationAuthMethods;
   expires_at: string;
   accepted_at: string | null;
   revoked_at: string | null;

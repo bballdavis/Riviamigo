@@ -26,6 +26,12 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Authentication',
+      collapsed: false,
+      items: ['guides/oidc-sso'],
+    },
+    {
+      type: 'category',
       label: 'Host-specific installation',
       collapsed: false,
       items: ['guides/synology'],
