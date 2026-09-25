@@ -2,6 +2,39 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { api } from './api';
 
+const EXPLICIT_LOGOUT_INTENT_KEY = 'rm-explicit-logout-intent';
+let fallbackExplicitLogoutIntent = false;
+
+export function recordExplicitLogoutIntent(): void {
+  if (typeof window === 'undefined') {
+    fallbackExplicitLogoutIntent = true;
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(EXPLICIT_LOGOUT_INTENT_KEY, '1');
+    fallbackExplicitLogoutIntent = false;
+  } catch {
+    fallbackExplicitLogoutIntent = true;
+  }
+}
+
+export function consumeExplicitLogoutIntent(): boolean {
+  if (fallbackExplicitLogoutIntent) {
+    fallbackExplicitLogoutIntent = false;
+    return true;
+  }
+  if (typeof window === 'undefined') return false;
+
+  try {
+    if (window.sessionStorage.getItem(EXPLICIT_LOGOUT_INTENT_KEY) !== '1') return false;
+    window.sessionStorage.removeItem(EXPLICIT_LOGOUT_INTENT_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function userIdFromToken(token: string): string | null {
   try {
     const part = token.split('.')[1];
@@ -126,6 +159,7 @@ export const useAuth = create<AuthState>()(
       },
 
       logout: async () => {
+        recordExplicitLogoutIntent();
         get().clearSession();
         try { await api.logout(); } catch { /* session state is already cleared */ }
       },

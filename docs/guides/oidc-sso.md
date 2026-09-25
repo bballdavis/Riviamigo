@@ -64,6 +64,10 @@ empty where possible. Do not use `/v1/auth/logout` as a provider logout URL; it
 is a `POST` endpoint for clearing Riviamigo's local session, not a browser
 redirect endpoint. If the provider session remains active, the next SSO attempt
 may sign the user back in without asking for credentials.
+When automatic SSO login is enabled, an explicit **Sign out** leaves the login
+page open for that visit instead of immediately starting SSO again. The user
+can still select the SSO button manually. Opening the login page later follows
+the configured automatic login behavior.
 
 ### Configure OIDC through standard Compose
 

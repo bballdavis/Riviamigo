@@ -3,7 +3,7 @@ import { createRoute, useNavigate, useSearch } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 import { rootRoute } from './__root';
-import { api, useAuth } from '@riviamigo/hooks';
+import { api, consumeExplicitLogoutIntent, useAuth } from '@riviamigo/hooks';
 import { useDocumentTheme } from '@riviamigo/ui/hooks';
 import { Button, Input } from '@riviamigo/ui/primitives';
 import { getBrandAsset } from '@riviamigo/ui/lib/brandAssets';
@@ -45,6 +45,8 @@ export function LoginPage() {
   const shouldResumeSession = search.password_changed !== '1';
   const resumeAttempted = useRef(false);
   const autoSsoAttempted = useRef(false);
+  const explicitLogoutIntentConsumed = useRef(false);
+  const explicitLogoutIntent = useRef(false);
   const resumePromise = useRef<Promise<boolean> | null>(null);
   const redirectStarted = useRef(false);
   const [restoringSession, setRestoringSession] = useState(false);
@@ -118,11 +120,16 @@ export function LoginPage() {
   }, [isAuthenticated, isBootstrapping, navigate, redirectTarget, resumeSession, shouldResumeSession]);
 
   useEffect(() => {
+    if (!explicitLogoutIntentConsumed.current) {
+      explicitLogoutIntentConsumed.current = true;
+      explicitLogoutIntent.current = consumeExplicitLogoutIntent();
+    }
+    if (explicitLogoutIntent.current) return;
     if (autoSsoAttempted.current || !config?.oidc_auto_login || !ssoReady ||
         isAuthenticated || isBootstrapping || restoringSession || search.error || search.password_changed) return;
     autoSsoAttempted.current = true;
     void startSso();
-  }, [config?.oidc_auto_login, ssoReady, isAuthenticated, isBootstrapping, restoringSession, search.error, search.password_changed, startSso]);
+  }, [config?.oidc_auto_login, ssoReady, isAuthenticated, isBootstrapping, restoringSession, search.error, search.password_changed, startSso, consumeExplicitLogoutIntent]);
 
   if (restoringSession) {
     return (
