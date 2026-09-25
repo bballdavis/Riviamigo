@@ -87,6 +87,7 @@ fn is_r2_model(model: Option<&str>) -> bool {
 /// telemetry channel, so backpressure or schema failures cannot delay it.
 /// `active_sessions` is deliberately a watch channel: only the latest
 /// canonical lifecycle context is relevant to enrichment consumers.
+#[allow(clippy::too_many_arguments)] // The owner, credentials, and lifecycle channels are independent inputs.
 pub fn spawn_in_process(
     pool: PgPool,
     vehicle_id: Uuid,

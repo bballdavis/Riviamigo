@@ -2420,7 +2420,7 @@ async fn create_demo_vehicle(
     .execute(&mut *tx)
     .await?;
 
-    let summary = seed_demo_vehicle(&mut tx, vehicle_id, &model, Utc::now()).await?;
+    let summary = seed_demo_vehicle(&mut tx, vehicle_id, model, Utc::now()).await?;
 
     tx.commit().await?;
     Ok(Json(serde_json::json!({
