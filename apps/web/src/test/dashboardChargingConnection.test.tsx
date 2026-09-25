@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const chargingMocks = vi.hoisted(() => ({
   forcePluggedState: 'Disconnected' as 'Disconnected' | 'Connected' | 'Charging',
-  model: 'R1S' as 'R1S' | 'R1T' | 'R2S' | 'unknown',
+  model: 'R1S' as 'R1S' | 'R1T' | 'R2' | 'R2S' | 'unknown',
   isDemo: false,
   images: null as null | {
     all: Array<{
@@ -637,6 +637,7 @@ describe('charging connection custom widget', () => {
 
   it.each([
     ['R1T', '/vehicle-images/fallbacks/r1t/charging.webp'],
+    ['R2', '/vehicle-images/fallbacks/r2s/charging.webp'],
     ['R2S', '/vehicle-images/fallbacks/r2s/charging.webp'],
   ] as const)('anchors the enlarged dedicated charging fallback for demo %s', (model, fallback) => {
     chargingMocks.forcePluggedState = 'Connected';

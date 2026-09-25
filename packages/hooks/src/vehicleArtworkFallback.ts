@@ -1,7 +1,7 @@
 import type { VehicleImage, VehicleImages } from '@riviamigo/types';
 
 export type VehicleArtworkUsage = 'overview' | 'charging' | 'health' | 'vehicle-card';
-export type VehicleArtworkFallbackModel = 'r1s' | 'r1t' | 'r2s';
+export type VehicleArtworkFallbackModel = 'r1s' | 'r1t' | 'r2';
 
 const VEHICLE_ARTWORK_FALLBACKS: Record<
   VehicleArtworkFallbackModel,
@@ -19,7 +19,8 @@ const VEHICLE_ARTWORK_FALLBACKS: Record<
     health: '/vehicle-images/fallbacks/r1t/health.webp',
     'vehicle-card': '/vehicle-images/fallbacks/r1t/side.webp',
   },
-  r2s: {
+  // Keep the packaged path stable for existing deployments and cached URLs.
+  r2: {
     overview: '/vehicle-images/fallbacks/r2s/overview.webp',
     charging: '/vehicle-images/fallbacks/r2s/charging.webp',
     health: '/vehicle-images/fallbacks/r2s/health.webp',
@@ -33,7 +34,7 @@ export function normalizeVehicleArtworkModel(
   const normalized = (model ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
   if (normalized.includes('r1t')) return 'r1t';
   if (normalized.includes('r1s')) return 'r1s';
-  if (normalized.includes('r2s')) return 'r2s';
+  if (normalized.includes('r2s') || normalized.includes('r2')) return 'r2';
   return null;
 }
 

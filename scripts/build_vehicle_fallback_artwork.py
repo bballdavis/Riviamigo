@@ -399,7 +399,9 @@ def report_asset(
     opaque_weight = sum(index * count for index, count in enumerate(histogram))
     alpha_coverage = opaque_weight / (255 * image.width * image.height)
     return AssetReport(
-        model=model.upper(),
+        # Source artwork retains its historical directory name, while the
+        # generated manifest uses the public canonical model label.
+        model="R2" if model == "r2s" else model.upper(),
         usage=usage,
         source=source_path.relative_to(root.parent).as_posix(),
         output=output_path.relative_to(output_root).as_posix(),

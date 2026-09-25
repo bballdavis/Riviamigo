@@ -29,7 +29,9 @@ const mockLogin = vi.fn();
 const mockRegister = vi.fn();
 const mockResumeSession = vi.fn();
 const mockStartOidc = vi.hoisted(() => vi.fn());
+const mockConsumeExplicitLogoutIntent = vi.hoisted(() => vi.fn(() => false));
 vi.mock('@riviamigo/hooks', () => ({
+  consumeExplicitLogoutIntent: mockConsumeExplicitLogoutIntent,
   useAuth: () => ({
     login: mockLogin,
     register: mockRegister,
@@ -45,6 +47,8 @@ import { LoginPage } from '../login';
 
 beforeEach(() => {
   mockNavigate.mockClear(); mockLogin.mockClear(); mockRegister.mockClear(); mockResumeSession.mockReset(); mockStartOidc.mockReset();
+  mockConsumeExplicitLogoutIntent.mockReset();
+  mockConsumeExplicitLogoutIntent.mockReturnValue(false);
   mockSearch = {}; setupRequired = false; setupProofRequired = false; setupProofAvailable = false;
   authConfig = { oidc_enabled: false, oidc_ready: false, password_login_enabled: true, oidc_auto_login: false, button_label: 'Sign in with SSO' };
   isAuthenticated = false; isBootstrapping = false;
@@ -94,6 +98,20 @@ describe('LoginPage', () => {
     expect(mockStartOidc).toHaveBeenCalledWith('/charging?view=table');
     expect(await screen.findByRole('alert')).toHaveTextContent('Contact an administrator');
     expect(screen.getByRole('button', { name: 'Company SSO' })).toBeInTheDocument();
+  });
+
+  it('keeps the login page available after an explicit logout when automatic SSO is enabled', async () => {
+    authConfig = { oidc_enabled: true, oidc_ready: true, password_login_enabled: false, oidc_auto_login: true, button_label: 'Company SSO' };
+    mockConsumeExplicitLogoutIntent.mockReturnValueOnce(true);
+    mockStartOidc.mockRejectedValue(new Error('provider unavailable'));
+    const user = userEvent.setup();
+
+    render(<LoginPage />);
+    await act(async () => {});
+    expect(mockConsumeExplicitLogoutIntent).toHaveBeenCalledTimes(1);
+    expect(mockStartOidc).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Company SSO' }));
+    expect(mockStartOidc).toHaveBeenCalledTimes(1);
   });
 
   it('starts SSO with password login enabled and leaves the password form after a failed start', async () => {

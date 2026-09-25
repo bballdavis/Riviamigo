@@ -36,6 +36,8 @@ This directory is canonical for operational and process runbooks. Update it when
   Interpret the advisory 180-day timer, renew credentials safely, and verify live recovery.
 - [`charge-payload-cleanup.md`](./charge-payload-cleanup.md)
   Diagnose and compact redundant charging payload evidence without broad or automatic deletion.
+- [`r2-ingestion-diagnostics.md`](./r2-ingestion-diagnostics.md)
+  Trace R2 acquisition, typed decoding, canonical status, and sparse trips.
 
 ## When To Add A Runbook
 

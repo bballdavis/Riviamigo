@@ -25,9 +25,9 @@ Provider role mapping, multiple providers, SCIM, and provider logout remain
 outside this first configuration surface. SSO complements secure reverse-proxy
 guidance; it does not make an unprotected origin safe by itself.
 
-### R1T, R1S, and R2/R2S test coverage
+### R1T, R1S, and R2 test coverage
 
-Build a model and firmware compatibility matrix, starting with owner-contributed R1T and R1S coverage and extending to R2/R2S as vehicles and upstream access become available. The matrix should record model, model year, generation, trim, battery pack, firmware, supported fields, and known upstream gaps.
+Build a model and firmware compatibility matrix, starting with owner-contributed R1T and R1S coverage and extending to R2 as vehicles and upstream access become available. The matrix should record model, model year, generation, trim, battery pack, firmware, supported fields, and known upstream gaps. The legacy R2S label remains an accepted compatibility value.
 
 Expand the test system with:
 
@@ -77,7 +77,7 @@ Every command must have capability discovery, permission checks, explicit confir
 
 ## Contribution opportunities
 
-The most useful contributions are model-specific fixtures from R1T/R1S owners, future R2/R2S owner testing, replay cases for upstream GraphQL changes, parser/API contract tests, OIDC provider validation, accessibility/mobile checks, and documentation improvements. Contributors should redact names, VINs, tokens, coordinates, and timestamps that could identify a household before sharing evidence.
+The most useful contributions are model-specific fixtures from R1T/R1S owners, future R2 owner testing, replay cases for upstream GraphQL changes, parser/API contract tests, OIDC provider validation, accessibility/mobile checks, and documentation improvements. Contributors should redact names, VINs, tokens, coordinates, and timestamps that could identify a household before sharing evidence.
 
 ## Competitive parity without copying the wrong tradeoffs
 

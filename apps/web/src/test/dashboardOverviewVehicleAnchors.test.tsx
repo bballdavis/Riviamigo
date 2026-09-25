@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const overviewMocks = vi.hoisted(() => ({
-  model: 'R1T' as 'R1T' | 'R1S' | 'R2S',
+  model: 'R1T' as 'R1T' | 'R1S' | 'R2',
   chargerState: 'Disconnected' as 'Disconnected' | 'Connected' | 'Charging',
   batteryLevel: 64,
   hasApiArtwork: true,
@@ -126,7 +126,7 @@ const expectedAnchors = {
       sideBinRight: 'left-[36%] top-[76%]',
     },
   },
-  R2S: {
+  R2: {
     tires: {
       rl: 'left-[27%] top-[0%]',
       fl: 'left-[82%] top-[0%]',
@@ -144,7 +144,7 @@ const expectedAnchors = {
   },
 } as const;
 
-function renderOverviewForModel(model: 'R1T' | 'R2S') {
+function renderOverviewForModel(model: 'R1T' | 'R2') {
   overviewMocks.model = model;
   render(
     <DashboardRenderer
@@ -165,7 +165,7 @@ describe('overview vehicle anchors', () => {
 
   it.each([
     ['R1T'],
-    ['R2S'],
+    ['R2'],
   ] as const)('keeps tire and lock overlays aligned for %s', (model) => {
     renderOverviewForModel(model);
 
@@ -242,7 +242,7 @@ describe('overview vehicle anchors', () => {
     );
   });
 
-  it.each(['R1T', 'R2S'] as const)('keeps Rivian-provided %s demo artwork on its original coordinates', (model) => {
+  it.each(['R1T', 'R2'] as const)('keeps Rivian-provided %s demo artwork on its original coordinates', (model) => {
     overviewMocks.isDemo = true;
     renderOverviewForModel(model);
     const anchors = expectedAnchors[model];
@@ -254,7 +254,7 @@ describe('overview vehicle anchors', () => {
     expect(screen.getByTitle('Rear left door lock')).toHaveClass(anchors.locks.rl);
   });
 
-  it.each(['R1T', 'R2S'] as const)('centers only the packaged %s demo fallback between the lock anchors', (model) => {
+  it.each(['R1T', 'R2'] as const)('centers only the packaged %s demo fallback between the lock anchors', (model) => {
     overviewMocks.isDemo = true;
     overviewMocks.hasApiArtwork = false;
     renderOverviewForModel(model);
@@ -289,7 +289,7 @@ describe('overview vehicle anchors', () => {
     }
 
     overviewMocks.hasApiArtwork = false;
-    renderOverviewForModel('R2S');
+    renderOverviewForModel('R2');
     for (const image of Array.from(document.querySelectorAll('img[src="/vehicle-images/fallbacks/r2s/overview.webp"]'))) {
       expect(image).toHaveStyle({ transform: 'translate(-50%, -50%) rotate(90deg)' });
     }

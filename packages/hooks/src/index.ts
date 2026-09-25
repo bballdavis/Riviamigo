@@ -2,7 +2,7 @@ export { api, themeClient, setApiBaseUrl, resolveApiBaseUrl } from './api';
 export { authClient, vehicleClient, tripClient, chargingClient, telemetryClient, analyticsClient, systemClient } from './api';
 export { queryKeys } from './queryKeys';
 export type { ChargingSchedule, ChargingScheduleInput, DepartureSchedule, DepartureScheduleInput, DepartureOccurrence, DepartureComfortSettings, LiveSession, BackfillStatus } from './api';
-export { useAuth } from './useAuth';
+export { consumeExplicitLogoutIntent, recordExplicitLogoutIntent, useAuth } from './useAuth';
 export { useAuthReady, useResolvedVehicleSelection } from './useAuthState';
 export { useDashboardChartFavorites, useUpdateDashboardChartFavorite } from './useDashboardChartFavorites';
 export {

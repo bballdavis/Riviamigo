@@ -143,6 +143,8 @@ vi.mock('@riviamigo/hooks', () => ({
       return settingsMocks.preferences;
     }),
     changePassword: hooksMocks.changePassword,
+    getVehicleIngestionDiagnostics: vi.fn().mockResolvedValue({ enabled: false, enabled_until: null }),
+    updateVehicleIngestionDiagnostics: vi.fn().mockResolvedValue({ enabled: true, enabled_until: '2026-09-24T18:00:00Z' }),
     getOidcIdentities: vi.fn().mockResolvedValue({
       password_configured: true,
       oidc_linked: false,
@@ -665,18 +667,18 @@ describe('Settings page', () => {
     expect(picker).toHaveClass('w-full');
     expect(picker).toHaveValue('vehicles');
     expect(Array.from((picker as HTMLSelectElement).options).map((option) => option.value)).toEqual([
-      'vehicles',
-      'dashboards',
-      'charts',
-      'units',
-      'places',
-      'charging',
-      'external',
-      'api',
-      'jobs',
-      'raw',
-      'appearance',
       'account',
+      'api',
+      'appearance',
+      'charging',
+      'charts',
+      'dashboards',
+      'external',
+      'jobs',
+      'places',
+      'raw',
+      'units',
+      'vehicles',
     ]);
 
     fireEvent.change(picker, { target: { value: 'appearance' } });
@@ -1298,6 +1300,30 @@ describe('Settings page', () => {
       expect(screen.getByText('Field coverage')).toBeInTheDocument();
       expect(screen.getByText('Inbound Rivian events')).toBeInTheDocument();
     });
+  });
+
+  it('enables diagnostics for connected owners and omits demo vehicles', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.vehicles = [...settingsMocks.vehicles, {
+      id: 'demo-v1',
+      display_name: 'Demo R2',
+      model: 'R2',
+      year: null,
+      trim: null,
+      vin: null,
+      rivian_vehicle_id: 'demo-r2s-local',
+      battery_capacity_kwh: 82,
+      target_tire_pressure_psi: 48,
+      membership_role: 'owner',
+      is_demo: true,
+    }];
+    renderSettings();
+    clickSettingsSection('Raw Data');
+    const toggle = await screen.findByRole('switch', { name: 'Enable ingestion diagnostics for Adventure Truck' });
+    expect(screen.queryByRole('switch', { name: 'Enable ingestion diagnostics for Demo R2' })).not.toBeInTheDocument();
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+    fireEvent.click(toggle);
+    await waitFor(() => expect(hooks.api.updateVehicleIngestionDiagnostics).toHaveBeenCalledWith('v1', true));
   });
 
   it('renders and operates the admin Backups section', async () => {

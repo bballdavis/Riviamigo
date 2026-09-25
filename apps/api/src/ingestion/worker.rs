@@ -16,6 +16,7 @@ use crate::{
         trip_detector::{
             compute_distance_odometer_or_gps, compute_trip_energy, TripDetectorState, TripEvent,
         },
+        trip_signals::TripSignalFusion,
         ws_client::{self, WsInboundEvent, WsInboundKind},
     },
     models::{
@@ -244,6 +245,8 @@ pub async fn run_vehicle_worker(
     .await;
 
     let (ev_tx, mut ev_rx) = mpsc::channel::<WsInboundEvent>(256);
+    // Keep Parallax delivery bounded and independent from the legacy socket.
+    let (parallax_tx, mut parallax_rx) = mpsc::channel::<(String, TelemetryEvent)>(256);
 
     // Get rivian_vehicle_id
     let riv_id: Option<String> =
@@ -262,6 +265,16 @@ pub async fn run_vehicle_worker(
             return;
         }
     };
+    let is_r2 =
+        sqlx::query_scalar::<_, String>("SELECT model FROM riviamigo.vehicles WHERE id = $1")
+            .bind(vehicle_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|model| {
+                matches!(model.to_ascii_uppercase().as_str(), "R2" | "R2S" | "R2-S")
+            });
 
     // Fetch owner user_id (needed for wallbox enrichment).
     let user_id: Option<Uuid> =
@@ -334,6 +347,7 @@ pub async fn run_vehicle_worker(
     }
 
     let mut trip_det = TripDetectorState::new(vehicle_id);
+    let mut trip_signals = TripSignalFusion::new(is_r2);
     let mut active_session_started_at = None;
     let mut charge_det =
         if let Some(snapshot) = load_active_charge_snapshot(&pool, vehicle_id).await {
@@ -383,8 +397,10 @@ pub async fn run_vehicle_worker(
         let pool2 = pool.clone();
         let client2 = http_client.clone();
         let age_key2 = age_key.clone();
+        let baseline_tx = ev_tx.clone();
         tokio::spawn(async move {
-            rivian_poll::run_startup_polls(vehicle_id, uid, pool2, client2, age_key2).await;
+            rivian_poll::run_startup_polls(vehicle_id, uid, pool2, client2, age_key2, baseline_tx)
+                .await;
         });
     }
     {
@@ -415,6 +431,8 @@ pub async fn run_vehicle_worker(
             vehicle_id,
             rivian_vehicle_id.clone(),
             age_key.clone(),
+            is_r2,
+            parallax_tx,
             active_session_rx,
             shutdown.resubscribe(),
         ))
@@ -468,6 +486,9 @@ pub async fn run_vehicle_worker(
     // Track the most recent inbound WS/control event so we can restart a
     // connection that stays silently wedged while still holding the worker lock.
     let mut last_ws_inbound_at = tokio::time::Instant::now();
+    let mut diagnostics_refresh_at =
+        tokio::time::Instant::now() - std::time::Duration::from_secs(30);
+    let mut diagnostics_enabled = false;
     let mut state_reconcile_interval = tokio::time::interval(STATE_PERIOD_RECONCILE_INTERVAL);
     state_reconcile_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Startup reconciliation above already covered the current tail.
@@ -511,6 +532,18 @@ pub async fn run_vehicle_worker(
                 Some(ev) => ev,
                 None => break,
             },
+            parallax_event = parallax_rx.recv(), if parallax_handle.is_some() && !parallax_rx.is_closed() => match parallax_event {
+                Some((topic, event)) => WsInboundEvent {
+                    kind: WsInboundKind::Telemetry,
+                    received_at: Utc::now(),
+                    raw: String::new(),
+                    message_type: Some(format!("parallax:{topic}")),
+                    telemetry: Some(event),
+                    charging_session: None,
+                    battery_cell_type: None,
+                },
+                None => continue,
+            },
             // Monitor the WS task; log if it exits unexpectedly.
             result = &mut ws_handle => {
                 match result {
@@ -533,8 +566,15 @@ pub async fn run_vehicle_worker(
                 continue;
             }
         };
-        last_ws_inbound_at = tokio::time::Instant::now();
-        handle_inbound_accounting(&pool, vehicle_id, &config, &inbound, &mut counter_batch).await;
+        let is_parallax = inbound
+            .message_type
+            .as_deref()
+            .is_some_and(|kind| kind.starts_with("parallax:"));
+        if !is_parallax && inbound.message_type.as_deref() != Some("baseline") {
+            last_ws_inbound_at = tokio::time::Instant::now();
+            handle_inbound_accounting(&pool, vehicle_id, &config, &inbound, &mut counter_batch)
+                .await;
+        }
         raw_cleanup_tick += 1;
         counter_flush_tick += 1;
         if raw_cleanup_tick.is_multiple_of(500) {
@@ -617,7 +657,39 @@ pub async fn run_vehicle_worker(
         }
 
         let trip_id = trip_det.active_trip_id();
-        let charge_event = charge_det.process(&event);
+        let charge_event = if is_parallax {
+            // Parallax frames are partial vehicle state, not charge lifecycle
+            // frames. A stream of GNSS updates must not time out a legacy
+            // charge session or alter its canonical identity.
+            ChargeEvent::NoChange
+        } else {
+            charge_det.process(&event)
+        };
+
+        if diagnostics_refresh_at.elapsed() >= std::time::Duration::from_secs(30) {
+            diagnostics_enabled = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicle_ingestion_diagnostics WHERE vehicle_id=$1 AND enabled_until>now())",
+            )
+            .bind(vehicle_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(false);
+            diagnostics_refresh_at = tokio::time::Instant::now();
+        }
+        if diagnostics_enabled {
+            tracing::info!(
+                vehicle_id=%vehicle_id,
+                source=inbound.message_type.as_deref().unwrap_or("legacy"),
+                has_power=event.power_state.is_some(),
+                has_speed=event.speed_mph.is_some(),
+                has_location=event.latitude.is_some() && event.longitude.is_some(),
+                has_odometer=event.odometer_miles.is_some(),
+                has_battery=event.battery_level.is_some(),
+                has_charger=event.charger_state.is_some(),
+                sample_age_seconds=(Utc::now()-event.ts).num_seconds(),
+                "vehicle ingestion diagnostics"
+            );
+        }
         if matches!(charge_event, ChargeEvent::SessionStarted) {
             active_session_started_at = Some(event.ts);
         }
@@ -707,27 +779,33 @@ pub async fn run_vehicle_worker(
         }
 
         // ── State period tracking ────────────────────────────────────────────
-        let current_state = infer_vehicle_state(&event);
-        match transition_state_period(
-            &pool,
-            vehicle_id,
-            active_state_period.clone(),
-            current_state,
-            event.ts,
-        )
-        .await
-        {
-            Ok(period) => active_state_period = period,
-            Err(error) => {
-                tracing::warn!(vehicle_id=%vehicle_id, event_ts=%event.ts, err=%error, "state-period transition failed; durable state will be retried")
+        if !is_parallax || event.power_state.is_some() || event.is_online.is_some() {
+            let current_state = infer_vehicle_state(&event);
+            match transition_state_period(
+                &pool,
+                vehicle_id,
+                active_state_period.clone(),
+                current_state,
+                event.ts,
+            )
+            .await
+            {
+                Ok(period) => active_state_period = period,
+                Err(error) => {
+                    tracing::warn!(vehicle_id=%vehicle_id, event_ts=%event.ts, err=%error, "state-period transition failed; durable state will be retried")
+                }
             }
         }
 
         // Keep the poll loop informed of the latest power state so it can
         // adapt its cadence (e.g. switch to 30-second live-session polling
         // while Charging).
-        let _ = power_state_tx.send(event.power_state.clone());
-        let _ = charging_tx.send(event.is_actively_charging());
+        if !is_parallax || event.power_state.is_some() {
+            let _ = power_state_tx.send(event.power_state.clone());
+        }
+        if !is_parallax || event.charger_state.is_some() || event.power_state.is_some() {
+            let _ = charging_tx.send(event.is_actively_charging());
+        }
 
         // ── Software version tracking ────────────────────────────────────────
         if let Some(ver) = &event.ota_current_version {
@@ -757,7 +835,19 @@ pub async fn run_vehicle_worker(
         }
 
         // ── Trip detection ───────────────────────────────────────────────────
-        if let TripEvent::TripEnded { trip } = trip_det.process(&event) {
+        let trip_sample = trip_signals.fuse(&event);
+        let trip_event = trip_det.process(&trip_sample);
+        if diagnostics_enabled {
+            tracing::info!(
+                vehicle_id=%vehicle_id,
+                trip_active=trip_det.active_trip_id().is_some(),
+                fused_power=trip_sample.power_state.is_some() && event.power_state.is_none(),
+                derived_speed=trip_sample.speed_mph.is_some() && event.speed_mph.is_none(),
+                trip_transition=?trip_event,
+                "vehicle trip diagnostics"
+            );
+        }
+        if let TripEvent::TripEnded { trip } = trip_event {
             let distance = compute_distance_odometer_or_gps(
                 trip.start_odometer_mi,
                 trip.end_odometer_mi,
@@ -2017,6 +2107,70 @@ async fn write_telemetry(
               regen_power_kw            = COALESCE(EXCLUDED.regen_power_kw, timeseries.telemetry.regen_power_kw),
               heading_deg               = COALESCE(EXCLUDED.heading_deg, timeseries.telemetry.heading_deg),
               odometer_miles            = COALESCE(EXCLUDED.odometer_miles, timeseries.telemetry.odometer_miles),
+              tire_fl_psi                 = COALESCE(EXCLUDED.tire_fl_psi, timeseries.telemetry.tire_fl_psi),
+              tire_fr_psi                 = COALESCE(EXCLUDED.tire_fr_psi, timeseries.telemetry.tire_fr_psi),
+              tire_rl_psi                 = COALESCE(EXCLUDED.tire_rl_psi, timeseries.telemetry.tire_rl_psi),
+              tire_rr_psi                 = COALESCE(EXCLUDED.tire_rr_psi, timeseries.telemetry.tire_rr_psi),
+              tire_fl_status              = COALESCE(EXCLUDED.tire_fl_status, timeseries.telemetry.tire_fl_status),
+              tire_fr_status              = COALESCE(EXCLUDED.tire_fr_status, timeseries.telemetry.tire_fr_status),
+              tire_rl_status              = COALESCE(EXCLUDED.tire_rl_status, timeseries.telemetry.tire_rl_status),
+              tire_rr_status              = COALESCE(EXCLUDED.tire_rr_status, timeseries.telemetry.tire_rr_status),
+              tire_fl_valid               = COALESCE(EXCLUDED.tire_fl_valid, timeseries.telemetry.tire_fl_valid),
+              tire_fr_valid               = COALESCE(EXCLUDED.tire_fr_valid, timeseries.telemetry.tire_fr_valid),
+              tire_rl_valid               = COALESCE(EXCLUDED.tire_rl_valid, timeseries.telemetry.tire_rl_valid),
+              tire_rr_valid               = COALESCE(EXCLUDED.tire_rr_valid, timeseries.telemetry.tire_rr_valid),
+              door_front_left_locked      = COALESCE(EXCLUDED.door_front_left_locked, timeseries.telemetry.door_front_left_locked),
+              door_front_right_locked     = COALESCE(EXCLUDED.door_front_right_locked, timeseries.telemetry.door_front_right_locked),
+              door_rear_left_locked       = COALESCE(EXCLUDED.door_rear_left_locked, timeseries.telemetry.door_rear_left_locked),
+              door_rear_right_locked      = COALESCE(EXCLUDED.door_rear_right_locked, timeseries.telemetry.door_rear_right_locked),
+              door_front_left_closed      = COALESCE(EXCLUDED.door_front_left_closed, timeseries.telemetry.door_front_left_closed),
+              door_front_right_closed     = COALESCE(EXCLUDED.door_front_right_closed, timeseries.telemetry.door_front_right_closed),
+              door_rear_left_closed       = COALESCE(EXCLUDED.door_rear_left_closed, timeseries.telemetry.door_rear_left_closed),
+              door_rear_right_closed      = COALESCE(EXCLUDED.door_rear_right_closed, timeseries.telemetry.door_rear_right_closed),
+              closure_frunk_locked        = COALESCE(EXCLUDED.closure_frunk_locked, timeseries.telemetry.closure_frunk_locked),
+              closure_frunk_closed        = COALESCE(EXCLUDED.closure_frunk_closed, timeseries.telemetry.closure_frunk_closed),
+              closure_liftgate_locked     = COALESCE(EXCLUDED.closure_liftgate_locked, timeseries.telemetry.closure_liftgate_locked),
+              closure_liftgate_closed     = COALESCE(EXCLUDED.closure_liftgate_closed, timeseries.telemetry.closure_liftgate_closed),
+              closure_tailgate_locked     = COALESCE(EXCLUDED.closure_tailgate_locked, timeseries.telemetry.closure_tailgate_locked),
+              closure_tailgate_closed     = COALESCE(EXCLUDED.closure_tailgate_closed, timeseries.telemetry.closure_tailgate_closed),
+              ota_current_version         = COALESCE(EXCLUDED.ota_current_version, timeseries.telemetry.ota_current_version),
+              ota_available_version       = COALESCE(EXCLUDED.ota_available_version, timeseries.telemetry.ota_available_version),
+              ota_status                  = COALESCE(EXCLUDED.ota_status, timeseries.telemetry.ota_status),
+              ota_current_status          = COALESCE(EXCLUDED.ota_current_status, timeseries.telemetry.ota_current_status),
+              hv_thermal_event            = COALESCE(EXCLUDED.hv_thermal_event, timeseries.telemetry.hv_thermal_event),
+              twelve_volt_health          = COALESCE(EXCLUDED.twelve_volt_health, timeseries.telemetry.twelve_volt_health),
+              trip_id                     = COALESCE(EXCLUDED.trip_id, timeseries.telemetry.trip_id),
+              charge_session_id           = COALESCE(EXCLUDED.charge_session_id, timeseries.telemetry.charge_session_id),
+              charge_port_open            = COALESCE(EXCLUDED.charge_port_open, timeseries.telemetry.charge_port_open),
+              charger_derate_active       = COALESCE(EXCLUDED.charger_derate_active, timeseries.telemetry.charger_derate_active),
+              cabin_precon_status         = COALESCE(EXCLUDED.cabin_precon_status, timeseries.telemetry.cabin_precon_status),
+              cabin_precon_type           = COALESCE(EXCLUDED.cabin_precon_type, timeseries.telemetry.cabin_precon_type),
+              pet_mode_active             = COALESCE(EXCLUDED.pet_mode_active, timeseries.telemetry.pet_mode_active),
+              pet_mode_temp_ok            = COALESCE(EXCLUDED.pet_mode_temp_ok, timeseries.telemetry.pet_mode_temp_ok),
+              defrost_active              = COALESCE(EXCLUDED.defrost_active, timeseries.telemetry.defrost_active),
+              steering_wheel_heat         = COALESCE(EXCLUDED.steering_wheel_heat, timeseries.telemetry.steering_wheel_heat),
+              seat_fl_heat                = COALESCE(EXCLUDED.seat_fl_heat, timeseries.telemetry.seat_fl_heat),
+              seat_fr_heat                = COALESCE(EXCLUDED.seat_fr_heat, timeseries.telemetry.seat_fr_heat),
+              seat_rl_heat                = COALESCE(EXCLUDED.seat_rl_heat, timeseries.telemetry.seat_rl_heat),
+              seat_rr_heat                = COALESCE(EXCLUDED.seat_rr_heat, timeseries.telemetry.seat_rr_heat),
+              seat_fl_vent                = COALESCE(EXCLUDED.seat_fl_vent, timeseries.telemetry.seat_fl_vent),
+              seat_fr_vent                = COALESCE(EXCLUDED.seat_fr_vent, timeseries.telemetry.seat_fr_vent),
+              tonneau_locked              = COALESCE(EXCLUDED.tonneau_locked, timeseries.telemetry.tonneau_locked),
+              tonneau_closed              = COALESCE(EXCLUDED.tonneau_closed, timeseries.telemetry.tonneau_closed),
+              side_bin_left_locked        = COALESCE(EXCLUDED.side_bin_left_locked, timeseries.telemetry.side_bin_left_locked),
+              side_bin_right_locked       = COALESCE(EXCLUDED.side_bin_right_locked, timeseries.telemetry.side_bin_right_locked),
+              side_bin_left_closed        = COALESCE(EXCLUDED.side_bin_left_closed, timeseries.telemetry.side_bin_left_closed),
+              side_bin_right_closed       = COALESCE(EXCLUDED.side_bin_right_closed, timeseries.telemetry.side_bin_right_closed),
+              window_fl_closed            = COALESCE(EXCLUDED.window_fl_closed, timeseries.telemetry.window_fl_closed),
+              window_fr_closed            = COALESCE(EXCLUDED.window_fr_closed, timeseries.telemetry.window_fr_closed),
+              window_rl_closed            = COALESCE(EXCLUDED.window_rl_closed, timeseries.telemetry.window_rl_closed),
+              window_rr_closed            = COALESCE(EXCLUDED.window_rr_closed, timeseries.telemetry.window_rr_closed),
+              gear_guard_locked           = COALESCE(EXCLUDED.gear_guard_locked, timeseries.telemetry.gear_guard_locked),
+              gear_guard_video_status     = COALESCE(EXCLUDED.gear_guard_video_status, timeseries.telemetry.gear_guard_video_status),
+              wiper_fluid_low             = COALESCE(EXCLUDED.wiper_fluid_low, timeseries.telemetry.wiper_fluid_low),
+              brake_fluid_low             = COALESCE(EXCLUDED.brake_fluid_low, timeseries.telemetry.brake_fluid_low),
+              alarm_active                = COALESCE(EXCLUDED.alarm_active, timeseries.telemetry.alarm_active),
+              service_mode                = COALESCE(EXCLUDED.service_mode, timeseries.telemetry.service_mode),
               is_online                 = COALESCE(EXCLUDED.is_online, timeseries.telemetry.is_online)"#,
     )
         .bind(e.ts)
