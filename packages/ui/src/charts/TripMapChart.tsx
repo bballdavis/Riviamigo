@@ -5,6 +5,7 @@ import { useDocumentPalette } from '../hooks/useDocumentPalette';
 import { useDocumentTheme } from '../hooks/useDocumentTheme';
 import { isAbortError, reportClientError } from '../lib/clientDiagnostics';
 import { useThemeRevision } from '../lib/themeRuntime';
+import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 
 export interface LatLng { lat: number; lng: number; }
 
@@ -148,6 +149,7 @@ function basemapSignature(basemap: BasemapConfig, mode: MapStyleMode, preference
 
 export async function loadMapLibre() {
   const maplibregl = await import('maplibre-gl');
+  maplibregl.setWorkerUrl(mapLibreWorkerUrl);
   await import('maplibre-gl/dist/maplibre-gl.css');
   return maplibregl;
 }

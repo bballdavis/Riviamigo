@@ -48,6 +48,9 @@ to use the stable chart slug.
   receives the authenticated same-origin basemap configuration and per-user map-style preference from its caller.
   Browser map traffic must use Riviamigo's `/v1/external/basemap/...` proxy;
   direct browser-to-provider map requests are not a supported transport.
+  The MapLibre module worker is bundled as a web build asset and configured
+  before the first map is created. Production images must serve that emitted
+  worker asset alongside the application chunks.
   OpenFreeMap vector styles and CARTO/custom raster styles use the same seam;
   style swaps keep one MapLibre instance and restore route and active-point
   overlays after `style.load`. Follow appearance tracks the page theme, named
