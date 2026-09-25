@@ -582,7 +582,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
       const withAuthentication = canManageAuthentication
         ? [...available, { id: 'authentication' as const, label: 'Authentication', icon: Lock }]
         : available;
-      return withAuthentication;
+      return withAuthentication.sort((left, right) => left.label.localeCompare(right.label));
     },
     [canManageAuthentication, canManageBackups],
   );
