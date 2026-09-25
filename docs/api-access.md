@@ -139,7 +139,7 @@ surface for searchable records or selected-record inspection.
 
 The exact inbound Rivian websocket stream is intentionally separate: signed-in vehicle owners and managers can list retained event metadata at `GET /v1/vehicles/{id}/raw-events` and fetch a single payload at `GET /v1/vehicles/{id}/raw-events/{event_id}`. These session-only routes are excluded from integration-key access and expose their configured retention period in the list response.
 
-Owners and managers can inspect `GET /v1/vehicles/{id}/ingestion-diagnostics` and set `PUT /v1/vehicles/{id}/ingestion-diagnostics` with `{ "enabled": true | false }`. Enabling expires after one hour and applies only to a connected vehicle. While enabled, the worker logs source topic, field presence, sample age, and trip signal decisions without payloads or coordinates. These session-only routes are unavailable to integration keys.
+Owners and managers can inspect `GET /v1/vehicles/{id}/ingestion-diagnostics` and set `PUT /v1/vehicles/{id}/ingestion-diagnostics` with `{ "enabled": true | false }`. Enabling expires after one hour and applies only to a non-demo vehicle linked to a Rivian account; the vehicle need not be online when the switch is set. While enabled, the worker logs source topic, field presence, sample age, and trip signal decisions without payloads or coordinates. These session-only routes are unavailable to integration keys.
 
 All historical endpoints accept a bounded timeframe where applicable. Use UTC
 RFC 3339 timestamps and URL-encode query parameters.

@@ -81,6 +81,7 @@ const sidebars: SidebarsConfig = {
         'runbooks/vehicle-history-rebuild',
         'runbooks/rivian-connection-renewal',
         'runbooks/charge-payload-cleanup',
+        'runbooks/r2-ingestion-diagnostics',
       ],
     },
   ],

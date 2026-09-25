@@ -28,7 +28,7 @@ With all that said, but shoutout to the guys over at Teslamate, I definitely use
 - **Sharing:** Invite other people to the installation and give them access only to the vehicles they should see. Vehicle access can be managed with owner, manager, and viewer roles.
 - **Desktop and mobile:** Use the same responsive interface from a desktop, tablet, or phone, with light and dark themes.
 - **Optional connections:** Choose whether to use remote, self-hosted, or disabled providers for weather, maps, and geocoding.
-- **Demo vehicles:** Create an R1T, R1S, or R2S with realistic sample history so you can explore the app without connecting a Rivian account.
+- **Demo vehicles:** Create an R1T, R1S, or R2 with realistic sample history so you can explore the app without connecting a Rivian account.
 
 The exact data available depends on what Rivian reports, and that can change over time. A sleeping vehicle may also take a while to update. Riviamigo shows the information it receives instead of filling gaps with made-up values.
 

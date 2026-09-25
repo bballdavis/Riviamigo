@@ -17,6 +17,7 @@ use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -28,6 +29,8 @@ use crate::services::charge_sessions::{
 };
 
 mod transport;
+
+static BASELINE_FORWARD_DROP_LOG_COUNT: AtomicU64 = AtomicU64::new(0);
 
 pub use transport::{gql_request, AuthError};
 
@@ -2470,7 +2473,7 @@ pub async fn run_startup_polls(
             increment_poll_counter(&pool, vehicle_id).await;
             let raw = serde_json::json!({"type":"next","payload":{"data":data}}).to_string();
             if let Ok(Some(event)) = parser::parse_ws_message(&raw, vehicle_id) {
-                let _ = baseline_tx.try_send(WsInboundEvent {
+                let baseline_event = WsInboundEvent {
                     kind: WsInboundKind::Telemetry,
                     received_at: Utc::now(),
                     raw: String::new(),
@@ -2478,7 +2481,29 @@ pub async fn run_startup_polls(
                     telemetry: Some(event),
                     charging_session: None,
                     battery_cell_type: None,
-                });
+                };
+                if let Err(error) = baseline_tx.try_send(baseline_event) {
+                    let count = BASELINE_FORWARD_DROP_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                    let reason = match &error {
+                        mpsc::error::TrySendError::Full(_) => "full",
+                        mpsc::error::TrySendError::Closed(_) => "closed",
+                    };
+                    tracing::debug!(
+                        vehicle_id=%vehicle_id,
+                        source="vehicle_state_baseline",
+                        reason,
+                        "vehicle-state baseline could not reach canonical worker"
+                    );
+                    if count == 1 || count.is_power_of_two() {
+                        tracing::warn!(
+                            vehicle_id=%vehicle_id,
+                            source="vehicle_state_baseline",
+                            reason,
+                            sampled_drop_count=count,
+                            "vehicle-state baseline could not reach canonical worker"
+                        );
+                    }
+                }
             }
         }
         Err(error) => {

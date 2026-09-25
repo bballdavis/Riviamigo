@@ -341,10 +341,16 @@ function VehicleIngestionDiagnosticsRow({ vehicle, onChanged }: { vehicle: Vehic
       <div className="min-w-0">
         <p className="truncate text-sm font-medium text-fg">{vehicle.display_name}</p>
         <p className="mt-0.5 text-xs text-fg-tertiary">
-          {query.isPending ? 'Checking diagnostic status…' : enabled && until
+          {query.isPending ? 'Checking diagnostic status…' : query.isError
+            ? 'Could not check diagnostic status.' : enabled && until
             ? `Enabled until ${new Date(until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
             : 'Off'}
         </p>
+        {query.isError && (
+          <button type="button" className="mt-1 text-xs text-accent underline" onClick={() => void query.refetch()}>
+            Retry status check
+          </button>
+        )}
         {mutation.isError && <p className="mt-1 text-xs text-danger">Could not change diagnostics. Try again.</p>}
       </div>
       <button
@@ -352,7 +358,7 @@ function VehicleIngestionDiagnosticsRow({ vehicle, onChanged }: { vehicle: Vehic
         role="switch"
         aria-checked={enabled}
         aria-label={`Enable ingestion diagnostics for ${vehicle.display_name}`}
-        disabled={query.isPending || mutation.isPending}
+        disabled={query.isPending || query.isError || mutation.isPending}
         onClick={() => mutation.mutate(!enabled)}
         className={[
           'relative inline-flex h-[22px] w-10 shrink-0 rounded-full border transition-all duration-200',

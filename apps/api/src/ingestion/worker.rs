@@ -431,6 +431,7 @@ pub async fn run_vehicle_worker(
             vehicle_id,
             rivian_vehicle_id.clone(),
             age_key.clone(),
+            is_r2,
             parallax_tx,
             active_session_rx,
             shutdown.resubscribe(),
