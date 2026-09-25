@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, AuthenticatedVehicleArtwork, queryKeys, resolveVehicleArtwork, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
-import { type UnitPreferences, type VehicleImages, type VehicleMember } from '@riviamigo/types';
+import { type UnitPreferences, type Vehicle, type VehicleImages, type VehicleMember } from '@riviamigo/types';
 import {
   downloadDashboardYaml,
   materializeUserDashboardDraft,
@@ -78,7 +78,7 @@ const RIVIAN_BATTERY_PRESETS: Record<BatteryGen, Array<{ key: string; label: str
 };
 
 const ALL_PRESETS = [...RIVIAN_BATTERY_PRESETS.gen1, ...RIVIAN_BATTERY_PRESETS.gen2];
-const R2S_PRESET = { key: 'r2s', label: 'R2S', kwh: 82 };
+const R2_PRESET = { key: 'r2', label: 'R2', kwh: 82 };
 
 type SettingsSection = 'vehicles' | 'dashboards' | 'charts' | 'units' | 'places' | 'charging' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account' | 'authentication';
 
@@ -295,6 +295,76 @@ function DashboardEditButtonPreference({
             checked ? 'translate-x-[22px] bg-fg' : 'translate-x-[2px] bg-fg-tertiary',
           ].join(' ')}
         />
+      </button>
+    </div>
+  );
+}
+
+function IngestionDiagnosticsSection({ vehicles }: { vehicles: Vehicle[] }) {
+  const queryClient = useQueryClient();
+  const manageableVehicles = vehicles.filter((vehicle) => (
+    (vehicle.membership_role === 'owner' || vehicle.membership_role === 'manager')
+    && !(vehicle.is_demo ?? vehicle.rivian_vehicle_id?.startsWith('demo-') ?? false)
+  ));
+  if (manageableVehicles.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader><CardTitle>Ingestion diagnostics</CardTitle></CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-sm text-fg-secondary">
+          Enable short lived diagnostics for a vehicle when investigating missing telemetry. Diagnostics record field coverage and decode failures without storing raw payloads or precise coordinates.
+        </p>
+        {manageableVehicles.map((vehicle) => (
+          <VehicleIngestionDiagnosticsRow key={vehicle.id} vehicle={vehicle} onChanged={() => {
+            void queryClient.invalidateQueries({ queryKey: ['vehicle-ingestion-diagnostics', vehicle.id] });
+          }} />
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function VehicleIngestionDiagnosticsRow({ vehicle, onChanged }: { vehicle: Vehicle; onChanged: () => void }) {
+  const query = useQuery({
+    queryKey: ['vehicle-ingestion-diagnostics', vehicle.id],
+    queryFn: () => api.getVehicleIngestionDiagnostics(vehicle.id),
+  });
+  const mutation = useMutation({
+    mutationFn: (enabled: boolean) => api.updateVehicleIngestionDiagnostics(vehicle.id, enabled),
+    onSuccess: onChanged,
+  });
+  const enabled = query.data?.enabled ?? false;
+  const until = query.data?.enabled_until;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-bg-elevated/35 px-3 py-3">
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium text-fg">{vehicle.display_name}</p>
+        <p className="mt-0.5 text-xs text-fg-tertiary">
+          {query.isPending ? 'Checking diagnostic status…' : enabled && until
+            ? `Enabled until ${new Date(until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+            : 'Off'}
+        </p>
+        {mutation.isError && <p className="mt-1 text-xs text-danger">Could not change diagnostics. Try again.</p>}
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={enabled}
+        aria-label={`Enable ingestion diagnostics for ${vehicle.display_name}`}
+        disabled={query.isPending || mutation.isPending}
+        onClick={() => mutation.mutate(!enabled)}
+        className={[
+          'relative inline-flex h-[22px] w-10 shrink-0 rounded-full border transition-all duration-200',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-60',
+          enabled ? 'border-accent/60 bg-accent' : 'border-border bg-bg-elevated',
+          'cursor-pointer',
+        ].join(' ')}
+      >
+        <span className={[
+          'pointer-events-none absolute top-[2px] inline-block h-4 w-4 rounded-full shadow-sm transition-transform duration-200',
+          enabled ? 'translate-x-[22px] bg-fg' : 'translate-x-[2px] bg-fg-tertiary',
+        ].join(' ')} />
       </button>
     </div>
   );
@@ -728,7 +798,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
   });
 
   const createDemoVehicle = useMutation({
-    mutationFn: (model: 'R1T' | 'R1S' | 'R2S') => api.createDemoVehicle({ model }),
+    mutationFn: (model: 'R1T' | 'R1S' | 'R2') => api.createDemoVehicle({ model }),
     onSuccess: (result) => {
       setActiveVehicleId(result.vehicle_id);
       setDemoPickerOpen(false);
@@ -804,8 +874,8 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
           return;
         }
       }
-      if (R2S_PRESET.kwh === currentKwh) {
-        setBatteryPreset(R2S_PRESET.key);
+      if (R2_PRESET.kwh === currentKwh) {
+        setBatteryPreset(R2_PRESET.key);
         setCustomKwh('');
         return;
       }
@@ -963,7 +1033,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                         </Button>
                         {demoPickerOpen && (
                           <div className="absolute right-0 top-full z-20 mt-2 w-40 rounded-lg border border-border bg-bg-surface p-1 shadow-lg">
-                            {(['R1T', 'R1S', 'R2S'] as const).map((model) => (
+                            {(['R1T', 'R1S', 'R2'] as const).map((model) => (
                               <button
                                 key={model}
                                 type="button"
@@ -1370,7 +1440,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                                       value={batteryPreset}
                                       onChange={setBatteryPreset}
                                       aria-label="Battery pack"
-                                      options={(v.model?.includes('R2') || v.model?.includes('r2') ? [R2S_PRESET, { key: 'custom', label: 'Custom', kwh: null }] : RIVIAN_BATTERY_PRESETS[batteryGen]).map((preset) => ({
+                                      options={(v.model?.includes('R2') || v.model?.includes('r2') ? [R2_PRESET, { key: 'custom', label: 'Custom', kwh: null }] : RIVIAN_BATTERY_PRESETS[batteryGen]).map((preset) => ({
                                         value: preset.key,
                                         label: `${preset.label}${preset.kwh != null ? ` (${preset.kwh} kWh)` : ''}`,
                                       }))}
@@ -1860,7 +1930,12 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
 
             {activeSection === 'jobs' && <JobsSection vehicles={vehicles ?? []} />}
 
-            {activeSection === 'raw' && <RawTelemetryExplorer vehicles={vehicles ?? []} isAdmin={isAdmin} />}
+            {activeSection === 'raw' && (
+              <div className="grid gap-6">
+                <IngestionDiagnosticsSection vehicles={vehicles ?? []} />
+                <RawTelemetryExplorer vehicles={vehicles ?? []} isAdmin={isAdmin} />
+              </div>
+            )}
 
             {activeSection === 'appearance' && <AppearanceSection preferencesQuery={unitPreferencesQuery} />}
 

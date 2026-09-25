@@ -111,14 +111,14 @@ fn model_profile(model: &str) -> Result<ModelProfile, AppError> {
             has_liftgate: false,
             has_truck_closures: true,
         }),
-        "R2S" => Ok(ModelProfile {
+        "R2" | "R2S" | "R2-S" => Ok(ModelProfile {
             capacity_wh: 82_000.0,
             max_range_mi: 300.0,
-            has_liftgate: false,
+            has_liftgate: true,
             has_truck_closures: false,
         }),
         _ => Err(AppError::Validation(
-            "model must be one of R1T, R1S, R2S".into(),
+            "model must be one of R1T, R1S, R2".into(),
         )),
     }
 }
@@ -914,13 +914,14 @@ mod tests {
     fn model_profiles_keep_truck_and_suv_closures_distinct() {
         let r1t = model_profile("R1T").unwrap();
         let r1s = model_profile("R1S").unwrap();
-        let r2s = model_profile("R2S").unwrap();
+        let r2 = model_profile("R2").unwrap();
         assert!(r1t.has_truck_closures);
         assert!(!r1t.has_liftgate);
         assert!(r1s.has_liftgate);
         assert!(!r1s.has_truck_closures);
-        assert!(!r2s.has_liftgate);
-        assert!(!r2s.has_truck_closures);
+        assert!(r2.has_liftgate);
+        assert!(!r2.has_truck_closures);
+        assert_eq!(model_profile("R2S").unwrap().has_liftgate, r2.has_liftgate);
     }
 
     #[tokio::test]
@@ -938,7 +939,7 @@ mod tests {
         .await
         .expect("create demo seed test user");
 
-        for model in ["R1T", "R1S", "R2S"] {
+        for model in ["R1T", "R1S", "R2"] {
             let mut tx = pool.begin().await.unwrap();
             let vehicle_id = sqlx::query_scalar::<_, Uuid>(
                 "INSERT INTO riviamigo.vehicles
@@ -1074,10 +1075,10 @@ mod tests {
                     assert_eq!(closures.3, Some(true));
                     assert_eq!(closures.4, Some(true));
                 }
-                "R2S" => {
+                "R2" => {
                     assert_eq!(
                         (closures.0, closures.1, closures.2, closures.3, closures.4),
-                        (None, None, None, None, None)
+                        (Some(true), None, None, None, None)
                     );
                     assert_eq!(closures.5, Some(true));
                 }

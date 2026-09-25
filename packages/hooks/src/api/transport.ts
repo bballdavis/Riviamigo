@@ -35,6 +35,7 @@ import type {
   AddVehicleResult,
   CreateDemoVehicleBody,
   CreateDemoVehicleResult,
+  VehicleIngestionDiagnostics,
   ApiKeyRecord,
   CreateApiKeyBody,
   CreateApiKeyResult,
@@ -775,6 +776,14 @@ export class AuthenticatedTransport {
 
   async refreshDemoVehicle(vehicleId: string): Promise<CreateDemoVehicleResult> {
     return this.request('POST', `/v1/vehicles/${vehicleId}/demo/refresh`);
+  }
+
+  async getVehicleIngestionDiagnostics(vehicleId: string): Promise<VehicleIngestionDiagnostics> {
+    return this.request('GET', `/v1/vehicles/${vehicleId}/ingestion-diagnostics`);
+  }
+
+  async updateVehicleIngestionDiagnostics(vehicleId: string, enabled: boolean): Promise<VehicleIngestionDiagnostics> {
+    return this.request('PUT', `/v1/vehicles/${vehicleId}/ingestion-diagnostics`, { enabled });
   }
 
   async deleteVehicle(

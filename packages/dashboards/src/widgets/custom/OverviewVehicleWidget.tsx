@@ -41,6 +41,7 @@ const OVERVIEW_ANCHORS: Record<string, AnchorSet> = {
     sideBinRightCover: 'left-[36%] top-[76%]',
   },
   R1S: SHARED_OVERVIEW_ANCHORS,
+  R2: SHARED_OVERVIEW_ANCHORS,
   R2S: SHARED_OVERVIEW_ANCHORS,
 };
 
@@ -121,7 +122,7 @@ export function CurrentVehicleStatePanel({
     : status?.closure_liftgate_locked ?? status?.closure_tailgate_locked;
   const rearGateLockTitle = vehicleModel === 'R1T' ? 'Tailgate lock' : 'Rear gate lock';
   const demoArtworkNudgeRight = isDemoVehicle
-    && (vehicleModel === 'R1S' || vehicleModel === 'R1T' || vehicleModel === 'R2S');
+    && (vehicleModel === 'R1S' || vehicleModel === 'R1T' || vehicleModel === 'R2' || vehicleModel === 'R2S');
 
   useEffect(() => {
     const element = imageStageRef.current;

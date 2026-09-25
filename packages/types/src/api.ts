@@ -1205,7 +1205,12 @@ export interface CreateDemoVehicleResult {
 }
 
 export interface CreateDemoVehicleBody {
-  model: 'R1T' | 'R1S' | 'R2S';
+  model: 'R1T' | 'R1S' | 'R2';
+}
+
+export interface VehicleIngestionDiagnostics {
+  enabled: boolean;
+  enabled_until: string | null;
 }
 
 export interface AuthTokens {

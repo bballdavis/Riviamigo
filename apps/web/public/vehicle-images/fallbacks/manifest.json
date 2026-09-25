@@ -132,7 +132,7 @@
       "sha256": "d6cf207382b853e4aca427b80ac6079a4df905e6fd14129ec72a5d76df5ee501"
     },
     {
-      "model": "R2S",
+      "model": "R2",
       "usage": "overview",
       "source": "vehicles_generated/r2s/top.png",
       "output": "r2s/overview.webp",
@@ -148,7 +148,7 @@
       "sha256": "f0e5fd6561f0d1cfb0652cfefc51bd27334797289b5d140c342625b867037f13"
     },
     {
-      "model": "R2S",
+      "model": "R2",
       "usage": "charging",
       "source": "vehicles_generated/r2s/charge.png",
       "output": "r2s/charging.webp",
@@ -164,7 +164,7 @@
       "sha256": "7eee1246747278a5cc199c967b4b30093683ce34ceb1034834a6b382387a16cb"
     },
     {
-      "model": "R2S",
+      "model": "R2",
       "usage": "health",
       "source": "vehicles_generated/r2s/three_quarter.png",
       "output": "r2s/health.webp",
@@ -180,7 +180,7 @@
       "sha256": "e259ce655dc96994589e77d9e7bfc043d2467837444486469014322a191cfce3"
     },
     {
-      "model": "R2S",
+      "model": "R2",
       "usage": "vehicle-card",
       "source": "vehicles_generated/r2s/side.png",
       "output": "r2s/side.webp",

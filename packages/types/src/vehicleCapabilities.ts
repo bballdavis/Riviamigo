@@ -10,6 +10,6 @@ export function resolveVehicleGateCapability(
 ): VehicleGateCapability | null {
   const normalized = model?.trim().toUpperCase() ?? '';
   if (normalized.includes('R1T')) return 'tailgate';
-  if (normalized.includes('R1S') || normalized.includes('R2S')) return 'liftgate';
+  if (normalized.includes('R1S') || normalized.includes('R2S') || normalized.includes('R2')) return 'liftgate';
   return null;
 }
