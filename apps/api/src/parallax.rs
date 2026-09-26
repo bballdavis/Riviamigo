@@ -502,10 +502,14 @@ pub(crate) fn decode_vehicle_telemetry(
             let value = ClosureStates::decode(payload)?;
             for state in value.states {
                 let position = state.position.context("missing closure position")?;
-                let closed = match state.state.context("missing closure state")? {
-                    1 => false,
-                    2 => true,
-                    other => anyhow::bail!("unknown closure state {other}"),
+                // Observed R2 states: 1 open, 2 closed, 3 moving (powered
+                // frunk/liftgate). Every R2 frame also ends with a stateless
+                // sentinel (position 10000). Skip entries without a settled
+                // state rather than discarding the whole frame.
+                let closed = match state.state {
+                    Some(1) => false,
+                    Some(2) => true,
+                    _ => continue,
                 };
                 meaningful |= set_closure(&mut event, position, closed)?;
             }
@@ -591,7 +595,14 @@ fn set_closure(event: &mut TelemetryEvent, position: i32, closed: bool) -> Resul
         5 => event.closure_frunk_closed = Some(closed),
         6 => event.side_bin_left_closed = Some(closed),
         7 => event.closure_liftgate_closed = Some(closed),
-        other => anyhow::bail!("unknown closure position {other}"),
+        // R2 window positions, mapped from an observed window-by-window test.
+        12 => event.window_fl_closed = Some(closed),
+        13 => event.window_fr_closed = Some(closed),
+        14 => event.window_rl_closed = Some(closed),
+        15 => event.window_rr_closed = Some(closed),
+        // Unmapped positions (for example 16, the R2 rear drop glass) are
+        // skipped so one unknown closure cannot discard the known ones.
+        _ => return Ok(false),
     }
     Ok(true)
 }
@@ -1751,6 +1762,38 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(body.door_front_left_closed, Some(true));
+
+        let mixed = decode_vehicle_telemetry(
+            "body.closures.states",
+            &ClosureStates {
+                states: vec![
+                    ClosureState {
+                        position: Some(5),
+                        state: Some(1),
+                    },
+                    ClosureState {
+                        position: Some(12),
+                        state: Some(1),
+                    },
+                    ClosureState {
+                        position: Some(7),
+                        state: Some(3),
+                    },
+                    ClosureState {
+                        position: Some(17),
+                        state: None,
+                    },
+                ],
+            }
+            .encode_to_vec(),
+            source_at,
+            vehicle_id,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(mixed.closure_frunk_closed, Some(false));
+        assert_eq!(mixed.window_fl_closed, Some(false));
+        assert_eq!(mixed.closure_liftgate_closed, None);
 
         let tire = decode_vehicle_telemetry(
             "dynamics.tires.state",
