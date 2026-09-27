@@ -66,6 +66,24 @@ updates `latest`.
 The GitHub pre-release tag is created at the exact `dev` commit used for the
 build.
 
+When **Candidate image** is dispatched with `source_ref=dev`, its successful
+AMD64 build also publishes the moving `ghcr.io/bballdavis/riviamigo:dev` alias
+in the same run. The alias is created by retagging that immutable candidate;
+it is allowed only when the upstream `dev` branch still resolves to the exact
+SHA built by the run. A `both` build waits for and includes the ARM64 candidate;
+an ARM64-only dispatch never updates `:dev`. Runs for arbitrary branches,
+commits, or tags remain candidate-only.
+
+Use `:dev` for development and test environments that intentionally follow the
+current development image. It is a mutable convenience alias and does not
+provide production release identity or rollback repeatability. Production
+deployments must use a Calendar Version or the digest-qualified reference from
+`images.lock`.
+
+```bash
+docker pull ghcr.io/bballdavis/riviamigo:dev
+```
+
 ## Source and image verification
 
 - Normal self-hosted deployments use `compose/docker-compose.yml` and pull published images.
