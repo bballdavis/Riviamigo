@@ -64,29 +64,37 @@ estimated speed.
 
 ## Investigate missing readings
 
-1. Open **Health** for the vehicle. Check Acquisition separately from canonical
-   feed health. A connected acquisition means the Parallax socket is active;
-   it does not guarantee that Rivian has sent every requested topic.
-2. In **Settings → Raw data**, an owner or manager can enable **Ingestion
-   diagnostics** for a non-demo vehicle linked to a Rivian account. The switch
-   automatically expires after one hour. Demo vehicles cannot enable it.
-3. Watch the API process logs while a relevant vehicle update occurs. The
-   `vehicle ingestion diagnostics` event reports source, field presence, and
-   sample age. The `vehicle trip diagnostics` event reports whether recent
-   power or derived speed was used and whether a trip transitioned. A rejected
-   typed Parallax frame reports its topic and decoder reason.
-4. Compare those events with the Health acquisition status and the collector
-   diagnostics in **Settings → Raw data**. No incoming topic points toward
-   upstream availability or connection state. An incoming topic with a decoder
-   rejection points toward a schema or value mismatch. A valid sparse fix with
-   no trip can be expected until enough recent motion samples arrive.
-5. Turn the switch off after collecting enough evidence. Expiry also turns it
-   off automatically. The switch controls diagnostic logging; it does not
-   enable or disable telemetry collection.
+Use this short procedure when a maintainer asks for evidence about a missing
+reading:
+
+1. From the repository root, start the standard stack if it is stopped, then
+   follow the existing API output:
+
+   ```bash
+   docker compose --env-file .env -f compose/docker-compose.yml up -d
+   docker compose --env-file .env -f compose/docker-compose.yml logs -f riviamigo
+   ```
+
+   Use the equivalent log command for your deployment if it is managed by an
+   operator. Normal API startup runs the in-process Parallax acquisition task;
+   there is no separate Parallax logger, container, or start command.
+2. In **Settings → Raw data**, an owner or manager turns on **Ingestion
+   diagnostics** for the affected non-demo vehicle. It expires after one hour.
+   The switch increases diagnostic log detail; it does not enable ingestion or
+   create a downloadable data dump.
+3. Create or wait for a real vehicle update while the logs are being followed.
+   The `vehicle ingestion diagnostics` event records source, field presence,
+   and sample age. The `vehicle trip diagnostics` event records power joining,
+   derived speed, and trip transitions. Health **Acquisition** and **Collector
+   diagnostics** provide the connection and decoder context.
+4. Share only redacted diagnostic lines. Remove vehicle IDs, account data,
+   coordinates, tokens, secrets, and any other identifying values. Do not share
+   raw telemetry payloads.
+5. Turn **Ingestion diagnostics** off when the evidence is collected. It also
+   expires automatically after one hour.
 
 Diagnostic events omit raw Parallax payloads, credentials, network identifiers,
-and coordinates. They are written to the API's configured logs, so log
-retention is controlled by the host. A sleeping vehicle may provide no new
-frames during the one-hour window. See the [maintainer runbook](../runbooks/r2-ingestion-diagnostics.md)
+and coordinates; host logging controls retention. A sleeping vehicle may provide
+no new frames during the window. See the [maintainer runbook](../runbooks/r2-ingestion-diagnostics.md)
 for a repeatable investigation and the [API reference](../api-access.md) for
 the session-only switch endpoints.
