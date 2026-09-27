@@ -439,16 +439,35 @@ struct DefrostState {
     status: Option<i32>,
 }
 
-/// Decode one allowlisted Parallax RVM into the canonical partial event.
-///
-/// This is deliberately pure: callers decide how to merge and persist the
-/// partial event. Unknown RVMs return `Ok(None)`, while malformed payloads or
-/// values outside the documented physical/enum ranges are rejected.
+/// R2 closure position with no canonical field (the rear drop glass).
+const CLOSURE_REAR_GLASS_POSITION: i32 = 16;
+/// Stateless entry that ends every R2 closure frame.
+const CLOSURE_SENTINEL_POSITION: i32 = 10000;
+
+#[cfg(test)]
 pub(crate) fn decode_vehicle_telemetry(
     topic: &str,
     payload: &[u8],
     source_at: DateTime<Utc>,
     vehicle_id: Uuid,
+) -> Result<Option<TelemetryEvent>> {
+    decode_vehicle_telemetry_with_notes(topic, payload, source_at, vehicle_id, &mut Vec::new())
+}
+
+/// Decode one allowlisted Parallax RVM into the canonical partial event.
+///
+/// This is deliberately pure: callers decide how to merge and persist the
+/// partial event. Unknown RVMs return `Ok(None)`, while malformed payloads or
+/// values outside the documented physical/enum ranges are rejected. Entries
+/// skipped for an unexpected reason while the rest of the frame still decodes
+/// are described in `notes` so callers can surface them through ingestion
+/// diagnostics.
+pub(crate) fn decode_vehicle_telemetry_with_notes(
+    topic: &str,
+    payload: &[u8],
+    source_at: DateTime<Utc>,
+    vehicle_id: Uuid,
+    notes: &mut Vec<String>,
 ) -> Result<Option<TelemetryEvent>> {
     let mut event = TelemetryEvent::empty(vehicle_id, source_at);
     let mut meaningful = false;
@@ -502,16 +521,28 @@ pub(crate) fn decode_vehicle_telemetry(
             let value = ClosureStates::decode(payload)?;
             for state in value.states {
                 let position = state.position.context("missing closure position")?;
-                // Observed R2 states: 1 open, 2 closed, 3 moving (powered
-                // frunk/liftgate). Every R2 frame also ends with a stateless
-                // sentinel (position 10000). Skip entries without a settled
-                // state rather than discarding the whole frame.
-                let closed = match state.state {
-                    Some(1) => false,
-                    Some(2) => true,
-                    _ => continue,
+                let closed = match (position, state.state) {
+                    (_, Some(1)) => false,
+                    (_, Some(2)) => true,
+                    // The powered frunk and liftgate report 3 while moving;
+                    // keep the last settled value until they stop.
+                    (_, Some(3)) => continue,
+                    // Every R2 frame ends with this stateless sentinel entry.
+                    (CLOSURE_SENTINEL_POSITION, None) => continue,
+                    (_, other) => {
+                        let state = other.map_or_else(
+                            || "missing state".into(),
+                            |s| format!("unexpected state {s}"),
+                        );
+                        notes.push(format!("skipped closure position {position} with {state}"));
+                        continue;
+                    }
                 };
-                meaningful |= set_closure(&mut event, position, closed)?;
+                if set_closure(&mut event, position, closed)? {
+                    meaningful = true;
+                } else if position != CLOSURE_REAR_GLASS_POSITION {
+                    notes.push(format!("skipped unmapped closure position {position}"));
+                }
             }
         }
         "body.locks.states" => {
@@ -735,6 +766,16 @@ pub async fn run(database_url: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+async fn ingestion_diagnostics_enabled(pool: &PgPool, vehicle_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicle_ingestion_diagnostics WHERE vehicle_id=$1 AND enabled_until>now())",
+    )
+    .bind(vehicle_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false)
 }
 
 async fn load_sessions(pool: &PgPool) -> Result<Vec<CollectorSession>> {
@@ -993,7 +1034,15 @@ async fn persist_envelope(
                 && source_at <= received_at + chrono::Duration::seconds(30)
         }
     }) {
-        match decode_vehicle_telemetry(topic, &payload, source_at, vehicle_id) {
+        let mut notes = Vec::new();
+        let decoded =
+            decode_vehicle_telemetry_with_notes(topic, &payload, source_at, vehicle_id, &mut notes);
+        if !notes.is_empty() && ingestion_diagnostics_enabled(pool, vehicle_id).await {
+            for note in &notes {
+                tracing::info!(vehicle_id=%vehicle_id, topic=%topic, reason=%note, "typed Parallax entry skipped");
+            }
+        }
+        match decoded {
             Ok(Some(event)) => {
                 if let Err(error) = telemetry_tx.try_send((topic.to_owned(), event)) {
                     let count =
@@ -1023,10 +1072,7 @@ async fn persist_envelope(
             }
             Ok(None) => {}
             Err(error) => {
-                let diagnostics_enabled = sqlx::query_scalar::<_, bool>(
-                    "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicle_ingestion_diagnostics WHERE vehicle_id=$1 AND enabled_until>now())",
-                ).bind(vehicle_id).fetch_one(pool).await.unwrap_or(false);
-                if diagnostics_enabled {
+                if ingestion_diagnostics_enabled(pool, vehicle_id).await {
                     tracing::info!(vehicle_id=%vehicle_id, topic=%topic, reason=%error, "typed Parallax frame rejected");
                 }
                 anyhow::bail!("typed Parallax decoder rejected topic {topic}");
@@ -1763,38 +1809,6 @@ mod tests {
         .unwrap();
         assert_eq!(body.door_front_left_closed, Some(true));
 
-        let mixed = decode_vehicle_telemetry(
-            "body.closures.states",
-            &ClosureStates {
-                states: vec![
-                    ClosureState {
-                        position: Some(5),
-                        state: Some(1),
-                    },
-                    ClosureState {
-                        position: Some(12),
-                        state: Some(1),
-                    },
-                    ClosureState {
-                        position: Some(7),
-                        state: Some(3),
-                    },
-                    ClosureState {
-                        position: Some(17),
-                        state: None,
-                    },
-                ],
-            }
-            .encode_to_vec(),
-            source_at,
-            vehicle_id,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(mixed.closure_frunk_closed, Some(false));
-        assert_eq!(mixed.window_fl_closed, Some(false));
-        assert_eq!(mixed.closure_liftgate_closed, None);
-
         let tire = decode_vehicle_telemetry(
             "dynamics.tires.state",
             &TireStates {
@@ -1828,6 +1842,88 @@ mod tests {
         .unwrap();
         assert_eq!(climate.cabin_temp_c, Some(21.5));
         assert_eq!(climate.driver_temp_c, Some(20.0));
+    }
+
+    fn closure_frame(entries: &[(i32, Option<i32>)]) -> Vec<u8> {
+        ClosureStates {
+            states: entries
+                .iter()
+                .map(|&(position, state)| ClosureState {
+                    position: Some(position),
+                    state,
+                })
+                .collect(),
+        }
+        .encode_to_vec()
+    }
+
+    #[test]
+    fn r2_closure_frame_decodes_observed_shape_and_reports_unexpected_entries() {
+        let vehicle_id = Uuid::new_v4();
+        let source_at = Utc::now();
+
+        // Observed R2 frame while the liftgate closes and the front-left
+        // window is open: rear glass (16) and the stateless sentinel (10000)
+        // are expected skips and must not produce diagnostics notes.
+        let mut notes = Vec::new();
+        let event = decode_vehicle_telemetry_with_notes(
+            "body.closures.states",
+            &closure_frame(&[
+                (1, Some(2)),
+                (2, Some(2)),
+                (3, Some(2)),
+                (4, Some(2)),
+                (5, Some(1)),
+                (7, Some(3)),
+                (12, Some(1)),
+                (13, Some(2)),
+                (14, Some(2)),
+                (15, Some(2)),
+                (16, Some(2)),
+                (10000, None),
+            ]),
+            source_at,
+            vehicle_id,
+            &mut notes,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(notes.is_empty(), "unexpected notes: {notes:?}");
+        assert_eq!(event.door_front_left_closed, Some(true));
+        assert_eq!(event.door_rear_right_closed, Some(true));
+        assert_eq!(event.closure_frunk_closed, Some(false));
+        assert_eq!(event.closure_liftgate_closed, None);
+        assert_eq!(event.window_fl_closed, Some(false));
+        assert_eq!(event.window_rr_closed, Some(true));
+
+        // Unexpected states and positions are skipped without discarding the
+        // frame, and each one is reported for ingestion diagnostics.
+        let mut notes = Vec::new();
+        let event = decode_vehicle_telemetry_with_notes(
+            "body.closures.states",
+            &closure_frame(&[
+                (1, Some(4)),
+                (2, None),
+                (5, Some(2)),
+                (20, Some(2)),
+                (10000, None),
+            ]),
+            source_at,
+            vehicle_id,
+            &mut notes,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(event.door_front_left_closed, None);
+        assert_eq!(event.closure_frunk_closed, Some(true));
+        assert_eq!(
+            notes,
+            vec![
+                "skipped closure position 1 with unexpected state 4",
+                "skipped closure position 2 with missing state",
+                "skipped unmapped closure position 20",
+            ]
+        );
     }
 
     #[test]
