@@ -21,6 +21,7 @@ use riviamigo_api::{
         compute_distance_odometer_or_gps, compute_trip_energy, CompletedTripData,
         TripDetectorState, TripEvent,
     },
+    ingestion::trip_signals::{is_sparse_model, TripSignalFusion},
     models::telemetry::{ChargerState, DriveMode, PowerState, TelemetryEvent},
     services::{
         charge_sessions::canonicalize_charge_sessions,
@@ -622,6 +623,13 @@ struct ChargeLocationRow {
 async fn replay_trips_for_vehicle(pool: &PgPool, vehicle_id: Uuid, client: &Client) -> Result<u64> {
     let owner_id = get_vehicle_owner_id(pool, vehicle_id).await?;
     let mut trip_det = TripDetectorState::new(vehicle_id);
+    let sparse =
+        sqlx::query_scalar::<_, String>("SELECT model FROM riviamigo.vehicles WHERE id = $1")
+            .bind(vehicle_id)
+            .fetch_optional(pool)
+            .await?
+            .is_some_and(|model| is_sparse_model(&model));
+    let mut trip_signals = TripSignalFusion::new(sparse);
     let mut rows = sqlx::query_as::<_, ReplayTelemetryRow>(
         r#"
         SELECT
@@ -643,7 +651,8 @@ async fn replay_trips_for_vehicle(pool: &PgPool, vehicle_id: Uuid, client: &Clie
     while let Some(row) = rows.try_next().await? {
         let event = row_to_event(row);
 
-        if let TripEvent::TripEnded { trip } = trip_det.process(&event) {
+        let trip_sample = trip_signals.fuse(&event);
+        if let TripEvent::TripEnded { trip } = trip_det.process(&trip_sample) {
             let distance = compute_distance_odometer_or_gps(
                 trip.start_odometer_mi,
                 trip.end_odometer_mi,

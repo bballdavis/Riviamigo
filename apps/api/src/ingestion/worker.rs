@@ -16,7 +16,7 @@ use crate::{
         trip_detector::{
             compute_distance_odometer_or_gps, compute_trip_energy, TripDetectorState, TripEvent,
         },
-        trip_signals::TripSignalFusion,
+        trip_signals::{is_sparse_model, TripSignalFusion},
         ws_client::{self, WsInboundEvent, WsInboundKind},
     },
     models::{
@@ -272,9 +272,7 @@ pub async fn run_vehicle_worker(
             .await
             .ok()
             .flatten()
-            .is_some_and(|model| {
-                matches!(model.to_ascii_uppercase().as_str(), "R2" | "R2S" | "R2-S")
-            });
+            .is_some_and(|model| is_sparse_model(&model));
 
     // Fetch owner user_id (needed for wallbox enrichment).
     let user_id: Option<Uuid> =
