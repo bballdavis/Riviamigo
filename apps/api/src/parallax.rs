@@ -439,16 +439,35 @@ struct DefrostState {
     status: Option<i32>,
 }
 
-/// Decode one allowlisted Parallax RVM into the canonical partial event.
-///
-/// This is deliberately pure: callers decide how to merge and persist the
-/// partial event. Unknown RVMs return `Ok(None)`, while malformed payloads or
-/// values outside the documented physical/enum ranges are rejected.
+/// R2 closure position with no canonical field (the rear drop glass).
+const CLOSURE_REAR_GLASS_POSITION: i32 = 16;
+/// Stateless entry that ends every R2 closure frame.
+const CLOSURE_SENTINEL_POSITION: i32 = 10000;
+
+#[cfg(test)]
 pub(crate) fn decode_vehicle_telemetry(
     topic: &str,
     payload: &[u8],
     source_at: DateTime<Utc>,
     vehicle_id: Uuid,
+) -> Result<Option<TelemetryEvent>> {
+    decode_vehicle_telemetry_with_notes(topic, payload, source_at, vehicle_id, &mut Vec::new())
+}
+
+/// Decode one allowlisted Parallax RVM into the canonical partial event.
+///
+/// This is deliberately pure: callers decide how to merge and persist the
+/// partial event. Unknown RVMs return `Ok(None)`, while malformed payloads or
+/// values outside the documented physical/enum ranges are rejected. Entries
+/// skipped for an unexpected reason while the rest of the frame still decodes
+/// are described in `notes` so callers can surface them through ingestion
+/// diagnostics.
+pub(crate) fn decode_vehicle_telemetry_with_notes(
+    topic: &str,
+    payload: &[u8],
+    source_at: DateTime<Utc>,
+    vehicle_id: Uuid,
+    notes: &mut Vec<String>,
 ) -> Result<Option<TelemetryEvent>> {
     let mut event = TelemetryEvent::empty(vehicle_id, source_at);
     let mut meaningful = false;
@@ -502,12 +521,42 @@ pub(crate) fn decode_vehicle_telemetry(
             let value = ClosureStates::decode(payload)?;
             for state in value.states {
                 let position = state.position.context("missing closure position")?;
-                let closed = match state.state.context("missing closure state")? {
-                    1 => false,
-                    2 => true,
-                    other => anyhow::bail!("unknown closure state {other}"),
+                // Every R2 frame ends with this stateless sentinel entry.
+                if position == CLOSURE_SENTINEL_POSITION && state.state.is_none() {
+                    continue;
+                }
+                let describe_state = |state: Option<i32>| {
+                    state.map_or_else(|| "missing state".into(), |s| format!("state {s}"))
                 };
-                meaningful |= set_closure(&mut event, position, closed)?;
+                // Check the position before the state so an unknown position
+                // is reported whatever state it carries.
+                let field = closure_field(&mut event, position);
+                if field.is_none() && position != CLOSURE_REAR_GLASS_POSITION {
+                    notes.push(format!(
+                        "skipped unmapped closure position {position} with {}",
+                        describe_state(state.state)
+                    ));
+                    continue;
+                }
+                let closed = match state.state {
+                    Some(1) => false,
+                    Some(2) => true,
+                    // The powered frunk and liftgate report 3 while moving;
+                    // keep the last settled value until they stop.
+                    Some(3) => continue,
+                    other => {
+                        let reason = match other {
+                            Some(s) => format!("unexpected state {s}"),
+                            None => "missing state".into(),
+                        };
+                        notes.push(format!("skipped closure position {position} with {reason}"));
+                        continue;
+                    }
+                };
+                if let Some(field) = field {
+                    *field = Some(closed);
+                    meaningful = true;
+                }
             }
         }
         "body.locks.states" => {
@@ -582,18 +631,24 @@ fn valid_temperature(value: f64) -> Result<f64> {
     }
 }
 
-fn set_closure(event: &mut TelemetryEvent, position: i32, closed: bool) -> Result<bool> {
-    match position {
-        1 => event.door_front_left_closed = Some(closed),
-        2 => event.door_front_right_closed = Some(closed),
-        3 => event.door_rear_left_closed = Some(closed),
-        4 => event.door_rear_right_closed = Some(closed),
-        5 => event.closure_frunk_closed = Some(closed),
-        6 => event.side_bin_left_closed = Some(closed),
-        7 => event.closure_liftgate_closed = Some(closed),
-        other => anyhow::bail!("unknown closure position {other}"),
-    }
-    Ok(true)
+/// Canonical field for a closure position, or `None` when the position has no
+/// canonical field (including 16, the R2 rear drop glass).
+fn closure_field(event: &mut TelemetryEvent, position: i32) -> Option<&mut Option<bool>> {
+    Some(match position {
+        1 => &mut event.door_front_left_closed,
+        2 => &mut event.door_front_right_closed,
+        3 => &mut event.door_rear_left_closed,
+        4 => &mut event.door_rear_right_closed,
+        5 => &mut event.closure_frunk_closed,
+        6 => &mut event.side_bin_left_closed,
+        7 => &mut event.closure_liftgate_closed,
+        // R2 window positions, mapped from an observed window-by-window test.
+        12 => &mut event.window_fl_closed,
+        13 => &mut event.window_fr_closed,
+        14 => &mut event.window_rl_closed,
+        15 => &mut event.window_rr_closed,
+        _ => return None,
+    })
 }
 
 fn set_lock(event: &mut TelemetryEvent, position: i32, locked: bool) -> Result<bool> {
@@ -724,6 +779,16 @@ pub async fn run(database_url: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+async fn ingestion_diagnostics_enabled(pool: &PgPool, vehicle_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicle_ingestion_diagnostics WHERE vehicle_id=$1 AND enabled_until>now())",
+    )
+    .bind(vehicle_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false)
 }
 
 async fn load_sessions(pool: &PgPool) -> Result<Vec<CollectorSession>> {
@@ -982,7 +1047,15 @@ async fn persist_envelope(
                 && source_at <= received_at + chrono::Duration::seconds(30)
         }
     }) {
-        match decode_vehicle_telemetry(topic, &payload, source_at, vehicle_id) {
+        let mut notes = Vec::new();
+        let decoded =
+            decode_vehicle_telemetry_with_notes(topic, &payload, source_at, vehicle_id, &mut notes);
+        if !notes.is_empty() && ingestion_diagnostics_enabled(pool, vehicle_id).await {
+            for note in &notes {
+                tracing::info!(vehicle_id=%vehicle_id, topic=%topic, reason=%note, "typed Parallax entry skipped");
+            }
+        }
+        match decoded {
             Ok(Some(event)) => {
                 if let Err(error) = telemetry_tx.try_send((topic.to_owned(), event)) {
                     let count =
@@ -1012,10 +1085,7 @@ async fn persist_envelope(
             }
             Ok(None) => {}
             Err(error) => {
-                let diagnostics_enabled = sqlx::query_scalar::<_, bool>(
-                    "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicle_ingestion_diagnostics WHERE vehicle_id=$1 AND enabled_until>now())",
-                ).bind(vehicle_id).fetch_one(pool).await.unwrap_or(false);
-                if diagnostics_enabled {
+                if ingestion_diagnostics_enabled(pool, vehicle_id).await {
                     tracing::info!(vehicle_id=%vehicle_id, topic=%topic, reason=%error, "typed Parallax frame rejected");
                 }
                 anyhow::bail!("typed Parallax decoder rejected topic {topic}");
@@ -1785,6 +1855,125 @@ mod tests {
         .unwrap();
         assert_eq!(climate.cabin_temp_c, Some(21.5));
         assert_eq!(climate.driver_temp_c, Some(20.0));
+    }
+
+    fn closure_frame(entries: &[(i32, Option<i32>)]) -> Vec<u8> {
+        ClosureStates {
+            states: entries
+                .iter()
+                .map(|&(position, state)| ClosureState {
+                    position: Some(position),
+                    state,
+                })
+                .collect(),
+        }
+        .encode_to_vec()
+    }
+
+    #[test]
+    fn r2_closure_frame_decodes_observed_shape_and_reports_unexpected_entries() {
+        let vehicle_id = Uuid::new_v4();
+        let source_at = Utc::now();
+
+        // Observed R2 frame while the liftgate closes and the front-left
+        // window is open: rear glass (16) and the stateless sentinel (10000)
+        // are expected skips and must not produce diagnostics notes.
+        let mut notes = Vec::new();
+        let event = decode_vehicle_telemetry_with_notes(
+            "body.closures.states",
+            &closure_frame(&[
+                (1, Some(2)),
+                (2, Some(2)),
+                (3, Some(2)),
+                (4, Some(2)),
+                (5, Some(1)),
+                (7, Some(3)),
+                (12, Some(1)),
+                (13, Some(2)),
+                (14, Some(2)),
+                (15, Some(2)),
+                (16, Some(2)),
+                (10000, None),
+            ]),
+            source_at,
+            vehicle_id,
+            &mut notes,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(notes.is_empty(), "unexpected notes: {notes:?}");
+        assert_eq!(event.door_front_left_closed, Some(true));
+        assert_eq!(event.door_rear_right_closed, Some(true));
+        assert_eq!(event.closure_frunk_closed, Some(false));
+        assert_eq!(event.closure_liftgate_closed, None);
+        assert_eq!(event.window_fl_closed, Some(false));
+        assert_eq!(event.window_rr_closed, Some(true));
+
+        // Unexpected states and positions are skipped without discarding the
+        // frame, and each one is reported for ingestion diagnostics.
+        let mut notes = Vec::new();
+        let event = decode_vehicle_telemetry_with_notes(
+            "body.closures.states",
+            &closure_frame(&[
+                (1, Some(4)),
+                (2, None),
+                (5, Some(2)),
+                (20, Some(2)),
+                (10000, None),
+            ]),
+            source_at,
+            vehicle_id,
+            &mut notes,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(event.door_front_left_closed, None);
+        assert_eq!(event.closure_frunk_closed, Some(true));
+        assert_eq!(
+            notes,
+            vec![
+                "skipped closure position 1 with unexpected state 4",
+                "skipped closure position 2 with missing state",
+                "skipped unmapped closure position 20 with state 2",
+            ]
+        );
+    }
+
+    #[test]
+    fn closure_moving_state_is_only_a_silent_skip_for_known_positions() {
+        let vehicle_id = Uuid::new_v4();
+        let source_at = Utc::now();
+        let mut notes = Vec::new();
+        let event = decode_vehicle_telemetry_with_notes(
+            "body.closures.states",
+            &closure_frame(&[
+                (1, Some(2)),
+                (5, Some(3)),
+                (7, Some(3)),
+                (16, Some(3)),
+                (20, Some(3)),
+                (10000, Some(3)),
+            ]),
+            source_at,
+            vehicle_id,
+            &mut notes,
+        )
+        .unwrap()
+        .unwrap();
+        // Moving mapped closures and the rear drop glass keep their last
+        // settled value without a note.
+        assert_eq!(event.door_front_left_closed, Some(true));
+        assert_eq!(event.closure_frunk_closed, None);
+        assert_eq!(event.closure_liftgate_closed, None);
+        // An unknown position, or a sentinel that carries a state, is
+        // reported even while in the moving state.
+        assert_eq!(
+            notes,
+            vec![
+                "skipped unmapped closure position 20 with state 3",
+                "skipped unmapped closure position 10000 with state 3",
+            ]
+        );
     }
 
     #[test]
