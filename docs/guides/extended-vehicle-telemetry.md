@@ -47,25 +47,35 @@ Connectivity collection excludes network names and hardware identifiers.
 Values such as mass and learned efficiency are labeled as Rivian estimates,
 not independently measured specifications.
 
-## R2 readings and trips
+## Vehicle state readings and trips
 
-For a connected R2, the Parallax subscription also requests power, GNSS,
-odometer, closures and locks, tire state, and cabin readings. Validated readings
-join the ordinary vehicle status and telemetry history. A missing field stays
-missing; availability depends on what the vehicle and Rivian send. Parallax
+The same allowlisted Parallax subscription requests power, GNSS, odometer,
+closures and locks, tire state, and cabin readings for every enrolled vehicle
+model. Validated readings join the ordinary vehicle status and telemetry
+history. Availability still depends on what that vehicle and Rivian send. A
+missing or unrecognized value does not become an inferred state, and Parallax
 readings do not start or end charging sessions.
 
-R2 trips can be assembled from sparse updates. The R2 reports its power state
-only when it changes, so Riviamigo treats the latest reported state (for
-example Go) as current until the vehicle reports another one. When no speed is
-reported, Riviamigo estimates it from successive plausible location fixes
-(after two moving segments) or from odometer increases a few minutes apart.
-When location fixes show no movement yet but the odometer on the same update
-has increased, the odometer estimate is used. A speed the vehicle reports
-itself is never replaced. A trip's distance starts from the odometer reading taken when the vehicle
-shifted into gear, so the first odometer steps of a drive are not lost. Old
-fixes, implausible jumps, and parked odometer readings are discarded for trip
-detection. Stored source readings are not rewritten with the estimated speed.
+Power state keeps the freshness rule of its source. Parallax reports state when
+it changes, so the latest recognized Parallax state stays current until a newer
+state arrives. Legacy periodic `vehicleState` power samples are considered
+fresh for at most two minutes. When both sources contribute, the newest
+accepted sample by source timestamp controls the cached state and its freshness
+rule follows that sample's source. Unrecognized power values remain unknown and
+do not become sleep or drive decisions.
+
+Trip processing uses the vehicle's direct numeric speed when one is present.
+Only when direct speed is absent can shared telemetry fusion estimate speed:
+it uses successive plausible GNSS fixes after enough movement is observed, or
+an increasing odometer when GNSS has not yet shown movement. The source value
+is kept intact; an estimate is not written back as a vehicle-reported speed.
+Trip distance starts from the odometer reading at the detected shift into
+gear, so early odometer steps are retained. Old fixes, implausible jumps, and
+parked odometer readings are excluded from trip detection. Historical replay
+does not retain power-source provenance. It treats power-only rows as
+change-only frames and richer power rows as periodic telemetry. A legacy
+power-only row is indistinguishable, so this remains a replay limitation;
+live fusion uses the actual sample source.
 
 ## Investigate missing readings
 
@@ -88,18 +98,23 @@ reading:
    The switch increases diagnostic log detail; it does not enable ingestion or
    create a downloadable data dump.
 3. Create or wait for a real vehicle update while the logs are being followed.
-   The `vehicle ingestion diagnostics` event records source, field presence,
-   and sample age. The `vehicle trip diagnostics` event records power joining,
-   derived speed, and trip transitions. Health **Acquisition** and **Collector
-   diagnostics** provide the connection and decoder context.
+   `Parallax envelope diagnostics` reports an allowlisted topic's outcome,
+   payload byte length, source age, and canonical-forward result.
+   `vehicle ingestion diagnostics` records source, field presence, and sample
+   age. `vehicle trip diagnostics` reports the selected power source and age,
+   numeric speed and origin, GNSS or odometer derivation evidence, trip
+   category checks, start decision, and sanitized transition. Health
+   **Acquisition** and **Collector diagnostics** provide connection context.
 4. Share only redacted diagnostic lines. Remove vehicle IDs, account data,
    coordinates, tokens, secrets, and any other identifying values. Do not share
    raw telemetry payloads.
 5. Turn **Ingestion diagnostics** off when the evidence is collected. It also
    expires automatically after one hour.
 
-Diagnostic events omit raw Parallax payloads, credentials, network identifiers,
-and coordinates; host logging controls retention. A sleeping vehicle may provide
-no new frames during the window. See the [maintainer runbook](../runbooks/r2-ingestion-diagnostics.md)
-for a repeatable investigation and the [API reference](../api-access.md) for
-the session-only switch endpoints.
+Diagnostic events omit raw Parallax payloads, protobuf wire data, credentials,
+network identifiers, and coordinates; host logging controls retention. They
+include the existing vehicle ID, so redact it before sharing. A sleeping
+vehicle may provide no new frames during the window. See the [maintainer
+runbook](../runbooks/r2-ingestion-diagnostics.md) for a repeatable investigation
+and real-drive acceptance checklist, and the [API reference](../api-access.md)
+for the session-only switch endpoints.
