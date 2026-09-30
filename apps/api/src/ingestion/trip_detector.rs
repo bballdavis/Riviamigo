@@ -575,6 +575,47 @@ mod tests {
         assert_eq!(trip.start_odometer_mi, Some(101.0));
     }
 
+    /// Dense (R1) telemetry reports speed and odometer on every sample, so the
+    /// gear-shift start odometer must not change the measured distance.
+    #[test]
+    fn dense_r1_trip_distance_is_unchanged_by_gear_start_odometer() {
+        use crate::ingestion::trip_signals::TripSignalFusion;
+
+        let mut fusion = TripSignalFusion::new(false);
+        let mut d = TripDetectorState::new(Uuid::nil());
+        let mut samples = Vec::new();
+        let mut parked = mk_event(PowerState::Ready, 0.0, 0);
+        parked.odometer_miles = Some(200.0);
+        samples.push(parked);
+        let mut shifted = mk_event(PowerState::Drive, 0.0, 10);
+        shifted.odometer_miles = Some(200.0);
+        samples.push(shifted);
+        for step in 1..=20 {
+            let mut moving = mk_event(PowerState::Drive, 30.0, 10 + step * 30);
+            moving.odometer_miles = Some(200.0 + 0.25 * step as f64);
+            samples.push(moving);
+        }
+        let mut sleep = mk_event(PowerState::Sleep, 0.0, 700);
+        sleep.odometer_miles = Some(205.0);
+        samples.push(sleep);
+
+        let mut ended = None;
+        for sample in &samples {
+            if let TripEvent::TripEnded { trip } = d.process(&fusion.fuse(sample)) {
+                ended = Some(trip);
+            }
+        }
+        let trip = ended.expect("trip ended");
+        assert_eq!(trip.start_odometer_mi, Some(200.0));
+        assert_eq!(trip.end_odometer_mi, Some(205.0));
+        let distance = compute_distance_odometer_or_gps(
+            trip.start_odometer_mi,
+            trip.end_odometer_mi,
+            &trip.points,
+        );
+        assert!((distance - 5.0).abs() < 1e-9, "{distance}");
+    }
+
     #[test]
     fn trip_data_carries_trip_id() {
         let mut d = TripDetectorState::new(Uuid::nil());

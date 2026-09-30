@@ -60,7 +60,9 @@ only when it changes, so Riviamigo treats the latest reported state (for
 example Go) as current until the vehicle reports another one. When no speed is
 reported, Riviamigo estimates it from successive plausible location fixes
 (after two moving segments) or from odometer increases a few minutes apart.
-A trip's distance starts from the odometer reading taken when the vehicle
+When location fixes show no movement yet but the odometer on the same update
+has increased, the odometer estimate is used. A speed the vehicle reports
+itself is never replaced. A trip's distance starts from the odometer reading taken when the vehicle
 shifted into gear, so the first odometer steps of a drive are not lost. Old
 fixes, implausible jumps, and parked odometer readings are discarded for trip
 detection. Stored source readings are not rewritten with the estimated speed.
