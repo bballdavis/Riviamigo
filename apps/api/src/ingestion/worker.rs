@@ -787,7 +787,12 @@ pub async fn run_vehicle_worker(
         }
 
         // ── State period tracking ────────────────────────────────────────────
-        if !is_parallax || event.power_state.is_some() || event.is_online.is_some() {
+        let lifecycle = lifecycle_updates(
+            &event,
+            is_parallax,
+            charge_det.active_session_id().is_some(),
+        );
+        if lifecycle.state_period {
             let current_state = infer_vehicle_state(&event);
             match transition_state_period(
                 &pool,
@@ -808,10 +813,10 @@ pub async fn run_vehicle_worker(
         // Keep the poll loop informed of the latest power state so it can
         // adapt its cadence (e.g. switch to 30-second live-session polling
         // while Charging).
-        if !is_parallax || event.power_state.is_some() {
+        if lifecycle.power_state {
             let _ = power_state_tx.send(event.power_state.clone());
         }
-        if !is_parallax || event.charger_state.is_some() || event.power_state.is_some() {
+        if lifecycle.charging {
             let _ = charging_tx.send(event.is_actively_charging());
         }
 
@@ -3296,6 +3301,44 @@ async fn reverse_geocode_and_store(pool: &PgPool, lat: f64, lon: f64) -> Option<
     }
 }
 
+/// Which lifecycle signals an inbound frame may drive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LifecycleUpdates {
+    state_period: bool,
+    power_state: bool,
+    charging: bool,
+}
+
+/// Parallax frames are partial state, and Parallax power has no Charging
+/// value (only Sleep/Unknown/Ready/Go). While a canonical charge session is
+/// open, a Parallax frame without charger state must not close the Charging
+/// period or drop the poll loop out of its live-session cadence.
+fn lifecycle_updates(
+    event: &TelemetryEvent,
+    is_parallax: bool,
+    charge_active: bool,
+) -> LifecycleUpdates {
+    if !is_parallax {
+        return LifecycleUpdates {
+            state_period: true,
+            power_state: true,
+            charging: true,
+        };
+    }
+    if charge_active && event.charger_state.is_none() {
+        return LifecycleUpdates {
+            state_period: false,
+            power_state: false,
+            charging: false,
+        };
+    }
+    LifecycleUpdates {
+        state_period: event.power_state.is_some() || event.is_online.is_some(),
+        power_state: event.power_state.is_some(),
+        charging: event.charger_state.is_some() || event.power_state.is_some(),
+    }
+}
+
 /// Infer a coarse VehicleState from the latest telemetry event.
 fn infer_vehicle_state(e: &TelemetryEvent) -> VehicleState {
     infer_vehicle_state_values(
@@ -3800,6 +3843,48 @@ mod stewardship_tests {
         assert_eq!(
             update.auth_reason_code,
             Some("rivian_ws_no_active_subscriptions")
+        );
+    }
+
+    #[test]
+    fn parallax_power_frames_cannot_end_an_active_charge() {
+        let mut event = blank_event(Uuid::nil(), Utc::now());
+        event.power_state = Some(PowerState::Ready);
+        let blocked = LifecycleUpdates {
+            state_period: false,
+            power_state: false,
+            charging: false,
+        };
+        assert_eq!(lifecycle_updates(&event, true, true), blocked);
+        event.power_state = Some(PowerState::Sleep);
+        assert_eq!(lifecycle_updates(&event, true, true), blocked);
+    }
+
+    #[test]
+    fn lifecycle_updates_keep_legacy_and_idle_parallax_behaviour() {
+        let all = LifecycleUpdates {
+            state_period: true,
+            power_state: true,
+            charging: true,
+        };
+        let mut event = blank_event(Uuid::nil(), Utc::now());
+        event.power_state = Some(PowerState::Ready);
+        // Legacy frames always drive the lifecycle, charge or not.
+        assert_eq!(lifecycle_updates(&event, false, true), all);
+        // Without an open session, Parallax power behaves as before.
+        assert_eq!(lifecycle_updates(&event, true, false), all);
+        // Parallax frames that carry charger state still count.
+        event.charger_state = Some(ChargerState::Charging);
+        assert_eq!(lifecycle_updates(&event, true, true), all);
+        // A Parallax frame with no lifecycle fields changes nothing.
+        let empty = blank_event(Uuid::nil(), Utc::now());
+        assert_eq!(
+            lifecycle_updates(&empty, true, false),
+            LifecycleUpdates {
+                state_period: false,
+                power_state: false,
+                charging: false,
+            }
         );
     }
 
