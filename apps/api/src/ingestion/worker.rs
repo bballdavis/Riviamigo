@@ -16,7 +16,7 @@ use crate::{
         trip_detector::{
             compute_distance_odometer_or_gps, compute_trip_energy, TripDetectorState, TripEvent,
         },
-        trip_signals::{is_sparse_model, TripSignalFusion},
+        trip_signals::{FusionDiagnostics, TripSignalFusion},
         ws_client::{self, WsInboundEvent, WsInboundKind},
     },
     models::{
@@ -265,15 +265,6 @@ pub async fn run_vehicle_worker(
             return;
         }
     };
-    let is_r2 =
-        sqlx::query_scalar::<_, String>("SELECT model FROM riviamigo.vehicles WHERE id = $1")
-            .bind(vehicle_id)
-            .fetch_optional(&pool)
-            .await
-            .ok()
-            .flatten()
-            .is_some_and(|model| is_sparse_model(&model));
-
     // Fetch owner user_id (needed for wallbox enrichment).
     let user_id: Option<Uuid> =
         sqlx::query_scalar("SELECT user_id FROM riviamigo.vehicles WHERE id = $1")
@@ -345,7 +336,7 @@ pub async fn run_vehicle_worker(
     }
 
     let mut trip_det = TripDetectorState::new(vehicle_id);
-    let mut trip_signals = TripSignalFusion::new(is_r2);
+    let mut trip_signals = TripSignalFusion::default();
     let mut active_session_started_at = None;
     let mut charge_det =
         if let Some(snapshot) = load_active_charge_snapshot(&pool, vehicle_id).await {
@@ -429,7 +420,6 @@ pub async fn run_vehicle_worker(
             vehicle_id,
             rivian_vehicle_id.clone(),
             age_key.clone(),
-            is_r2,
             parallax_tx,
             active_session_rx,
             shutdown.resubscribe(),
@@ -684,6 +674,26 @@ pub async fn run_vehicle_worker(
                 has_odometer=event.odometer_miles.is_some(),
                 has_battery=event.battery_level.is_some(),
                 has_charger=event.charger_state.is_some(),
+                has_temperatures=event.cabin_temp_c.is_some() || event.driver_temp_c.is_some() || event.outside_temp_c.is_some(),
+                has_climate=event.cabin_precon_status.is_some() || event.cabin_precon_type.is_some() || event.defrost_active.is_some() || event.hvac_active.is_some(),
+                has_tires=event.tire_fl_psi.is_some() || event.tire_fr_psi.is_some() || event.tire_rl_psi.is_some() || event.tire_rr_psi.is_some() || event.tire_fl_valid.is_some() || event.tire_fr_valid.is_some() || event.tire_rl_valid.is_some() || event.tire_rr_valid.is_some() || event.tire_fl_status.is_some() || event.tire_fr_status.is_some() || event.tire_rl_status.is_some() || event.tire_rr_status.is_some(),
+                has_locks=event.door_front_left_locked.is_some() || event.door_front_right_locked.is_some() || event.door_rear_left_locked.is_some() || event.door_rear_right_locked.is_some() || event.closure_frunk_locked.is_some() || event.closure_liftgate_locked.is_some() || event.closure_tailgate_locked.is_some() || event.side_bin_left_locked.is_some() || event.side_bin_right_locked.is_some() || event.tonneau_locked.is_some() || event.gear_guard_locked.is_some(),
+                has_closures=event.door_front_left_closed.is_some() || event.door_front_right_closed.is_some() || event.door_rear_left_closed.is_some() || event.door_rear_right_closed.is_some() || event.closure_frunk_closed.is_some() || event.closure_liftgate_closed.is_some() || event.closure_tailgate_closed.is_some() || event.side_bin_left_closed.is_some() || event.side_bin_right_closed.is_some() || event.tonneau_closed.is_some(),
+                has_windows=event.window_fl_closed.is_some() || event.window_fr_closed.is_some() || event.window_rl_closed.is_some() || event.window_rr_closed.is_some(),
+                has_charge_status=event.charger_status.is_some(),
+                has_gear=event.gear_status.is_some(),
+                has_energy_power=event.power_kw.is_some() || event.regen_power_kw.is_some(),
+                reported_power=?event.power_state,
+                reported_charger=?event.charger_state,
+                actively_charging=event.is_actively_charging(),
+                power_age_seconds=?field_age(&event, event.power_state.is_some(), event.power_state_ts),
+                speed_age_seconds=?field_age(&event, event.speed_mph.is_some(), event.speed_mph_ts),
+                location_age_seconds=?field_age(&event, event.latitude.is_some() && event.longitude.is_some(), event.location_ts),
+                odometer_age_seconds=?field_age(&event, event.odometer_miles.is_some(), event.odometer_miles_ts),
+                battery_age_seconds=?field_age(&event, event.battery_level.is_some(), event.battery_level_ts),
+                charger_age_seconds=?field_age(&event, event.charger_state.is_some(), event.charger_state_ts),
+                charge_lifecycle_eligible=!is_parallax,
+                charge_transition=match &charge_event { ChargeEvent::SessionStarted => "started", ChargeEvent::SessionEnded(_) => "ended", ChargeEvent::NoChange => "no_change" },
                 sample_age_seconds=(Utc::now()-event.ts).num_seconds(),
                 "vehicle ingestion diagnostics"
             );
@@ -833,16 +843,18 @@ pub async fn run_vehicle_worker(
         }
 
         // ── Trip detection ───────────────────────────────────────────────────
-        let trip_sample = trip_signals.fuse(&event);
+        let (trip_sample, fusion) = trip_signals.fuse_from(&event, is_parallax);
+        let start_decision = trip_det.start_decision(&trip_sample);
         let trip_event = trip_det.process(&trip_sample);
         if diagnostics_enabled {
-            tracing::info!(
-                vehicle_id=%vehicle_id,
-                trip_active=trip_det.active_trip_id().is_some(),
-                fused_power=trip_sample.power_state.is_some() && event.power_state.is_none(),
-                derived_speed=trip_sample.speed_mph.is_some() && event.speed_mph.is_none(),
-                trip_transition=?trip_event,
-                "vehicle trip diagnostics"
+            log_trip_diagnostics(
+                vehicle_id,
+                &event,
+                &trip_sample,
+                &fusion,
+                trip_det.active_trip_id().is_some(),
+                start_decision,
+                &trip_event,
             );
         }
         if let TripEvent::TripEnded { trip } = trip_event {
@@ -3807,5 +3819,121 @@ mod stewardship_tests {
             infer_vehicle_state_values(Some(&PowerState::Ready), None, None, None, Some(false)),
             VehicleState::Offline
         );
+    }
+}
+
+fn field_age(
+    event: &TelemetryEvent,
+    present: bool,
+    observed_at: Option<DateTime<Utc>>,
+) -> Option<i64> {
+    present.then(|| (event.ts - observed_at.unwrap_or(event.ts)).num_seconds())
+}
+
+#[allow(clippy::too_many_arguments)] // Original, fused, and detector contexts have separate ownership.
+fn log_trip_diagnostics(
+    vehicle_id: Uuid,
+    event: &TelemetryEvent,
+    trip_sample: &TelemetryEvent,
+    fusion: &FusionDiagnostics,
+    trip_active: bool,
+    start_decision: &str,
+    trip_event: &TripEvent,
+) {
+    tracing::info!(
+        vehicle_id=%vehicle_id,
+        trip_active,
+        fused_power=trip_sample.power_state.is_some() && event.power_state.is_none(),
+        derived_speed=trip_sample.speed_mph.is_some() && event.speed_mph.is_none(),
+        effective_power=?trip_sample.power_state,
+        power_origin=fusion.power_origin,
+        power_policy=fusion.power_policy,
+        power_outcome=fusion.power_outcome,
+        reported_power_outcome=fusion.reported_power_outcome,
+        power_age_seconds=?field_age(trip_sample, trip_sample.power_state.is_some(), trip_sample.power_state_ts),
+        speed_mph=?trip_sample.speed_mph,
+        speed_origin=fusion.speed_origin,
+        reported_speed_outcome=fusion.reported_speed_outcome,
+        speed_age_seconds=?field_age(trip_sample, trip_sample.speed_mph.is_some(), trip_sample.speed_mph_ts),
+        gnss_outcome=fusion.gnss_outcome,
+        gnss_interval_seconds=?fusion.gnss_interval_seconds,
+        gnss_distance_miles=?fusion.gnss_distance_miles,
+        moving_segments=fusion.moving_segments,
+        odometer_outcome=fusion.odometer_outcome,
+        odometer_interval_seconds=?fusion.odometer_interval_seconds,
+        odometer_delta_miles=?fusion.odometer_delta_miles,
+        start_decision,
+        trip_transition=trip_event.transition_name(),
+        "vehicle trip diagnostics"
+    );
+}
+
+#[cfg(test)]
+mod diagnostic_logging_tests {
+    use super::*;
+    use std::{
+        io::Write,
+        sync::{Arc, Mutex},
+    };
+    #[derive(Clone)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    #[test]
+    fn completed_trip_diagnostics_explain_decision_without_trip_contents() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let writer = Capture(bytes.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let at = Utc::now();
+        let mut detector = TripDetectorState::new(Uuid::nil());
+        let mut source = TelemetryEvent::empty(Uuid::nil(), at);
+        source.power_state = Some(PowerState::Go);
+        source.speed_mph = Some(30.0);
+        source.latitude = Some(33.1234567);
+        source.longitude = Some(-97.7654321);
+        source.odometer_miles = Some(123456.789);
+        detector.process(&source);
+        let mut stopped = source.clone();
+        stopped.ts += Duration::seconds(60);
+        stopped.power_state = Some(PowerState::Sleep);
+        let transition = detector.process(&stopped);
+        assert!(matches!(&transition, TripEvent::TripEnded { .. }));
+        tracing::subscriber::with_default(subscriber, || {
+            log_trip_diagnostics(
+                Uuid::nil(),
+                &stopped,
+                &stopped,
+                &FusionDiagnostics::default(),
+                false,
+                "already_active",
+                &transition,
+            );
+        });
+        let output = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        assert!(output.contains("trip_transition=\"ended\""), "{output}");
+        assert!(output.contains("speed_mph=Some(30.0)"), "{output}");
+        for private in [
+            "33.1234567",
+            "97.7654321",
+            "123456.789",
+            "CompletedTripData",
+            "points=",
+        ] {
+            assert!(
+                !output.contains(private),
+                "private trip contents in diagnostics: {private}"
+            );
+        }
     }
 }
