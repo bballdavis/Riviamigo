@@ -1,3 +1,3 @@
 -- Lower the default target tire pressure for newly created vehicles.
 -- Existing rows keep their stored value.
-ALTER TABLE vehicles ALTER COLUMN target_tire_pressure_psi SET DEFAULT 40;
+ALTER TABLE riviamigo.vehicles ALTER COLUMN target_tire_pressure_psi SET DEFAULT 40;
