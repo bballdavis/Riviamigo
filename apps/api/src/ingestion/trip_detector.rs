@@ -111,6 +111,12 @@ pub struct TripDetectorState {
 
     drive_modes: Vec<String>,
     last_moving_at: Option<DateTime<Utc>>,
+
+    // Odometer when the vehicle last shifted into gear (or ended a trip while
+    // still in gear). Sparse vehicles report motion only after the first
+    // odometer steps, so this marks where the upcoming trip really began.
+    in_gear: bool,
+    gear_odometer: Option<f64>,
 }
 
 impl TripDetectorState {
@@ -138,6 +144,7 @@ impl TripDetectorState {
         if let Some(cap) = event.battery_capacity_wh {
             self.battery_capacity = Some(cap);
         }
+        let prior_odometer = self.last_odometer;
         if let Some(odo) = event.odometer_miles {
             self.last_odometer = Some(odo);
         }
@@ -151,6 +158,16 @@ impl TripDetectorState {
             Some(PowerState::Drive | PowerState::Go | PowerState::Ready)
         );
         let is_asleep = matches!(power, Some(PowerState::Sleep));
+
+        if let Some(power) = power {
+            let in_gear = matches!(power, PowerState::Drive | PowerState::Go);
+            if in_gear && !self.in_gear {
+                self.gear_odometer = prior_odometer.or(event.odometer_miles);
+            } else if !in_gear {
+                self.gear_odometer = None;
+            }
+            self.in_gear = in_gear;
+        }
 
         if self.active_trip_id.is_some() {
             if let Some((lat, lng)) = valid_location_pair(event.latitude, event.longitude) {
@@ -216,7 +233,17 @@ impl TripDetectorState {
             self.active_trip_id = Some(trip_id);
             self.trip_started_at = Some(ts);
             self.soc_at_start = event.battery_level;
-            self.start_odometer = event.odometer_miles;
+            // Motion may first be seen after the odometer has already
+            // advanced, or on a sample carrying no odometer at all; the
+            // reading before that motion is the trip's true starting point.
+            let current_odometer = event.odometer_miles.or(prior_odometer);
+            self.start_odometer = match (self.gear_odometer.take(), prior_odometer) {
+                (Some(gear), _) if current_odometer.is_none_or(|now| gear <= now) => Some(gear),
+                (_, Some(prior)) if event.odometer_miles.is_some_and(|now| now > prior) => {
+                    Some(prior)
+                }
+                _ => current_odometer,
+            };
             self.range_at_start = event.distance_to_empty_mi;
             self.last_moving_at = Some(ts);
             self.last_altitude = event.altitude_m;
@@ -332,6 +359,9 @@ impl TripDetectorState {
         self.outside_temp_count = 0;
         self.regen_wh_acc = 0.0;
         self.drive_modes.clear();
+        if self.in_gear {
+            self.gear_odometer = self.last_odometer;
+        }
 
         TripEvent::TripEnded { trip: data }
     }
@@ -487,6 +517,103 @@ mod tests {
             d.process(&mk_event(PowerState::Ready, 0.0, 400)),
             TripEvent::TripEnded { .. }
         ));
+    }
+
+    #[test]
+    fn trip_start_odometer_is_the_reading_before_motion() {
+        let mut d = TripDetectorState::new(Uuid::nil());
+        let mut parked = mk_event(PowerState::Ready, 0.0, 0);
+        parked.odometer_miles = Some(100.0);
+        d.process(&parked);
+        let mut moved = mk_event(PowerState::Go, 30.0, 60);
+        moved.odometer_miles = Some(100.62);
+        d.process(&moved);
+        let TripEvent::TripEnded { trip } = d.process(&mk_event(PowerState::Sleep, 0.0, 120))
+        else {
+            panic!("expected TripEnded");
+        };
+        assert_eq!(trip.start_odometer_mi, Some(100.0));
+    }
+
+    #[test]
+    fn trip_start_without_odometer_uses_last_known_reading() {
+        let mut d = TripDetectorState::new(Uuid::nil());
+        let mut parked = mk_event(PowerState::Ready, 0.0, 0);
+        parked.odometer_miles = Some(100.0);
+        d.process(&parked);
+        d.process(&mk_event(PowerState::Go, 30.0, 60));
+        let TripEvent::TripEnded { trip } = d.process(&mk_event(PowerState::Sleep, 0.0, 120))
+        else {
+            panic!("expected TripEnded");
+        };
+        assert_eq!(trip.start_odometer_mi, Some(100.0));
+    }
+
+    #[test]
+    fn trip_resumed_in_gear_starts_at_previous_trip_end() {
+        let mut d = TripDetectorState::new(Uuid::nil());
+        let mut parked = mk_event(PowerState::Ready, 0.0, 0);
+        parked.odometer_miles = Some(100.0);
+        d.process(&parked);
+        let mut first = mk_event(PowerState::Drive, 30.0, 60);
+        first.odometer_miles = Some(101.0);
+        d.process(&first);
+        let mut stopped = mk_event(PowerState::Drive, 0.0, 400);
+        stopped.odometer_miles = Some(101.0);
+        let TripEvent::TripEnded { trip } = d.process(&stopped) else {
+            panic!("expected TripEnded");
+        };
+        assert_eq!(trip.start_odometer_mi, Some(100.0));
+
+        let mut resumed = mk_event(PowerState::Drive, 30.0, 500);
+        resumed.odometer_miles = Some(101.6);
+        d.process(&resumed);
+        let TripEvent::TripEnded { trip } = d.process(&mk_event(PowerState::Sleep, 0.0, 600))
+        else {
+            panic!("expected TripEnded");
+        };
+        assert_eq!(trip.start_odometer_mi, Some(101.0));
+    }
+
+    /// Dense (R1) telemetry reports speed and odometer on every sample, so the
+    /// gear-shift start odometer must not change the measured distance.
+    #[test]
+    fn dense_r1_trip_distance_is_unchanged_by_gear_start_odometer() {
+        use crate::ingestion::trip_signals::TripSignalFusion;
+
+        let mut fusion = TripSignalFusion::new(false);
+        let mut d = TripDetectorState::new(Uuid::nil());
+        let mut samples = Vec::new();
+        let mut parked = mk_event(PowerState::Ready, 0.0, 0);
+        parked.odometer_miles = Some(200.0);
+        samples.push(parked);
+        let mut shifted = mk_event(PowerState::Drive, 0.0, 10);
+        shifted.odometer_miles = Some(200.0);
+        samples.push(shifted);
+        for step in 1..=20 {
+            let mut moving = mk_event(PowerState::Drive, 30.0, 10 + step * 30);
+            moving.odometer_miles = Some(200.0 + 0.25 * step as f64);
+            samples.push(moving);
+        }
+        let mut sleep = mk_event(PowerState::Sleep, 0.0, 700);
+        sleep.odometer_miles = Some(205.0);
+        samples.push(sleep);
+
+        let mut ended = None;
+        for sample in &samples {
+            if let TripEvent::TripEnded { trip } = d.process(&fusion.fuse(sample)) {
+                ended = Some(trip);
+            }
+        }
+        let trip = ended.expect("trip ended");
+        assert_eq!(trip.start_odometer_mi, Some(200.0));
+        assert_eq!(trip.end_odometer_mi, Some(205.0));
+        let distance = compute_distance_odometer_or_gps(
+            trip.start_odometer_mi,
+            trip.end_odometer_mi,
+            &trip.points,
+        );
+        assert!((distance - 5.0).abs() < 1e-9, "{distance}");
     }
 
     #[test]

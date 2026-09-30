@@ -1,5 +1,10 @@
 //! Join sparse vehicle-state readings for trip detection without rewriting the
 //! original telemetry sample or treating an old location as live motion.
+//!
+//! Sparse (R2) power arrives only when it changes, so the latest state stays
+//! in effect until the vehicle reports another one. Speed is derived from
+//! successive GNSS fixes or from odometer increments, because neither is
+//! reported directly.
 
 use chrono::{DateTime, Duration, Utc};
 
@@ -17,14 +22,20 @@ const MOVING_MPH: f64 = 2.0;
 pub struct TripSignalFusion {
     power: Option<(PowerState, DateTime<Utc>)>,
     last_fix: Option<(f64, f64, DateTime<Utc>)>,
+    last_odometer: Option<(f64, DateTime<Utc>)>,
     moving_segments: u8,
-    allow_gps_speed: bool,
+    sparse: bool,
+}
+
+/// Vehicles whose telemetry reports power on change and omits speed.
+pub fn is_sparse_model(model: &str) -> bool {
+    matches!(model.to_ascii_uppercase().as_str(), "R2" | "R2S" | "R2-S")
 }
 
 impl TripSignalFusion {
-    pub fn new(allow_gps_speed: bool) -> Self {
+    pub fn new(sparse: bool) -> Self {
         Self {
-            allow_gps_speed,
+            sparse,
             ..Self::default()
         }
     }
@@ -42,7 +53,9 @@ impl TripSignalFusion {
                 self.power = Some((power.clone(), observed_at));
             }
         } else if let Some((power, observed_at)) = self.power.as_ref() {
-            if sample.ts >= *observed_at && sample.ts - *observed_at <= POWER_MAX_AGE {
+            if sample.ts >= *observed_at
+                && (self.sparse || sample.ts - *observed_at <= POWER_MAX_AGE)
+            {
                 joined.power_state = Some(power.clone());
                 joined.power_state_ts = Some(*observed_at);
             }
@@ -60,6 +73,10 @@ impl TripSignalFusion {
             }
         }
 
+        // A zero derived from GNSS only means the fixes did not (yet) show
+        // motion; unlike a reported speed, a validated odometer increment on
+        // the same sample may replace it.
+        let mut gps_derived_zero = false;
         if let Some((lat, lon)) = valid_location_pair(sample.latitude, sample.longitude)
             .filter(|(lat, lon)| (-90.0..=90.0).contains(lat) && (-180.0..=180.0).contains(lon))
         {
@@ -68,7 +85,7 @@ impl TripSignalFusion {
                 && sample.ts - fix_at <= FIX_MAX_AGE
                 && self.last_fix.is_none_or(|(_, _, prior)| fix_at > prior)
             {
-                if joined.speed_mph.is_none() && self.allow_gps_speed {
+                if joined.speed_mph.is_none() && self.sparse {
                     if let Some((last_lat, last_lon, last_at)) = self.last_fix {
                         let seconds = (fix_at - last_at).num_seconds();
                         if (5..=MAX_FIX_INTERVAL.num_seconds()).contains(&seconds) {
@@ -80,8 +97,9 @@ impl TripSignalFusion {
                                 } else {
                                     0
                                 };
-                                joined.speed_mph =
-                                    Some(if self.moving_segments >= 2 { mph } else { 0.0 });
+                                let derived = if self.moving_segments >= 2 { mph } else { 0.0 };
+                                gps_derived_zero = derived == 0.0;
+                                joined.speed_mph = Some(derived);
                                 joined.speed_mph_ts = Some(fix_at);
                             } else {
                                 self.moving_segments = 0;
@@ -96,6 +114,33 @@ impl TripSignalFusion {
                 joined.latitude = None;
                 joined.longitude = None;
                 joined.location_ts = None;
+            }
+        }
+
+        if let Some(odometer) = sample.odometer_miles.filter(|v| v.is_finite()) {
+            let odometer_at = sample.odometer_miles_ts.unwrap_or(sample.ts);
+            if odometer_at <= sample.ts + Duration::seconds(5)
+                && self
+                    .last_odometer
+                    .is_none_or(|(_, prior)| odometer_at > prior)
+            {
+                if (joined.speed_mph.is_none() || gps_derived_zero)
+                    && self.sparse
+                    && sample.ts - odometer_at <= FIX_MAX_AGE
+                {
+                    if let Some((last_odometer, last_at)) = self.last_odometer {
+                        let seconds = (odometer_at - last_at).num_seconds();
+                        let miles = odometer - last_odometer;
+                        if (5..=MAX_FIX_INTERVAL.num_seconds()).contains(&seconds) && miles > 0.0 {
+                            let mph = miles * 3600.0 / seconds as f64;
+                            if mph <= MAX_PLAUSIBLE_MPH {
+                                joined.speed_mph = Some(mph);
+                                joined.speed_mph_ts = Some(odometer_at);
+                            }
+                        }
+                    }
+                }
+                self.last_odometer = Some((odometer, odometer_at));
             }
         }
         joined
@@ -132,20 +177,245 @@ mod tests {
     }
 
     #[test]
-    fn stale_power_and_location_jump_cannot_start_a_trip() {
+    fn stale_power_is_not_joined_for_dense_vehicles() {
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(false);
+        let mut power = TelemetryEvent::empty(Uuid::nil(), at);
+        power.power_state = Some(PowerState::Go);
+        fusion.fuse(&power);
+        let fix = TelemetryEvent::empty(Uuid::nil(), at + Duration::minutes(4));
+        assert_eq!(fusion.fuse(&fix).power_state, None);
+    }
+
+    #[test]
+    fn sparse_power_holds_until_the_vehicle_reports_another_state() {
         let at = Utc::now();
         let mut fusion = TripSignalFusion::new(true);
         let mut power = TelemetryEvent::empty(Uuid::nil(), at);
         power.power_state = Some(PowerState::Go);
         fusion.fuse(&power);
-        let mut fix = TelemetryEvent::empty(Uuid::nil(), at + Duration::minutes(4));
+        let later = TelemetryEvent::empty(Uuid::nil(), at + Duration::minutes(20));
+        assert_eq!(fusion.fuse(&later).power_state, Some(PowerState::Go));
+
+        power.ts = at + Duration::minutes(21);
+        power.power_state = Some(PowerState::Ready);
+        fusion.fuse(&power);
+        let after = TelemetryEvent::empty(Uuid::nil(), at + Duration::minutes(22));
+        assert_eq!(fusion.fuse(&after).power_state, Some(PowerState::Ready));
+    }
+
+    #[test]
+    fn location_jump_cannot_derive_speed() {
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(true);
+        let mut fix = TelemetryEvent::empty(Uuid::nil(), at);
         fix.latitude = Some(30.0);
         fix.longitude = Some(-97.0);
         fix.location_ts = Some(fix.ts);
-        assert_eq!(fusion.fuse(&fix).power_state, None);
+        fusion.fuse(&fix);
         fix.ts += Duration::seconds(30);
         fix.latitude = Some(35.0);
         fix.location_ts = Some(fix.ts);
         assert_eq!(fusion.fuse(&fix).speed_mph, None);
+    }
+
+    fn odometer(at: chrono::DateTime<Utc>, miles: f64) -> TelemetryEvent {
+        let mut event = TelemetryEvent::empty(Uuid::nil(), at);
+        event.odometer_miles = Some(miles);
+        event
+    }
+
+    #[test]
+    fn sparse_odometer_increment_derives_speed() {
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(true);
+        assert_eq!(fusion.fuse(&odometer(at, 55.92)).speed_mph, None);
+        let speed = fusion
+            .fuse(&odometer(at + Duration::seconds(60), 56.54))
+            .speed_mph
+            .expect("odometer speed");
+        assert!((speed - 37.2).abs() < 0.1, "{speed}");
+        // A parked reading hours later is not motion.
+        let parked = fusion.fuse(&odometer(at + Duration::hours(3), 56.54));
+        assert_eq!(parked.speed_mph, None);
+        let resumed = fusion.fuse(&odometer(at + Duration::hours(4), 57.16));
+        assert_eq!(resumed.speed_mph, None);
+    }
+
+    fn fix_with_odometer(at: chrono::DateTime<Utc>, lon: f64, miles: f64) -> TelemetryEvent {
+        let mut event = odometer(at, miles);
+        event.latitude = Some(30.0);
+        event.longitude = Some(lon);
+        event.location_ts = Some(at);
+        event
+    }
+
+    /// Repeated GNSS coordinates yield a derived zero, but the odometer on the
+    /// same sample shows the vehicle moved; the odometer speed must win.
+    #[test]
+    fn odometer_increment_overrides_stationary_gps_zero_on_mixed_sample() {
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(true);
+        fusion.fuse(&fix_with_odometer(at, -97.0, 55.92));
+        let joined = fusion.fuse(&fix_with_odometer(at + Duration::seconds(60), -97.0, 56.54));
+        let speed = joined.speed_mph.expect("odometer speed");
+        assert!((speed - 37.2).abs() < 0.1, "{speed}");
+        assert_eq!(joined.speed_mph_ts, Some(at + Duration::seconds(60)));
+    }
+
+    /// The first moving GNSS segment is held at a provisional zero; an odometer
+    /// increment on the same sample still contributes.
+    #[test]
+    fn odometer_increment_overrides_provisional_gps_zero_on_mixed_sample() {
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(true);
+        fusion.fuse(&fix_with_odometer(at, -97.0, 55.92));
+        let joined = fusion.fuse(&fix_with_odometer(
+            at + Duration::seconds(60),
+            -96.99,
+            56.54,
+        ));
+        assert!(joined.speed_mph.expect("odometer speed") > 2.0);
+    }
+
+    #[test]
+    fn stationary_gps_zero_stands_without_odometer_increment() {
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(true);
+        fusion.fuse(&fix_with_odometer(at, -97.0, 55.92));
+        let joined = fusion.fuse(&fix_with_odometer(at + Duration::seconds(60), -97.0, 55.92));
+        assert_eq!(joined.speed_mph, Some(0.0));
+    }
+
+    #[test]
+    fn reported_zero_speed_is_not_replaced_by_odometer() {
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(true);
+        fusion.fuse(&odometer(at, 55.92));
+        let mut sample = odometer(at + Duration::seconds(60), 56.54);
+        sample.speed_mph = Some(0.0);
+        assert_eq!(fusion.fuse(&sample).speed_mph, Some(0.0));
+    }
+
+    #[test]
+    fn stale_odometer_on_mixed_sample_keeps_gps_zero() {
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(true);
+        fusion.fuse(&fix_with_odometer(at, -97.0, 55.92));
+        let mut sample = fix_with_odometer(at + Duration::minutes(4), -97.0, 56.54);
+        sample.odometer_miles_ts = Some(at + Duration::seconds(60));
+        assert_eq!(fusion.fuse(&sample).speed_mph, Some(0.0));
+    }
+
+    #[test]
+    fn implausible_odometer_jump_on_mixed_sample_keeps_gps_zero() {
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(true);
+        fusion.fuse(&fix_with_odometer(at, -97.0, 55.92));
+        let joined = fusion.fuse(&fix_with_odometer(at + Duration::seconds(60), -97.0, 60.0));
+        assert_eq!(joined.speed_mph, Some(0.0));
+    }
+
+    /// Minute-spaced fixes that repeat the same coordinates while the odometer
+    /// climbs must still produce a trip.
+    #[test]
+    fn r2_drive_with_repeated_gps_and_rising_odometer_produces_a_trip() {
+        use crate::ingestion::trip_detector::{TripDetectorState, TripEvent};
+
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(true);
+        let mut detector = TripDetectorState::new(Uuid::nil());
+        let mut go = fix_with_odometer(at, -97.0, 55.92);
+        go.power_state = Some(PowerState::Go);
+        detector.process(&fusion.fuse(&go));
+        let mut started = false;
+        for (i, secs) in [60, 120, 180, 240].into_iter().enumerate() {
+            let sample = fix_with_odometer(
+                at + Duration::seconds(secs),
+                -97.0,
+                55.92 + 0.62 * (i + 1) as f64,
+            );
+            if let TripEvent::TripStarted { .. } = detector.process(&fusion.fuse(&sample)) {
+                started = true;
+            }
+        }
+        assert!(started, "trip should start from odometer motion");
+    }
+
+    #[test]
+    fn dense_vehicles_do_not_derive_odometer_speed() {
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(false);
+        fusion.fuse(&odometer(at, 55.92));
+        let next = fusion.fuse(&odometer(at + Duration::seconds(60), 56.54));
+        assert_eq!(next.speed_mph, None);
+    }
+
+    /// Timings from a real R2 drive that was missed: power reported Go once,
+    /// then only minute-spaced GNSS fixes and 1 km odometer steps arrived.
+    #[test]
+    fn r2_drive_with_late_motion_produces_a_trip() {
+        use crate::ingestion::trip_detector::{
+            compute_distance_odometer_or_gps, TripDetectorState, TripEvent,
+        };
+
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(true);
+        let mut detector = TripDetectorState::new(Uuid::nil());
+        let mut events = vec![odometer(at - Duration::minutes(34), 55.92)];
+        let mut go = TelemetryEvent::empty(Uuid::nil(), at);
+        go.power_state = Some(PowerState::Go);
+        events.push(go);
+        for (secs, miles) in [
+            (73, 56.54),
+            (216, 57.17),
+            (355, 57.79),
+            (410, 58.41),
+            (471, 59.03),
+            (515, 59.65),
+            (557, 60.27),
+            (613, 60.89),
+            (681, 61.52),
+        ] {
+            events.push(odometer(at + Duration::seconds(secs), miles));
+        }
+        for (i, secs) in [60, 120, 241, 360, 421, 482, 542, 601, 661, 722]
+            .into_iter()
+            .enumerate()
+        {
+            let mut fix = TelemetryEvent::empty(Uuid::nil(), at + Duration::seconds(secs));
+            fix.latitude = Some(30.0 + i as f64 * 0.01);
+            fix.longitude = Some(-97.0);
+            fix.location_ts = Some(fix.ts);
+            events.push(fix);
+        }
+        let mut ready = TelemetryEvent::empty(Uuid::nil(), at + Duration::seconds(772));
+        ready.power_state = Some(PowerState::Ready);
+        events.push(ready);
+        let mut sleep = TelemetryEvent::empty(Uuid::nil(), at + Duration::seconds(1200));
+        sleep.power_state = Some(PowerState::Sleep);
+        events.push(sleep);
+        events.sort_by_key(|event| event.ts);
+
+        let mut started = None;
+        let mut ended = None;
+        for event in &events {
+            match detector.process(&fusion.fuse(event)) {
+                TripEvent::TripStarted { started_at, .. } => started = Some(started_at),
+                TripEvent::TripEnded { trip } => ended = Some(trip),
+                TripEvent::NoChange => {}
+            }
+        }
+
+        assert!(started.expect("trip started") <= at + Duration::seconds(216));
+        let trip = ended.expect("trip ended");
+        assert_eq!(trip.start_odometer_mi, Some(55.92));
+        assert_eq!(trip.end_odometer_mi, Some(61.52));
+        let distance = compute_distance_odometer_or_gps(
+            trip.start_odometer_mi,
+            trip.end_odometer_mi,
+            &trip.points,
+        );
+        assert!((distance - 5.6).abs() < 0.01, "{distance}");
     }
 }

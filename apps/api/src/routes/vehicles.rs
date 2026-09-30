@@ -2482,13 +2482,15 @@ async fn vehicle_status(
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
     queue_vehicle_artwork_repair(&state, vid).await;
 
-    let vehicle = sqlx::query_scalar::<_, Option<f64>>(
-        "SELECT battery_capacity_wh FROM riviamigo.vehicles WHERE id = $1",
+    let (vehicle, vehicle_model) = sqlx::query_as::<_, (Option<f64>, String)>(
+        "SELECT battery_capacity_wh, model FROM riviamigo.vehicles WHERE id = $1",
     )
     .bind(vid)
     .fetch_optional(&state.pool)
     .await?
-    .flatten();
+    .map_or((None, None), |(capacity_wh, model)| {
+        (capacity_wh, Some(model))
+    });
 
     let row = sqlx::query_as::<_, VehicleRuntimeStateRow>(
         "SELECT is_online, last_event_at, last_payload_at, last_heartbeat_at, \
@@ -2799,6 +2801,7 @@ async fn vehicle_status(
         latest.distance_to_empty_mi,
         latest.battery_level,
         latest.battery_capacity_wh.or(vehicle),
+        vehicle_model.as_deref(),
     );
     let now = chrono::Utc::now();
     let (effective_worker_health, telemetry_stale, telemetry_stale_reason) =
@@ -3363,13 +3366,13 @@ mod range_tests {
 
     #[test]
     fn leaves_plausible_miles_untouched() {
-        let value = normalize_remaining_range_miles(Some(227.0), Some(71.0), Some(135_000.0));
+        let value = normalize_remaining_range_miles(Some(227.0), Some(71.0), Some(135_000.0), None);
         assert_eq!(value, Some(227.0));
     }
 
     #[test]
     fn converts_implausible_km_value_to_miles() {
-        let value = normalize_remaining_range_miles(Some(380.0), Some(71.0), Some(135_000.0));
+        let value = normalize_remaining_range_miles(Some(380.0), Some(71.0), Some(135_000.0), None);
         assert_eq!(
             value.map(|miles| (miles * 10.0).round() / 10.0),
             Some(236.1)
@@ -3378,7 +3381,7 @@ mod range_tests {
 
     #[test]
     fn leaves_high_but_plausible_miles_untouched() {
-        let value = normalize_remaining_range_miles(Some(227.0), Some(71.0), Some(105_000.0));
+        let value = normalize_remaining_range_miles(Some(227.0), Some(71.0), Some(105_000.0), None);
         assert_eq!(value, Some(227.0));
     }
 }

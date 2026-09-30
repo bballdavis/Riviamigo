@@ -55,12 +55,17 @@ join the ordinary vehicle status and telemetry history. A missing field stays
 missing; availability depends on what the vehicle and Rivian send. Parallax
 readings do not start or end charging sessions.
 
-R2 trips can be assembled from sparse updates. Riviamigo joins a recent power
-state to a location fix and, when no speed is reported, estimates speed from
-successive plausible fixes. It requires two moving segments before using that
-estimate to detect motion. Old fixes, implausible jumps, and stale power are
-discarded for trip detection. Stored source readings are not rewritten with the
-estimated speed.
+R2 trips can be assembled from sparse updates. The R2 reports its power state
+only when it changes, so Riviamigo treats the latest reported state (for
+example Go) as current until the vehicle reports another one. When no speed is
+reported, Riviamigo estimates it from successive plausible location fixes
+(after two moving segments) or from odometer increases a few minutes apart.
+When location fixes show no movement yet but the odometer on the same update
+has increased, the odometer estimate is used. A speed the vehicle reports
+itself is never replaced. A trip's distance starts from the odometer reading taken when the vehicle
+shifted into gear, so the first odometer steps of a drive are not lost. Old
+fixes, implausible jumps, and parked odometer readings are discarded for trip
+detection. Stored source readings are not rewritten with the estimated speed.
 
 ## Investigate missing readings
 
