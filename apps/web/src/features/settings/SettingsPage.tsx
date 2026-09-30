@@ -1473,7 +1473,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                                       type="number"
                                       value={editTargetTirePressure}
                                       onChange={(e) => setEditTargetTirePressure(e.target.value)}
-                                      placeholder="48"
+                                      placeholder="40"
                                       min="20"
                                       max="80"
                                       step="1"

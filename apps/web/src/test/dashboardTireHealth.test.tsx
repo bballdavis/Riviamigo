@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 
 import { CurrentVehicleStatePanel } from '../components/dashboard/DashboardPage';
+import type { VehicleStatus } from '@riviamigo/types';
 
 const images = {
   all: [
@@ -103,5 +104,33 @@ describe('dashboard tire health', () => {
     expect(screen.getByText('46+ psi')).toBeInTheDocument();
     expect(screen.getByText('43-45 psi')).toBeInTheDocument();
     expect(screen.getByText('<=42 psi')).toBeInTheDocument();
+  });
+
+  it('pulls the rear gate lock in only for real R2 artwork', () => {
+    const status: VehicleStatus = {
+      vehicle_id: 'vehicle-1',
+      battery_level: 80,
+      range_miles: 250,
+      power_state: 'ready',
+      charger_state: 'Disconnected',
+      speed_mph: 0,
+      latitude: null,
+      longitude: null,
+      is_online: true,
+      last_updated: '2026-06-03T12:00:00Z',
+      closure_liftgate_locked: true,
+    };
+    const rearGate = () => screen.getByTitle('Rear gate lock').closest('[class*="left-["]');
+
+    const r2 = renderPanel(<CurrentVehicleStatePanel images={images} vehicleModel="R2" status={status} />);
+    expect(rearGate()?.className).toContain('left-[8.8%]');
+    r2.unmount();
+
+    const r1s = renderPanel(<CurrentVehicleStatePanel images={images} vehicleModel="R1S" status={status} />);
+    expect(rearGate()?.className).toContain('left-[4%]');
+    r1s.unmount();
+
+    renderPanel(<CurrentVehicleStatePanel images={images} vehicleModel="R2" isDemoVehicle status={status} />);
+    expect(rearGate()?.className).toContain('left-[4%]');
   });
 });

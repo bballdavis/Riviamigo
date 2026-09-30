@@ -4,7 +4,7 @@ import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
 import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import { formatAltitude, formatMiles, formatMph, formatTemp } from '@riviamigo/ui/lib/utils';
-import { formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
+import { DEFAULT_TARGET_TIRE_PRESSURE_PSI, formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
 import { Tooltip } from '@riviamigo/ui/primitives';
 import { isVehicleCharging } from '@riviamigo/types';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
@@ -31,6 +31,15 @@ const SHARED_OVERVIEW_ANCHORS: AnchorSet = {
   doorLocks: { rl: 'left-[43%] top-[-0%]', fl: 'left-[60%] top-[-0%]', rr: 'left-[43%] top-[102%]', fr: 'left-[60%] top-[102%]' },
   rearGateLock: 'left-[4%] top-1/2',
   frunkLock: 'left-[102%] top-1/2',
+};
+
+// Rivian's real R2 overview render has more empty canvas behind the tailgate
+// than the R1 renders, so the shared 4% rear-gate anchor leaves a visibly wider
+// gap than the frunk anchor has at the front. Pull it in to match; the other
+// anchors already sit on their parts. Not used for the packaged fallback art.
+const R2_REAL_ARTWORK_ANCHORS: AnchorSet = {
+  ...SHARED_OVERVIEW_ANCHORS,
+  rearGateLock: 'left-[8.8%] top-1/2',
 };
 
 const OVERVIEW_ANCHORS: Record<string, AnchorSet> = {
@@ -79,7 +88,6 @@ export function CurrentVehicleStatePanel({
   isDemoVehicle?: boolean;
   targetTirePressurePsi?: number | null | undefined;
 }) {
-  const anchors = OVERVIEW_ANCHORS[vehicleModel ?? ''] ?? SHARED_OVERVIEW_ANCHORS;
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const resolvedOverhead = resolveVehicleArtwork(images, vehicleModel, 'overview');
   const baseOverheadLight = resolvedOverhead.light;
@@ -87,6 +95,10 @@ export function CurrentVehicleStatePanel({
   const apiOverheadFallback = baseOverheadLight ?? baseOverheadDark;
   const localOverheadFallback = resolvedOverhead.fallback;
   const overheadArtworkAvailable = Boolean(apiOverheadFallback ?? localOverheadFallback);
+  const isR2RealArtwork = (vehicleModel === 'R2' || vehicleModel === 'R2S') && !isDemoVehicle && Boolean(apiOverheadFallback);
+  const anchors = isR2RealArtwork
+    ? R2_REAL_ARTWORK_ANCHORS
+    : OVERVIEW_ANCHORS[vehicleModel ?? ''] ?? SHARED_OVERVIEW_ANCHORS;
   const openDoorStates = getOpenDoorStates(status);
   const overlaysLight = getDoorOverlayUrls(images?.all, openDoorStates, 'light');
   const overlaysDark = getDoorOverlayUrls(images?.all, openDoorStates, 'dark');
@@ -491,7 +503,7 @@ function TireHealthTooltipContent({ targetTirePressurePsi }: { targetTirePressur
     <div className="grid gap-2">
       <div className="grid gap-0.5">
         <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-fg-tertiary">Tire Pressure Health</p>
-        <p className="text-sm font-medium text-fg">Target: {targetTirePressurePsi ?? 48} psi</p>
+        <p className="text-sm font-medium text-fg">Target: {targetTirePressurePsi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI} psi</p>
       </div>
       {entries.map((entry) => (
         <div key={entry.tone} className="flex items-start gap-2 rounded-lg border border-border/70 bg-bg-surface/65 px-2.5 py-2">
