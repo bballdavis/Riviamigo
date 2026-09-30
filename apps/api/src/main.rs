@@ -101,6 +101,10 @@ async fn main() -> anyhow::Result<()> {
     let charge_identity_backfill_config =
         services::charge_payload_identity::BackfillConfig::from_env()?;
 
+    // Before the workers start, so a capture that was running across a
+    // restart keeps recording from the first frame.
+    services::ingestion_capture::init(pool.clone()).await?;
+
     let supervisor =
         ingestion::start_workers(pool.clone(), redis.clone(), age_key.clone(), config.clone())
             .await?;

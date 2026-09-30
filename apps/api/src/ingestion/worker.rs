@@ -26,6 +26,7 @@ use crate::{
     services::{
         cost::recompute_charge_session_cost,
         geofences::match_geofence,
+        ingestion_capture::{self, Kind as CaptureKind},
         trip_enrichment::{resolve_trip_location, MatchedLocation},
         trip_routes::build_route_preview,
         weather_enrichment,
@@ -474,9 +475,6 @@ pub async fn run_vehicle_worker(
     // Track the most recent inbound WS/control event so we can restart a
     // connection that stays silently wedged while still holding the worker lock.
     let mut last_ws_inbound_at = tokio::time::Instant::now();
-    let mut diagnostics_refresh_at =
-        tokio::time::Instant::now() - std::time::Duration::from_secs(30);
-    let mut diagnostics_enabled = false;
     let mut state_reconcile_interval = tokio::time::interval(STATE_PERIOD_RECONCILE_INTERVAL);
     state_reconcile_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Startup reconciliation above already covered the current tail.
@@ -558,6 +556,12 @@ pub async fn run_vehicle_worker(
             .message_type
             .as_deref()
             .is_some_and(|kind| kind.starts_with("parallax:"));
+        let capturing = ingestion_capture::is_capturing(vehicle_id);
+        if capturing && !is_parallax {
+            if let Some((kind, fields)) = legacy_capture_fields(&inbound) {
+                ingestion_capture::record(vehicle_id, kind, fields);
+            }
+        }
         if !is_parallax && inbound.message_type.as_deref() != Some("baseline") {
             last_ws_inbound_at = tokio::time::Instant::now();
             handle_inbound_accounting(&pool, vehicle_id, &config, &inbound, &mut counter_batch)
@@ -654,50 +658,6 @@ pub async fn run_vehicle_worker(
             charge_det.process(&event)
         };
 
-        if diagnostics_refresh_at.elapsed() >= std::time::Duration::from_secs(30) {
-            diagnostics_enabled = sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicle_ingestion_diagnostics WHERE vehicle_id=$1 AND enabled_until>now())",
-            )
-            .bind(vehicle_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap_or(false);
-            diagnostics_refresh_at = tokio::time::Instant::now();
-        }
-        if diagnostics_enabled {
-            tracing::info!(
-                vehicle_id=%vehicle_id,
-                source=inbound.message_type.as_deref().unwrap_or("legacy"),
-                has_power=event.power_state.is_some(),
-                has_speed=event.speed_mph.is_some(),
-                has_location=event.latitude.is_some() && event.longitude.is_some(),
-                has_odometer=event.odometer_miles.is_some(),
-                has_battery=event.battery_level.is_some(),
-                has_charger=event.charger_state.is_some(),
-                has_temperatures=event.cabin_temp_c.is_some() || event.driver_temp_c.is_some() || event.outside_temp_c.is_some(),
-                has_climate=event.cabin_precon_status.is_some() || event.cabin_precon_type.is_some() || event.defrost_active.is_some() || event.hvac_active.is_some(),
-                has_tires=event.tire_fl_psi.is_some() || event.tire_fr_psi.is_some() || event.tire_rl_psi.is_some() || event.tire_rr_psi.is_some() || event.tire_fl_valid.is_some() || event.tire_fr_valid.is_some() || event.tire_rl_valid.is_some() || event.tire_rr_valid.is_some() || event.tire_fl_status.is_some() || event.tire_fr_status.is_some() || event.tire_rl_status.is_some() || event.tire_rr_status.is_some(),
-                has_locks=event.door_front_left_locked.is_some() || event.door_front_right_locked.is_some() || event.door_rear_left_locked.is_some() || event.door_rear_right_locked.is_some() || event.closure_frunk_locked.is_some() || event.closure_liftgate_locked.is_some() || event.closure_tailgate_locked.is_some() || event.side_bin_left_locked.is_some() || event.side_bin_right_locked.is_some() || event.tonneau_locked.is_some() || event.gear_guard_locked.is_some(),
-                has_closures=event.door_front_left_closed.is_some() || event.door_front_right_closed.is_some() || event.door_rear_left_closed.is_some() || event.door_rear_right_closed.is_some() || event.closure_frunk_closed.is_some() || event.closure_liftgate_closed.is_some() || event.closure_tailgate_closed.is_some() || event.side_bin_left_closed.is_some() || event.side_bin_right_closed.is_some() || event.tonneau_closed.is_some(),
-                has_windows=event.window_fl_closed.is_some() || event.window_fr_closed.is_some() || event.window_rl_closed.is_some() || event.window_rr_closed.is_some(),
-                has_charge_status=event.charger_status.is_some(),
-                has_gear=event.gear_status.is_some(),
-                has_energy_power=event.power_kw.is_some() || event.regen_power_kw.is_some(),
-                reported_power=?event.power_state,
-                reported_charger=?event.charger_state,
-                actively_charging=event.is_actively_charging(),
-                power_age_seconds=?field_age(&event, event.power_state.is_some(), event.power_state_ts),
-                speed_age_seconds=?field_age(&event, event.speed_mph.is_some(), event.speed_mph_ts),
-                location_age_seconds=?field_age(&event, event.latitude.is_some() && event.longitude.is_some(), event.location_ts),
-                odometer_age_seconds=?field_age(&event, event.odometer_miles.is_some(), event.odometer_miles_ts),
-                battery_age_seconds=?field_age(&event, event.battery_level.is_some(), event.battery_level_ts),
-                charger_age_seconds=?field_age(&event, event.charger_state.is_some(), event.charger_state_ts),
-                charge_lifecycle_eligible=!is_parallax,
-                charge_transition=match &charge_event { ChargeEvent::SessionStarted => "started", ChargeEvent::SessionEnded(_) => "ended", ChargeEvent::NoChange => "no_change" },
-                sample_age_seconds=(Utc::now()-event.ts).num_seconds(),
-                "vehicle ingestion diagnostics"
-            );
-        }
         if matches!(charge_event, ChargeEvent::SessionStarted) {
             active_session_started_at = Some(event.ts);
         }
@@ -787,11 +747,8 @@ pub async fn run_vehicle_worker(
         }
 
         // ── State period tracking ────────────────────────────────────────────
-        let lifecycle = lifecycle_updates(
-            &event,
-            is_parallax,
-            charge_det.active_session_id().is_some(),
-        );
+        let charge_active = charge_det.active_session_id().is_some();
+        let lifecycle = lifecycle_updates(&event, is_parallax, charge_active);
         if lifecycle.state_period {
             let current_state = infer_vehicle_state(&event);
             match transition_state_period(
@@ -818,6 +775,21 @@ pub async fn run_vehicle_worker(
         }
         if lifecycle.charging {
             let _ = charging_tx.send(event.is_actively_charging());
+        }
+        if capturing {
+            ingestion_capture::record(
+                vehicle_id,
+                CaptureKind::Ingestion,
+                ingestion_capture_fields(
+                    &event,
+                    inbound.message_type.as_deref(),
+                    is_parallax,
+                    &charge_event,
+                    &persistence_decision,
+                    lifecycle,
+                    charge_active,
+                ),
+            );
         }
 
         // ── Software version tracking ────────────────────────────────────────
@@ -851,8 +823,8 @@ pub async fn run_vehicle_worker(
         let (trip_sample, fusion) = trip_signals.fuse_from(&event, is_parallax);
         let start_decision = trip_det.start_decision(&trip_sample);
         let trip_event = trip_det.process(&trip_sample);
-        if diagnostics_enabled {
-            log_trip_diagnostics(
+        if capturing {
+            record_trip_diagnostics(
                 vehicle_id,
                 &event,
                 &trip_sample,
@@ -3915,8 +3887,151 @@ fn field_age(
     present.then(|| (event.ts - observed_at.unwrap_or(event.ts)).num_seconds())
 }
 
-#[allow(clippy::too_many_arguments)] // Original, fused, and detector contexts have separate ownership.
-fn log_trip_diagnostics(
+/// Legacy WebSocket traffic as a capture record: vehicle-state fields with
+/// their source timestamps, charging-session fields, or connection events.
+/// Location values are reduced to a presence marker.
+fn legacy_capture_fields(inbound: &WsInboundEvent) -> Option<(CaptureKind, serde_json::Value)> {
+    let raw = serde_json::from_str::<serde_json::Value>(&inbound.raw).ok();
+    match inbound.kind {
+        WsInboundKind::Heartbeat => None,
+        WsInboundKind::Control => Some((
+            CaptureKind::LegacyConnection,
+            serde_json::json!({
+                "message_type": inbound.message_type,
+                "detail": raw.filter(serde_json::Value::is_object),
+            }),
+        )),
+        WsInboundKind::Telemetry | WsInboundKind::ChargingSession => {
+            let data = raw.as_ref()?.pointer("/payload/data")?;
+            let mut fields = serde_json::Map::new();
+            if let Some(state) = data
+                .get("vehicleState")
+                .and_then(serde_json::Value::as_object)
+            {
+                for (key, value) in state {
+                    let Some(value) = value.as_object() else {
+                        continue;
+                    };
+                    let time_stamp = value.get("timeStamp").cloned();
+                    if key == "gnssLocation" {
+                        fields.insert(
+                            "gnssLocationPresent".into(),
+                            serde_json::json!({ "timeStamp": time_stamp }),
+                        );
+                    } else {
+                        fields.insert(
+                            key.clone(),
+                            serde_json::json!({ "value": value.get("value"), "timeStamp": time_stamp }),
+                        );
+                    }
+                }
+            }
+            let charging_session = data
+                .get("chargingSession")
+                .and_then(serde_json::Value::as_object)
+                .map(|session| {
+                    session
+                        .iter()
+                        .filter(|(_, value)| !value.is_null())
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect::<serde_json::Map<_, _>>()
+                });
+            Some((
+                CaptureKind::LegacyFrame,
+                serde_json::json!({
+                    "frame": inbound.kind.as_str(),
+                    "message_type": inbound.message_type,
+                    "fields": fields,
+                    "charging_session": charging_session,
+                }),
+            ))
+        }
+    }
+}
+
+fn persistence_label(decision: &PersistenceDecision) -> &'static str {
+    match decision {
+        PersistenceDecision::Persist => "persisted",
+        PersistenceDecision::Suppress(SuppressionReason::Empty) => "suppressed_empty",
+        PersistenceDecision::Suppress(SuppressionReason::Duplicate) => "suppressed_duplicate",
+        PersistenceDecision::Suppress(SuppressionReason::Threshold) => "suppressed_threshold",
+    }
+}
+
+/// What the worker did with one inbound sample, for a capture.
+fn ingestion_capture_fields(
+    event: &TelemetryEvent,
+    message_type: Option<&str>,
+    is_parallax: bool,
+    charge_event: &ChargeEvent,
+    persistence: &PersistenceDecision,
+    lifecycle: LifecycleUpdates,
+    charge_active: bool,
+) -> serde_json::Value {
+    let state_period = if lifecycle.state_period {
+        serde_json::to_value(infer_vehicle_state(event)).unwrap_or_default()
+    } else if is_parallax && charge_active && event.charger_state.is_none() {
+        "skipped_parallax_charge_guard".into()
+    } else {
+        "no_lifecycle_fields".into()
+    };
+    serde_json::json!({
+        "source": if is_parallax { message_type.unwrap_or("parallax") } else { "legacy" },
+        "event_ts": event.ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "sample_age_ms": (Utc::now() - event.ts).num_milliseconds(),
+        "values": ingestion_capture::present_fields(event),
+        "persistence": persistence_label(persistence),
+        "state_period": state_period,
+        "power_tx_sent": lifecycle.power_state,
+        "charging_tx_sent": lifecycle.charging,
+        "charge_active": charge_active,
+        "charge_lifecycle_eligible": !is_parallax,
+        "charge_transition": match charge_event {
+            ChargeEvent::SessionStarted => "started",
+            ChargeEvent::SessionEnded(_) => "ended",
+            ChargeEvent::NoChange => "no_change",
+        },
+        "actively_charging": event.is_actively_charging(),
+    })
+}
+
+/// Why the trip detector did what it did for one sample. Never includes
+/// coordinates, odometer readings, or completed-trip contents.
+fn trip_diagnostics_fields(
+    event: &TelemetryEvent,
+    trip_sample: &TelemetryEvent,
+    fusion: &FusionDiagnostics,
+    trip_active: bool,
+    start_decision: &str,
+    trip_event: &TripEvent,
+) -> serde_json::Value {
+    serde_json::json!({
+        "trip_active": trip_active,
+        "fused_power": trip_sample.power_state.is_some() && event.power_state.is_none(),
+        "derived_speed": trip_sample.speed_mph.is_some() && event.speed_mph.is_none(),
+        "effective_power": trip_sample.power_state,
+        "power_origin": fusion.power_origin,
+        "power_policy": fusion.power_policy,
+        "power_outcome": fusion.power_outcome,
+        "reported_power_outcome": fusion.reported_power_outcome,
+        "power_age_seconds": field_age(trip_sample, trip_sample.power_state.is_some(), trip_sample.power_state_ts),
+        "speed_mph": trip_sample.speed_mph,
+        "speed_origin": fusion.speed_origin,
+        "reported_speed_outcome": fusion.reported_speed_outcome,
+        "speed_age_seconds": field_age(trip_sample, trip_sample.speed_mph.is_some(), trip_sample.speed_mph_ts),
+        "gnss_outcome": fusion.gnss_outcome,
+        "gnss_interval_seconds": fusion.gnss_interval_seconds,
+        "gnss_distance_miles": fusion.gnss_distance_miles,
+        "moving_segments": fusion.moving_segments,
+        "odometer_outcome": fusion.odometer_outcome,
+        "odometer_interval_seconds": fusion.odometer_interval_seconds,
+        "odometer_delta_miles": fusion.odometer_delta_miles,
+        "start_decision": start_decision,
+        "trip_transition": trip_event.transition_name(),
+    })
+}
+
+fn record_trip_diagnostics(
     vehicle_id: Uuid,
     event: &TelemetryEvent,
     trip_sample: &TelemetryEvent,
@@ -3925,61 +4040,26 @@ fn log_trip_diagnostics(
     start_decision: &str,
     trip_event: &TripEvent,
 ) {
-    tracing::info!(
-        vehicle_id=%vehicle_id,
-        trip_active,
-        fused_power=trip_sample.power_state.is_some() && event.power_state.is_none(),
-        derived_speed=trip_sample.speed_mph.is_some() && event.speed_mph.is_none(),
-        effective_power=?trip_sample.power_state,
-        power_origin=fusion.power_origin,
-        power_policy=fusion.power_policy,
-        power_outcome=fusion.power_outcome,
-        reported_power_outcome=fusion.reported_power_outcome,
-        power_age_seconds=?field_age(trip_sample, trip_sample.power_state.is_some(), trip_sample.power_state_ts),
-        speed_mph=?trip_sample.speed_mph,
-        speed_origin=fusion.speed_origin,
-        reported_speed_outcome=fusion.reported_speed_outcome,
-        speed_age_seconds=?field_age(trip_sample, trip_sample.speed_mph.is_some(), trip_sample.speed_mph_ts),
-        gnss_outcome=fusion.gnss_outcome,
-        gnss_interval_seconds=?fusion.gnss_interval_seconds,
-        gnss_distance_miles=?fusion.gnss_distance_miles,
-        moving_segments=fusion.moving_segments,
-        odometer_outcome=fusion.odometer_outcome,
-        odometer_interval_seconds=?fusion.odometer_interval_seconds,
-        odometer_delta_miles=?fusion.odometer_delta_miles,
-        start_decision,
-        trip_transition=trip_event.transition_name(),
-        "vehicle trip diagnostics"
+    ingestion_capture::record(
+        vehicle_id,
+        CaptureKind::Trip,
+        trip_diagnostics_fields(
+            event,
+            trip_sample,
+            fusion,
+            trip_active,
+            start_decision,
+            trip_event,
+        ),
     );
 }
 
 #[cfg(test)]
-mod diagnostic_logging_tests {
+mod diagnostic_capture_tests {
     use super::*;
-    use std::{
-        io::Write,
-        sync::{Arc, Mutex},
-    };
-    #[derive(Clone)]
-    struct Capture(Arc<Mutex<Vec<u8>>>);
-    impl Write for Capture {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
+
     #[test]
     fn completed_trip_diagnostics_explain_decision_without_trip_contents() {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let writer = Capture(bytes.clone());
-        let subscriber = tracing_subscriber::fmt()
-            .without_time()
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish();
         let at = Utc::now();
         let mut detector = TripDetectorState::new(Uuid::nil());
         let mut source = TelemetryEvent::empty(Uuid::nil(), at);
@@ -3994,31 +4074,86 @@ mod diagnostic_logging_tests {
         stopped.power_state = Some(PowerState::Sleep);
         let transition = detector.process(&stopped);
         assert!(matches!(&transition, TripEvent::TripEnded { .. }));
-        tracing::subscriber::with_default(subscriber, || {
-            log_trip_diagnostics(
-                Uuid::nil(),
-                &stopped,
-                &stopped,
-                &FusionDiagnostics::default(),
-                false,
-                "already_active",
-                &transition,
-            );
-        });
-        let output = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
-        assert!(output.contains("trip_transition=\"ended\""), "{output}");
-        assert!(output.contains("speed_mph=Some(30.0)"), "{output}");
+        let fields = trip_diagnostics_fields(
+            &stopped,
+            &stopped,
+            &FusionDiagnostics::default(),
+            false,
+            "already_active",
+            &transition,
+        );
+        assert_eq!(fields["trip_transition"], "ended");
+        assert_eq!(fields["speed_mph"], 30.0);
+        assert_eq!(fields["start_decision"], "already_active");
+        let output = ingestion_capture::sanitize(fields).to_string();
         for private in [
             "33.1234567",
             "97.7654321",
             "123456.789",
             "CompletedTripData",
-            "points=",
+            "points",
         ] {
             assert!(
                 !output.contains(private),
                 "private trip contents in diagnostics: {private}"
             );
         }
+    }
+
+    #[test]
+    fn legacy_frames_keep_values_and_timestamps_but_not_location() {
+        let inbound = WsInboundEvent {
+            kind: WsInboundKind::Telemetry,
+            received_at: Utc::now(),
+            raw: serde_json::json!({
+                "type": "next",
+                "payload": { "data": { "vehicleState": {
+                    "doorFrontLeftClosed": { "value": "open", "timeStamp": "2026-09-30T21:10:47.971Z" },
+                    "gnssLocation": { "latitude": 33.1234567, "longitude": -97.7654321, "timeStamp": "2026-09-30T21:10:47.000Z" },
+                    "gnssSpeed": null,
+                } } }
+            })
+            .to_string(),
+            message_type: Some("next".into()),
+            telemetry: None,
+            charging_session: None,
+            battery_cell_type: None,
+        };
+        let (kind, fields) = legacy_capture_fields(&inbound).unwrap();
+        assert_eq!(kind, CaptureKind::LegacyFrame);
+        assert_eq!(
+            fields["fields"]["doorFrontLeftClosed"],
+            serde_json::json!({ "value": "open", "timeStamp": "2026-09-30T21:10:47.971Z" })
+        );
+        assert_eq!(
+            fields["fields"]["gnssLocationPresent"]["timeStamp"],
+            "2026-09-30T21:10:47.000Z"
+        );
+        assert!(fields["fields"].get("gnssSpeed").is_none());
+        let text = ingestion_capture::sanitize(fields).to_string();
+        assert!(!text.contains("33.1234567") && !text.contains("97.7654321"));
+    }
+
+    #[test]
+    fn ingestion_fields_explain_the_parallax_charge_guard() {
+        let mut event = TelemetryEvent::empty(Uuid::nil(), Utc::now());
+        event.power_state = Some(PowerState::Ready);
+        event.latitude = Some(33.1234567);
+        let lifecycle = lifecycle_updates(&event, true, true);
+        let fields = ingestion_capture_fields(
+            &event,
+            Some("parallax:vehicle.power.state"),
+            true,
+            &ChargeEvent::NoChange,
+            &PersistenceDecision::Persist,
+            lifecycle,
+            true,
+        );
+        assert_eq!(fields["source"], "parallax:vehicle.power.state");
+        assert_eq!(fields["state_period"], "skipped_parallax_charge_guard");
+        assert_eq!(fields["power_tx_sent"], false);
+        assert_eq!(fields["persistence"], "persisted");
+        assert_eq!(fields["values"]["power_state"], "ready");
+        assert!(fields["values"].get("latitude").is_none());
     }
 }

@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 use crate::ingestion::session_store::{decrypt_tokens, RivianTokenBundle};
 use crate::models::telemetry::{PowerState, TelemetryEvent};
+use crate::services::ingestion_capture::{self, Kind as CaptureKind};
 
 const WS_URL: &str = "wss://api.rivian.com/gql-consumer-subscriptions/graphql";
 const SUBSCRIPTION_ID: &str = "riviamigo-parallax-collector";
@@ -640,6 +641,39 @@ fn closure_field(event: &mut TelemetryEvent, position: i32) -> Option<&mut Optio
     })
 }
 
+/// Name of the canonical field a closure position maps to, for captures.
+/// Must agree with `closure_field`.
+fn closure_field_name(position: i32) -> Option<&'static str> {
+    Some(match position {
+        1 => "door_front_left_closed",
+        2 => "door_front_right_closed",
+        3 => "door_rear_left_closed",
+        4 => "door_rear_right_closed",
+        5 => "closure_frunk_closed",
+        6 => "side_bin_left_closed",
+        7 => "closure_liftgate_closed",
+        12 => "window_fl_closed",
+        13 => "window_fr_closed",
+        14 => "window_rl_closed",
+        15 => "window_rr_closed",
+        _ => return None,
+    })
+}
+
+/// Name of the canonical field a lock position maps to, for captures.
+/// Must agree with `set_lock`.
+fn lock_field_name(position: i32) -> Option<&'static str> {
+    Some(match position {
+        1 => "door_front_left_locked",
+        2 => "door_front_right_locked",
+        3 => "door_rear_left_locked",
+        4 => "door_rear_right_locked",
+        5 => "closure_frunk_locked",
+        7 => "closure_liftgate_locked",
+        _ => return None,
+    })
+}
+
 fn set_lock(event: &mut TelemetryEvent, position: i32, locked: bool) -> Result<bool> {
     match position {
         1 => event.door_front_left_locked = Some(locked),
@@ -770,16 +804,6 @@ pub async fn run(database_url: &str) -> Result<()> {
     Ok(())
 }
 
-async fn ingestion_diagnostics_enabled(pool: &PgPool, vehicle_id: Uuid) -> bool {
-    sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicle_ingestion_diagnostics WHERE vehicle_id=$1 AND enabled_until>now())",
-    )
-    .bind(vehicle_id)
-    .fetch_one(pool)
-    .await
-    .unwrap_or(false)
-}
-
 async fn load_sessions(pool: &PgPool) -> Result<Vec<CollectorSession>> {
     let rows = sqlx::query_as::<_, (Uuid, String, Vec<u8>, String)>(
         r#"SELECT v.id, v.rivian_vehicle_id, c.encrypted_tokens,
@@ -897,11 +921,14 @@ async fn collect_connection_with_context(
         ))
         .await?;
     set_collector_state(pool, session.vehicle_id, "connected", None).await?;
+    ingestion_capture::record(
+        session.vehicle_id,
+        CaptureKind::ParallaxConnection,
+        json!({ "event": "subscribed", "topics": VEHICLE_STATE_TOPICS.len() }),
+    );
 
     let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
     heartbeat.tick().await;
-    let mut diagnostics_enabled = false;
-    let mut diagnostics_checked_at = None;
     loop {
         tokio::select! {
             message = websocket.next() => {
@@ -922,28 +949,42 @@ async fn collect_connection_with_context(
                                 else {
                                     continue;
                                 };
-                                let now = tokio::time::Instant::now();
-                                if diagnostics_checked_at.is_none_or(|checked_at| {
-                                    now.duration_since(checked_at) >= Duration::from_secs(30)
-                                }) {
-                                    diagnostics_enabled = ingestion_diagnostics_enabled(pool, session.vehicle_id).await;
-                                    diagnostics_checked_at = Some(now);
-                                }
                                 let context = active_sessions.borrow_and_update().clone();
-                                if persist_envelope(pool, session.vehicle_id, envelope, &context, telemetry_tx, diagnostics_enabled).await.is_err() {
+                                if persist_envelope(pool, session.vehicle_id, envelope, &context, telemetry_tx).await.is_err() {
                                     tracing::debug!(vehicle_id=%session.vehicle_id, "Parallax frame rejected by typed decoder");
                                     let _ = sqlx::query("UPDATE riviamigo.parallax_collector_state SET decode_error_count=decode_error_count+1,last_frame_at=now(),updated_at=now() WHERE vehicle_id=$1")
                                         .bind(session.vehicle_id).execute(pool).await;
                                 }
                             }
-                            Some("error") => anyhow::bail!("Parallax subscription rejected"),
+                            Some("error") => {
+                                ingestion_capture::record(
+                                    session.vehicle_id,
+                                    CaptureKind::ParallaxConnection,
+                                    json!({ "event": "subscription_rejected" }),
+                                );
+                                anyhow::bail!("Parallax subscription rejected")
+                            }
                             Some("complete") => {
+                                ingestion_capture::record(
+                                    session.vehicle_id,
+                                    CaptureKind::ParallaxConnection,
+                                    json!({ "event": "subscription_completed" }),
+                                );
                                 anyhow::bail!("Parallax subscription completed")
                             }
                             _ => {}
                         }
                     }
                     Message::Close(frame) => {
+                        ingestion_capture::record(
+                            session.vehicle_id,
+                            CaptureKind::ParallaxConnection,
+                            json!({
+                                "event": "closed",
+                                "close_code": frame.as_ref().map(|f| u16::from(f.code)),
+                                "close_reason": frame.as_ref().map(|f| f.reason.to_string()),
+                            }),
+                        );
                         set_collector_state(pool, session.vehicle_id, "disconnected", None)
                             .await?;
                         anyhow::bail!("Parallax socket closed: {frame:?}");
@@ -1058,23 +1099,103 @@ impl ForwardOutcome {
     }
 }
 
-fn trace_envelope_diagnostics(
+/// Facts gathered while handling one envelope, for an ingestion capture.
+#[derive(Debug)]
+struct EnvelopeReport {
+    forward_outcome: ForwardOutcome,
+    decoded: Option<Value>,
+    notes: Vec<String>,
+}
+
+impl EnvelopeReport {
+    fn new() -> Self {
+        Self {
+            forward_outcome: ForwardOutcome::NotApplicable,
+            decoded: None,
+            notes: Vec::new(),
+        }
+    }
+}
+
+/// Raw payload bytes kept in a capture, per envelope.
+const CAPTURE_PAYLOAD_MAX_BYTES: usize = 4096;
+
+/// Raw payloads are captured only for topics that cannot carry location or
+/// network identity, so a capture stays shareable.
+fn capture_payload_allowed(topic: &str) -> bool {
+    !matches!(topic, "dynamics.vehicle.gnss" | "vehicle.network.state")
+}
+
+/// Every entry of a body frame with the canonical field it maps to (or
+/// `null`), so a capture shows positions the decoder does not know.
+fn body_entries(topic: &str, payload: &[u8]) -> Option<Value> {
+    let entries: Vec<(Option<i32>, Option<i32>, Option<&'static str>)> = match topic {
+        "body.closures.states" => ClosureStates::decode(payload)
+            .ok()?
+            .states
+            .into_iter()
+            .map(|entry| {
+                let field = entry.position.and_then(closure_field_name);
+                (entry.position, entry.state, field)
+            })
+            .collect(),
+        "body.locks.states" => LockStates::decode(payload)
+            .ok()?
+            .states
+            .into_iter()
+            .map(|entry| {
+                let field = entry.position.and_then(lock_field_name);
+                (entry.position, entry.state, field)
+            })
+            .collect(),
+        _ => return None,
+    };
+    Some(Value::Array(
+        entries
+            .into_iter()
+            .map(|(position, state, field)| {
+                json!({ "position": position, "state": state, "field": field })
+            })
+            .collect(),
+    ))
+}
+
+fn capture_envelope(
     vehicle_id: Uuid,
     topic: &str,
-    payload_bytes: Option<usize>,
-    source_age_ms: i64,
-    outcome: EnvelopeOutcome,
-    forward_outcome: ForwardOutcome,
+    payload: Option<&[u8]>,
+    received_at: DateTime<Utc>,
+    source_at: DateTime<Utc>,
+    outcome: &str,
+    report: &EnvelopeReport,
 ) {
-    tracing::info!(
-        vehicle_id=%vehicle_id,
-        topic=%topic,
-        payload_bytes=?payload_bytes,
-        source_age_ms,
-        outcome=outcome.as_str(),
-        forward_outcome=forward_outcome.as_str(),
-        "Parallax envelope diagnostics"
-    );
+    let mut fields = json!({
+        "topic": topic,
+        "source_at": source_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "source_age_ms": (received_at - source_at).num_milliseconds(),
+        "payload_bytes": payload.map(<[u8]>::len),
+        "outcome": outcome,
+        "forward_outcome": report.forward_outcome.as_str(),
+    });
+    if let Some(payload) = payload {
+        if capture_payload_allowed(topic) {
+            let kept = &payload[..payload.len().min(CAPTURE_PAYLOAD_MAX_BYTES)];
+            fields["payload_hex"] = Value::from(hex::encode(kept));
+            if kept.len() < payload.len() {
+                fields["payload_truncated"] = Value::from(true);
+            }
+        }
+        if let Some(entries) = body_entries(topic, payload) {
+            fields["entries"] = entries;
+        }
+    }
+    if let Some(decoded) = &report.decoded {
+        fields["decoded"] = decoded.clone();
+    }
+    if !report.notes.is_empty() {
+        fields["notes"] = json!(report.notes);
+    }
+    ingestion_capture::record(vehicle_id, CaptureKind::ParallaxEnvelope, fields);
 }
 
 fn is_canonical_telemetry_topic(topic: &str) -> bool {
@@ -1098,52 +1219,55 @@ async fn persist_envelope(
     envelope: &Value,
     active_session: &crate::ingestion::worker::ActiveSessionContext,
     telemetry_tx: Option<&mpsc::Sender<(String, TelemetryEvent)>>,
-    diagnostics_enabled: bool,
 ) -> Result<()> {
     let topic = envelope
         .get("rvm")
         .and_then(Value::as_str)
         .context("missing RVM topic")?;
+    let capturing = ingestion_capture::is_capturing(vehicle_id);
+    let received_at = Utc::now();
+    let source_at = parse_source_at(envelope.get("timestamp")).unwrap_or(received_at);
     // The server can send unsolicited data. Only the exact subscription
     // allowlist may reach a decoder or persistence branch.
     if !is_allowlisted_topic(topic) {
+        if capturing {
+            capture_envelope(
+                vehicle_id,
+                topic,
+                None,
+                received_at,
+                source_at,
+                "not_allowlisted",
+                &EnvelopeReport::new(),
+            );
+        }
         return Ok(());
     }
-    let received_at = Utc::now();
-    let source_at = parse_source_at(envelope.get("timestamp")).unwrap_or(received_at);
-    let encoded = match envelope.get("payload").and_then(Value::as_str) {
-        Some(encoded) => encoded,
-        None => {
-            if diagnostics_enabled {
-                trace_envelope_diagnostics(
-                    vehicle_id,
-                    topic,
-                    None,
-                    (received_at - source_at).num_milliseconds(),
-                    EnvelopeOutcome::Rejected,
-                    ForwardOutcome::NotEvaluated,
-                );
-            }
-            anyhow::bail!("missing Parallax payload");
-        }
-    };
-    let payload = match BASE64.decode(encoded) {
+    let mut report = EnvelopeReport::new();
+    let payload = match envelope
+        .get("payload")
+        .and_then(Value::as_str)
+        .context("missing Parallax payload")
+        .and_then(|encoded| BASE64.decode(encoded).map_err(Into::into))
+    {
         Ok(payload) => payload,
         Err(error) => {
-            if diagnostics_enabled {
-                trace_envelope_diagnostics(
+            if capturing {
+                report.forward_outcome = ForwardOutcome::NotEvaluated;
+                report.notes.push(error.to_string());
+                capture_envelope(
                     vehicle_id,
                     topic,
                     None,
-                    (received_at - source_at).num_milliseconds(),
-                    EnvelopeOutcome::Rejected,
-                    ForwardOutcome::NotEvaluated,
+                    received_at,
+                    source_at,
+                    EnvelopeOutcome::Rejected.as_str(),
+                    &report,
                 );
             }
-            return Err(error.into());
+            return Err(error);
         }
     };
-    let mut forward_outcome = ForwardOutcome::NotApplicable;
     let result = persist_allowlisted_envelope(
         pool,
         vehicle_id,
@@ -1153,21 +1277,26 @@ async fn persist_envelope(
         source_at,
         active_session,
         telemetry_tx,
-        &mut forward_outcome,
-        diagnostics_enabled,
+        &mut report,
+        capturing,
     )
     .await;
-    if diagnostics_enabled {
-        trace_envelope_diagnostics(
+    if capturing {
+        if let Err(error) = &result {
+            report.notes.push(error.to_string());
+        }
+        capture_envelope(
             vehicle_id,
             topic,
-            Some(payload.len()),
-            (received_at - source_at).num_milliseconds(),
+            Some(&payload),
+            received_at,
+            source_at,
             result
                 .as_ref()
                 .copied()
-                .unwrap_or(EnvelopeOutcome::Rejected),
-            forward_outcome,
+                .unwrap_or(EnvelopeOutcome::Rejected)
+                .as_str(),
+            &report,
         );
     }
     result.map(|_| ())
@@ -1183,8 +1312,8 @@ async fn persist_allowlisted_envelope(
     source_at: DateTime<Utc>,
     active_session: &crate::ingestion::worker::ActiveSessionContext,
     telemetry_tx: Option<&mpsc::Sender<(String, TelemetryEvent)>>,
-    forward_outcome: &mut ForwardOutcome,
-    diagnostics_enabled: bool,
+    report: &mut EnvelopeReport,
+    capturing: bool,
 ) -> Result<EnvelopeOutcome> {
     let hash = Sha256::digest(payload).to_vec();
     let associated_session = matching_active_session(active_session, source_at);
@@ -1193,25 +1322,30 @@ async fn persist_allowlisted_envelope(
     // channel must never interrupt this companion's independent storage path.
     let mut canonical_outcome = None;
     if is_canonical_telemetry_topic(topic) {
-        *forward_outcome = ForwardOutcome::NotEvaluated;
-        let mut notes = Vec::new();
-        let decoded =
-            decode_vehicle_telemetry_with_notes(topic, payload, source_at, vehicle_id, &mut notes);
-        if !notes.is_empty() && diagnostics_enabled {
-            for note in &notes {
-                tracing::info!(vehicle_id=%vehicle_id, topic=%topic, reason=%note, "typed Parallax entry skipped");
-            }
+        report.forward_outcome = ForwardOutcome::NotEvaluated;
+        let decoded = decode_vehicle_telemetry_with_notes(
+            topic,
+            payload,
+            source_at,
+            vehicle_id,
+            &mut report.notes,
+        );
+        for note in &report.notes {
+            tracing::debug!(vehicle_id=%vehicle_id, topic=%topic, reason=%note, "typed Parallax entry skipped");
         }
         match decoded {
             Ok(Some(event)) => {
                 canonical_outcome = Some(EnvelopeOutcome::Decoded);
+                if capturing {
+                    report.decoded = Some(ingestion_capture::present_fields(&event));
+                }
                 if source_at < received_at - chrono::Duration::minutes(5)
                     || source_at > received_at + chrono::Duration::seconds(30)
                 {
-                    *forward_outcome = ForwardOutcome::Stale;
+                    report.forward_outcome = ForwardOutcome::Stale;
                 } else if let Some(telemetry_tx) = telemetry_tx {
                     match telemetry_tx.try_send((topic.to_owned(), event)) {
-                        Ok(()) => *forward_outcome = ForwardOutcome::Enqueued,
+                        Ok(()) => report.forward_outcome = ForwardOutcome::Enqueued,
                         Err(error) => {
                             let (reason, outcome) = match &error {
                                 mpsc::error::TrySendError::Full(_) => {
@@ -1221,7 +1355,7 @@ async fn persist_allowlisted_envelope(
                                     ("closed", ForwardOutcome::Closed)
                                 }
                             };
-                            *forward_outcome = outcome;
+                            report.forward_outcome = outcome;
                             let count = TELEMETRY_FORWARD_DROP_LOG_COUNT
                                 .fetch_add(1, Ordering::Relaxed)
                                 + 1;
@@ -1243,16 +1377,16 @@ async fn persist_allowlisted_envelope(
                         }
                     }
                 } else {
-                    *forward_outcome = ForwardOutcome::NotAttached;
+                    report.forward_outcome = ForwardOutcome::NotAttached;
                 }
             }
             Ok(None) => {
-                canonical_outcome = Some(if notes.is_empty() {
+                canonical_outcome = Some(if report.notes.is_empty() {
                     EnvelopeOutcome::Empty
                 } else {
                     EnvelopeOutcome::Ignored
                 });
-                *forward_outcome = ForwardOutcome::NoCanonicalData;
+                report.forward_outcome = ForwardOutcome::NoCanonicalData;
             }
             Err(_) => {
                 anyhow::bail!("typed Parallax decoder rejected topic {topic}");
@@ -2106,6 +2240,49 @@ mod tests {
                 .collect(),
         }
         .encode_to_vec()
+    }
+
+    #[test]
+    fn capture_field_names_agree_with_the_decoder_mappings() {
+        for position in -1..=40 {
+            let mut event = TelemetryEvent::empty(Uuid::nil(), Utc::now());
+            assert_eq!(
+                closure_field(&mut event, position).is_some(),
+                closure_field_name(position).is_some(),
+                "closure position {position}"
+            );
+            assert_eq!(
+                set_lock(&mut event, position, true).is_ok(),
+                lock_field_name(position).is_some(),
+                "lock position {position}"
+            );
+        }
+    }
+
+    #[test]
+    fn capture_lists_every_body_entry_including_unmapped_positions() {
+        let entries = body_entries(
+            "body.closures.states",
+            &closure_frame(&[(1, Some(1)), (20, Some(2)), (10000, None)]),
+        )
+        .unwrap();
+        assert_eq!(
+            entries,
+            json!([
+                { "position": 1, "state": 1, "field": "door_front_left_closed" },
+                { "position": 20, "state": 2, "field": null },
+                { "position": 10000, "state": null, "field": null },
+            ])
+        );
+        assert!(body_entries("vehicle.power.state", &[]).is_none());
+    }
+
+    #[test]
+    fn capture_never_keeps_location_or_network_payloads() {
+        assert!(!capture_payload_allowed("dynamics.vehicle.gnss"));
+        assert!(!capture_payload_allowed("vehicle.network.state"));
+        assert!(capture_payload_allowed("body.closures.states"));
+        assert!(capture_payload_allowed("vehicle.power.state"));
     }
 
     #[test]

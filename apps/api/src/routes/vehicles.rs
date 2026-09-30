@@ -37,6 +37,7 @@ use crate::{
         external_connections::{
             rivian_renewal_state_for_auth, RivianRenewalState, RIVIAN_RENEWAL_INTERVAL,
         },
+        ingestion_capture,
     },
 };
 
@@ -90,7 +91,19 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/{id}/raw-events", get(raw_vehicle_events))
         .route(
             "/vehicles/{id}/ingestion-diagnostics",
-            get(get_ingestion_diagnostics).put(set_ingestion_diagnostics),
+            get(get_ingestion_diagnostics),
+        )
+        .route(
+            "/vehicles/{id}/ingestion-diagnostics/start",
+            post(start_ingestion_capture),
+        )
+        .route(
+            "/vehicles/{id}/ingestion-diagnostics/stop",
+            post(stop_ingestion_capture),
+        )
+        .route(
+            "/vehicles/{id}/ingestion-diagnostics/export",
+            get(export_ingestion_capture),
         )
         .route(
             "/vehicles/{id}/raw-events/{event_id}",
@@ -132,61 +145,111 @@ struct RawEventParams {
     message_type: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct IngestionDiagnosticsBody {
-    enabled: bool,
-}
-
 async fn get_ingestion_diagnostics(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(vehicle_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<ingestion_capture::CaptureStatus>, AppError> {
     require_vehicle_access(&auth, vehicle_id)?;
     require_raw_event_access(&state, &auth, vehicle_id).await?;
-    let enabled_until = sqlx::query_scalar::<_, chrono::DateTime<Utc>>(
-        "SELECT enabled_until FROM riviamigo.vehicle_ingestion_diagnostics WHERE vehicle_id=$1 AND enabled_until>now()",
-    )
-    .bind(vehicle_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    Ok(Json(serde_json::json!({
-        "enabled": enabled_until.is_some(),
-        "enabled_until": enabled_until
-    })))
+    Ok(Json(
+        ingestion_capture::status(&state.pool, vehicle_id).await?,
+    ))
 }
 
-async fn set_ingestion_diagnostics(
+async fn start_ingestion_capture(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(vehicle_id): Path<Uuid>,
-    Json(body): Json<IngestionDiagnosticsBody>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<ingestion_capture::CaptureStatus>, AppError> {
     require_vehicle_access(&auth, vehicle_id)?;
     require_raw_event_access(&state, &auth, vehicle_id).await?;
     require_remote_backed_vehicle(&state.pool, vehicle_id).await?;
-    let enabled_until = if body.enabled {
-        Some(sqlx::query_scalar::<_, chrono::DateTime<Utc>>(
-            "INSERT INTO riviamigo.vehicle_ingestion_diagnostics(vehicle_id,enabled_until,enabled_by) \
-             VALUES($1,now()+interval '1 hour',$2) \
-             ON CONFLICT(vehicle_id) DO UPDATE SET enabled_until=EXCLUDED.enabled_until,enabled_by=EXCLUDED.enabled_by,updated_at=now() \
-             RETURNING enabled_until",
-        )
-        .bind(vehicle_id)
-        .bind(auth.user_id)
-        .fetch_one(&state.pool)
-        .await?)
-    } else {
-        sqlx::query("DELETE FROM riviamigo.vehicle_ingestion_diagnostics WHERE vehicle_id=$1")
-            .bind(vehicle_id)
-            .execute(&state.pool)
-            .await?;
-        None
-    };
-    Ok(Json(serde_json::json!({
-        "enabled": enabled_until.is_some(),
-        "enabled_until": enabled_until
-    })))
+    ingestion_capture::start(&state.pool, vehicle_id, auth.user_id)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(
+        ingestion_capture::status(&state.pool, vehicle_id).await?,
+    ))
+}
+
+async fn stop_ingestion_capture(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(vehicle_id): Path<Uuid>,
+) -> Result<Json<ingestion_capture::CaptureStatus>, AppError> {
+    require_vehicle_access(&auth, vehicle_id)?;
+    require_raw_event_access(&state, &auth, vehicle_id).await?;
+    ingestion_capture::stop(&state.pool, vehicle_id, ingestion_capture::StopReason::User)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(
+        ingestion_capture::status(&state.pool, vehicle_id).await?,
+    ))
+}
+
+const CAPTURE_EXPORT_PAGE: i64 = 1000;
+
+/// Stream the vehicle's latest capture as NDJSON: one header line, then one
+/// line per event. Neither carries the vehicle id, VIN, or name.
+async fn export_ingestion_capture(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(vehicle_id): Path<Uuid>,
+) -> Result<Response<Body>, AppError> {
+    require_vehicle_access(&auth, vehicle_id)?;
+    require_raw_event_access(&state, &auth, vehicle_id).await?;
+    let export = ingestion_capture::export(&state.pool, vehicle_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let pool = state.pool.clone();
+    let capture_id = export.capture_id;
+    let header_line = format!("{}\n", export.header);
+    let rows = futures::stream::unfold(Some(0_i64), move |cursor| {
+        let pool = pool.clone();
+        async move {
+            let after_id = cursor?;
+            match ingestion_capture::export_rows(&pool, capture_id, after_id, CAPTURE_EXPORT_PAGE)
+                .await
+            {
+                Ok(rows) if rows.is_empty() => None,
+                Ok(rows) => {
+                    let last_id = rows.last().map_or(after_id, |(id, _)| *id);
+                    let mut chunk = String::new();
+                    for (_, line) in rows {
+                        chunk.push_str(&line.to_string());
+                        chunk.push('\n');
+                    }
+                    Some((Ok(axum::body::Bytes::from(chunk)), Some(last_id)))
+                }
+                Err(error) => Some((Err(std::io::Error::other(error)), None)),
+            }
+        }
+    });
+    let body = futures::StreamExt::chain(
+        futures::stream::once(async move {
+            Ok::<_, std::io::Error>(axum::body::Bytes::from(header_line))
+        }),
+        rows,
+    );
+
+    let mut response = Response::new(Body::from_stream(body));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/x-ndjson"),
+    );
+    let content_disposition = HeaderValue::from_str(&format!(
+        "attachment; filename=\"{}\"",
+        export.filename.replace('"', "_")
+    ))
+    .map_err(|error| AppError::Internal(anyhow::anyhow!("invalid download filename: {error}")))?;
+    response
+        .headers_mut()
+        .insert(header::CONTENT_DISPOSITION, content_disposition);
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
 }
 
 #[derive(Deserialize)]

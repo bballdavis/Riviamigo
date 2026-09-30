@@ -900,6 +900,15 @@ async fn connect_and_subscribe(
                                 close_reason = frame.as_ref().map(|f| f.reason.to_string()),
                                 "Rivian WS close frame"
                             );
+                            crate::services::ingestion_capture::record(
+                                *vehicle_id,
+                                crate::services::ingestion_capture::Kind::LegacyConnection,
+                                json!({
+                                    "message_type": "connection_ttl_expired",
+                                    "close_code": frame.as_ref().map(|f| u16::from(f.code)),
+                                    "close_reason": frame.as_ref().map(|f| f.reason.to_string()),
+                                }),
+                            );
                             return Ok(WsLoopEnd::ConnectionTtlExpired);
                         }
                         if is_rivian_no_active_subscriptions(frame.as_ref()) {

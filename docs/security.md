@@ -93,6 +93,13 @@ precise vehicle locations in public issues.
 - There is currently **no automatic retention/deletion job** for security
   events. Retention is therefore bounded by the operator's database retention
   and backup policy, not by an application purge interval.
+- Owner-started ingestion captures are stored in
+  `riviamigo.vehicle_ingestion_capture_events`. They hold sanitized ingestion
+  facts, decoded values, and raw Parallax payload bytes for topics that cannot
+  carry location or network identity. A key filter removes vehicle IDs, VINs,
+  names, coordinates, and credential-like fields before storage and again on
+  export. Each vehicle keeps one capture, which stops after one hour and is
+  purged 24 hours after it stops.
 - Structured `[riviamigo][LEVEL]` key-value logs are written to stdout/stderr; Docker supplies the outer timestamp. The production wrapper normalizes Nginx error lines into the same shape.
 
 ## Security regression controls

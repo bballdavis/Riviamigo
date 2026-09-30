@@ -143,8 +143,10 @@ vi.mock('@riviamigo/hooks', () => ({
       return settingsMocks.preferences;
     }),
     changePassword: hooksMocks.changePassword,
-    getVehicleIngestionDiagnostics: vi.fn().mockResolvedValue({ enabled: false, enabled_until: null }),
-    updateVehicleIngestionDiagnostics: vi.fn().mockResolvedValue({ enabled: true, enabled_until: '2026-09-24T18:00:00Z' }),
+    getVehicleIngestionCapture: vi.fn().mockResolvedValue({ state: 'idle', started_at: null, ends_at: null, stopped_at: null, stop_reason: null, event_count: 0, last_event_at: null, truncated: false }),
+    startVehicleIngestionCapture: vi.fn().mockResolvedValue({ ...{ state: 'idle', started_at: null, ends_at: null, stopped_at: null, stop_reason: null, event_count: 0, last_event_at: null, truncated: false }, state: 'capturing', started_at: '2026-09-24T17:00:00Z', ends_at: '2026-09-24T18:00:00Z' }),
+    stopVehicleIngestionCapture: vi.fn().mockResolvedValue({ ...{ state: 'idle', started_at: null, ends_at: null, stopped_at: null, stop_reason: null, event_count: 0, last_event_at: null, truncated: false }, state: 'stopped', started_at: '2026-09-24T17:00:00Z', ends_at: '2026-09-24T18:00:00Z', stopped_at: '2026-09-24T17:20:00Z', stop_reason: 'user', event_count: 12 }),
+    downloadVehicleIngestionCapture: vi.fn().mockResolvedValue({ blob: new Blob(['{}']), fileName: 'riviamigo-capture-r1t-20260924T1700Z.jsonl' }),
     getOidcIdentities: vi.fn().mockResolvedValue({
       password_configured: true,
       oidc_linked: false,
@@ -1302,7 +1304,7 @@ describe('Settings page', () => {
     });
   });
 
-  it('enables diagnostics for connected owners and omits demo vehicles', async () => {
+  it('starts and stops an ingestion capture for connected owners and omits demo vehicles', async () => {
     const hooks = await import('@riviamigo/hooks');
     settingsMocks.vehicles = [...settingsMocks.vehicles, {
       id: 'demo-v1',
@@ -1319,11 +1321,50 @@ describe('Settings page', () => {
     }];
     renderSettings();
     clickSettingsSection('Raw Data');
-    const toggle = await screen.findByRole('switch', { name: 'Enable ingestion diagnostics for Adventure Truck' });
-    expect(screen.queryByRole('switch', { name: 'Enable ingestion diagnostics for Demo R2' })).not.toBeInTheDocument();
-    await waitFor(() => expect(toggle).not.toBeDisabled());
-    fireEvent.click(toggle);
-    await waitFor(() => expect(hooks.api.updateVehicleIngestionDiagnostics).toHaveBeenCalledWith('v1', true));
+    const startButton = await screen.findByRole('button', { name: 'Start capture for Adventure Truck' });
+    expect(screen.queryByRole('button', { name: 'Start capture for Demo R2' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Download capture for Adventure Truck' })).not.toBeInTheDocument();
+    await waitFor(() => expect(startButton).not.toBeDisabled());
+    fireEvent.click(startButton);
+    await waitFor(() => expect(hooks.api.startVehicleIngestionCapture).toHaveBeenCalledWith('v1'));
+
+    const stopButton = await screen.findByRole('button', { name: 'Stop capture for Adventure Truck' });
+    expect(screen.getByText('Capturing')).toBeInTheDocument();
+    fireEvent.click(stopButton);
+    await waitFor(() => expect(hooks.api.stopVehicleIngestionCapture).toHaveBeenCalledWith('v1'));
+
+    const downloadButton = await screen.findByRole('button', { name: 'Download capture for Adventure Truck' });
+    expect(screen.getByText(/12 events/)).toBeInTheDocument();
+    const createObjectURL = vi.fn(() => 'blob:capture');
+    const revokeObjectURL = vi.fn();
+    Object.assign(URL, { createObjectURL, revokeObjectURL });
+    fireEvent.click(downloadButton);
+    await waitFor(() => expect(hooks.api.downloadVehicleIngestionCapture).toHaveBeenCalledWith('v1'));
+  });
+
+  it('confirms before a new capture replaces the previous one', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    vi.mocked(hooks.api.getVehicleIngestionCapture).mockResolvedValueOnce({
+      state: 'stopped',
+      started_at: '2026-09-24T17:00:00Z',
+      ends_at: '2026-09-24T18:00:00Z',
+      stopped_at: '2026-09-24T18:00:00Z',
+      stop_reason: 'expired',
+      event_count: 0,
+      last_event_at: null,
+      truncated: false,
+    });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderSettings();
+    clickSettingsSection('Raw Data');
+    const newCapture = await screen.findByRole('button', { name: 'Start capture for Adventure Truck' });
+    expect(await screen.findByText(/stopped after 1 hour/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download capture for Adventure Truck' })).toBeDisabled();
+    await waitFor(() => expect(newCapture).not.toBeDisabled());
+    fireEvent.click(newCapture);
+    expect(confirm).toHaveBeenCalled();
+    expect(hooks.api.startVehicleIngestionCapture).not.toHaveBeenCalled();
+    confirm.mockRestore();
   });
 
   it('renders and operates the admin Backups section', async () => {

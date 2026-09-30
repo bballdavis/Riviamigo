@@ -1,70 +1,82 @@
 ---
 title: Vehicle state and trip ingestion diagnostics
-description: Trace allowlisted Parallax frames, canonical telemetry fusion, and sparse trip detection for any vehicle model.
+description: Record and read an ingestion capture of Parallax frames, legacy frames, canonical telemetry fusion, and trip detection for any vehicle model.
 ---
 
 # Vehicle state and trip ingestion diagnostics
 
 Use this when a connected vehicle shows missing state fields or trips. Parallax
-acquisition already runs inside the API process. The Settings switch enables
-additional per-frame diagnostics; `logs -f` displays API output. There is no
-standalone logger, container, or downloadable capture. Keep VINs, account data,
-exact coordinates, tokens, secrets, and raw payloads out of reports.
+acquisition already runs inside the API process. The owner records an
+**ingestion capture** from **Settings → Raw data** and shares the downloaded
+`.jsonl` file. Captures exclude VINs, vehicle IDs, names, coordinates, tokens,
+and secrets, so the file can be shared as it is.
 
-## Collect a diagnostic window
+## Collect a capture
 
-1. From the repository root, start the standard stack if needed:
-
-   ```bash
-   docker compose --env-file .env -f compose/docker-compose.yml up -d
-   ```
-
-   Then follow the API output:
-
-   ```bash
-   docker compose --env-file .env -f compose/docker-compose.yml logs -f riviamigo
-   ```
-
-   Use the operator's equivalent commands for another deployment.
-2. Check **Health → Acquisition** and **Settings → Raw data → Collector
+1. Check **Health → Acquisition** and **Settings → Raw data → Collector
    diagnostics** for socket, heartbeat, reconnect, and decoder context.
-3. In **Settings → Raw data**, an owner or manager enables **Ingestion
-   diagnostics** for the affected non-demo vehicle. It runs for up to one hour
-   and adds diagnostic events; it does not enable ingestion. Allow up to 30
-   seconds for the worker to pick up the switch.
-4. Create or wait for a real vehicle update. Keep only redacted diagnostic
-   lines and turn the switch off when the window is complete.
+2. In **Settings → Raw data → Ingestion capture**, an owner or manager selects
+   **Start capture** for the affected non-demo vehicle. Recording starts
+   immediately, runs for up to one hour, and does not change ingestion.
+3. Create or wait for a real vehicle update, then select **Stop** and
+   **Download**. Starting a new capture replaces the old one; a stopped capture
+   is deleted after 24 hours.
 
-`Parallax envelope diagnostics` reports an allowlisted topic, outcome (`empty`,
-`ignored`, `decoded`, or `rejected`), payload byte length, source age, and
-canonical-forward result (`enqueued`, `stale`, `full`, `closed`, or no canonical
-data). `vehicle ingestion diagnostics` reports source, field presence, and
-sample age. `vehicle trip diagnostics` reports the selected power source and
-age, numeric speed and origin, GNSS or odometer derivation reason and deltas,
-trip category checks, start decision, and sanitized transition. These events
-exclude payload and protobuf wire data, credentials, network identifiers, and
-coordinates; they do include the existing vehicle ID, which must be redacted
-before sharing.
+A capture file contains:
+
+- a header line with the app version, vehicle model, capture window, event
+  counts by kind, and whether any events were dropped or the 50,000-event limit
+  was reached;
+- `parallax_envelope`: every Parallax frame with its topic, source timestamp
+  and age, decode outcome, whether it reached the canonical worker, the decoded
+  values, and the raw payload bytes (except GNSS and network frames). Body
+  frames also list each closure or lock position with the field it maps to, or
+  `null` when Riviamigo does not know the position;
+- `parallax_connection` and `legacy_connection`: subscribe, close, and
+  connection-renewal events for both Rivian streams;
+- `legacy_frame`: each legacy WebSocket update with every reported field, its
+  value, and Rivian's timestamp, so it can be lined up against Parallax;
+- `ingestion`: what the worker did with each sample: its source, values,
+  whether it was stored or suppressed as a duplicate, the state it implies,
+  and whether charge and power lifecycle signals were updated;
+- `trip`: the trip detector's power and speed choices, GNSS and odometer
+  evidence, start decision, and transition.
+
+Captures never include coordinates, credentials, the VIN, the vehicle ID, or
+vehicle and account names. GNSS frames record only that a location was present.
+
+To line up both streams, sort by `recorded_at` and compare each
+`parallax_envelope` `source_at` and `decoded` values with the `legacy_frame`
+field timestamps for the same change.
 
 ## Symptom → next check
 
-- Envelope outcome is `rejected`: check the topic and decoder/build version;
-  the log intentionally omits payload bytes and decoder wire contents.
-- Envelope outcome is `empty` or `ignored`: the frame had no usable canonical
+- Envelope `outcome` is `rejected`: read `notes` for the decoder error and
+  decode `payload_hex` against the topic's protobuf shape.
+- Envelope `outcome` is `empty` or `ignored`: the frame had no usable canonical
   value or the topic has no stable canonical mapping. Unknown enum values do
   not become inferred states.
-- Canonical-forward result is `stale`: compare the source age with the event
-  time and check whether the update arrived outside the freshness window.
-- Canonical-forward result is `full` or `closed`: inspect worker health and
+- Body `entries` contain `"field": null`: the vehicle reported a closure or
+  lock position the decoder does not map. Note the position and what was
+  physically operated at that time.
+- `forward_outcome` is `stale`: compare `source_age_ms` with the freshness
+  window (five minutes old, thirty seconds ahead).
+- `forward_outcome` is `full` or `closed`: inspect worker health and
   backpressure. Parallax collection keeps its independent persistence path.
-- `vehicle trip diagnostics`: check the effective power source and freshness.
-  Change-only Parallax power remains latched until a newer state arrives;
-  periodic legacy `vehicleState` power is fresh for at most two minutes. Check
-  that direct speed is used when present and that a GNSS or odometer estimate
-  is used only when direct speed is absent.
-- No topic or event: check Acquisition and upstream availability. A connected
-  socket proves the subscription and heartbeat, not that a vehicle sent a
-  particular topic.
+- No `parallax_envelope` rows at all: check the `parallax_connection` rows and
+  Acquisition. A connected socket proves the subscription, not that a vehicle
+  sent a particular topic.
+- `ingestion` rows show `"state_period": "skipped_parallax_charge_guard"`:
+  expected during a charge. Parallax power has no Charging value, so Parallax
+  frames without charger state cannot close the Charging period or slow
+  live-session polling while a charge session is open.
+- `ingestion` `persistence` is `suppressed_duplicate`: the sample matched the
+  stored state, so it left no new telemetry row.
+- `trip` rows: check the effective power source and freshness. Change-only
+  Parallax power remains latched until a newer state arrives; periodic legacy
+  `vehicleState` power is fresh for at most two minutes. Check that direct
+  speed is used when present and that a GNSS or odometer estimate is used only
+  when direct speed is absent, then read the start decision and transition.
 
 ## Exact-SHA real-drive acceptance
 
@@ -73,23 +85,22 @@ that a vehicle sent the expected signals or that a trip completed. Record the
 full source Git SHA and immutable image digest for a controlled real-drive
 check, then confirm the running API instance uses that build.
 
-- [ ] Enable diagnostics for a non-demo vehicle and confirm fresh allowlisted
-      state frames appear with bounded metadata.
+- [ ] Start a capture for a non-demo vehicle and confirm fresh allowlisted
+      Parallax frames appear in the downloaded file.
 - [ ] Capture a short, known drive safely. A passenger can observe the live
-      dashboard; capture server logs only while stopped.
+      dashboard; stop and download the capture only while parked.
 - [ ] Confirm recognized power and its source age are plausible: Parallax
       change-only state remains latched until an explicit new state, while
       periodic legacy power ages out after two minutes.
 - [ ] Confirm reported numeric speed is preserved. When it is absent, check
       that any derived speed names its GNSS or odometer source and has plausible
       input deltas and interval.
-- [ ] Confirm category checks and the trip start decision agree with the
-      captured drive, followed by a sanitized start and completion transition.
+- [ ] Confirm the trip start decision agrees with the captured drive,
+      followed by a start and completion transition.
 - [ ] After stopping, confirm the trip closes and its distance is plausible.
-      Save redacted evidence with the exact Git SHA and image digest.
+      Save the capture with the exact Git SHA and image digest.
 
 If there is no real-vehicle capture from the identified build, record live
-acceptance as unverified. Do not include vehicle IDs, VINs, coordinates, raw
-payloads, or credentials in the evidence.
+acceptance as unverified.
 
 For the owner-facing overview, see [Extended Vehicle Telemetry](../guides/extended-vehicle-telemetry.md).

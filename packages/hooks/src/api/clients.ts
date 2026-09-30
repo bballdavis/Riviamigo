@@ -24,7 +24,8 @@ export const authClient = client(
 export const vehicleClient = client(
   'listVehicles', 'vehicleStatus', 'vehicleImages', 'refreshVehicleArtwork',
   'purgeVehicleArtworkCache', 'addVehicle', 'createDemoVehicle', 'refreshDemoVehicle',
-  'getVehicleIngestionDiagnostics', 'updateVehicleIngestionDiagnostics',
+  'getVehicleIngestionCapture', 'startVehicleIngestionCapture', 'stopVehicleIngestionCapture',
+  'downloadVehicleIngestionCapture',
   'deleteVehicle', 'refreshVehicleCredentials', 'connectRivian', 'connectRivianOtp',
   'updateVehicleBatteryConfig', 'updateVehicleSettings', 'updateVehicleName',
   'setDefaultVehicle', 'listVehicleMembers', 'addVehicleMember', 'updateVehicleMember',

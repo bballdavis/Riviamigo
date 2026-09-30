@@ -79,42 +79,48 @@ live fusion uses the actual sample source.
 
 ## Investigate missing readings
 
-Use this short procedure when a maintainer asks for evidence about a missing
-reading:
+When a maintainer asks for evidence about a missing reading, record an
+**ingestion capture** and share the downloaded file:
 
-1. From the repository root, start the standard stack if it is stopped, then
-   follow the existing API output:
+1. In **Settings → Raw data → Ingestion capture**, an owner or manager selects
+   **Start capture** for the affected non-demo vehicle. Recording starts
+   immediately and stops on its own after one hour.
+2. Reproduce the problem: open and close the doors, drive, plug in, or wait
+   for the update that goes missing. A sleeping vehicle may send nothing.
+3. Select **Stop**, then **Download**. The file is named
+   `riviamigo-capture-<model>-<start time>.jsonl`, with one JSON object per
+   line.
+4. Share the file with the maintainer as it is. It is safe to share.
 
-   ```bash
-   docker compose --env-file .env -f compose/docker-compose.yml up -d
-   docker compose --env-file .env -f compose/docker-compose.yml logs -f riviamigo
-   ```
+Each vehicle keeps only its most recent capture. Starting a new one replaces
+the previous file, and a stopped capture is deleted after 24 hours.
 
-   Use the equivalent log command for your deployment if it is managed by an
-   operator. Normal API startup runs the in-process Parallax acquisition task;
-   there is no separate Parallax logger, container, or start command.
-2. In **Settings → Raw data**, an owner or manager turns on **Ingestion
-   diagnostics** for the affected non-demo vehicle. It expires after one hour.
-   The switch increases diagnostic log detail; it does not enable ingestion or
-   create a downloadable data dump.
-3. Create or wait for a real vehicle update while the logs are being followed.
-   `Parallax envelope diagnostics` reports an allowlisted topic's outcome,
-   payload byte length, source age, and canonical-forward result.
-   `vehicle ingestion diagnostics` records source, field presence, and sample
-   age. `vehicle trip diagnostics` reports the selected power source and age,
-   numeric speed and origin, GNSS or odometer derivation evidence, trip
-   category checks, start decision, and sanitized transition. Health
-   **Acquisition** and **Collector diagnostics** provide connection context.
-4. Share only redacted diagnostic lines. Remove vehicle IDs, account data,
-   coordinates, tokens, secrets, and any other identifying values. Do not share
-   raw telemetry payloads.
-5. Turn **Ingestion diagnostics** off when the evidence is collected. It also
-   expires automatically after one hour.
+A capture file contains:
 
-Diagnostic events omit raw Parallax payloads, protobuf wire data, credentials,
-network identifiers, and coordinates; host logging controls retention. They
-include the existing vehicle ID, so redact it before sharing. A sleeping
-vehicle may provide no new frames during the window. See the [maintainer
-runbook](../runbooks/r2-ingestion-diagnostics.md) for a repeatable investigation
-and real-drive acceptance checklist, and the [API reference](../api-access.md)
-for the session-only switch endpoints.
+- a header line with the app version, vehicle model, capture window, event
+  counts by kind, and whether any events were dropped or the 50,000-event limit
+  was reached;
+- `parallax_envelope`: every Parallax frame with its topic, source timestamp
+  and age, decode outcome, whether it reached the canonical worker, the decoded
+  values, and the raw payload bytes (except GNSS and network frames). Body
+  frames also list each closure or lock position with the field it maps to, or
+  `null` when Riviamigo does not know the position;
+- `parallax_connection` and `legacy_connection`: subscribe, close, and
+  connection-renewal events for both Rivian streams;
+- `legacy_frame`: each legacy WebSocket update with every reported field, its
+  value, and Rivian's timestamp, so it can be lined up against Parallax;
+- `ingestion`: what the worker did with each sample: its source, values,
+  whether it was stored or suppressed as a duplicate, the state it implies,
+  and whether charge and power lifecycle signals were updated;
+- `trip`: the trip detector's power and speed choices, GNSS and odometer
+  evidence, start decision, and transition.
+
+Captures never include coordinates, credentials, the VIN, the vehicle ID, or
+vehicle and account names. GNSS frames record only that a location was present.
+
+Operators can still follow API output with
+`docker compose --env-file .env -f compose/docker-compose.yml logs -f riviamigo`,
+but diagnostic detail now goes to the capture rather than the log. See the
+[maintainer runbook](../runbooks/r2-ingestion-diagnostics.md) for reading a
+capture, and the [API reference](../api-access.md) for the session-only capture
+endpoints.
