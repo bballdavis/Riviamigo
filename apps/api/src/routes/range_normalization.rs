@@ -1,10 +1,10 @@
-const PLAUSIBLE_MAX_MI_PER_KWH: f64 = 3.4;
+pub const PLAUSIBLE_MAX_MI_PER_KWH: f64 = 3.4;
 // The R2 is more efficient than R1 vehicles: Rivian's own R2 range estimates
 // imply more than 3.6 mi/kWh, while a kilometre value misread as miles implies
 // roughly 5.9 mi/kWh.
-const R2_PLAUSIBLE_MAX_MI_PER_KWH: f64 = 4.5;
+pub const R2_PLAUSIBLE_MAX_MI_PER_KWH: f64 = 4.5;
 
-fn plausible_max_mi_per_kwh(model: Option<&str>) -> f64 {
+pub fn plausible_max_mi_per_kwh(model: Option<&str>) -> f64 {
     match model {
         Some(model) if model.trim().eq_ignore_ascii_case("R2") => R2_PLAUSIBLE_MAX_MI_PER_KWH,
         _ => PLAUSIBLE_MAX_MI_PER_KWH,

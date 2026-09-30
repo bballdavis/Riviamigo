@@ -1,10 +1,18 @@
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
+use riviamigo_api::routes::range_normalization::plausible_max_mi_per_kwh;
 use sqlx::postgres::PgPoolOptions;
 use tracing::info;
 use uuid::Uuid;
 
-const PLAUSIBLE_MAX_MI_PER_KWH: f64 = 3.4;
+/// Plausible efficiency ceilings bound as `$4` (every other model) and `$5`
+/// (R2). They come from the live normalizer so repairs never disagree with it.
+fn efficiency_ceilings() -> (f64, f64) {
+    (
+        plausible_max_mi_per_kwh(None),
+        plausible_max_mi_per_kwh(Some("R2")),
+    )
+}
 
 #[derive(Debug, Default)]
 struct RepairScope {
@@ -92,26 +100,31 @@ async fn main() -> Result<()> {
 }
 
 async fn summarize(pool: &sqlx::PgPool, scope: &RepairScope) -> Result<RepairSummary> {
+    let (default_ceiling, r2_ceiling) = efficiency_ceilings();
     let summary = sqlx::query_as::<_, RepairSummary>(
         r#"
         WITH scoped AS (
             SELECT
-                distance_to_empty_mi,
-                battery_level,
-                battery_capacity_wh,
+                t.distance_to_empty_mi,
+                t.battery_level,
+                t.battery_capacity_wh,
                 CASE
-                    WHEN battery_capacity_wh > 1000.0 THEN battery_capacity_wh / 1000.0
-                    ELSE battery_capacity_wh
-                END AS capacity_kwh
-            FROM timeseries.telemetry
-            WHERE distance_to_empty_mi IS NOT NULL
-              AND battery_level IS NOT NULL
-              AND battery_level > 0
-              AND battery_capacity_wh IS NOT NULL
-              AND battery_capacity_wh > 10000
-              AND ($1::uuid IS NULL OR vehicle_id = $1)
-              AND ($2::timestamptz IS NULL OR ts >= $2)
-              AND ($3::timestamptz IS NULL OR ts <= $3)
+                    WHEN t.battery_capacity_wh > 1000.0 THEN t.battery_capacity_wh / 1000.0
+                    ELSE t.battery_capacity_wh
+                END AS capacity_kwh,
+                -- Model values are canonical (migration 0024 constraint).
+                CASE WHEN upper(trim(v.model)) = 'R2' THEN $5::float8 ELSE $4::float8 END
+                    AS max_mi_per_kwh
+            FROM timeseries.telemetry t
+            JOIN riviamigo.vehicles v ON v.id = t.vehicle_id
+            WHERE t.distance_to_empty_mi IS NOT NULL
+              AND t.battery_level IS NOT NULL
+              AND t.battery_level > 0
+              AND t.battery_capacity_wh IS NOT NULL
+              AND t.battery_capacity_wh > 10000
+              AND ($1::uuid IS NULL OR t.vehicle_id = $1)
+              AND ($2::timestamptz IS NULL OR t.ts >= $2)
+              AND ($3::timestamptz IS NULL OR t.ts <= $3)
         ), assessed AS (
             SELECT
                 distance_to_empty_mi,
@@ -119,7 +132,7 @@ async fn summarize(pool: &sqlx::PgPool, scope: &RepairScope) -> Result<RepairSum
                 capacity_kwh,
                 distance_to_empty_mi / battery_level * 100.0 AS raw_full_range,
                 (distance_to_empty_mi / 1.609344) / battery_level * 100.0 AS converted_full_range,
-                capacity_kwh * $4::float8 AS plausible_full_range
+                capacity_kwh * max_mi_per_kwh AS plausible_full_range
             FROM scoped
             WHERE capacity_kwh > 0
         )
@@ -141,7 +154,8 @@ async fn summarize(pool: &sqlx::PgPool, scope: &RepairScope) -> Result<RepairSum
     .bind(scope.vehicle_id)
     .bind(scope.from)
     .bind(scope.to)
-    .bind(PLAUSIBLE_MAX_MI_PER_KWH)
+    .bind(default_ceiling)
+    .bind(r2_ceiling)
     .fetch_one(pool)
     .await?;
 
@@ -149,35 +163,40 @@ async fn summarize(pool: &sqlx::PgPool, scope: &RepairScope) -> Result<RepairSum
 }
 
 async fn apply_repairs(pool: &sqlx::PgPool, scope: &RepairScope) -> Result<u64> {
+    let (default_ceiling, r2_ceiling) = efficiency_ceilings();
     let result = sqlx::query(
         r#"
         WITH candidates AS (
             SELECT
-                ts,
-                vehicle_id,
-                distance_to_empty_mi,
-                battery_level,
+                t.ts,
+                t.vehicle_id,
+                t.distance_to_empty_mi,
+                t.battery_level,
                 CASE
-                    WHEN battery_capacity_wh > 1000.0 THEN battery_capacity_wh / 1000.0
-                    ELSE battery_capacity_wh
-                END AS capacity_kwh
-            FROM timeseries.telemetry
-            WHERE distance_to_empty_mi IS NOT NULL
-              AND battery_level IS NOT NULL
-              AND battery_level > 0
-              AND battery_capacity_wh IS NOT NULL
-              AND battery_capacity_wh > 10000
-              AND ($1::uuid IS NULL OR vehicle_id = $1)
-              AND ($2::timestamptz IS NULL OR ts >= $2)
-              AND ($3::timestamptz IS NULL OR ts <= $3)
+                    WHEN t.battery_capacity_wh > 1000.0 THEN t.battery_capacity_wh / 1000.0
+                    ELSE t.battery_capacity_wh
+                END AS capacity_kwh,
+                -- Model values are canonical (migration 0024 constraint).
+                CASE WHEN upper(trim(v.model)) = 'R2' THEN $5::float8 ELSE $4::float8 END
+                    AS max_mi_per_kwh
+            FROM timeseries.telemetry t
+            JOIN riviamigo.vehicles v ON v.id = t.vehicle_id
+            WHERE t.distance_to_empty_mi IS NOT NULL
+              AND t.battery_level IS NOT NULL
+              AND t.battery_level > 0
+              AND t.battery_capacity_wh IS NOT NULL
+              AND t.battery_capacity_wh > 10000
+              AND ($1::uuid IS NULL OR t.vehicle_id = $1)
+              AND ($2::timestamptz IS NULL OR t.ts >= $2)
+              AND ($3::timestamptz IS NULL OR t.ts <= $3)
         ), repairs AS (
             SELECT
                 ts,
                 vehicle_id,
                 CASE
-                    WHEN (distance_to_empty_mi / battery_level * 100.0) <= (capacity_kwh * $4::float8)
+                    WHEN (distance_to_empty_mi / battery_level * 100.0) <= (capacity_kwh * max_mi_per_kwh)
                         THEN NULL
-                    WHEN ((distance_to_empty_mi / 1.609344) / battery_level * 100.0) <= (capacity_kwh * $4::float8)
+                    WHEN ((distance_to_empty_mi / 1.609344) / battery_level * 100.0) <= (capacity_kwh * max_mi_per_kwh)
                         THEN distance_to_empty_mi / 1.609344
                     ELSE 0.0
                 END AS repaired_miles
@@ -198,9 +217,35 @@ async fn apply_repairs(pool: &sqlx::PgPool, scope: &RepairScope) -> Result<u64> 
     .bind(scope.vehicle_id)
     .bind(scope.from)
     .bind(scope.to)
-    .bind(PLAUSIBLE_MAX_MI_PER_KWH)
+    .bind(default_ceiling)
+    .bind(r2_ceiling)
     .execute(pool)
     .await?;
 
     Ok(result.rows_affected())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use riviamigo_api::routes::range_normalization::{
+        PLAUSIBLE_MAX_MI_PER_KWH, R2_PLAUSIBLE_MAX_MI_PER_KWH,
+    };
+
+    #[test]
+    fn ceilings_match_the_live_normalizer() {
+        assert_eq!(
+            efficiency_ceilings(),
+            (PLAUSIBLE_MAX_MI_PER_KWH, R2_PLAUSIBLE_MAX_MI_PER_KWH)
+        );
+    }
+
+    #[test]
+    fn legitimate_r2_range_stays_under_the_r2_ceiling_only() {
+        // 208 mi at 62 % of a 91.6 kWh pack is about 3.66 mi/kWh.
+        let full_range = 208.0 / 62.0 * 100.0;
+        let (default_ceiling, r2_ceiling) = efficiency_ceilings();
+        assert!(full_range > 91.6 * default_ceiling);
+        assert!(full_range <= 91.6 * r2_ceiling);
+    }
 }
