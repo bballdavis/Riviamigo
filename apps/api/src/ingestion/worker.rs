@@ -857,7 +857,9 @@ pub async fn run_vehicle_worker(
             if let Err(error) = redis_conn.del::<_, ()>(&live_key).await {
                 tracing::debug!(vehicle_id=%vehicle_id, err=%error, "live session Redis delete on canonical end failed");
             }
-            let _ = persist_charge_session(&pool, &session).await;
+            if let Err(error) = persist_charge_session(&pool, &session).await {
+                tracing::warn!(vehicle_id=%vehicle_id, session_id=%session.session_id, error=%error, "worker.persist_charge_session_failed");
+            }
             // Trigger incremental charge history sync to enrich the new session
             // with Rivian API fields (network vendor, range added, etc.).
             let pool2 = pool.clone();
@@ -3008,6 +3010,48 @@ async fn persist_trip(
     Ok(())
 }
 
+/// Where a completed session happened. Charging frames rarely carry GPS, so
+/// when the detector never saw a fix, use the row's stored location and then
+/// the vehicle's nearest telemetry fix, so the saved place and address can
+/// still be matched.
+async fn charge_session_coordinates(
+    pool: &PgPool,
+    session: &crate::ingestion::charge_detector::CompletedChargeSession,
+) -> (Option<f64>, Option<f64>) {
+    if let (Some(lat), Some(lng)) = (session.location_lat, session.location_lng) {
+        return (Some(lat), Some(lng));
+    }
+
+    let stored = sqlx::query_as::<_, (Option<f64>, Option<f64>)>(
+        "SELECT location_lat, location_lng FROM riviamigo.charge_sessions WHERE id = $1",
+    )
+    .bind(session.session_id)
+    .fetch_optional(pool)
+    .await;
+    match stored {
+        Ok(Some((Some(lat), Some(lng)))) => return (Some(lat), Some(lng)),
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(session_id=%session.session_id, error=%error, "worker.charge_session_stored_location_failed");
+        }
+    }
+
+    match crate::services::trip_enrichment::nearest_telemetry_fix(
+        pool,
+        session.vehicle_id,
+        session.started_at,
+    )
+    .await
+    {
+        Ok(Some((lat, lng))) => (Some(lat), Some(lng)),
+        Ok(None) => (None, None),
+        Err(error) => {
+            tracing::warn!(session_id=%session.session_id, error=%error, "worker.charge_session_telemetry_fix_failed");
+            (None, None)
+        }
+    }
+}
+
 async fn persist_charge_session(
     pool: &PgPool,
     session: &crate::ingestion::charge_detector::CompletedChargeSession,
@@ -3018,7 +3062,8 @@ async fn persist_charge_session(
         .build()
         .unwrap_or_default();
     let owner_id = get_vehicle_owner_id(pool, session.vehicle_id).await?;
-    let location_match = match (owner_id, session.location_lat, session.location_lng) {
+    let (location_lat, location_lng) = charge_session_coordinates(pool, session).await;
+    let location_match = match (owner_id, location_lat, location_lng) {
         (Some(user_id), Some(lat), Some(lon)) => {
             resolve_trip_location(pool, &http_client, user_id, lat, lon).await?
         }
@@ -3066,8 +3111,8 @@ async fn persist_charge_session(
     .bind(session.vehicle_id)
     .bind(session.started_at)
     .bind(session.ended_at)
-    .bind(session.location_lat)
-    .bind(session.location_lng)
+    .bind(location_lat)
+    .bind(location_lng)
     .bind(location_match.is_home)
     .bind(session.soc_start)
     .bind(session.soc_end)

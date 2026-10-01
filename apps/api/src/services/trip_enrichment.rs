@@ -10,12 +10,16 @@ use uuid::Uuid;
 
 use crate::{
     db::vehicles::get_vehicle_owner_id,
-    services::{geofences::match_geofence, nominatim},
+    services::{cost::recompute_charge_session_cost, geofences::match_geofence, nominatim},
 };
 
 const ADDRESS_CACHE_RADIUS_METERS: f64 = 100.0;
 const RECONCILIATION_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const RECONCILIATION_ADDRESS_BATCH_SIZE: i64 = 100;
+const RECONCILIATION_COORDINATE_BATCH_SIZE: i64 = 500;
+/// How far from a trip or session boundary a telemetry GPS fix may be and
+/// still stand in for the missing coordinates.
+const TELEMETRY_FIX_WINDOW_SECS: f64 = 600.0;
 
 /// Recover enrichment skipped while a sanitized restore or provider outage left
 /// completed trips without weather or address data. The existing provider
@@ -30,6 +34,7 @@ pub fn start_reconciliation_worker(pool: PgPool) -> tokio::task::JoinHandle<()> 
             }
         };
         loop {
+            reconcile_locations(&pool, &client).await;
             let addresses = backfill_trip_addresses(&pool, &client, None).await;
             let weather = enqueue_trip_weather_enrichment(&pool, None).await;
             match (addresses, weather) {
@@ -49,6 +54,24 @@ pub fn start_reconciliation_worker(pool: PgPool) -> tokio::task::JoinHandle<()> 
             tokio::time::sleep(RECONCILIATION_INTERVAL).await;
         }
     })
+}
+
+/// Fill missing coordinates, then saved-place matches, for trips and charge
+/// sessions. Each step logs its own failure so one bad step cannot starve the
+/// others; the address pass that follows picks up any trips still unresolved.
+async fn reconcile_locations(pool: &PgPool, client: &Client) {
+    if let Err(error) = backfill_trip_coordinates(pool, None).await {
+        warn!(error = %error, "trip_enrichment.reconciler_trip_coordinates_failed");
+    }
+    if let Err(error) = backfill_trip_geofence_matches(pool, None).await {
+        warn!(error = %error, "trip_enrichment.reconciler_trip_geofences_failed");
+    }
+    if let Err(error) = backfill_charge_session_coordinates(pool, None).await {
+        warn!(error = %error, "trip_enrichment.reconciler_charge_coordinates_failed");
+    }
+    if let Err(error) = backfill_charge_session_locations(pool, client, None).await {
+        warn!(error = %error, "trip_enrichment.reconciler_charge_locations_failed");
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -122,6 +145,18 @@ struct TripAddressRow {
     end_lat: Option<f64>,
     end_lng: Option<f64>,
     end_address_id: Option<Uuid>,
+}
+
+#[derive(Debug, FromRow)]
+struct TripBoundaryRow {
+    id: Uuid,
+    vehicle_id: Uuid,
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+    start_lat: Option<f64>,
+    start_lng: Option<f64>,
+    end_lat: Option<f64>,
+    end_lng: Option<f64>,
 }
 
 #[derive(Debug, FromRow)]
@@ -639,7 +674,166 @@ pub async fn backfill_trip_addresses(
     Ok(stats)
 }
 
-pub async fn backfill_charge_session_addresses(
+/// Closest usable GPS fix the vehicle reported within
+/// `TELEMETRY_FIX_WINDOW_SECS` of `at`. Charging frames usually carry no GPS,
+/// so a session that opens without coordinates borrows the surrounding fix.
+pub async fn nearest_telemetry_fix(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    at: DateTime<Utc>,
+) -> Result<Option<(f64, f64)>> {
+    let fix = sqlx::query_as::<_, (f64, f64)>(
+        r#"SELECT latitude, longitude
+           FROM timeseries.telemetry
+           WHERE vehicle_id = $1
+             AND ts BETWEEN $2 - make_interval(secs => $3) AND $2 + make_interval(secs => $3)
+             AND latitude IS NOT NULL
+             AND longitude IS NOT NULL
+             AND NOT (latitude = 0 AND longitude = 0)
+           ORDER BY ABS(EXTRACT(EPOCH FROM (ts - $2)))
+           LIMIT 1"#,
+    )
+    .bind(vehicle_id)
+    .bind(at)
+    .bind(TELEMETRY_FIX_WINDOW_SECS)
+    .fetch_optional(pool)
+    .await?;
+    Ok(fix)
+}
+
+/// Recover trip start/end coordinates that were never recorded from the
+/// telemetry fixes around the trip boundaries.
+pub async fn backfill_trip_coordinates(
+    pool: &PgPool,
+    vehicle_id: Option<Uuid>,
+) -> Result<BackfillStats> {
+    let trips = sqlx::query_as::<_, TripBoundaryRow>(
+        r#"SELECT id, vehicle_id, started_at, ended_at, start_lat, start_lng, end_lat, end_lng
+           FROM riviamigo.trips
+           WHERE ($1::uuid IS NULL OR vehicle_id = $1)
+             AND (start_lat IS NULL OR start_lng IS NULL OR end_lat IS NULL OR end_lng IS NULL)
+           ORDER BY started_at DESC
+           LIMIT $2"#,
+    )
+    .bind(vehicle_id)
+    .bind(RECONCILIATION_COORDINATE_BATCH_SIZE)
+    .fetch_all(pool)
+    .await?;
+
+    let mut stats = BackfillStats {
+        scanned: trips.len(),
+        ..BackfillStats::default()
+    };
+
+    for trip in &trips {
+        let start = if trip.start_lat.is_none() || trip.start_lng.is_none() {
+            nearest_telemetry_fix(pool, trip.vehicle_id, trip.started_at).await?
+        } else {
+            None
+        };
+        let end = if trip.end_lat.is_none() || trip.end_lng.is_none() {
+            nearest_telemetry_fix(pool, trip.vehicle_id, trip.ended_at).await?
+        } else {
+            None
+        };
+
+        if start.is_none() && end.is_none() {
+            stats.skipped += 1;
+            continue;
+        }
+
+        sqlx::query(
+            r#"UPDATE riviamigo.trips
+               SET start_lat = CASE WHEN start_lat IS NULL OR start_lng IS NULL THEN COALESCE($2, start_lat) ELSE start_lat END,
+                   start_lng = CASE WHEN start_lat IS NULL OR start_lng IS NULL THEN COALESCE($3, start_lng) ELSE start_lng END,
+                   end_lat   = CASE WHEN end_lat IS NULL OR end_lng IS NULL THEN COALESCE($4, end_lat) ELSE end_lat END,
+                   end_lng   = CASE WHEN end_lat IS NULL OR end_lng IS NULL THEN COALESCE($5, end_lng) ELSE end_lng END
+               WHERE id = $1"#,
+        )
+        .bind(trip.id)
+        .bind(start.map(|(lat, _)| lat))
+        .bind(start.map(|(_, lng)| lng))
+        .bind(end.map(|(lat, _)| lat))
+        .bind(end.map(|(_, lng)| lng))
+        .execute(pool)
+        .await?;
+        stats.filled += 1;
+    }
+
+    info!(
+        vehicle_id = ?vehicle_id,
+        scanned = stats.scanned,
+        filled = stats.filled,
+        skipped = stats.skipped,
+        "trip_enrichment.trip_coordinates.complete"
+    );
+    Ok(stats)
+}
+
+/// Give automatic-location charge sessions without coordinates the telemetry
+/// fix recorded around their start.
+pub async fn backfill_charge_session_coordinates(
+    pool: &PgPool,
+    vehicle_id: Option<Uuid>,
+) -> Result<BackfillStats> {
+    let sessions = sqlx::query_as::<_, (Uuid, Uuid, DateTime<Utc>)>(
+        r#"SELECT id, vehicle_id, started_at
+           FROM riviamigo.charge_sessions
+           WHERE ($1::uuid IS NULL OR vehicle_id = $1)
+             AND location_override_mode = 'automatic'
+             AND (location_lat IS NULL OR location_lng IS NULL)
+           ORDER BY started_at DESC
+           LIMIT $2"#,
+    )
+    .bind(vehicle_id)
+    .bind(RECONCILIATION_COORDINATE_BATCH_SIZE)
+    .fetch_all(pool)
+    .await?;
+
+    let mut stats = BackfillStats {
+        scanned: sessions.len(),
+        ..BackfillStats::default()
+    };
+
+    for (session_id, session_vehicle_id, started_at) in sessions {
+        let Some((lat, lng)) = nearest_telemetry_fix(pool, session_vehicle_id, started_at).await?
+        else {
+            stats.skipped += 1;
+            continue;
+        };
+
+        sqlx::query(
+            r#"UPDATE riviamigo.charge_sessions
+               SET location_lat = $2,
+                   location_lng = $3,
+                   source_location_lat = COALESCE(source_location_lat, $2),
+                   source_location_lng = COALESCE(source_location_lng, $3)
+               WHERE id = $1
+                 AND location_override_mode = 'automatic'
+                 AND (location_lat IS NULL OR location_lng IS NULL)"#,
+        )
+        .bind(session_id)
+        .bind(lat)
+        .bind(lng)
+        .execute(pool)
+        .await?;
+        stats.filled += 1;
+    }
+
+    info!(
+        vehicle_id = ?vehicle_id,
+        scanned = stats.scanned,
+        filled = stats.filled,
+        skipped = stats.skipped,
+        "trip_enrichment.charge_coordinates.complete"
+    );
+    Ok(stats)
+}
+
+/// Resolve the saved place (geofence, home flag, address) for automatic-location
+/// charge sessions that have coordinates but no place yet, reverse-geocoding
+/// when no geofence matches. Sessions the user edited by hand are left alone.
+pub async fn backfill_charge_session_locations(
     pool: &PgPool,
     client: &Client,
     vehicle_id: Option<Uuid>,
@@ -648,13 +842,17 @@ pub async fn backfill_charge_session_addresses(
         r#"SELECT id, vehicle_id, location_lat, location_lng
            FROM riviamigo.charge_sessions
            WHERE ($1::uuid IS NULL OR vehicle_id = $1)
+             AND location_override_mode = 'automatic'
+             AND geofence_id IS NULL
              AND address_id IS NULL
              AND location_lat IS NOT NULL
              AND location_lng IS NOT NULL
              AND NOT (location_lat = 0 AND location_lng = 0)
-           ORDER BY started_at DESC"#,
+           ORDER BY started_at DESC
+           LIMIT $2"#,
     )
     .bind(vehicle_id)
+    .bind(RECONCILIATION_ADDRESS_BATCH_SIZE)
     .fetch_all(pool)
     .await?;
 
@@ -664,50 +862,75 @@ pub async fn backfill_charge_session_addresses(
     };
 
     for session in &sessions {
-        let owner_id = get_vehicle_owner_id(pool, session.vehicle_id).await?;
-        let Some(address_id) = resolve_address_id(
+        let owner_id = match get_vehicle_owner_id(pool, session.vehicle_id).await {
+            Ok(Some(user_id)) => user_id,
+            Ok(None) => {
+                warn!(session_id = %session.id, "trip_enrichment.charge_location.owner_missing");
+                stats.failed += 1;
+                continue;
+            }
+            Err(err) => {
+                warn!(session_id = %session.id, error = %err, "trip_enrichment.charge_location.owner_lookup_failed");
+                stats.failed += 1;
+                continue;
+            }
+        };
+
+        let matched = resolve_trip_location(
             pool,
             client,
+            owner_id,
             session.location_lat.expect("checked"),
             session.location_lng.expect("checked"),
         )
-        .await
-        else {
+        .await?;
+
+        if matched.geofence_id.is_none() && matched.address_id.is_none() {
             warn!(
                 session_id = %session.id,
                 lat = session.location_lat,
                 lng = session.location_lng,
-                "trip_enrichment.address.session_lookup_failed"
+                "trip_enrichment.charge_location.lookup_failed"
             );
-            stats.failed += 1;
-            continue;
-        };
-
-        if let Err(err) = sqlx::query(
-            r#"UPDATE riviamigo.charge_sessions
-               SET address_id = COALESCE($2, address_id)
-               WHERE id = $1"#,
-        )
-        .bind(session.id)
-        .bind(address_id)
-        .execute(pool)
-        .await
-        {
-            warn!(session_id = %session.id, error = %err, "trip_enrichment.address.session_update_failed");
             stats.failed += 1;
             continue;
         }
 
-        if let Some(user_id) = owner_id {
-            upsert_charge_session_user_annotation(
-                pool,
-                session.id,
-                user_id,
-                None,
-                Some(address_id),
-                None,
-            )
-            .await?;
+        if let Err(err) = sqlx::query(
+            r#"UPDATE riviamigo.charge_sessions
+               SET geofence_id = COALESCE(geofence_id, $2),
+                   address_id  = COALESCE(address_id,  $3),
+                   is_home     = COALESCE(is_home,     $4)
+               WHERE id = $1
+                 AND location_override_mode = 'automatic'"#,
+        )
+        .bind(session.id)
+        .bind(matched.geofence_id)
+        .bind(matched.address_id)
+        .bind(matched.is_home)
+        .execute(pool)
+        .await
+        {
+            warn!(session_id = %session.id, error = %err, "trip_enrichment.charge_location.session_update_failed");
+            stats.failed += 1;
+            continue;
+        }
+
+        upsert_charge_session_user_annotation(
+            pool,
+            session.id,
+            owner_id,
+            matched.geofence_id,
+            matched.address_id,
+            matched.is_home,
+        )
+        .await?;
+
+        // A newly matched geofence can carry a cost profile (e.g. home rates).
+        if matched.geofence_id.is_some() {
+            if let Err(err) = recompute_charge_session_cost(pool, session.id).await {
+                warn!(session_id = %session.id, error = %err, "trip_enrichment.charge_location.cost_recompute_failed");
+            }
         }
 
         stats.filled += 1;
@@ -719,7 +942,7 @@ pub async fn backfill_charge_session_addresses(
         filled = stats.filled,
         failed = stats.failed,
         skipped = stats.skipped,
-        "trip_enrichment.charge_address.complete"
+        "trip_enrichment.charge_location.complete"
     );
     Ok(stats)
 }

@@ -17,8 +17,9 @@ use riviamigo_api::{
     middleware::auth::{AppState, JwtKeys},
     routes,
     services::trip_enrichment::{
-        backfill_trip_outside_temps_with_lookup, enrich_trip_history_for_vehicle_with_lookup,
-        report_trip_enrichment_gaps,
+        backfill_charge_session_coordinates, backfill_charge_session_locations,
+        backfill_trip_coordinates, backfill_trip_outside_temps_with_lookup,
+        enrich_trip_history_for_vehicle_with_lookup, report_trip_enrichment_gaps,
     },
 };
 use serde_json::{json, Value};
@@ -645,4 +646,153 @@ async fn trip_enrichment_diagnostics_distinguish_recoverable_and_unrecoverable_g
         row.missing_outside_temp_unrecoverable_no_start_coordinates,
         1
     );
+}
+
+async fn insert_telemetry_fix(pool: &PgPool, vehicle_id: Uuid, ts: &str, lat: f64, lng: f64) {
+    sqlx::query(
+        "INSERT INTO timeseries.telemetry (ts, vehicle_id, latitude, longitude)
+         VALUES ($1::timestamptz, $2, $3, $4)",
+    )
+    .bind(ts)
+    .bind(vehicle_id)
+    .bind(lat)
+    .bind(lng)
+    .execute(pool)
+    .await
+    .expect("insert telemetry fix");
+}
+
+#[tokio::test]
+async fn reconciler_recovers_coordinates_and_places_for_charge_sessions_and_trips() {
+    let app = TestApp::new().await;
+    let email = "location-reconcile@example.com";
+    register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    let vehicle_id = insert_vehicle(
+        &app.pool,
+        user_id,
+        "location-reconcile-vehicle",
+        "Reconcile Truck",
+    )
+    .await;
+
+    let home_address_id = insert_address(
+        &app.pool,
+        "North Main Street, Houston, TX 77009",
+        29.8182846_f64,
+        -95.3881685_f64,
+        Some("North Main Street"),
+        Some("Houston"),
+    )
+    .await;
+    let home_geofence_id = insert_geofence(
+        &app.pool,
+        user_id,
+        "Home - Test",
+        29.8182846_f64,
+        -95.3881685_f64,
+        76.0_f64,
+        home_address_id,
+    )
+    .await;
+
+    // A GPS fix a minute before the session, and one far outside the window.
+    insert_telemetry_fix(
+        &app.pool,
+        vehicle_id,
+        "2026-09-30T21:10:55Z",
+        29.81848_f64,
+        -95.38827_f64,
+    )
+    .await;
+    insert_telemetry_fix(
+        &app.pool,
+        vehicle_id,
+        "2026-09-30T10:00:00Z",
+        40.0_f64,
+        -100.0_f64,
+    )
+    .await;
+
+    let auto_session_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO riviamigo.charge_sessions (vehicle_id, started_at, ended_at, source)
+         VALUES ($1, '2026-09-30T21:12:01Z', '2026-09-30T21:12:53Z', 'telemetry') RETURNING id",
+    )
+    .bind(vehicle_id)
+    .fetch_one(&app.pool)
+    .await
+    .expect("insert charge session");
+    let manual_session_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO riviamigo.charge_sessions
+             (vehicle_id, started_at, ended_at, source, location_override_mode)
+         VALUES ($1, '2026-09-30T21:13:01Z', '2026-09-30T21:13:53Z', 'telemetry', 'none')
+         RETURNING id",
+    )
+    .bind(vehicle_id)
+    .fetch_one(&app.pool)
+    .await
+    .expect("insert manually cleared charge session");
+    let trip_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO riviamigo.trips (vehicle_id, started_at, ended_at)
+         VALUES ($1, '2026-09-30T21:11:00Z', '2026-09-30T21:11:30Z') RETURNING id",
+    )
+    .bind(vehicle_id)
+    .fetch_one(&app.pool)
+    .await
+    .expect("insert trip without coordinates");
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .expect("reqwest client");
+
+    let session_coords = backfill_charge_session_coordinates(&app.pool, Some(vehicle_id))
+        .await
+        .expect("session coordinates");
+    assert_eq!(
+        session_coords.filled, 1,
+        "manual session must stay untouched"
+    );
+    let trip_coords = backfill_trip_coordinates(&app.pool, Some(vehicle_id))
+        .await
+        .expect("trip coordinates");
+    assert_eq!(trip_coords.filled, 1);
+
+    let session_places = backfill_charge_session_locations(&app.pool, &client, Some(vehicle_id))
+        .await
+        .expect("session places");
+    assert_eq!(session_places.filled, 1);
+
+    let auto = sqlx::query_as::<_, (Option<f64>, Option<Uuid>, Option<Uuid>)>(
+        "SELECT location_lat, geofence_id, address_id FROM riviamigo.charge_sessions WHERE id = $1",
+    )
+    .bind(auto_session_id)
+    .fetch_one(&app.pool)
+    .await
+    .expect("auto session");
+    assert_eq!(auto.0, Some(29.81848_f64));
+    assert_eq!(auto.1, Some(home_geofence_id));
+    assert_eq!(auto.2, Some(home_address_id));
+
+    let manual = sqlx::query_as::<_, (Option<f64>, Option<Uuid>)>(
+        "SELECT location_lat, geofence_id FROM riviamigo.charge_sessions WHERE id = $1",
+    )
+    .bind(manual_session_id)
+    .fetch_one(&app.pool)
+    .await
+    .expect("manual session");
+    assert_eq!(
+        manual,
+        (None, None),
+        "cleared location must not be refilled"
+    );
+
+    let trip = sqlx::query_as::<_, (Option<f64>, Option<f64>)>(
+        "SELECT start_lat, end_lat FROM riviamigo.trips WHERE id = $1",
+    )
+    .bind(trip_id)
+    .fetch_one(&app.pool)
+    .await
+    .expect("trip");
+    assert_eq!(trip, (Some(29.81848_f64), Some(29.81848_f64)));
 }
