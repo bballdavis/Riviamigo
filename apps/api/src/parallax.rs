@@ -581,8 +581,8 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
             for state in value.states {
                 let position = state.position.context("missing lock position")?;
                 // R1 vehicles also report positions with no canonical field
-                // (6, 8, 9, 14, 15). Skip those entries rather than losing the
-                // door, frunk, and liftgate locks in the same frame.
+                // (14, 15). Skip those entries rather than losing the other
+                // locks in the same frame.
                 if lock_field_name(position).is_none() {
                     notes.push(format!("skipped unmapped lock position {position}"));
                     continue;
@@ -689,11 +689,14 @@ fn closure_field(event: &mut TelemetryEvent, position: i32) -> Option<&mut Optio
         3 => &mut event.door_rear_left_closed,
         4 => &mut event.door_rear_right_closed,
         5 => &mut event.closure_frunk_closed,
-        // rivian-python-client maps 6 to the left side bin; rivolt's reading
-        // of the app enum says tailgate. Keep the side bin until an R1T
-        // capture settles it.
-        6 => &mut event.side_bin_left_closed,
+        // 6 is the tailgate in the Rivian app enum (via apohor/rivolt). On
+        // the R1S, 6, 8, 9, and 11 are all "not fitted", and 8 and 9 share one
+        // closure detail type, so they are the R1T side bins; left before
+        // right follows the door ordering. Confirm with an R1T capture.
+        6 => &mut event.closure_tailgate_closed,
         7 => &mut event.closure_liftgate_closed,
+        8 => &mut event.side_bin_left_closed,
+        9 => &mut event.side_bin_right_closed,
         11 => &mut event.tonneau_closed,
         // Windows, confirmed window by window on both the R1S and the R2.
         12 => &mut event.window_fl_closed,
@@ -713,8 +716,10 @@ fn closure_field_name(position: i32) -> Option<&'static str> {
         3 => "door_rear_left_closed",
         4 => "door_rear_right_closed",
         5 => "closure_frunk_closed",
-        6 => "side_bin_left_closed",
+        6 => "closure_tailgate_closed",
         7 => "closure_liftgate_closed",
+        8 => "side_bin_left_closed",
+        9 => "side_bin_right_closed",
         11 => "tonneau_closed",
         12 => "window_fl_closed",
         13 => "window_fr_closed",
@@ -733,7 +738,10 @@ fn lock_field_name(position: i32) -> Option<&'static str> {
         3 => "door_rear_left_locked",
         4 => "door_rear_right_locked",
         5 => "closure_frunk_locked",
+        6 => "closure_tailgate_locked",
         7 => "closure_liftgate_locked",
+        8 => "side_bin_left_locked",
+        9 => "side_bin_right_locked",
         _ => return None,
     })
 }
@@ -745,7 +753,12 @@ fn set_lock(event: &mut TelemetryEvent, position: i32, locked: bool) -> Result<b
         3 => event.door_rear_left_locked = Some(locked),
         4 => event.door_rear_right_locked = Some(locked),
         5 => event.closure_frunk_locked = Some(locked),
+        // Same positions as the closures; on the R1S they lock and unlock
+        // with legacy's tailgate and side-bin lock fields.
+        6 => event.closure_tailgate_locked = Some(locked),
         7 => event.closure_liftgate_locked = Some(locked),
+        8 => event.side_bin_left_locked = Some(locked),
+        9 => event.side_bin_right_locked = Some(locked),
         other => anyhow::bail!("unknown lock position {other}"),
     }
     Ok(true)
@@ -2395,9 +2408,12 @@ mod tests {
         assert_eq!(event.door_rear_right_locked, Some(false));
         assert_eq!(event.closure_frunk_locked, Some(true));
         assert_eq!(event.closure_liftgate_locked, Some(true));
+        assert_eq!(event.closure_tailgate_locked, Some(true));
+        assert_eq!(event.side_bin_left_locked, Some(true));
+        assert_eq!(event.side_bin_right_locked, Some(true));
         assert_eq!(
             notes,
-            [6, 8, 9, 14, 15]
+            [14, 15]
                 .iter()
                 .map(|p| format!("skipped unmapped lock position {p}"))
                 .collect::<Vec<_>>()
@@ -2541,8 +2557,8 @@ mod tests {
 
     #[test]
     fn r1_closure_frame_maps_app_positions_and_skips_absent_closures() {
-        // Observed R1S frame with the frunk and liftgate open: positions 6,
-        // 8, 9, and 11 (side bins and tonneau on an R1T) are not fitted, and
+        // Observed R1S frame with the frunk and liftgate open: the tailgate
+        // (6), side bins (8, 9), and tonneau (11) are not fitted, and
         // position 10 (likely the charge port door) is unmapped.
         let mut notes = Vec::new();
         let event = decode_vehicle_telemetry_with_notes(
@@ -2574,7 +2590,9 @@ mod tests {
         assert_eq!(event.door_rear_right_closed, Some(true));
         assert_eq!(event.closure_frunk_closed, Some(false));
         assert_eq!(event.closure_liftgate_closed, Some(false));
+        assert_eq!(event.closure_tailgate_closed, None);
         assert_eq!(event.side_bin_left_closed, None);
+        assert_eq!(event.side_bin_right_closed, None);
         assert_eq!(event.tonneau_closed, None);
         assert_eq!(event.window_rr_closed, Some(true));
         assert_eq!(
@@ -2582,27 +2600,29 @@ mod tests {
             vec!["skipped unmapped closure position 10 with state 2"]
         );
 
-        // Position 6 is the left side bin; 11 is the tonneau.
+        // An R1T: tailgate closing, left side bin open, right side bin and
+        // tonneau closed.
         let mut notes = Vec::new();
         let event = decode_vehicle_telemetry_with_notes(
             "body.closures.states",
-            &closure_frame(&[(6, Some(5)), (11, Some(2))]),
+            &closure_frame(&[(6, Some(5)), (8, Some(1)), (9, Some(2)), (11, Some(2))]),
             Utc::now(),
             Uuid::new_v4(),
             &mut notes,
         )
         .unwrap()
         .unwrap();
-        assert_eq!(event.side_bin_left_closed, Some(false));
+        assert_eq!(event.closure_tailgate_closed, Some(false));
         assert_eq!(
             event.closure_transitions,
             Some(std::collections::BTreeMap::from([(
-                "side_bin_left_closed".to_owned(),
+                "closure_tailgate_closed".to_owned(),
                 ClosureTransition::Closing,
             )]))
         );
+        assert_eq!(event.side_bin_left_closed, Some(false));
+        assert_eq!(event.side_bin_right_closed, Some(true));
         assert_eq!(event.tonneau_closed, Some(true));
-        assert_eq!(event.closure_tailgate_closed, None);
         assert!(notes.is_empty(), "{notes:?}");
     }
 
