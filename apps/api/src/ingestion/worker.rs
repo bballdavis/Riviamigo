@@ -4051,7 +4051,11 @@ fn ingestion_capture_fields(
         "no_lifecycle_fields".into()
     };
     serde_json::json!({
-        "source": if is_parallax { message_type.unwrap_or("parallax") } else { "legacy" },
+        "source": match (is_parallax, message_type) {
+            (true, kind) => kind.unwrap_or("parallax"),
+            (false, Some("baseline")) => "baseline",
+            (false, _) => "legacy",
+        },
         "event_ts": event.ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "sample_age_ms": (Utc::now() - event.ts).num_milliseconds(),
         "values": ingestion_capture::present_fields(event),

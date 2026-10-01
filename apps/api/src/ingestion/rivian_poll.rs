@@ -24,6 +24,25 @@ use uuid::Uuid;
 use crate::ingestion::rivian_auth::rivian_refresh_csrf;
 use crate::ingestion::session_store::{decrypt_tokens, encrypt_tokens, RivianTokenBundle};
 use crate::services::charge_backfill::{self, ChargeBackfillError};
+use crate::services::ingestion_capture::{self, Kind as CaptureKind};
+
+/// Record one GraphQL acquisition in a running ingestion capture.
+fn capture_poll<T>(
+    vehicle_id: Uuid,
+    operation: &str,
+    result: &Result<T>,
+    detail: serde_json::Value,
+) {
+    let fields = match result {
+        Ok(_) => serde_json::json!({ "operation": operation, "outcome": "ok", "detail": detail }),
+        Err(error) => serde_json::json!({
+            "operation": operation,
+            "outcome": if is_auth_error(error) { "auth_required" } else { "error" },
+            "error": error.to_string(),
+        }),
+    };
+    ingestion_capture::record(vehicle_id, CaptureKind::Poll, fields);
+}
 use crate::services::charge_sessions::{
     self, ChargeSessionPayloadRef, ChargeSessionSummaryPayload, UnmatchedInsertPolicy,
 };
@@ -2468,6 +2487,12 @@ pub async fn run_startup_polls(
         },
     )
     .await;
+    capture_poll(
+        vehicle_id,
+        "vehicle_state_baseline",
+        &baseline,
+        serde_json::Value::Null,
+    );
     match baseline {
         Ok(data) => {
             increment_poll_counter(&pool, vehicle_id).await;
@@ -2476,7 +2501,9 @@ pub async fn run_startup_polls(
                 let baseline_event = WsInboundEvent {
                     kind: WsInboundKind::Telemetry,
                     received_at: Utc::now(),
-                    raw: String::new(),
+                    // Kept so an ingestion capture records the baseline's
+                    // fields and their source timestamps.
+                    raw,
                     message_type: Some("baseline".into()),
                     telemetry: Some(event),
                     charging_session: None,
@@ -2511,8 +2538,15 @@ pub async fn run_startup_polls(
         }
     }
 
-    if let Err(e) = fetch_vehicle_enrichment_for_vehicle(vehicle_id, &pool, &client, &age_key).await
-    {
+    let enrichment =
+        fetch_vehicle_enrichment_for_vehicle(vehicle_id, &pool, &client, &age_key).await;
+    capture_poll(
+        vehicle_id,
+        "vehicle_enrichment",
+        &enrichment,
+        serde_json::Value::Null,
+    );
+    if let Err(e) = enrichment {
         if is_auth_error(&e) {
             tracing::info!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment skipped: authentication required");
         } else {
@@ -2520,8 +2554,10 @@ pub async fn run_startup_polls(
         }
     }
 
-    if let Err(e) = fetch_wallboxes_for_vehicle(user_id, vehicle_id, &pool, &client, &age_key).await
-    {
+    let wallboxes =
+        fetch_wallboxes_for_vehicle(user_id, vehicle_id, &pool, &client, &age_key).await;
+    capture_poll(vehicle_id, "wallboxes", &wallboxes, serde_json::Value::Null);
+    if let Err(e) = wallboxes {
         tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_wallboxes failed");
     }
 
@@ -2564,7 +2600,13 @@ pub async fn run_startup_polls(
         }
     } else {
         // Incremental enrich: just reconcile any sessions that appeared since last run.
-        match fetch_charge_history_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
+        let history = fetch_charge_history_for_vehicle(vehicle_id, &pool, &client, &age_key).await;
+        let detail = history.as_ref().map_or(
+            serde_json::Value::Null,
+            |n| serde_json::json!({ "reconciled": n }),
+        );
+        capture_poll(vehicle_id, "charge_history", &history, detail);
+        match history {
             Ok(n) => {
                 tracing::info!(vehicle_id=%vehicle_id, enriched=%n, "incremental charge history sync complete")
             }
@@ -2578,8 +2620,14 @@ pub async fn run_startup_polls(
         }
     }
 
-    if let Err(e) = fetch_charging_schedule_for_vehicle(vehicle_id, &pool, &client, &age_key).await
-    {
+    let schedule = fetch_charging_schedule_for_vehicle(vehicle_id, &pool, &client, &age_key).await;
+    capture_poll(
+        vehicle_id,
+        "charging_schedule",
+        &schedule,
+        serde_json::Value::Null,
+    );
+    if let Err(e) = schedule {
         if is_auth_error(&e) {
             tracing::debug!(vehicle_id=%vehicle_id, err=%e, "fetch_charging_schedule skipped: authentication required");
         } else {
@@ -2662,7 +2710,14 @@ pub(crate) async fn run_poll_loop(
 
         if last_charge_history_sync.elapsed() >= charge_history_interval {
             last_charge_history_sync = tokio::time::Instant::now();
-            match fetch_charge_history_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
+            let history =
+                fetch_charge_history_for_vehicle(vehicle_id, &pool, &client, &age_key).await;
+            let detail = history.as_ref().map_or(
+                serde_json::Value::Null,
+                |n| serde_json::json!({ "reconciled": n }),
+            );
+            capture_poll(vehicle_id, "charge_history_periodic", &history, detail);
+            match history {
                 Ok(count) => {
                     tracing::debug!(vehicle_id=%vehicle_id, reconciled=count, "periodic charge history sync complete");
                 }
