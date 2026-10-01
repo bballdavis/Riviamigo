@@ -508,7 +508,7 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
                 }
                 // Protobuf omits a zero status, which the app enum defines as
                 // unspecified: the vehicle does not have this closure (for
-                // example the tailgate or tonneau on an R1S).
+                // example the side bin or tonneau on an R1S).
                 let Some(status) = state.state.filter(|status| *status != 0) else {
                     continue;
                 };
@@ -662,7 +662,10 @@ fn closure_field(event: &mut TelemetryEvent, position: i32) -> Option<&mut Optio
         3 => &mut event.door_rear_left_closed,
         4 => &mut event.door_rear_right_closed,
         5 => &mut event.closure_frunk_closed,
-        6 => &mut event.closure_tailgate_closed,
+        // rivian-python-client maps 6 to the left side bin; rivolt's reading
+        // of the app enum says tailgate. Keep the side bin until an R1T
+        // capture settles it.
+        6 => &mut event.side_bin_left_closed,
         7 => &mut event.closure_liftgate_closed,
         11 => &mut event.tonneau_closed,
         // Windows, confirmed window by window on both the R1S and the R2.
@@ -683,7 +686,7 @@ fn closure_field_name(position: i32) -> Option<&'static str> {
         3 => "door_rear_left_closed",
         4 => "door_rear_right_closed",
         5 => "closure_frunk_closed",
-        6 => "closure_tailgate_closed",
+        6 => "side_bin_left_closed",
         7 => "closure_liftgate_closed",
         11 => "tonneau_closed",
         12 => "window_fl_closed",
@@ -2482,9 +2485,9 @@ mod tests {
 
     #[test]
     fn r1_closure_frame_maps_app_positions_and_skips_absent_closures() {
-        // Observed R1S frame with the frunk and liftgate open: no tailgate
-        // (6), side bins (8, 9), or tonneau (11), and position 10 (likely the
-        // charge port door) unmapped.
+        // Observed R1S frame with the frunk and liftgate open: positions 6,
+        // 8, 9, and 11 (side bins and tonneau on an R1T) are not fitted, and
+        // position 10 (likely the charge port door) is unmapped.
         let mut notes = Vec::new();
         let event = decode_vehicle_telemetry_with_notes(
             "body.closures.states",
@@ -2515,7 +2518,7 @@ mod tests {
         assert_eq!(event.door_rear_right_closed, Some(true));
         assert_eq!(event.closure_frunk_closed, Some(false));
         assert_eq!(event.closure_liftgate_closed, Some(false));
-        assert_eq!(event.closure_tailgate_closed, None);
+        assert_eq!(event.side_bin_left_closed, None);
         assert_eq!(event.tonneau_closed, None);
         assert_eq!(event.window_rr_closed, Some(true));
         assert_eq!(
@@ -2523,7 +2526,7 @@ mod tests {
             vec!["skipped unmapped closure position 10 with state 2"]
         );
 
-        // An R1T reports its tailgate at 6 and tonneau at 11.
+        // Position 6 is the left side bin; 11 is the tonneau.
         let mut notes = Vec::new();
         let event = decode_vehicle_telemetry_with_notes(
             "body.closures.states",
@@ -2534,16 +2537,16 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(event.closure_tailgate_closed, Some(false));
+        assert_eq!(event.side_bin_left_closed, Some(false));
         assert_eq!(
             event.closure_transitions,
             Some(std::collections::BTreeMap::from([(
-                "closure_tailgate_closed".to_owned(),
+                "side_bin_left_closed".to_owned(),
                 ClosureTransition::Closing,
             )]))
         );
         assert_eq!(event.tonneau_closed, Some(true));
-        assert_eq!(event.side_bin_left_closed, None);
+        assert_eq!(event.closure_tailgate_closed, None);
         assert!(notes.is_empty(), "{notes:?}");
     }
 
