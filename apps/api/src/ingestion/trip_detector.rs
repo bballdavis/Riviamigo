@@ -128,7 +128,15 @@ pub struct TripDetectorState {
     // odometer steps, so this marks where the upcoming trip really began.
     in_gear: bool,
     gear_odometer: Option<f64>,
+    // When that shift happened, and the last location seen while parked, so
+    // a backdated start also gets the matching start time and place.
+    gear_at: Option<DateTime<Utc>>,
+    last_parked_fix: Option<TrackPoint>,
 }
+
+/// A gear shift older than this no longer describes the trip that starts
+/// now (a missed drive must not be attributed to a much later one).
+const GEAR_ANCHOR_MAX_AGE_SECS: i64 = 15 * 60;
 
 impl TripDetectorState {
     pub fn new(vehicle_id: Uuid) -> Self {
@@ -194,8 +202,10 @@ impl TripDetectorState {
             let in_gear = matches!(power, PowerState::Drive | PowerState::Go);
             if in_gear && !self.in_gear {
                 self.gear_odometer = prior_odometer.or(event.odometer_miles);
+                self.gear_at = Some(ts);
             } else if !in_gear {
                 self.gear_odometer = None;
+                self.gear_at = None;
             }
             self.in_gear = in_gear;
         }
@@ -264,23 +274,56 @@ impl TripDetectorState {
             self.last_regen_ts = Some(ts);
         }
 
+        // Where the vehicle sat before shifting: the start of the next trip.
+        // Fixes after the shift may already be on the road, unseen.
+        if self.active_trip_id.is_none() && !self.in_gear && !is_moving {
+            if let Some((lat, lng)) = valid_location_pair(event.latitude, event.longitude) {
+                self.last_parked_fix = Some(TrackPoint {
+                    ts,
+                    lat,
+                    lng,
+                    speed_mph: 0.0,
+                    altitude_m: event.altitude_m,
+                });
+            }
+        }
+
         // ── Trip START ──────────────────────────────────────────────────────
         if start_decision == "eligible" {
             let trip_id = Uuid::new_v4();
             self.active_trip_id = Some(trip_id);
-            self.trip_started_at = Some(ts);
             self.soc_at_start = self.last_soc;
+            let fresh =
+                |at: DateTime<Utc>| at <= ts && (ts - at).num_seconds() <= GEAR_ANCHOR_MAX_AGE_SECS;
+            let gear_at = self.gear_at.take().filter(|at| fresh(*at));
+            let gear_odometer = self.gear_odometer.take().filter(|_| gear_at.is_some());
             // Motion may first be seen after the odometer has already
             // advanced, or on a sample carrying no odometer at all; the
             // reading before that motion is the trip's true starting point.
             let current_odometer = event.odometer_miles.or(prior_odometer);
-            self.start_odometer = match (self.gear_odometer.take(), prior_odometer) {
+            self.start_odometer = match (gear_odometer, prior_odometer) {
                 (Some(gear), _) if current_odometer.is_none_or(|now| gear <= now) => Some(gear),
                 (_, Some(prior)) if event.odometer_miles.is_some_and(|now| now > prior) => {
                     Some(prior)
                 }
                 _ => current_odometer,
             };
+            // Sparse vehicles see motion only after the first odometer steps.
+            // When the start odometer is backdated, backdate the start time to
+            // the shift and the start place to where the vehicle was parked,
+            // so duration, average speed, and start geofences agree with it.
+            let backdated = matches!(
+                (self.start_odometer, current_odometer),
+                (Some(start), Some(now)) if start < now
+            );
+            let started_at = if backdated { gear_at.unwrap_or(ts) } else { ts };
+            self.trip_started_at = Some(started_at);
+            let parked_fix = self.last_parked_fix.take();
+            if backdated {
+                if let Some(fix) = parked_fix.filter(|fix| fresh(fix.ts)) {
+                    self.track_points.push(fix);
+                }
+            }
             self.range_at_start = self.last_range;
             self.last_moving_at = Some(ts);
             self.last_altitude = event.altitude_m;
@@ -306,7 +349,7 @@ impl TripDetectorState {
             }
             return TripEvent::TripStarted {
                 trip_id,
-                started_at: ts,
+                started_at,
             };
         }
 
@@ -400,6 +443,7 @@ impl TripDetectorState {
         self.drive_modes.clear();
         if self.in_gear {
             self.gear_odometer = self.last_odometer;
+            self.gear_at = Some(ended_at);
         }
 
         TripEvent::TripEnded { trip: data }
@@ -723,6 +767,9 @@ mod tests {
             }
         }
         let trip = ended.expect("trip ended");
+        // The start odometer is the shift reading, so the start time is the
+        // shift too, 30 seconds before the first moving sample.
+        assert_eq!(trip.started_at, samples[1].ts);
         assert_eq!(trip.start_odometer_mi, Some(200.0));
         assert_eq!(trip.end_odometer_mi, Some(205.0));
         let distance = compute_distance_odometer_or_gps(

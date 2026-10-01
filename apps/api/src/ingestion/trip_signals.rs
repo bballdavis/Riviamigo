@@ -567,6 +567,12 @@ mod tests {
         let mut fusion = TripSignalFusion::new(true);
         let mut detector = TripDetectorState::new(Uuid::nil());
         let mut events = vec![odometer(at - Duration::minutes(34), 55.92)];
+        // Parked at home before shifting.
+        let mut home = TelemetryEvent::empty(Uuid::nil(), at - Duration::seconds(30));
+        home.latitude = Some(29.9);
+        home.longitude = Some(-97.0);
+        home.location_ts = Some(home.ts);
+        events.push(home);
         let mut go = TelemetryEvent::empty(Uuid::nil(), at);
         go.power_state = Some(PowerState::Go);
         events.push(go);
@@ -611,8 +617,13 @@ mod tests {
             }
         }
 
-        assert!(started.expect("trip started") <= at + Duration::seconds(216));
+        // Motion is first seen minutes later, but the trip starts at the
+        // shift to Go and at the parked location.
+        assert_eq!(started.expect("trip started"), at);
         let trip = ended.expect("trip ended");
+        assert_eq!(trip.started_at, at);
+        let first = trip.points.first().expect("start point");
+        assert_eq!((first.lat, first.lng, first.speed_mph), (29.9, -97.0, 0.0));
         assert_eq!(trip.start_odometer_mi, Some(55.92));
         assert_eq!(trip.end_odometer_mi, Some(61.52));
         let distance = compute_distance_odometer_or_gps(
@@ -621,5 +632,33 @@ mod tests {
             &trip.points,
         );
         assert!((distance - 5.6).abs() < 0.01, "{distance}");
+    }
+
+    /// A shift long before the motion belongs to a missed drive, not this
+    /// trip: keep the prior-odometer rule and the first-motion start.
+    #[test]
+    fn stale_gear_shift_does_not_anchor_a_later_trip() {
+        use crate::ingestion::trip_detector::{TripDetectorState, TripEvent};
+
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(true);
+        let mut detector = TripDetectorState::new(Uuid::nil());
+        let mut events = vec![odometer(at - Duration::minutes(40), 50.0)];
+        let mut go = TelemetryEvent::empty(Uuid::nil(), at - Duration::minutes(30));
+        go.power_state = Some(PowerState::Go);
+        events.push(go);
+        events.push(odometer(at - Duration::seconds(60), 55.92));
+        events.push(odometer(at, 56.54));
+        events.sort_by_key(|event| event.ts);
+
+        let mut started = None;
+        for event in &events {
+            if let TripEvent::TripStarted { started_at, .. } = detector.process(&fusion.fuse(event))
+            {
+                started = Some(started_at);
+            }
+        }
+        let started = started.expect("trip started");
+        assert!(started > at - Duration::minutes(15), "{started}");
     }
 }
