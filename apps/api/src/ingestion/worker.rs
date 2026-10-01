@@ -2853,6 +2853,22 @@ mod snapshot_tests {
     }
 }
 
+async fn last_battery_level_at(pool: &PgPool, vehicle_id: Uuid, at: DateTime<Utc>) -> Option<f64> {
+    sqlx::query_scalar(
+        r#"SELECT battery_level
+           FROM timeseries.telemetry
+           WHERE vehicle_id = $1 AND ts <= $2 AND battery_level IS NOT NULL
+           ORDER BY ts DESC
+           LIMIT 1"#,
+    )
+    .bind(vehicle_id)
+    .bind(at)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
 async fn persist_trip(
     pool: &PgPool,
     http_client: &reqwest::Client,
@@ -2871,10 +2887,22 @@ async fn persist_trip(
         None
     };
 
+    // The detector only knows battery levels it saw in this process, and the
+    // vehicle reports one only when it changes. After a restart, or on a short
+    // trip with no change, fall back to the last persisted reading.
+    let soc_start = match trip.soc_start {
+        Some(soc) => Some(soc),
+        None => last_battery_level_at(pool, trip.vehicle_id, trip.started_at).await,
+    };
+    let soc_end = match trip.soc_end {
+        Some(soc) => Some(soc),
+        None => last_battery_level_at(pool, trip.vehicle_id, trip.ended_at).await,
+    };
+
     // Energy ensemble
     let (energy_wh, energy_strategy, efficiency_wh_per_mi) = match compute_trip_energy(
-        trip.soc_start,
-        trip.soc_end,
+        soc_start,
+        soc_end,
         trip.battery_capacity_wh,
         trip.range_start_mi,
         trip.range_end_mi,
@@ -2891,7 +2919,7 @@ async fn persist_trip(
         }
         None => {
             // Fallback: use SOC-based efficiency
-            let eff = match (trip.soc_start, trip.soc_end, trip.battery_capacity_wh) {
+            let eff = match (soc_start, soc_end, trip.battery_capacity_wh) {
                 (Some(s0), Some(s1), Some(cap)) if distance > 0.0 && s0 > s1 => {
                     Some(((s0 - s1) / 100.0) * cap / distance)
                 }
@@ -2953,8 +2981,8 @@ async fn persist_trip(
         .bind(end.map(|p| p.lng))
         .bind(distance)
         .bind(duration)
-        .bind(trip.soc_start)
-        .bind(trip.soc_end)
+        .bind(soc_start)
+        .bind(soc_end)
         .bind(efficiency_wh_per_mi)
         .bind(max_speed)
         .bind(avg_speed)
