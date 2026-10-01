@@ -976,17 +976,27 @@ async fn collect_connection_with_context(
                         }
                     }
                     Message::Close(frame) => {
+                        // Rivian closes every subscription when its connection
+                        // TTL runs out. That is a routine renewal, not a
+                        // failure: returning Ok resets the backoff so the
+                        // collector resubscribes immediately instead of
+                        // sitting offline for up to two minutes.
+                        let renewal =
+                            crate::ingestion::ws_client::is_rivian_connection_ttl_expired(frame.as_ref());
                         ingestion_capture::record(
                             session.vehicle_id,
                             CaptureKind::ParallaxConnection,
                             json!({
-                                "event": "closed",
+                                "event": if renewal { "ttl_expired" } else { "closed" },
                                 "close_code": frame.as_ref().map(|f| u16::from(f.code)),
                                 "close_reason": frame.as_ref().map(|f| f.reason.to_string()),
                             }),
                         );
                         set_collector_state(pool, session.vehicle_id, "disconnected", None)
                             .await?;
+                        if renewal {
+                            return Ok(());
+                        }
                         anyhow::bail!("Parallax socket closed: {frame:?}");
                     }
                     _ => {}

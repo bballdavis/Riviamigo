@@ -954,7 +954,7 @@ async fn connect_and_subscribe(
     }
 }
 
-fn is_rivian_connection_ttl_expired(frame: Option<&CloseFrame>) -> bool {
+pub(crate) fn is_rivian_connection_ttl_expired(frame: Option<&CloseFrame>) -> bool {
     frame.is_some_and(|f| {
         u16::from(f.code) == RIVIAN_CONNECTION_TTL_EXPIRED_CODE
             && f.reason.as_str() == RIVIAN_CONNECTION_TTL_EXPIRED_REASON
