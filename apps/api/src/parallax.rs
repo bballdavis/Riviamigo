@@ -50,6 +50,7 @@ const VEHICLE_STATE_TOPICS: &[&str] = &[
     "vehicle.power.state",
     "dynamics.vehicle.gnss",
     "dynamics.vehicle.odometer",
+    "dynamics.vehicle.gear",
     "body.closures.states",
     "body.locks.states",
     "dynamics.tires.state",
@@ -350,6 +351,12 @@ struct GnssState {
 }
 
 #[derive(Clone, PartialEq, ProstMessage)]
+struct GearState {
+    #[prost(int32, optional, tag = "1")]
+    gear: Option<i32>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
 struct OdometerState {
     #[prost(uint64, optional, tag = "1")]
     kilometers: Option<u64>,
@@ -496,6 +503,26 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
             event.odometer_miles = Some(kilometers as f64 * 0.621_371_192);
             event.odometer_miles_ts = Some(source_at);
             meaningful = true;
+        }
+        "dynamics.vehicle.gear" => {
+            // Gear enum as observed on an R1S by apohor/rivolt: 1 P, 2 R,
+            // 4 D; 3 N is inferred from the ordering. Values match the legacy
+            // gearStatus strings.
+            let value = GearState::decode(payload)?;
+            let gear = match value.gear.context("missing gear")? {
+                1 => Some("park"),
+                2 => Some("reverse"),
+                3 => Some("neutral"),
+                4 => Some("drive"),
+                other => {
+                    notes.push(format!("skipped unknown gear {other}"));
+                    None
+                }
+            };
+            if let Some(gear) = gear {
+                event.gear_status = Some(gear.into());
+                meaningful = true;
+            }
         }
         "body.closures.states" => {
             let value = ClosureStates::decode(payload)?;
@@ -1251,6 +1278,7 @@ fn is_canonical_telemetry_topic(topic: &str) -> bool {
         "vehicle.power.state"
             | "dynamics.vehicle.gnss"
             | "dynamics.vehicle.odometer"
+            | "dynamics.vehicle.gear"
             | "body.closures.states"
             | "body.locks.states"
             | "dynamics.tires.state"
@@ -2388,6 +2416,34 @@ mod tests {
         assert_eq!(event.door_front_left_locked, None);
         assert_eq!(event.closure_frunk_locked, Some(true));
         assert_eq!(notes.len(), 2);
+    }
+
+    #[test]
+    fn gear_frames_map_to_legacy_gear_strings() {
+        for (raw, expected) in [(1, "park"), (2, "reverse"), (3, "neutral"), (4, "drive")] {
+            let event = decode_vehicle_telemetry(
+                "dynamics.vehicle.gear",
+                &GearState { gear: Some(raw) }.encode_to_vec(),
+                Utc::now(),
+                Uuid::new_v4(),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(event.gear_status.as_deref(), Some(expected));
+        }
+        assert!(is_allowlisted_topic("dynamics.vehicle.gear"));
+
+        let mut notes = Vec::new();
+        let event = decode_vehicle_telemetry_with_notes(
+            "dynamics.vehicle.gear",
+            &GearState { gear: Some(9) }.encode_to_vec(),
+            Utc::now(),
+            Uuid::new_v4(),
+            &mut notes,
+        )
+        .unwrap();
+        assert!(event.is_none());
+        assert_eq!(notes, vec!["skipped unknown gear 9"]);
     }
 
     #[test]

@@ -50,7 +50,7 @@ not independently measured specifications.
 ## Vehicle state readings and trips
 
 The same allowlisted Parallax subscription requests power, GNSS, odometer,
-closures and locks, tire state, and cabin readings for every enrolled vehicle
+gear, closures and locks, tire state, and cabin readings for every enrolled vehicle
 model. Validated readings join the ordinary vehicle status and telemetry
 history. Availability still depends on what that vehicle and Rivian send. A
 missing or unrecognized value does not become an inferred state, and Parallax
@@ -77,7 +77,11 @@ it uses successive plausible GNSS fixes after enough movement is observed, or
 an increasing odometer when GNSS has not yet shown movement. The source value
 is kept intact; an estimate is not written back as a vehicle-reported speed.
 Trip distance starts from the odometer reading at the detected shift into
-gear, so early odometer steps are retained. Old fixes, implausible jumps, and
+gear, so early odometer steps are retained. When that backdates the start,
+the trip also starts at the shift time and at the last location seen while
+parked, so duration, average speed, and start places such as Home match the
+distance. A shift more than 15 minutes before the first detected motion is
+not used, so a missed drive is not attributed to a later trip. Old fixes, implausible jumps, and
 parked odometer readings are excluded from trip detection. Historical replay
 does not retain power-source provenance. It treats power-only rows as
 change-only frames and richer power rows as periodic telemetry. A legacy
