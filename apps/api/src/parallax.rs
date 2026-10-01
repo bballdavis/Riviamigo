@@ -543,10 +543,24 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
             let value = LockStates::decode(payload)?;
             for state in value.states {
                 let position = state.position.context("missing lock position")?;
-                let locked = match state.state.context("missing lock state")? {
-                    1 => true,
-                    2 => false,
-                    other => anyhow::bail!("unknown lock state {other}"),
+                // R1 vehicles also report positions with no canonical field
+                // (6, 8, 9, 14, 15). Skip those entries rather than losing the
+                // door, frunk, and liftgate locks in the same frame.
+                if lock_field_name(position).is_none() {
+                    notes.push(format!("skipped unmapped lock position {position}"));
+                    continue;
+                }
+                let locked = match state.state {
+                    Some(1) => true,
+                    Some(2) => false,
+                    other => {
+                        let reason = other.map_or_else(
+                            || "missing state".into(),
+                            |s| format!("unexpected state {s}"),
+                        );
+                        notes.push(format!("skipped lock position {position} with {reason}"));
+                        continue;
+                    }
                 };
                 meaningful |= set_lock(&mut event, position, locked)?;
             }
@@ -2285,6 +2299,72 @@ mod tests {
             ])
         );
         assert!(body_entries("vehicle.power.state", &[]).is_none());
+    }
+
+    fn lock_frame(entries: &[(i32, Option<i32>)]) -> Vec<u8> {
+        LockStates {
+            states: entries
+                .iter()
+                .map(|&(position, state)| LockState {
+                    position: Some(position),
+                    state,
+                })
+                .collect(),
+        }
+        .encode_to_vec()
+    }
+
+    #[test]
+    fn r1_lock_frame_keeps_mapped_locks_and_notes_extra_positions() {
+        // Observed R1S frame mid-lock: doors still unlocked (2), every other
+        // position already locked (1).
+        let mut notes = Vec::new();
+        let event = decode_vehicle_telemetry_with_notes(
+            "body.locks.states",
+            &lock_frame(&[
+                (1, Some(2)),
+                (2, Some(2)),
+                (3, Some(2)),
+                (4, Some(2)),
+                (5, Some(1)),
+                (6, Some(1)),
+                (7, Some(1)),
+                (8, Some(1)),
+                (9, Some(1)),
+                (14, Some(1)),
+                (15, Some(1)),
+            ]),
+            Utc::now(),
+            Uuid::new_v4(),
+            &mut notes,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(event.door_front_left_locked, Some(false));
+        assert_eq!(event.door_rear_right_locked, Some(false));
+        assert_eq!(event.closure_frunk_locked, Some(true));
+        assert_eq!(event.closure_liftgate_locked, Some(true));
+        assert_eq!(
+            notes,
+            [6, 8, 9, 14, 15]
+                .iter()
+                .map(|p| format!("skipped unmapped lock position {p}"))
+                .collect::<Vec<_>>()
+        );
+
+        let mut notes = Vec::new();
+        let event = decode_vehicle_telemetry_with_notes(
+            "body.locks.states",
+            &lock_frame(&[(1, Some(9)), (2, None), (5, Some(1))]),
+            Utc::now(),
+            Uuid::new_v4(),
+            &mut notes,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(event.door_front_left_locked, None);
+        assert_eq!(event.closure_frunk_locked, Some(true));
+        assert_eq!(notes.len(), 2);
     }
 
     #[test]
