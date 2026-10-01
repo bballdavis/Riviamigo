@@ -428,6 +428,9 @@ struct DefrostState {
 
 /// R2 closure position with no canonical field (the rear drop glass).
 const CLOSURE_REAR_GLASS_POSITION: i32 = 16;
+/// The charge port door. Matched against legacy chargePortState on an R1S:
+/// opening, open, closing, and closed changed at the same moments.
+const CLOSURE_CHARGE_PORT_POSITION: i32 = 10;
 /// Stateless entry that ends every R2 closure frame.
 const CLOSURE_SENTINEL_POSITION: i32 = 10000;
 
@@ -539,6 +542,19 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
                 let Some(status) = state.state.filter(|status| *status != 0) else {
                     continue;
                 };
+                if position == CLOSURE_CHARGE_PORT_POSITION {
+                    // Same meaning as legacy chargePortState: open or ajar
+                    // count as open; opening, closing, and closed do not.
+                    if (1..=5).contains(&status) {
+                        event.charge_port_open = Some(matches!(status, 1 | 3));
+                        meaningful = true;
+                    } else {
+                        notes.push(format!(
+                            "skipped charge port with unexpected state {status}"
+                        ));
+                    }
+                    continue;
+                }
                 let field = closure_field(&mut event, position);
                 if field.is_none() && position != CLOSURE_REAR_GLASS_POSITION {
                     notes.push(format!(
@@ -653,10 +669,10 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
         "comfort.cabin.defrost_defog_status" => {
             let value = DefrostState::decode(payload)?;
             let status = match value.status.context("missing defrost status")? {
-                0 | 1 => Some(false),
+                // The R1S reports 4 whenever legacy reports "Off"; as in
+                // rivian-python-client, only 2 means defrosting.
+                0 | 1 | 4 => Some(false),
                 2 => Some(true),
-                // The R1S reports 4, which no public mapping defines. Legacy
-                // still reports defrost, so skip it rather than reject.
                 other => {
                     notes.push(format!("skipped unknown defrost status {other}"));
                     None
@@ -720,6 +736,7 @@ fn closure_field_name(position: i32) -> Option<&'static str> {
         7 => "closure_liftgate_closed",
         8 => "side_bin_left_closed",
         9 => "side_bin_right_closed",
+        CLOSURE_CHARGE_PORT_POSITION => "charge_port_open",
         11 => "tonneau_closed",
         12 => "window_fl_closed",
         13 => "window_fr_closed",
@@ -1418,9 +1435,6 @@ async fn persist_allowlisted_envelope(
             vehicle_id,
             &mut report.notes,
         );
-        for note in &report.notes {
-            tracing::debug!(vehicle_id=%vehicle_id, topic=%topic, reason=%note, "typed Parallax entry skipped");
-        }
         match decoded {
             Ok(Some(event)) => {
                 canonical_outcome = Some(EnvelopeOutcome::Decoded);
@@ -2335,7 +2349,8 @@ mod tests {
         for position in -1..=40 {
             let mut event = TelemetryEvent::empty(Uuid::nil(), Utc::now());
             assert_eq!(
-                closure_field(&mut event, position).is_some(),
+                closure_field(&mut event, position).is_some()
+                    || position == CLOSURE_CHARGE_PORT_POSITION,
                 closure_field_name(position).is_some(),
                 "closure position {position}"
             );
@@ -2463,19 +2478,48 @@ mod tests {
     }
 
     #[test]
-    fn unknown_defrost_status_is_noted_instead_of_rejected() {
-        // Observed R1S frame: `08 04`.
+    fn defrost_status_four_is_off_and_unknown_values_are_noted() {
+        // Observed R1S frame `08 04` while legacy reported "Off".
+        let event = decode_vehicle_telemetry(
+            "comfort.cabin.defrost_defog_status",
+            &[0x08, 0x04],
+            Utc::now(),
+            Uuid::new_v4(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(event.defrost_active, Some(false));
+
         let mut notes = Vec::new();
         let event = decode_vehicle_telemetry_with_notes(
             "comfort.cabin.defrost_defog_status",
-            &[0x08, 0x04],
+            &[0x08, 0x07],
             Utc::now(),
             Uuid::new_v4(),
             &mut notes,
         )
         .unwrap();
         assert!(event.is_none());
-        assert_eq!(notes, vec!["skipped unknown defrost status 4"]);
+        assert_eq!(notes, vec!["skipped unknown defrost status 7"]);
+    }
+
+    #[test]
+    fn charge_port_follows_legacy_charge_port_state() {
+        // Observed R1S sequence: closed, opening, open, closing, closed. Legacy
+        // reported close, opening, open, closing, close at the same moments.
+        for (status, open) in [(2, false), (4, false), (1, true), (5, false), (3, true)] {
+            let event = decode_vehicle_telemetry(
+                "body.closures.states",
+                &closure_frame(&[(10, Some(status))]),
+                Utc::now(),
+                Uuid::new_v4(),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(event.charge_port_open, Some(open), "status {status}");
+            assert!(event.closure_transitions.is_none());
+        }
+        assert_eq!(closure_field_name(10), Some("charge_port_open"));
     }
 
     #[test]
@@ -2559,7 +2603,7 @@ mod tests {
     fn r1_closure_frame_maps_app_positions_and_skips_absent_closures() {
         // Observed R1S frame with the frunk and liftgate open: the tailgate
         // (6), side bins (8, 9), and tonneau (11) are not fitted, and
-        // position 10 (likely the charge port door) is unmapped.
+        // position 10 is the charge port door.
         let mut notes = Vec::new();
         let event = decode_vehicle_telemetry_with_notes(
             "body.closures.states",
@@ -2595,10 +2639,8 @@ mod tests {
         assert_eq!(event.side_bin_right_closed, None);
         assert_eq!(event.tonneau_closed, None);
         assert_eq!(event.window_rr_closed, Some(true));
-        assert_eq!(
-            notes,
-            vec!["skipped unmapped closure position 10 with state 2"]
-        );
+        assert_eq!(event.charge_port_open, Some(false));
+        assert!(notes.is_empty(), "{notes:?}");
 
         // An R1T: tailgate closing, left side bin open, right side bin and
         // tonneau closed.
