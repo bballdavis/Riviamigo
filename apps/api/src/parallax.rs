@@ -501,35 +501,33 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
             let value = ClosureStates::decode(payload)?;
             for state in value.states {
                 let position = state.position.context("missing closure position")?;
-                // Every R2 frame ends with this stateless sentinel entry.
-                if position == CLOSURE_SENTINEL_POSITION && state.state.is_none() {
+                // Every frame ends with this marker: stateless on the R2,
+                // mirroring the window state on the R1.
+                if position == CLOSURE_SENTINEL_POSITION {
                     continue;
                 }
-                let describe_state = |state: Option<i32>| {
-                    state.map_or_else(|| "missing state".into(), |s| format!("state {s}"))
+                // Protobuf omits a zero status, which the app enum defines as
+                // unspecified: the vehicle does not have this closure (for
+                // example the tailgate or tonneau on an R1S).
+                let Some(status) = state.state.filter(|status| *status != 0) else {
+                    continue;
                 };
-                // Check the position before the state so an unknown position
-                // is reported whatever state it carries.
                 let field = closure_field(&mut event, position);
                 if field.is_none() && position != CLOSURE_REAR_GLASS_POSITION {
                     notes.push(format!(
-                        "skipped unmapped closure position {position} with {}",
-                        describe_state(state.state)
+                        "skipped unmapped closure position {position} with state {status}"
                     ));
                     continue;
                 }
-                let closed = match state.state {
-                    Some(1) => false,
-                    Some(2) => true,
-                    // The powered frunk and liftgate report 3 while moving;
-                    // keep the last settled value until they stop.
-                    Some(3) => continue,
+                // App enum: 1 OPEN, 2 CLOSE, 3 AJAR, 4 OPENING, 5 CLOSING.
+                // Every state except CLOSE is "not closed", as legacy reports.
+                let closed = match status {
+                    2 => true,
+                    1 | 3 | 4 | 5 => false,
                     other => {
-                        let reason = match other {
-                            Some(s) => format!("unexpected state {s}"),
-                            None => "missing state".into(),
-                        };
-                        notes.push(format!("skipped closure position {position} with {reason}"));
+                        notes.push(format!(
+                            "skipped closure position {position} with unexpected state {other}"
+                        ));
                         continue;
                     }
                 };
@@ -550,9 +548,10 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
                     notes.push(format!("skipped unmapped lock position {position}"));
                     continue;
                 }
+                // App enum: 1 LOCKED, 2 UNLOCKED, 3 PARTIALLY_UNLOCKED.
                 let locked = match state.state {
                     Some(1) => true,
-                    Some(2) => false,
+                    Some(2 | 3) => false,
                     other => {
                         let reason = other.map_or_else(
                             || "missing state".into(),
@@ -644,9 +643,10 @@ fn closure_field(event: &mut TelemetryEvent, position: i32) -> Option<&mut Optio
         3 => &mut event.door_rear_left_closed,
         4 => &mut event.door_rear_right_closed,
         5 => &mut event.closure_frunk_closed,
-        6 => &mut event.side_bin_left_closed,
+        6 => &mut event.closure_tailgate_closed,
         7 => &mut event.closure_liftgate_closed,
-        // R2 window positions, mapped from an observed window-by-window test.
+        11 => &mut event.tonneau_closed,
+        // Windows, confirmed window by window on both the R1S and the R2.
         12 => &mut event.window_fl_closed,
         13 => &mut event.window_fr_closed,
         14 => &mut event.window_rl_closed,
@@ -664,8 +664,9 @@ fn closure_field_name(position: i32) -> Option<&'static str> {
         3 => "door_rear_left_closed",
         4 => "door_rear_right_closed",
         5 => "closure_frunk_closed",
-        6 => "side_bin_left_closed",
+        6 => "closure_tailgate_closed",
         7 => "closure_liftgate_closed",
+        11 => "tonneau_closed",
         12 => "window_fl_closed",
         13 => "window_fr_closed",
         14 => "window_rl_closed",
@@ -2410,7 +2411,8 @@ mod tests {
         assert_eq!(event.door_front_left_closed, Some(true));
         assert_eq!(event.door_rear_right_closed, Some(true));
         assert_eq!(event.closure_frunk_closed, Some(false));
-        assert_eq!(event.closure_liftgate_closed, None);
+        // AJAR while the powered liftgate closes is still "not closed".
+        assert_eq!(event.closure_liftgate_closed, Some(false));
         assert_eq!(event.window_fl_closed, Some(false));
         assert_eq!(event.window_rr_closed, Some(true));
 
@@ -2432,20 +2434,79 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(event.door_front_left_closed, None);
+        // OPENING is not closed; a missing status means the closure is not
+        // fitted and is skipped silently.
+        assert_eq!(event.door_front_left_closed, Some(false));
+        assert_eq!(event.door_front_right_closed, None);
         assert_eq!(event.closure_frunk_closed, Some(true));
         assert_eq!(
             notes,
-            vec![
-                "skipped closure position 1 with unexpected state 4",
-                "skipped closure position 2 with missing state",
-                "skipped unmapped closure position 20 with state 2",
-            ]
+            vec!["skipped unmapped closure position 20 with state 2"]
         );
     }
 
     #[test]
-    fn closure_moving_state_is_only_a_silent_skip_for_known_positions() {
+    fn r1_closure_frame_maps_app_positions_and_skips_absent_closures() {
+        // Observed R1S frame with the frunk and liftgate open: no tailgate
+        // (6), side bins (8, 9), or tonneau (11), and position 10 (likely the
+        // charge port door) unmapped.
+        let mut notes = Vec::new();
+        let event = decode_vehicle_telemetry_with_notes(
+            "body.closures.states",
+            &closure_frame(&[
+                (1, Some(2)),
+                (2, Some(2)),
+                (3, Some(2)),
+                (4, Some(2)),
+                (5, Some(1)),
+                (6, None),
+                (7, Some(1)),
+                (8, None),
+                (9, None),
+                (10, Some(2)),
+                (11, None),
+                (12, Some(2)),
+                (13, Some(2)),
+                (14, Some(2)),
+                (15, Some(2)),
+                (10000, Some(2)),
+            ]),
+            Utc::now(),
+            Uuid::new_v4(),
+            &mut notes,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(event.door_rear_right_closed, Some(true));
+        assert_eq!(event.closure_frunk_closed, Some(false));
+        assert_eq!(event.closure_liftgate_closed, Some(false));
+        assert_eq!(event.closure_tailgate_closed, None);
+        assert_eq!(event.tonneau_closed, None);
+        assert_eq!(event.window_rr_closed, Some(true));
+        assert_eq!(
+            notes,
+            vec!["skipped unmapped closure position 10 with state 2"]
+        );
+
+        // An R1T reports its tailgate at 6 and tonneau at 11.
+        let mut notes = Vec::new();
+        let event = decode_vehicle_telemetry_with_notes(
+            "body.closures.states",
+            &closure_frame(&[(6, Some(5)), (11, Some(2))]),
+            Utc::now(),
+            Uuid::new_v4(),
+            &mut notes,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(event.closure_tailgate_closed, Some(false));
+        assert_eq!(event.tonneau_closed, Some(true));
+        assert_eq!(event.side_bin_left_closed, None);
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    #[test]
+    fn closure_transitional_states_mean_not_closed() {
         let vehicle_id = Uuid::new_v4();
         let source_at = Utc::now();
         let mut notes = Vec::new();
@@ -2465,19 +2526,15 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        // Moving mapped closures and the rear drop glass keep their last
-        // settled value without a note.
+        // AJAR closures are not closed; the rear drop glass has no field.
         assert_eq!(event.door_front_left_closed, Some(true));
-        assert_eq!(event.closure_frunk_closed, None);
-        assert_eq!(event.closure_liftgate_closed, None);
+        assert_eq!(event.closure_frunk_closed, Some(false));
+        assert_eq!(event.closure_liftgate_closed, Some(false));
         // An unknown position, or a sentinel that carries a state, is
         // reported even while in the moving state.
         assert_eq!(
             notes,
-            vec![
-                "skipped unmapped closure position 20 with state 3",
-                "skipped unmapped closure position 10000 with state 3",
-            ]
+            vec!["skipped unmapped closure position 20 with state 3"]
         );
     }
 
