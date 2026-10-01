@@ -8,6 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const MIGRATION_CHAIN_ID: &str = "riviamigo-schema-v1";
 
+/// How often a running migration reports that it is still working.
+const MIGRATION_HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// The one migration catalog used by startup, backup creation, restore
 /// planning, candidate preparation, and explicit chain adoption.
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
@@ -206,10 +209,53 @@ async fn run_current_migrations_locked(
     };
 
     set_public_search_path(connection).await?;
-    MIGRATOR
-        .run_direct(None, &mut *connection, false)
-        .await
-        .context("apply current Riviamigo migrations")?;
+    let applied: Vec<i64> = read_ledger(connection, "public")
+        .await?
+        .iter()
+        .map(|migration| migration.version)
+        .collect();
+    let pending: Vec<String> = MIGRATOR
+        .migrations
+        .iter()
+        .filter(|migration| !applied.contains(&migration.version))
+        .map(|migration| format!("{:04}_{}", migration.version, migration.description))
+        .collect();
+    if pending.is_empty() {
+        tracing::info!("database migrations are up to date");
+    } else {
+        tracing::info!(
+            pending = ?pending,
+            "applying database migrations; the API does not accept requests until they finish, and data repairs on large databases can take a long time"
+        );
+    }
+    let started = std::time::Instant::now();
+    let heartbeat = (!pending.is_empty()).then(|| {
+        let pending = pending.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(MIGRATION_HEARTBEAT);
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                tracing::info!(
+                    elapsed_secs = started.elapsed().as_secs(),
+                    pending = ?pending,
+                    "database migrations still running"
+                );
+            }
+        })
+    });
+    let outcome = MIGRATOR.run_direct(None, &mut *connection, false).await;
+    if let Some(heartbeat) = heartbeat {
+        heartbeat.abort();
+    }
+    outcome.context("apply current Riviamigo migrations")?;
+    if !pending.is_empty() {
+        tracing::info!(
+            elapsed_secs = started.elapsed().as_secs(),
+            applied = pending.len(),
+            "database migrations applied"
+        );
+    }
     let completed = read_ledger(connection, "public").await?;
     validate_complete_ledger(&completed).context("validate completed public migration ledger")?;
     if ledger_exists(connection, "riviamigo").await? {
