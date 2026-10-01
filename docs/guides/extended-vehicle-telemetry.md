@@ -47,46 +47,96 @@ Connectivity collection excludes network names and hardware identifiers.
 Values such as mass and learned efficiency are labeled as Rivian estimates,
 not independently measured specifications.
 
-## R2 readings and trips
+## Vehicle state readings and trips
 
-For a connected R2, the Parallax subscription also requests power, GNSS,
-odometer, closures and locks, tire state, and cabin readings. Validated readings
-join the ordinary vehicle status and telemetry history. A missing field stays
-missing; availability depends on what the vehicle and Rivian send. Parallax
+The same allowlisted Parallax subscription requests power, GNSS, odometer,
+gear, closures and locks, tire state, and cabin readings for every enrolled vehicle
+model. Validated readings join the ordinary vehicle status and telemetry
+history. Availability still depends on what that vehicle and Rivian send. A
+missing or unrecognized value does not become an inferred state, and Parallax
 readings do not start or end charging sessions.
 
-R2 trips can be assembled from sparse updates. Riviamigo joins a recent power
-state to a location fix and, when no speed is reported, estimates speed from
-successive plausible fixes. It requires two moving segments before using that
-estimate to detect motion. Old fixes, implausible jumps, and stale power are
-discarded for trip detection. Stored source readings are not rewritten with the
-estimated speed.
+Parallax also reports when a door, gate, frunk, or window is moving. The
+vehicle status page then shows **Opening…** or **Closing…** for that closure
+until it settles. When Rivian only reports that a closure is ajar, the
+direction comes from its last settled state: a closure that was closed is
+opening, and one that was open is closing. This motion is live only and is not
+stored in telemetry history; the stored value is simply "not closed".
+
+Power state keeps the freshness rule of its source. Parallax reports state when
+it changes, so the latest recognized Parallax state stays current until a newer
+state arrives. Legacy periodic `vehicleState` power samples are considered
+fresh for at most two minutes. When both sources contribute, the newest
+accepted sample by source timestamp controls the cached state and its freshness
+rule follows that sample's source. Unrecognized power values remain unknown and
+do not become sleep or drive decisions.
+
+Trip processing uses the vehicle's direct numeric speed when one is present.
+Only when direct speed is absent can shared telemetry fusion estimate speed:
+it uses successive plausible GNSS fixes after enough movement is observed, or
+an increasing odometer when GNSS has not yet shown movement. The source value
+is kept intact; an estimate is not written back as a vehicle-reported speed.
+Trip distance starts from the odometer reading at the detected shift into
+gear, so early odometer steps are retained. When that backdates the start,
+the trip also starts at the shift time and at the last location seen while
+parked, so duration, average speed, and start places such as Home match the
+distance. A shift more than 15 minutes before the first detected motion is
+not used, so a missed drive is not attributed to a later trip. Old fixes, implausible jumps, and
+parked odometer readings are excluded from trip detection. Historical replay
+does not retain power-source provenance. It treats power-only rows as
+change-only frames and richer power rows as periodic telemetry. A legacy
+power-only row is indistinguishable, so this remains a replay limitation;
+live fusion uses the actual sample source.
 
 ## Investigate missing readings
 
-1. Open **Health** for the vehicle. Check Acquisition separately from canonical
-   feed health. A connected acquisition means the Parallax socket is active;
-   it does not guarantee that Rivian has sent every requested topic.
-2. In **Settings → Raw data**, an owner or manager can enable **Ingestion
-   diagnostics** for a non-demo vehicle linked to a Rivian account. The switch
-   automatically expires after one hour. Demo vehicles cannot enable it.
-3. Watch the API process logs while a relevant vehicle update occurs. The
-   `vehicle ingestion diagnostics` event reports source, field presence, and
-   sample age. The `vehicle trip diagnostics` event reports whether recent
-   power or derived speed was used and whether a trip transitioned. A rejected
-   typed Parallax frame reports its topic and decoder reason.
-4. Compare those events with the Health acquisition status and the collector
-   diagnostics in **Settings → Raw data**. No incoming topic points toward
-   upstream availability or connection state. An incoming topic with a decoder
-   rejection points toward a schema or value mismatch. A valid sparse fix with
-   no trip can be expected until enough recent motion samples arrive.
-5. Turn the switch off after collecting enough evidence. Expiry also turns it
-   off automatically. The switch controls diagnostic logging; it does not
-   enable or disable telemetry collection.
+When a maintainer asks for evidence about a missing reading, record an
+**ingestion capture** and share the downloaded file:
 
-Diagnostic events omit raw Parallax payloads, credentials, network identifiers,
-and coordinates. They are written to the API's configured logs, so log
-retention is controlled by the host. A sleeping vehicle may provide no new
-frames during the one-hour window. See the [maintainer runbook](../runbooks/r2-ingestion-diagnostics.md)
-for a repeatable investigation and the [API reference](../api-access.md) for
-the session-only switch endpoints.
+1. In **Settings → Raw data → Ingestion capture**, an owner or manager selects
+   **Start capture** for the affected non-demo vehicle. Recording starts
+   immediately and stops on its own after one hour.
+2. Reproduce the problem: open and close the doors, drive, plug in, or wait
+   for the update that goes missing. A sleeping vehicle may send nothing.
+3. Select **Stop**, then **Download**. The file is named
+   `riviamigo-capture-<model>-<start time>.jsonl`, with one JSON object per
+   line.
+4. Share the file with the maintainer as it is. It is safe to share.
+
+Each vehicle keeps only its most recent capture. Starting a new one replaces
+the previous file, and a stopped capture is deleted after 24 hours.
+
+A capture file contains:
+
+- a header line with the app version, vehicle model, capture window, event
+  counts by kind, and whether any events were dropped or the 50,000-event limit
+  was reached;
+- `parallax_envelope`: every Parallax frame with its topic, source timestamp
+  and age, decode outcome, whether it reached the canonical worker, the decoded
+  values, and the raw payload bytes (except GNSS and network frames). Body
+  frames also list each closure or lock position with the field it maps to, or
+  `null` when Riviamigo does not know the position;
+- `parallax_connection` and `legacy_connection`: subscribe, close, and
+  connection-renewal events for both Rivian streams;
+- `legacy_frame`: each legacy WebSocket update with every reported field, its
+  value, and Rivian's timestamp, so it can be lined up against Parallax;
+- `ingestion`: what the worker did with each sample: its source, values,
+  whether it was stored or suppressed as a duplicate, the state it implies,
+  and whether charge and power lifecycle signals were updated;
+- `trip`: the trip detector's power and speed choices, GNSS and odometer
+  evidence, start decision, and transition;
+- `poll`: each Rivian GraphQL fetch (vehicle-state baseline, vehicle details,
+  wallboxes, charge history, charging schedule) with its outcome. The startup
+  fetches run when the vehicle's worker starts, so they appear only in a
+  capture that spans an API restart. The baseline's fields also appear as a
+  `legacy_frame` with message type `baseline`.
+
+Captures never include coordinates, credentials, the VIN, the vehicle ID, or
+vehicle and account names. GNSS frames record only that a location was present.
+
+Operators can still follow API output with
+`docker compose --env-file .env -f compose/docker-compose.yml logs -f riviamigo`,
+but diagnostic detail now goes to the capture rather than the log. See the
+[maintainer runbook](../runbooks/r2-ingestion-diagnostics.md) for reading a
+capture, and the [API reference](../api-access.md) for the session-only capture
+endpoints.

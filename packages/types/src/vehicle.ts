@@ -111,6 +111,8 @@ export type VehicleStatusAvailabilityReason =
   | 'never_seen'
   | 'invalid_sensor';
 
+export type ClosureMotion = 'opening' | 'closing';
+
 export interface VehicleStatusFieldAvailability {
   ever_seen: boolean;
   last_seen_at: string | null;
@@ -168,6 +170,12 @@ export interface VehicleStatus {
   door_rear_right_closed?: boolean | null;
   closure_frunk_locked?: boolean | null;
   closure_frunk_closed?: boolean | null;
+  /**
+   * Live-only: closures currently moving, keyed by their `*_closed` field.
+   * Sent on the live stream when it changes; an empty object means nothing
+   * is moving. Never stored.
+   */
+  closure_motion?: Partial<Record<string, ClosureMotion>> | null;
   closure_liftgate_locked?: boolean | null;
   closure_liftgate_closed?: boolean | null;
   closure_tailgate_locked?: boolean | null;

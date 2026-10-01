@@ -1208,9 +1208,17 @@ export interface CreateDemoVehicleBody {
   model: 'R1T' | 'R1S' | 'R2';
 }
 
-export interface VehicleIngestionDiagnostics {
-  enabled: boolean;
-  enabled_until: string | null;
+/** The vehicle's most recent ingestion capture. Only one is kept per vehicle. */
+export interface VehicleIngestionCapture {
+  state: 'idle' | 'capturing' | 'stopped';
+  started_at: string | null;
+  /** When a running capture stops on its own. */
+  ends_at: string | null;
+  stopped_at: string | null;
+  stop_reason: 'user' | 'expired' | null;
+  event_count: number;
+  last_event_at: string | null;
+  truncated: boolean;
 }
 
 export interface AuthTokens {

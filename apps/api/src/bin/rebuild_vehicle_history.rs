@@ -21,6 +21,7 @@ use riviamigo_api::{
         compute_distance_odometer_or_gps, compute_trip_energy, CompletedTripData,
         TripDetectorState, TripEvent,
     },
+    ingestion::trip_signals::TripSignalFusion,
     models::telemetry::{ChargerState, DriveMode, PowerState, TelemetryEvent},
     services::{
         charge_sessions::canonicalize_charge_sessions,
@@ -194,7 +195,10 @@ async fn backfill_state_periods_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> 
         r#"
         SELECT ts, power_state
         FROM timeseries.telemetry
-        WHERE vehicle_id = $1
+        -- Partial rows without power state (a door or tire update) say
+        -- nothing about the vehicle state; counting them as unknown split
+        -- the timeline into seconds-long periods.
+        WHERE vehicle_id = $1 AND power_state IS NOT NULL
         ORDER BY ts
         "#,
     )
@@ -622,6 +626,7 @@ struct ChargeLocationRow {
 async fn replay_trips_for_vehicle(pool: &PgPool, vehicle_id: Uuid, client: &Client) -> Result<u64> {
     let owner_id = get_vehicle_owner_id(pool, vehicle_id).await?;
     let mut trip_det = TripDetectorState::new(vehicle_id);
+    let mut trip_signals = TripSignalFusion::default();
     let mut rows = sqlx::query_as::<_, ReplayTelemetryRow>(
         r#"
         SELECT
@@ -643,7 +648,10 @@ async fn replay_trips_for_vehicle(pool: &PgPool, vehicle_id: Uuid, client: &Clie
     while let Some(row) = rows.try_next().await? {
         let event = row_to_event(row);
 
-        if let TripEvent::TripEnded { trip } = trip_det.process(&event) {
+        let trip_sample = trip_signals
+            .fuse_from(&event, replay_power_is_change_only(&event))
+            .0;
+        if let TripEvent::TripEnded { trip } = trip_det.process(&trip_sample) {
             let distance = compute_distance_odometer_or_gps(
                 trip.start_odometer_mi,
                 trip.end_odometer_mi,
@@ -688,6 +696,71 @@ fn row_to_event(row: ReplayTelemetryRow) -> TelemetryEvent {
     event.odometer_miles = row.odometer_miles;
     event.is_online = row.is_online;
     event
+}
+
+/// Historical rows lack source provenance. Power-only rows match the typed
+/// Parallax power frame; richer telemetry uses periodic freshness. A legacy
+/// power-only frame remains indistinguishable, so this is an inference only.
+fn replay_power_is_change_only(event: &TelemetryEvent) -> bool {
+    event.power_state.is_some()
+        && event.latitude.is_none()
+        && event.longitude.is_none()
+        && event.altitude_m.is_none()
+        && event.speed_mph.is_none()
+        && event.battery_level.is_none()
+        && event.battery_capacity_wh.is_none()
+        && event.distance_to_empty_mi.is_none()
+        && event.battery_limit.is_none()
+        && event.charger_state.is_none()
+        && event.charger_status.is_none()
+        && event.time_to_end_of_charge_min.is_none()
+        && event.drive_mode.is_none()
+        && event.gear_status.is_none()
+        && event.cabin_temp_c.is_none()
+        && event.outside_temp_c.is_none()
+        && event.power_kw.is_none()
+        && event.regen_power_kw.is_none()
+        && event.heading_deg.is_none()
+        && event.odometer_miles.is_none()
+        && event.is_online.is_none()
+}
+
+#[cfg(test)]
+mod replay_power_tests {
+    use super::*;
+    use chrono::Duration;
+
+    #[test]
+    fn mixed_history_keeps_the_supplying_power_rows_policy() {
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::default();
+        let mut power = TelemetryEvent::empty(Uuid::nil(), at);
+        power.power_state = Some(PowerState::Go);
+        assert!(replay_power_is_change_only(&power));
+        fusion.fuse_from(&power, replay_power_is_change_only(&power));
+        let mut direct_speed = TelemetryEvent::empty(Uuid::nil(), at + Duration::seconds(30));
+        direct_speed.speed_mph = Some(0.0);
+        fusion.fuse_from(&direct_speed, replay_power_is_change_only(&direct_speed));
+        let later = TelemetryEvent::empty(Uuid::nil(), at + Duration::minutes(20));
+        assert_eq!(
+            fusion.fuse_from(&later, false).0.power_state,
+            Some(PowerState::Go)
+        );
+        power.ts = later.ts;
+        power.is_online = Some(true);
+        assert!(!replay_power_is_change_only(&power));
+        fusion.fuse_from(&power, replay_power_is_change_only(&power));
+        let after = TelemetryEvent::empty(Uuid::nil(), power.ts + Duration::minutes(3));
+        assert_eq!(fusion.fuse_from(&after, false).0.power_state, None);
+        power.ts = after.ts;
+        power.is_online = None;
+        fusion.fuse_from(&power, replay_power_is_change_only(&power));
+        let after = TelemetryEvent::empty(Uuid::nil(), power.ts + Duration::minutes(20));
+        assert_eq!(
+            fusion.fuse_from(&after, false).0.power_state,
+            Some(PowerState::Go)
+        );
+    }
 }
 
 fn parse_power_state(value: &str) -> Option<PowerState> {

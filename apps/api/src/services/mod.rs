@@ -12,6 +12,7 @@ pub mod cost;
 pub mod demo_seed;
 pub mod external_connections;
 pub mod geofences;
+pub mod ingestion_capture;
 pub mod nominatim;
 pub mod oidc;
 pub mod redis_health;

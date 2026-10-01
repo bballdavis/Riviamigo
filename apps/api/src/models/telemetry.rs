@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -115,6 +117,11 @@ pub struct TelemetryEvent {
     pub brake_fluid_low: Option<bool>,
     pub alarm_active: Option<bool>,
     pub service_mode: Option<bool>,
+    /// Closures caught mid-movement in this sample, keyed by their
+    /// `*_closed` field. Live-only: the worker turns these into an
+    /// opening/closing state for the status stream; they are never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closure_transitions: Option<BTreeMap<String, ClosureTransition>>,
 }
 
 impl TelemetryEvent {
@@ -225,8 +232,20 @@ impl TelemetryEvent {
             brake_fluid_low: None,
             alarm_active: None,
             service_mode: None,
+            closure_transitions: None,
         }
     }
+}
+
+/// Rivian's transitional closure statuses (app enum 3, 4 and 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClosureTransition {
+    /// Neither latched nor at rest; the direction comes from the last
+    /// settled state.
+    Ajar,
+    Opening,
+    Closing,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]

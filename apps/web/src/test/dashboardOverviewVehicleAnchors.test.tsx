@@ -138,7 +138,8 @@ const expectedAnchors = {
       fl: 'left-[60%] top-[-0%]',
       rr: 'left-[43%] top-[102%]',
       fr: 'left-[60%] top-[102%]',
-      rearGate: 'left-[4%] top-1/2',
+      // Real R2 artwork has more canvas behind the rear gate.
+      rearGate: 'left-[8.8%] top-1/2',
       frunk: 'left-[102%] top-1/2',
     },
   },

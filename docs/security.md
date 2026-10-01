@@ -93,6 +93,13 @@ precise vehicle locations in public issues.
 - There is currently **no automatic retention/deletion job** for security
   events. Retention is therefore bounded by the operator's database retention
   and backup policy, not by an application purge interval.
+- Owner-started ingestion captures are stored in
+  `riviamigo.vehicle_ingestion_capture_events`. They hold sanitized ingestion
+  facts, decoded values, and raw Parallax payload bytes for topics that cannot
+  carry location or network identity. A key filter removes vehicle IDs, VINs,
+  names, coordinates, and credential-like fields before storage and again on
+  export. Each vehicle keeps one capture, which stops after one hour and is
+  purged 24 hours after it stops.
 - Structured `[riviamigo][LEVEL]` key-value logs are written to stdout/stderr; Docker supplies the outer timestamp. The production wrapper normalizes Nginx error lines into the same shape.
 
 ## Security regression controls
@@ -119,7 +126,7 @@ precise vehicle locations in public issues.
 
 - Standard Compose pulls one public unified image from GitHub Container Registry; source builds use the explicit build overlay only.
 - Stable images use immutable Calendar Version tags and provenance attestations; `latest` is a moving convenience tag, not a reproducible deployment identifier.
-- Versioned container images are published only by intentional release workflows from validated `main` tags or the current `dev` pre-release candidate. Pushes to `main` and `dev` may publish unversioned, commit-addressed build candidates; these are cache/release inputs, not releases. Stable and pre-release image tags and digests must be treated as release artifacts.
+- Versioned container images are published only by intentional release workflows from validated `main` tags or the current `dev` pre-release candidate. The manually dispatched candidate workflow may also move the mutable `:dev` alias after it verifies the exact current upstream `dev` SHA; this alias is for development and test environments, not production release identity. Manual Candidate image dispatches may publish unversioned, commit-addressed build candidates; these are cache/release inputs, not releases. Stable and pre-release image tags and digests must be treated as release artifacts.
 - See the [release images runbook](./runbooks/release-images.md) for package visibility, tag protection, and recovery requirements.
 
 ## Production Checklist

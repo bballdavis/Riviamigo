@@ -46,7 +46,7 @@ pub mod metrics;
 pub mod overview;
 pub mod parked_energy;
 pub mod places;
-mod range_normalization;
+pub mod range_normalization;
 pub mod rivian_stewardship;
 pub mod schedules;
 pub mod settings;

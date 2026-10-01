@@ -320,6 +320,11 @@ async fn get_mileage(
 
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 730);
     let usable_new_wh = resolve_usable_new_wh(&state.pool, vid).await?;
+    let vehicle_model: Option<String> =
+        sqlx::query_scalar("SELECT model FROM riviamigo.vehicles WHERE id = $1")
+            .bind(vid)
+            .fetch_optional(&state.pool)
+            .await?;
 
     let samples = sqlx::query_as::<_, BatteryMileageSampleRow>(
         "SELECT
@@ -359,6 +364,7 @@ async fn get_mileage(
                 sample.distance_to_empty_mi,
                 sample.battery_level,
                 sample.battery_capacity_wh,
+                vehicle_model.as_deref(),
             );
             let degradation_pct = match (usable_kwh, usable_new_wh > 0.0) {
                 (Some(usable_kwh), true) => {

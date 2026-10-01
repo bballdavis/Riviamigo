@@ -79,8 +79,10 @@ function checkPromotionWorkflow(relativePath, mode) {
 
 function checkCandidateWorkflow() {
   const workflow = read('.github/workflows/publish-candidate-image.yml');
+  const promote = jobBlock(workflow, 'promote-dev', 'prune-candidates');
   checkPins(workflow, 'publish-candidate-image.yml');
   requireText(workflow, /^\s{2}workflow_dispatch:/m, 'candidate workflow must remain manually dispatched');
+  requireText(workflow, /cancel-in-progress:\s*false/, 'candidate workflow must not cancel an in-flight dev promotion');
   if (/^\s{2}push:/m.test(workflow)) fail('candidate workflow must not build on every main or dev push');
   requireText(workflow, /runs-on:\s*ubuntu-24\.04(?:\s|$)/, 'AMD64 candidates must use the native AMD64 runner');
   requireText(workflow, /runs-on:\s*ubuntu-24\.04-arm(?:\s|$)/, 'ARM64 candidates must use the native ARM64 runner');
@@ -90,6 +92,17 @@ function checkCandidateWorkflow() {
   if (/type=gha/.test(workflow)) fail('candidate workflow must not consume GitHub Actions cache storage for BuildKit');
   requireText(workflow, /candidate-\$\{\{ needs\.resolve\.outputs\.source_sha \}\}-amd64/, 'candidate workflow must publish an exact AMD64 commit tag');
   requireText(workflow, /candidate-\$\{\{ needs\.resolve\.outputs\.source_sha \}\}-arm64/, 'candidate workflow must publish an exact ARM64 commit tag');
+  requireText(workflow, /source_ref:\s*\$\{\{ steps\.source\.outputs\.source_ref \}\}/, 'candidate workflow must retain the requested source ref');
+  requireText(promote, /needs:\s*\[resolve, build-amd64, build-arm64\]/, 'dev promotion must wait for both candidate build jobs');
+  requireText(promote, /needs\.build-amd64\.result == 'success'/, 'dev promotion must require a successful AMD64 build');
+  requireText(promote, /needs\.resolve\.outputs\.source_ref == 'dev'/, 'dev promotion must require source_ref exactly dev');
+  requireText(promote, /needs\.resolve\.outputs\.platform == 'both' && needs\.build-arm64\.result == 'success'/, 'both-platform dev promotion must require successful ARM64');
+  requireText(promote, /git\/ref\/heads\/dev.*object\.sha/s, 'dev promotion must reread the current upstream dev SHA');
+  requireText(promote, /current_dev_sha.*SOURCE_SHA/s, 'dev promotion must compare the upstream dev SHA to the built source');
+  requireText(promote, /imagetools create --metadata-file[\s\S]*--tag "\$IMAGE:dev"/, 'dev promotion must retag candidates without rebuilding');
+  requireText(promote, /imagetools inspect "\$IMAGE:dev" --format.*Manifest\.Digest/s, 'dev promotion must verify the mutable tag digest');
+  requireText(promote, /published_digest.*digest/s, 'dev promotion must compare the published digest to the promoted digest');
+  requireText(promote, /attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373/, 'dev promotion must attest the promoted digest');
   requireText(workflow, /prune-candidates:[\s\S]*?keep=10[\s\S]*?keep=3/, 'candidate workflow must bound AMD64 and ARM64 candidate retention');
   requireText(workflow, /gh api --method DELETE[^\n]*packages\/container\/riviamigo\/versions\/\$id/, 'candidate workflow must delete stale candidate versions by exact package version ID');
   requireText(workflow, /\^\[0-9a-f\]\{7\}-dev\$/, 'candidate workflow must remove orphaned legacy dev candidates without matching the moving dev tag');

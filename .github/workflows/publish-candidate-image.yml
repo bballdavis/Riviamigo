@@ -21,7 +21,7 @@ env:
 
 concurrency:
   group: candidate-image-${{ github.ref }}-${{ inputs.platform || 'amd64' }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   resolve:
@@ -29,6 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       source_sha: ${{ steps.source.outputs.source_sha }}
+      source_ref: ${{ steps.source.outputs.source_ref }}
       platform: ${{ steps.source.outputs.platform }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -38,9 +39,11 @@ jobs:
       - id: source
         env:
           REQUESTED_PLATFORM: ${{ inputs.platform || 'amd64' }}
+          REQUESTED_SOURCE_REF: ${{ inputs.source_ref || github.sha }}
         run: |
           set -euo pipefail
           echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "source_ref=$REQUESTED_SOURCE_REF" >> "$GITHUB_OUTPUT"
           echo "platform=$REQUESTED_PLATFORM" >> "$GITHUB_OUTPUT"
 
   build-amd64:
@@ -202,6 +205,76 @@ jobs:
           echo "- Platform: \`linux/arm64\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Digest: \`$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Build and cache export: ${duration}s" >> "$GITHUB_STEP_SUMMARY"
+
+  promote-dev:
+    name: Promote current dev candidate
+    needs: [resolve, build-amd64, build-arm64]
+    if: >-
+      always() && !cancelled() && needs.build-amd64.result == 'success' &&
+      needs.resolve.outputs.source_ref == 'dev' &&
+      (needs.resolve.outputs.platform == 'amd64' ||
+      (needs.resolve.outputs.platform == 'both' && needs.build-arm64.result == 'success'))
+    concurrency:
+      group: riviamigo-dev-image-promotion
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: promote
+        name: Retag exact current dev candidate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo
+          SOURCE_REF: ${{ needs.resolve.outputs.source_ref }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          PLATFORM: ${{ needs.resolve.outputs.platform }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REF" == "dev" ]]
+          current_dev_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/dev" --jq '.object.sha')
+          [[ "$current_dev_sha" == "$SOURCE_SHA" ]] || {
+            echo "The upstream dev branch advanced during candidate promotion; refusing to move :dev." >&2
+            exit 1
+          }
+
+          sources=("$IMAGE:candidate-$SOURCE_SHA-amd64")
+          docker buildx imagetools inspect "${sources[0]}" >/dev/null
+          if [[ "$PLATFORM" == "both" ]]; then
+            sources+=("$IMAGE:candidate-$SOURCE_SHA-arm64")
+            docker buildx imagetools inspect "${sources[1]}" >/dev/null
+          fi
+          docker buildx imagetools create --metadata-file "$RUNNER_TEMP/dev-image-metadata.json" \
+            --tag "$IMAGE:dev" "${sources[@]}"
+          digest=$(node -e 'const m = require(process.argv[1]); const d = m["containerimage.descriptor"]?.digest ?? m["containerimage.digest"]; if (!d) process.exit(1); process.stdout.write(d);' "$RUNNER_TEMP/dev-image-metadata.json")
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          published_digest=$(docker buildx imagetools inspect "$IMAGE:dev" --format '{{.Manifest.Digest}}')
+          [[ "$published_digest" == "$digest" ]] || {
+            echo "The moving dev tag did not resolve to the promoted immutable digest." >&2
+            exit 1
+          }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          platforms=linux/amd64
+          [[ "$PLATFORM" == "both" ]] && platforms="$platforms, linux/arm64"
+          echo "### Development image promotion" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Source commit: \`$SOURCE_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Platforms: \`$platforms\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Digest: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Tag: \`$IMAGE:dev\`" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo
+          subject-digest: ${{ steps.promote.outputs.digest }}
+          push-to-registry: true
 
   prune-candidates:
     name: Prune stale candidates

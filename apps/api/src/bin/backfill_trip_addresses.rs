@@ -11,7 +11,8 @@
 use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 use riviamigo_api::services::trip_enrichment::{
-    backfill_charge_session_addresses, backfill_trip_addresses,
+    backfill_charge_session_coordinates, backfill_charge_session_locations,
+    backfill_trip_addresses, backfill_trip_coordinates,
 };
 use sqlx::postgres::PgPoolOptions;
 use tracing::info;
@@ -36,8 +37,10 @@ async fn main() -> Result<()> {
         .timeout(std::time::Duration::from_secs(15))
         .build()?;
 
+    backfill_trip_coordinates(&pool, args.vehicle_id).await?;
+    backfill_charge_session_coordinates(&pool, args.vehicle_id).await?;
     let trip_stats = backfill_trip_addresses(&pool, &client, args.vehicle_id).await?;
-    let session_stats = backfill_charge_session_addresses(&pool, &client, args.vehicle_id).await?;
+    let session_stats = backfill_charge_session_locations(&pool, &client, args.vehicle_id).await?;
 
     info!(
         vehicle_id = ?args.vehicle_id,

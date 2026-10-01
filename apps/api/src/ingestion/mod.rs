@@ -1,4 +1,5 @@
 pub mod charge_detector;
+pub mod closure_motion;
 pub mod location;
 pub mod parser;
 pub mod poller;

@@ -17,7 +17,7 @@ This runbook is canonical for the `rebuild_vehicle_history` maintenance workflow
 3. rebuilding telemetry-derived charge evidence without deleting canonical `charge_sessions`
 4. replaying Rivian completed-session payloads back into canonical matching
 5. canonicalizing duplicate charge rows and recovering API-only charge history
-6. replaying trips and telemetry `trip_id` links
+6. replaying trips and telemetry `trip_id` links, using the same sparse R2 power, location, and odometer joining as live ingestion
 7. reattaching geofence/address matches and queueing route-aware outside-temperature enrichment
 
 The rebuild is intentionally self-healing for trip presentation and efficiency analysis. A completed rebuild should leave `/v1/trips` with human-readable start/destination labels when enrichment is available and `/v1/efficiency/vs-temp` with rebuilt trips included once outside temperatures are restored.

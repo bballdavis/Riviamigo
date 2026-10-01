@@ -35,7 +35,7 @@ import type {
   AddVehicleResult,
   CreateDemoVehicleBody,
   CreateDemoVehicleResult,
-  VehicleIngestionDiagnostics,
+  VehicleIngestionCapture,
   ApiKeyRecord,
   CreateApiKeyBody,
   CreateApiKeyResult,
@@ -778,12 +778,33 @@ export class AuthenticatedTransport {
     return this.request('POST', `/v1/vehicles/${vehicleId}/demo/refresh`);
   }
 
-  async getVehicleIngestionDiagnostics(vehicleId: string): Promise<VehicleIngestionDiagnostics> {
+  async getVehicleIngestionCapture(vehicleId: string): Promise<VehicleIngestionCapture> {
     return this.request('GET', `/v1/vehicles/${vehicleId}/ingestion-diagnostics`);
   }
 
-  async updateVehicleIngestionDiagnostics(vehicleId: string, enabled: boolean): Promise<VehicleIngestionDiagnostics> {
-    return this.request('PUT', `/v1/vehicles/${vehicleId}/ingestion-diagnostics`, { enabled });
+  async startVehicleIngestionCapture(vehicleId: string): Promise<VehicleIngestionCapture> {
+    return this.request('POST', `/v1/vehicles/${vehicleId}/ingestion-diagnostics/start`);
+  }
+
+  async stopVehicleIngestionCapture(vehicleId: string): Promise<VehicleIngestionCapture> {
+    return this.request('POST', `/v1/vehicles/${vehicleId}/ingestion-diagnostics/stop`);
+  }
+
+  async downloadVehicleIngestionCapture(vehicleId: string): Promise<{ blob: Blob; fileName: string }> {
+    const res = await this.requestResponse(
+      'GET',
+      `/v1/vehicles/${vehicleId}/ingestion-diagnostics/export`,
+      undefined,
+      undefined,
+      true,
+      true
+    );
+    const disposition = res.headers.get('content-disposition') ?? '';
+    const fileNameMatch = disposition.match(/filename="([^"]+)"/i);
+    return {
+      blob: await res.blob(),
+      fileName: fileNameMatch?.[1] ?? 'riviamigo-capture.jsonl',
+    };
   }
 
   async deleteVehicle(

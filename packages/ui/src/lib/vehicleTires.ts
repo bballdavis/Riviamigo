@@ -1,6 +1,6 @@
 import { formatPressure } from './utils';
 
-export const DEFAULT_TARGET_TIRE_PRESSURE_PSI = 48;
+export const DEFAULT_TARGET_TIRE_PRESSURE_PSI = 40;
 
 type TireHealthTone = 'neutral' | 'success' | 'warning' | 'danger';
 export type TireWheel = {

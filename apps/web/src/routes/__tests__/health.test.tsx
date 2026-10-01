@@ -103,6 +103,7 @@ const healthDataBase: any = {
 };
 
 const statusBase = {
+  closure_motion: {} as Record<string, 'opening' | 'closing'>,
   closure_tailgate_closed: true,
   brake_fluid_low: null,
   wiper_fluid_low: false,
@@ -664,6 +665,25 @@ describe('/vehicle-health page cleanup', () => {
     expect(screen.queryByText(/30-day history|observation|No history/)).not.toBeInTheDocument();
     expect(screen.getAllByText('48 psi')).toHaveLength(2);
     expect(mockUseTelemetryLanes).not.toHaveBeenCalled();
+  });
+
+  it('shows live opening and closing motion on closure badges', () => {
+    mockUseCurrentVehicleStatus.mockReturnValueOnce({
+      data: {
+        ...statusBase,
+        closure_frunk_closed: false,
+        door_front_left_closed: false,
+        closure_motion: {
+          closure_frunk_closed: 'closing',
+          door_front_left_closed: 'opening',
+        },
+      },
+    });
+
+    render(<HealthContent />);
+
+    expect(screen.getByText('Closing…')).toBeInTheDocument();
+    expect(screen.getByText('Opening…')).toBeInTheDocument();
   });
 
   it('omits unsupported tailgate telemetry for an R1S health view', () => {
