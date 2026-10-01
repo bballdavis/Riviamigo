@@ -11,6 +11,7 @@ use crate::{
     db::vehicles::get_vehicle_owner_id,
     ingestion::{
         charge_detector::{ActiveChargeSessionSnapshot, ChargeDetectorState, ChargeEvent},
+        closure_motion::{ClosureMotionMap, ClosureMotionTracker},
         parser, rivian_poll,
         session_store::{decrypt_tokens, RivianTokenBundle},
         trip_detector::{
@@ -475,6 +476,7 @@ pub async fn run_vehicle_worker(
     // Track the most recent inbound WS/control event so we can restart a
     // connection that stays silently wedged while still holding the worker lock.
     let mut last_ws_inbound_at = tokio::time::Instant::now();
+    let mut closure_motion = ClosureMotionTracker::default();
     let mut state_reconcile_interval = tokio::time::interval(STATE_PERIOD_RECONCILE_INTERVAL);
     state_reconcile_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Startup reconciliation above already covered the current tail.
@@ -706,7 +708,8 @@ pub async fn run_vehicle_worker(
         }
 
         // Publish live snapshot to Redis
-        let snapshot = build_snapshot(&event);
+        let motion = closure_motion.observe(&event, Utc::now());
+        let snapshot = build_snapshot(&event, motion.as_ref());
         let topic = format!("vehicle:{vehicle_id}:status");
         if let Err(e) = redis_conn.publish::<_, _, ()>(&topic, &snapshot).await {
             tracing::debug!(vehicle_id=%vehicle_id, err=%e, "redis publish failed");
@@ -2600,7 +2603,9 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
 /// omitted entirely rather than serialised as `null`.  This prevents the
 /// frontend from receiving a null for a field it hasn't heard about yet and
 /// mistakenly overwriting a previously-good sensor reading with a blank value.
-fn build_snapshot(e: &TelemetryEvent) -> String {
+/// `motion` is the full live closure-motion map, sent only when it changed so
+/// clients replace the previous map (an empty map clears it).
+fn build_snapshot(e: &TelemetryEvent, motion: Option<&ClosureMotionMap>) -> String {
     use serde_json::{json, Map, Value};
 
     let mut data: Map<String, Value> = Map::new();
@@ -2747,6 +2752,9 @@ fn build_snapshot(e: &TelemetryEvent) -> String {
     // included a cloudConnection field in this particular event.
     data.insert("is_online".into(), json!(e.is_online.unwrap_or(true)));
 
+    if let Some(motion) = motion {
+        data.insert("closure_motion".into(), json!(motion));
+    }
     json!({ "type": "status", "ts": e.ts, "data": Value::Object(data) }).to_string()
 }
 
@@ -2773,9 +2781,33 @@ mod snapshot_tests {
     }
 
     #[test]
+    fn build_snapshot_sends_closure_motion_only_when_it_changed() {
+        let event = event_with_partial_fields();
+        let unchanged: Value = serde_json::from_str(&build_snapshot(&event, None)).unwrap();
+        assert!(unchanged["data"].get("closure_motion").is_none());
+
+        let motion = crate::ingestion::closure_motion::ClosureMotionMap::from([(
+            "closure_frunk_closed".to_owned(),
+            crate::ingestion::closure_motion::ClosureMotion::Closing,
+        )]);
+        let moving: Value = serde_json::from_str(&build_snapshot(&event, Some(&motion))).unwrap();
+        assert_eq!(
+            moving["data"]["closure_motion"],
+            serde_json::json!({ "closure_frunk_closed": "closing" })
+        );
+
+        let settled: Value = serde_json::from_str(&build_snapshot(
+            &event,
+            Some(&crate::ingestion::closure_motion::ClosureMotionMap::new()),
+        ))
+        .unwrap();
+        assert_eq!(settled["data"]["closure_motion"], serde_json::json!({}));
+    }
+
+    #[test]
     fn build_snapshot_omits_absent_partial_fields_instead_of_emitting_nulls() {
         let payload: Value =
-            serde_json::from_str(&build_snapshot(&event_with_partial_fields())).unwrap();
+            serde_json::from_str(&build_snapshot(&event_with_partial_fields(), None)).unwrap();
         let data = payload["data"].as_object().unwrap();
 
         assert_eq!(data.get("battery_level").unwrap(), 79.0);
@@ -2806,14 +2838,14 @@ mod snapshot_tests {
         let mut event = event_with_partial_fields();
         event.latitude = Some(30.25);
 
-        let payload: Value = serde_json::from_str(&build_snapshot(&event)).unwrap();
+        let payload: Value = serde_json::from_str(&build_snapshot(&event, None)).unwrap();
         assert!(!payload["data"]
             .as_object()
             .unwrap()
             .contains_key("location"));
 
         event.longitude = Some(-97.75);
-        let payload: Value = serde_json::from_str(&build_snapshot(&event)).unwrap();
+        let payload: Value = serde_json::from_str(&build_snapshot(&event, None)).unwrap();
         assert_eq!(payload["data"]["location"]["lat"], 30.25);
         assert_eq!(payload["data"]["location"]["lng"], -97.75);
     }

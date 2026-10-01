@@ -56,6 +56,13 @@ history. Availability still depends on what that vehicle and Rivian send. A
 missing or unrecognized value does not become an inferred state, and Parallax
 readings do not start or end charging sessions.
 
+Parallax also reports when a door, gate, frunk, or window is moving. The
+vehicle status page then shows **Opening…** or **Closing…** for that closure
+until it settles. When Rivian only reports that a closure is ajar, the
+direction comes from its last settled state: a closure that was closed is
+opening, and one that was open is closing. This motion is live only and is not
+stored in telemetry history; the stored value is simply "not closed".
+
 Power state keeps the freshness rule of its source. Parallax reports state when
 it changes, so the latest recognized Parallax state stays current until a newer
 state arrives. Legacy periodic `vehicleState` power samples are considered

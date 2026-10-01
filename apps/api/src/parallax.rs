@@ -27,7 +27,7 @@ use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 use uuid::Uuid;
 
 use crate::ingestion::session_store::{decrypt_tokens, RivianTokenBundle};
-use crate::models::telemetry::{PowerState, TelemetryEvent};
+use crate::models::telemetry::{ClosureTransition, PowerState, TelemetryEvent};
 use crate::services::ingestion_capture::{self, Kind as CaptureKind};
 
 const WS_URL: &str = "wss://api.rivian.com/gql-consumer-subscriptions/graphql";
@@ -534,6 +534,18 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
                 if let Some(field) = field {
                     *field = Some(closed);
                     meaningful = true;
+                }
+                let transition = match status {
+                    3 => Some(ClosureTransition::Ajar),
+                    4 => Some(ClosureTransition::Opening),
+                    5 => Some(ClosureTransition::Closing),
+                    _ => None,
+                };
+                if let (Some(transition), Some(name)) = (transition, closure_field_name(position)) {
+                    event
+                        .closure_transitions
+                        .get_or_insert_with(Default::default)
+                        .insert(name.to_owned(), transition);
                 }
             }
         }
@@ -2500,6 +2512,13 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(event.closure_tailgate_closed, Some(false));
+        assert_eq!(
+            event.closure_transitions,
+            Some(std::collections::BTreeMap::from([(
+                "closure_tailgate_closed".to_owned(),
+                ClosureTransition::Closing,
+            )]))
+        );
         assert_eq!(event.tonneau_closed, Some(true));
         assert_eq!(event.side_bin_left_closed, None);
         assert!(notes.is_empty(), "{notes:?}");

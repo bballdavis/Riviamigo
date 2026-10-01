@@ -43,7 +43,7 @@ import {
   useResolvedVehicleSelection,
   useVehicleHealth,
 } from '@riviamigo/hooks';
-import { resolveVehicleGateCapability, type VehicleHealth } from '@riviamigo/types';
+import { resolveVehicleGateCapability, type ClosureMotion, type VehicleHealth } from '@riviamigo/types';
 import { SensorChipSummary } from '@riviamigo/dashboards';
 import {
   Badge,
@@ -501,6 +501,7 @@ export function VehicleHealthContent() {
                           field={row.field}
                           label={row.label}
                           value={row.value}
+                          motion={status?.closure_motion?.[row.field] ?? null}
                           availability={row.availability}
                         />
                       ))}
@@ -954,24 +955,36 @@ function ClosureRow({
   field,
   label,
   value,
+  motion,
   availability,
 }: {
   field: HealthClosureField;
   label: string;
   value: boolean | null;
+  motion: ClosureMotion | null;
   availability: StatusAvailabilitySummary | null;
 }) {
   const isUnavailable = availability?.availability === 'never_seen' && value === null;
   const isGate = field.startsWith('closure_');
   const variant = isUnavailable
     ? 'info'
-    : value === false
-      ? 'warning'
-      : value === true
-        ? 'success'
-        : 'default';
+    : motion
+      ? 'info'
+      : value === false
+        ? 'warning'
+        : value === true
+          ? 'success'
+          : 'default';
   const badge = (
-    <Badge variant={variant}>{isUnavailable ? 'Unavailable' : asOpenClosed(value)}</Badge>
+    <Badge variant={variant}>
+      {isUnavailable
+        ? 'Unavailable'
+        : motion === 'opening'
+          ? 'Opening…'
+          : motion === 'closing'
+            ? 'Closing…'
+            : asOpenClosed(value)}
+    </Badge>
   );
   const tooltip = buildAvailabilityTooltip(
     label,

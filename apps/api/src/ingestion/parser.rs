@@ -198,6 +198,7 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
         service_mode: extract_str(state, "/serviceMode/value")
             .or_else(|| extract_str(state, "/vehicleInServiceMode/value"))
             .map(|s| matches!(s.to_lowercase().as_str(), "on" | "active" | "true")),
+        closure_transitions: None,
     }))
 }
 
