@@ -626,12 +626,19 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
         "comfort.cabin.defrost_defog_status" => {
             let value = DefrostState::decode(payload)?;
             let status = match value.status.context("missing defrost status")? {
-                0 | 1 => false,
-                2 => true,
-                other => anyhow::bail!("unknown defrost status {other}"),
+                0 | 1 => Some(false),
+                2 => Some(true),
+                // The R1S reports 4, which no public mapping defines. Legacy
+                // still reports defrost, so skip it rather than reject.
+                other => {
+                    notes.push(format!("skipped unknown defrost status {other}"));
+                    None
+                }
             };
-            event.defrost_active = Some(status);
-            meaningful = true;
+            if let Some(status) = status {
+                event.defrost_active = Some(status);
+                meaningful = true;
+            }
         }
         _ => return Ok(None),
     }
@@ -2378,6 +2385,22 @@ mod tests {
         assert_eq!(event.door_front_left_locked, None);
         assert_eq!(event.closure_frunk_locked, Some(true));
         assert_eq!(notes.len(), 2);
+    }
+
+    #[test]
+    fn unknown_defrost_status_is_noted_instead_of_rejected() {
+        // Observed R1S frame: `08 04`.
+        let mut notes = Vec::new();
+        let event = decode_vehicle_telemetry_with_notes(
+            "comfort.cabin.defrost_defog_status",
+            &[0x08, 0x04],
+            Utc::now(),
+            Uuid::new_v4(),
+            &mut notes,
+        )
+        .unwrap();
+        assert!(event.is_none());
+        assert_eq!(notes, vec!["skipped unknown defrost status 4"]);
     }
 
     #[test]
