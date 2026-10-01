@@ -3313,33 +3313,36 @@ struct LifecycleUpdates {
     charging: bool,
 }
 
-/// Parallax frames are partial state, and Parallax power has no Charging
-/// value (only Sleep/Unknown/Ready/Go). While a canonical charge session is
-/// open, a Parallax frame without charger state must not close the Charging
-/// period or drop the poll loop out of its live-session cadence.
+/// Both sources send partial frames, so a frame only drives a lifecycle
+/// signal when it carries the data that signal is based on. A legacy update
+/// with only a door or window change used to be read as an Unknown state
+/// (splitting the state timeline into seconds-long periods) and as "not
+/// charging" (dropping the poll loop out of its live-session cadence).
+///
+/// Parallax power also has no Charging value (only Sleep/Unknown/Ready/Go).
+/// While a canonical charge session is open, a Parallax frame without
+/// charger state must not close the Charging period or change the poll
+/// cadence.
 fn lifecycle_updates(
     event: &TelemetryEvent,
     is_parallax: bool,
     charge_active: bool,
 ) -> LifecycleUpdates {
-    if !is_parallax {
-        return LifecycleUpdates {
-            state_period: true,
-            power_state: true,
-            charging: true,
-        };
-    }
-    if charge_active && event.charger_state.is_none() {
+    if is_parallax && charge_active && event.charger_state.is_none() {
         return LifecycleUpdates {
             state_period: false,
             power_state: false,
             charging: false,
         };
     }
+    let has_power = event.power_state.is_some();
+    let has_charge = event.charger_state.is_some() || event.charger_status.is_some();
     LifecycleUpdates {
-        state_period: event.power_state.is_some() || event.is_online.is_some(),
-        power_state: event.power_state.is_some(),
-        charging: event.charger_state.is_some() || event.power_state.is_some(),
+        // Unknown is only a real state when the vehicle reported it (legacy
+        // and Parallax standby); otherwise it means the frame said nothing.
+        state_period: has_power || infer_vehicle_state(event) != VehicleState::Unknown,
+        power_state: has_power,
+        charging: has_power || has_charge,
     }
 }
 
@@ -3503,9 +3506,13 @@ async fn reconcile_state_period_tail(
 ) -> anyhow::Result<Option<ActiveStatePeriod>> {
     let since = Utc::now() - Duration::hours(STATE_PERIOD_RECONCILE_LOOKBACK_HOURS);
     let latest = sqlx::query_as::<_, StateTailRow>(
+        // Only rows that say something about the vehicle state; a partial row
+        // (a door or tire update) would otherwise read as Unknown.
         r#"SELECT ts, power_state, charger_state, ota_status, ota_current_status, is_online
            FROM timeseries.telemetry
            WHERE vehicle_id = $1 AND ts >= $2
+             AND (power_state IS NOT NULL OR charger_state IS NOT NULL OR is_online IS NOT NULL
+                  OR ota_status IS NOT NULL OR ota_current_status IS NOT NULL)
            ORDER BY ts DESC
            LIMIT 1"#,
     )
@@ -3532,6 +3539,11 @@ async fn reconcile_state_period_tail(
         latest.ota_current_status.as_deref(),
         latest.is_online,
     );
+    // Same rule as live frames: Unknown counts only when the vehicle
+    // reported it.
+    if state == VehicleState::Unknown && power_state.is_none() {
+        return load_open_state_period(pool, vehicle_id).await;
+    }
     transition_state_period(pool, vehicle_id, cached, state, latest.ts).await
 }
 
@@ -3873,23 +3885,54 @@ mod stewardship_tests {
         };
         let mut event = blank_event(Uuid::nil(), Utc::now());
         event.power_state = Some(PowerState::Ready);
-        // Legacy frames always drive the lifecycle, charge or not.
+        // Legacy power frames drive the lifecycle, charge or not.
         assert_eq!(lifecycle_updates(&event, false, true), all);
         // Without an open session, Parallax power behaves as before.
         assert_eq!(lifecycle_updates(&event, true, false), all);
         // Parallax frames that carry charger state still count.
         event.charger_state = Some(ChargerState::Charging);
         assert_eq!(lifecycle_updates(&event, true, true), all);
-        // A Parallax frame with no lifecycle fields changes nothing.
+        // A frame with no lifecycle fields changes nothing, from either
+        // source.
         let empty = blank_event(Uuid::nil(), Utc::now());
-        assert_eq!(
-            lifecycle_updates(&empty, true, false),
-            LifecycleUpdates {
-                state_period: false,
-                power_state: false,
-                charging: false,
-            }
-        );
+        let none = LifecycleUpdates {
+            state_period: false,
+            power_state: false,
+            charging: false,
+        };
+        assert_eq!(lifecycle_updates(&empty, true, false), none);
+        assert_eq!(lifecycle_updates(&empty, false, false), none);
+    }
+
+    #[test]
+    fn partial_legacy_frames_do_not_fragment_the_state_timeline() {
+        // Observed R1S legacy frame: a door change with no power state.
+        let mut door_only = blank_event(Uuid::nil(), Utc::now());
+        door_only.door_front_left_closed = Some(false);
+        let updates = lifecycle_updates(&door_only, false, true);
+        assert!(!updates.state_period);
+        assert!(!updates.power_state);
+        // Mid-charge, it must not drop the live-session poll cadence either.
+        assert!(!updates.charging);
+
+        // Standby is reported as power "standby", which is a real state.
+        let mut standby = blank_event(Uuid::nil(), Utc::now());
+        standby.power_state = Some(PowerState::Unknown);
+        assert!(lifecycle_updates(&standby, false, false).state_period);
+
+        // Charger and offline evidence still move the timeline without power.
+        let mut charging = blank_event(Uuid::nil(), Utc::now());
+        charging.charger_state = Some(ChargerState::Charging);
+        let updates = lifecycle_updates(&charging, false, false);
+        assert!(updates.state_period && updates.charging && !updates.power_state);
+        let mut offline = blank_event(Uuid::nil(), Utc::now());
+        offline.is_online = Some(false);
+        assert!(lifecycle_updates(&offline, false, false).state_period);
+        // A disconnected charger alone says nothing about the vehicle state.
+        let mut disconnected = blank_event(Uuid::nil(), Utc::now());
+        disconnected.charger_state = Some(ChargerState::Disconnected);
+        let updates = lifecycle_updates(&disconnected, false, false);
+        assert!(!updates.state_period && updates.charging);
     }
 
     #[test]

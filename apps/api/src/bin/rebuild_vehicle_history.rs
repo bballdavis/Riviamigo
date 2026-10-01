@@ -195,7 +195,10 @@ async fn backfill_state_periods_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> 
         r#"
         SELECT ts, power_state
         FROM timeseries.telemetry
-        WHERE vehicle_id = $1
+        -- Partial rows without power state (a door or tire update) say
+        -- nothing about the vehicle state; counting them as unknown split
+        -- the timeline into seconds-long periods.
+        WHERE vehicle_id = $1 AND power_state IS NOT NULL
         ORDER BY ts
         "#,
     )
