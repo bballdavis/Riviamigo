@@ -36,6 +36,15 @@ tail. `odometer_daily` has a separate hourly, materialized-only policy.
 
 Optional outbound services are governed by `external_connection_settings`, not environment variables. Weather and Nominatim execute on the server. Basemap and Iconify browser requests terminate at authenticated same-origin proxy routes. Custom endpoints are validated before storage, secrets are age-encrypted and write-only, and disabling a provider is enforced at the shared service seam.
 
+Trip fusion can provisionally infer Ready for trip detection when reported power
+is missing or stale, using two distinct pairs of fresh, plausible GNSS motion and
+odometer increases. Separate-topic updates are joined without counting either
+reading twice. Fresh reported power and active charging take precedence. The
+inference is never stored as reported power or published to latest status. Its
+provenance and expiry appear in ingestion captures; see the
+[ingestion diagnostics runbook](../runbooks/r2-ingestion-diagnostics.md) for
+thresholds, limitations and real-drive acceptance.
+
 Parallax collection runs as an integrated, isolated Tokio acquisition subsystem inside each production
 vehicle worker. It opens its own allowlisted GraphQL WebSocket and writes normalized,
 typed readings to the `timeseries.parallax_*` tables. A bounded channel also passes validated R2-relevant power, GNSS, odometer, closure, tire, and cabin readings to the canonical worker, where they enter latest status and telemetry history. Parallax frames cannot create or end charge sessions. The collector never stores raw payloads, network identifiers, or credentials. Its failure cannot stall

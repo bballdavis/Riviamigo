@@ -83,6 +83,25 @@ field timestamps for the same change.
   speed is used when present and that a GNSS or odometer estimate is used only
   when direct speed is absent, then read the start decision and transition.
 
+When power is missing or older than two minutes, trip fusion can provisionally
+infer `Ready` after two distinct confirmations of GNSS movement and increasing
+odometer. Both estimates must exceed 5 mph and stay within 130 mph, using
+5-second to 5-minute intervals and readings no older than two minutes. GNSS and
+odometer may arrive on separate topics; each confirmation requires both to
+advance, so repeated packets cannot reuse a single odometer increment.
+Fresh reported power takes precedence, and an explicit zero speed or active
+charging prevents confirmation. GPS-only motion or odometer-only motion cannot
+activate this fallback.
+
+The capture identifies this choice as `power_origin: motion_inferred` and
+`power_outcome: corroborated_motion`. This is a trip-only inference; stored
+telemetry and the reported vehicle power state are unchanged. Inferred power
+expires two minutes after the last confirmation (`motion_expired`); an old
+cached Sleep reading then stays suppressed so the normal five-minute stopped
+timeout can close the trip. A fresh reported Sleep still closes it immediately.
+This cannot distinguish driving from transport that advances both signals, and
+it cannot recover a drive whose required motion signals never arrived.
+
 ## Exact-SHA real-drive acceptance
 
 Decoder tests and a successful build establish code behavior. They do not prove
@@ -102,6 +121,8 @@ check, then confirm the running API instance uses that build.
       input deltas and interval.
 - [ ] Confirm the trip start decision agrees with the captured drive,
       followed by a start and completion transition.
+- [ ] If power readings stop, verify that `motion_inferred` requires repeated,
+      fresh GNSS and odometer agreement; parked GPS drift must not start trips.
 - [ ] After stopping, confirm the trip closes and its distance is plausible.
       Save the capture with the exact Git SHA and image digest.
 

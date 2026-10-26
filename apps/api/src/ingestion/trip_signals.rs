@@ -57,6 +57,13 @@ pub struct TripSignalFusion {
     last_odometer: Option<(f64, DateTime<Utc>)>,
     moving_segments: u8,
     change_only_power: bool,
+    corroborated_segments: u8,
+    last_corroborated_motion: Option<DateTime<Utc>>,
+    confirmed_motion_at: Option<DateTime<Utc>>,
+    motion_power_active: bool,
+    gnss_motion_at: Option<DateTime<Utc>>,
+    odometer_motion_at: Option<DateTime<Utc>>,
+    last_motion_pair: Option<(DateTime<Utc>, DateTime<Utc>)>,
 }
 
 impl TripSignalFusion {
@@ -237,7 +244,124 @@ impl TripSignalFusion {
             diag.odometer_outcome = "invalid";
         }
         diag.moving_segments = self.moving_segments;
+        self.infer_motion_power(sample, &mut joined, &mut diag);
         (joined, diag)
+    }
+
+    /// Only the trip detector sees this provisional power state. Never put it
+    /// in the reported-power cache, latest status, or persisted telemetry.
+    fn infer_motion_power(
+        &mut self,
+        sample: &TelemetryEvent,
+        joined: &mut TelemetryEvent,
+        diag: &mut FusionDiagnostics,
+    ) {
+        let fresh = |at: DateTime<Utc>| at <= sample.ts && sample.ts - at <= POWER_MAX_AGE;
+        let fresh_power = self.power.as_ref().is_some_and(|(_, at, _)| {
+            // The power parser permits a small clock skew. Such an accepted
+            // direct reading must also take precedence over inferred motion.
+            *at <= sample.ts + Duration::seconds(5) && sample.ts - *at <= POWER_MAX_AGE
+        });
+        if fresh_power || sample.is_actively_charging() {
+            self.corroborated_segments = 0;
+            self.last_corroborated_motion = None;
+            self.confirmed_motion_at = None;
+            self.motion_power_active = false;
+            self.gnss_motion_at = None;
+            self.odometer_motion_at = None;
+            self.last_motion_pair = None;
+            return;
+        }
+
+        let plausible_motion = |miles: Option<f64>, seconds: Option<i64>| match (miles, seconds) {
+            (Some(miles), Some(seconds))
+                if (5..=MAX_FIX_INTERVAL.num_seconds()).contains(&seconds) =>
+            {
+                let mph = miles * 3600.0 / seconds as f64;
+                mph.is_finite() && mph > 5.0 && mph <= MAX_PLAUSIBLE_MPH
+            }
+            _ => false,
+        };
+        // Parallax sends GNSS and odometer on separate topics. Keep their
+        // evidence separately, and credit a pair only after BOTH advance.
+        // Reusing one odometer step for several GPS packets is not agreement.
+        let gnss_at = sample.location_ts.unwrap_or(sample.ts);
+        if matches!(
+            diag.gnss_outcome,
+            "derived"
+                | "provisional_zero"
+                | "reported_speed_precedence"
+                | "stationary"
+                | "implausible"
+                | "interval_out_of_range"
+                | "baseline"
+        ) {
+            self.gnss_motion_at = (fresh(gnss_at)
+                && plausible_motion(diag.gnss_distance_miles, diag.gnss_interval_seconds))
+            .then_some(gnss_at);
+            if self.gnss_motion_at.is_none() {
+                self.corroborated_segments = 0;
+            }
+        }
+        let odometer_at = sample.odometer_miles_ts.unwrap_or(sample.ts);
+        if sample.odometer_miles.is_some() && diag.odometer_outcome != "future_or_out_of_order" {
+            self.odometer_motion_at = (fresh(odometer_at)
+                && plausible_motion(diag.odometer_delta_miles, diag.odometer_interval_seconds))
+            .then_some(odometer_at);
+            if self.odometer_motion_at.is_none() {
+                self.corroborated_segments = 0;
+            }
+        }
+        if diag.reported_speed_outcome == "accepted"
+            && sample.speed_mph.is_some_and(|speed| speed <= 5.0)
+        {
+            self.gnss_motion_at = None;
+            self.odometer_motion_at = None;
+            self.corroborated_segments = 0;
+        }
+        let pair = self.gnss_motion_at.zip(self.odometer_motion_at);
+        let corroborated = pair.is_some_and(|(gps_at, odo_at)| {
+            fresh(gps_at)
+                && fresh(odo_at)
+                && self
+                    .last_motion_pair
+                    .is_none_or(|(prior_gps, prior_odo)| gps_at > prior_gps && odo_at > prior_odo)
+        }) && joined.speed_mph.is_some_and(|speed| speed > 5.0);
+
+        if corroborated {
+            // Replays, duplicate fixes, long gaps and late samples cannot
+            // manufacture a consecutive confirmation.
+            self.corroborated_segments = match self.last_corroborated_motion {
+                Some(at) if sample.ts > at && sample.ts - at <= MAX_FIX_INTERVAL => {
+                    self.corroborated_segments.saturating_add(1)
+                }
+                _ => 1,
+            };
+            self.last_corroborated_motion = Some(sample.ts);
+            self.last_motion_pair = pair;
+            if self.corroborated_segments >= 2 {
+                self.motion_power_active = true;
+                self.confirmed_motion_at = Some(sample.ts);
+            }
+        }
+
+        if self.motion_power_active {
+            // Once motion disproved an old Sleep reading, don't let that
+            // same cached reading immediately end the trip on a partial
+            // frame. When evidence expires, let the ordinary stopped timeout
+            // end it. A fresh reported Sleep above still ends it immediately.
+            if self.confirmed_motion_at.is_some_and(fresh) {
+                joined.power_state = Some(PowerState::Ready);
+                joined.power_state_ts = self.confirmed_motion_at;
+                diag.power_origin = "motion_inferred";
+                diag.power_outcome = "corroborated_motion";
+            } else {
+                joined.power_state = None;
+                joined.power_state_ts = None;
+                diag.power_origin = "absent";
+                diag.power_outcome = "motion_expired";
+            }
+        }
     }
 }
 
@@ -249,6 +373,248 @@ mod tests {
     use crate::models::telemetry::{PowerState, TelemetryEvent};
 
     use super::TripSignalFusion;
+
+    #[test]
+    fn missing_or_stale_sleep_power_does_not_lose_a_corroborated_drive() {
+        use crate::ingestion::trip_detector::{TripDetectorState, TripEvent};
+
+        for stale_sleep in [false, true] {
+            let at = Utc::now();
+            let mut fusion = TripSignalFusion::new(true);
+            let mut detector = TripDetectorState::new(Uuid::nil());
+            if stale_sleep {
+                let mut sleep = TelemetryEvent::empty(Uuid::nil(), at - Duration::days(3));
+                sleep.power_state = Some(PowerState::Sleep);
+                detector.process(&fusion.fuse(&sleep));
+            }
+            let mut started = 0;
+            for i in 0..5 {
+                let event = fix_with_odometer(
+                    at + Duration::seconds(i * 60),
+                    -97.0 + i as f64 * 0.01,
+                    100.0 + i as f64 * 0.62,
+                );
+                let (joined, diag) = fusion.fuse_from(&event, false);
+                if i >= 2 {
+                    assert_eq!(joined.power_state, Some(PowerState::Ready));
+                    assert_eq!(diag.power_origin, "motion_inferred");
+                }
+                assert_eq!(event.power_state, None, "raw telemetry is unchanged");
+                match detector.process(&joined) {
+                    TripEvent::TripStarted { .. } => started += 1,
+                    TripEvent::TripEnded { .. } => panic!("stale sleep must not end the drive"),
+                    TripEvent::NoChange => {}
+                }
+            }
+            assert_eq!(started, 1);
+            let mut sleep = TelemetryEvent::empty(Uuid::nil(), at + Duration::minutes(5));
+            sleep.power_state = Some(PowerState::Sleep);
+            assert!(matches!(
+                detector.process(&fusion.fuse(&sleep)),
+                TripEvent::TripEnded { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn motion_power_requires_both_sensors_and_two_distinct_segments() {
+        let at = Utc::now();
+        for source in [
+            "gnss_only",
+            "odometer_only",
+            "stationary_gnss",
+            "stationary_odometer",
+        ] {
+            let mut fusion = TripSignalFusion::new(true);
+            for i in 0..5 {
+                let mut event = fix_with_odometer(
+                    at + Duration::seconds(i * 60),
+                    if source == "stationary_gnss" {
+                        -97.0
+                    } else {
+                        -97.0 + i as f64 * 0.01
+                    },
+                    if source == "stationary_odometer" {
+                        100.0
+                    } else {
+                        100.0 + i as f64 * 0.62
+                    },
+                );
+                if source == "gnss_only" {
+                    event.odometer_miles = None;
+                }
+                if source == "odometer_only" {
+                    event.latitude = None;
+                    event.longitude = None;
+                }
+                assert_eq!(fusion.fuse(&event).power_state, None, "{source}");
+            }
+        }
+        let mut fusion = TripSignalFusion::new(true);
+        fusion.fuse(&fix_with_odometer(at, -97.0, 100.0));
+        let moved = fix_with_odometer(at + Duration::minutes(1), -96.99, 100.62);
+        for _ in 0..4 {
+            assert_eq!(
+                fusion.fuse(&moved).power_state,
+                None,
+                "duplicate is not confirmation"
+            );
+        }
+    }
+
+    #[test]
+    fn motion_power_joins_separate_topics_without_reusing_old_evidence() {
+        let at = Utc::now();
+        for gps_first in [false, true] {
+            let mut fusion = TripSignalFusion::new(true);
+            let mut inferred = false;
+            for i in 0..4 {
+                let mut gps = fix_with_odometer(
+                    at + Duration::seconds(i * 60),
+                    -97.0 + i as f64 * 0.01,
+                    100.0,
+                );
+                gps.odometer_miles = None;
+                let odo = odometer(at + Duration::seconds(i * 60 + 1), 100.0 + i as f64 * 0.62);
+                let pair = if gps_first {
+                    [gps, odo]
+                } else {
+                    // Source order may differ; received event times still increase.
+                    let mut gps = gps;
+                    let mut odo = odo;
+                    gps.ts += Duration::seconds(2);
+                    odo.ts -= Duration::seconds(1);
+                    [odo, gps]
+                };
+                for event in pair {
+                    inferred |= fusion.fuse(&event).power_state == Some(PowerState::Ready);
+                }
+            }
+            assert!(
+                inferred,
+                "separate topics must corroborate: gps_first={gps_first}"
+            );
+        }
+
+        let mut fusion = TripSignalFusion::new(true);
+        fusion.fuse(&fix_with_odometer(at, -97.0, 100.0));
+        fusion.fuse(&fix_with_odometer(
+            at + Duration::minutes(1),
+            -96.99,
+            100.62,
+        ));
+        // One odometer increment plus many GPS updates is still just one pair.
+        for i in 2..5 {
+            let mut gps = fix_with_odometer(
+                at + Duration::seconds(i * 30 + 30),
+                -97.0 + i as f64 * 0.01,
+                100.0,
+            );
+            gps.odometer_miles = None;
+            assert_eq!(fusion.fuse(&gps).power_state, None);
+        }
+    }
+
+    #[test]
+    fn motion_power_respects_fresh_power_reported_zero_and_charging() {
+        use crate::models::telemetry::ChargerState;
+        let at = Utc::now();
+        for conflict in ["sleep", "zero_speed", "charging"] {
+            let mut fusion = TripSignalFusion::new(true);
+            for i in 0..5 {
+                let mut event = fix_with_odometer(
+                    at + Duration::seconds(i * 60),
+                    -97.0 + i as f64 * 0.01,
+                    100.0 + i as f64 * 0.62,
+                );
+                match conflict {
+                    "sleep" => event.power_state = Some(PowerState::Sleep),
+                    "zero_speed" => event.speed_mph = Some(0.0),
+                    _ => event.charger_state = Some(ChargerState::Charging),
+                }
+                let (joined, diag) = fusion.fuse_from(&event, true);
+                assert_ne!(diag.power_origin, "motion_inferred", "{conflict}");
+                assert_eq!(joined.power_state, event.power_state);
+            }
+        }
+    }
+
+    #[test]
+    fn stale_future_and_implausible_samples_cannot_infer_power() {
+        let at = Utc::now();
+        for invalid in [
+            "stale_odometer",
+            "future_odometer",
+            "gps_jump",
+            "odometer_jump",
+            "rollback",
+        ] {
+            let mut fusion = TripSignalFusion::new(true);
+            for i in 0..5 {
+                let mut event = fix_with_odometer(
+                    at + Duration::seconds(i * 60),
+                    -97.0 + i as f64 * 0.01,
+                    100.0 + i as f64 * 0.62,
+                );
+                match invalid {
+                    "stale_odometer" => {
+                        event.odometer_miles_ts = Some(event.ts - Duration::minutes(3))
+                    }
+                    "future_odometer" => {
+                        event.odometer_miles_ts = Some(event.ts + Duration::seconds(3))
+                    }
+                    "gps_jump" => event.longitude = Some(-97.0 + i as f64),
+                    "odometer_jump" => event.odometer_miles = Some(100.0 + i as f64 * 10.0),
+                    _ => event.odometer_miles = Some(100.0 - i as f64),
+                }
+                assert_eq!(fusion.fuse(&event).power_state, None, "{invalid}");
+            }
+        }
+    }
+
+    #[test]
+    fn motion_power_expires_and_requires_confirmation_after_a_gap() {
+        use crate::ingestion::trip_detector::{TripDetectorState, TripEvent};
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(true);
+        let mut detector = TripDetectorState::new(Uuid::nil());
+        let mut sleep = TelemetryEvent::empty(Uuid::nil(), at - Duration::days(1));
+        sleep.power_state = Some(PowerState::Sleep);
+        detector.process(&fusion.fuse(&sleep));
+        for i in 0..3 {
+            let event = fix_with_odometer(
+                at + Duration::seconds(i * 60),
+                -97.0 + i as f64 * 0.01,
+                100.0 + i as f64 * 0.62,
+            );
+            detector.process(&fusion.fuse(&event));
+        }
+        assert!(detector.active_trip_id().is_some());
+        let partial = TelemetryEvent::empty(Uuid::nil(), at + Duration::seconds(130));
+        assert_eq!(
+            detector.process(&fusion.fuse(&partial)),
+            TripEvent::NoChange
+        );
+        let timeout = TelemetryEvent::empty(Uuid::nil(), at + Duration::minutes(8));
+        let (joined, diag) = fusion.fuse_from(&timeout, false);
+        assert_eq!(joined.power_state, None);
+        assert_eq!(diag.power_outcome, "motion_expired");
+        assert!(matches!(
+            detector.process(&joined),
+            TripEvent::TripEnded { .. }
+        ));
+        for i in 0..3 {
+            let event = fix_with_odometer(
+                at + Duration::minutes(20 + i),
+                -96.0 + i as f64 * 0.01,
+                110.0 + i as f64 * 0.62,
+            );
+            let joined = fusion.fuse(&event);
+            assert_eq!(joined.power_state.is_some(), i == 2);
+            detector.process(&joined);
+        }
+        assert!(detector.active_trip_id().is_some());
+    }
 
     #[test]
     fn source_policy_follows_latest_accepted_power_not_vehicle_model() {
