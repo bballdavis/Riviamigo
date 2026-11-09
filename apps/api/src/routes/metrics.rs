@@ -643,6 +643,19 @@ struct StreamRequest {
 /// Bounded producer/consumer buffering. Dropping the response cancels the
 /// producer. Its read guard cancels the backend and retains admission until
 /// rollback has drained the server response and closed its cursor.
+/// Adapts the producer channel into a response body stream.
+///
+/// `unfold` panics if it is polled again after yielding `None`, and a response
+/// body may legitimately poll a finished stream, so the stream is fused.
+fn metric_body_stream(
+    receiver: tokio::sync::mpsc::Receiver<Result<axum::body::Bytes, std::io::Error>>,
+) -> impl futures::Stream<Item = Result<axum::body::Bytes, std::io::Error>> {
+    futures::StreamExt::fuse(futures::stream::unfold(
+        receiver,
+        |mut receiver| async move { receiver.recv().await.map(|chunk| (chunk, receiver)) },
+    ))
+}
+
 fn stream_metrics(
     state: AppState,
     request: StreamRequest,
@@ -671,9 +684,7 @@ fn stream_metrics(
                 .await;
         }
     });
-    let stream = futures::stream::unfold(receiver, |mut receiver| async move {
-        receiver.recv().await.map(|chunk| (chunk, receiver))
-    });
+    let stream = metric_body_stream(receiver);
     (
         [
             ("content-type", "application/json"),
@@ -1489,6 +1500,24 @@ mod tests {
         for m in METRICS {
             assert!(seen.insert(m.id), "duplicate metric id: {}", m.id);
         }
+    }
+
+    #[tokio::test]
+    async fn metric_body_stream_tolerates_polling_after_completion() {
+        use futures::StreamExt;
+        let (sender, receiver) = tokio::sync::mpsc::channel(2);
+        sender
+            .send(Ok(axum::body::Bytes::from_static(b"{}")))
+            .await
+            .unwrap();
+        drop(sender);
+
+        let mut stream = Box::pin(metric_body_stream(receiver));
+        assert_eq!(stream.next().await.unwrap().unwrap().as_ref(), b"{}");
+        assert!(stream.next().await.is_none());
+        // Regression: polling a finished stream used to panic inside `unfold`,
+        // aborting every /v1/metrics/batch response.
+        assert!(stream.next().await.is_none());
     }
 
     #[test]
