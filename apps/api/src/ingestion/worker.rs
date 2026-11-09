@@ -41,6 +41,8 @@ use state_decisions::{is_synthetic_control, runtime_health_update_for_ws_control
 const MIN_TRIP_DISTANCE_MILES: f64 = 0.1;
 const ADVISORY_LOCK_NAMESPACE: i64 = 0x52_49_56_57; // "RIVW"
 const WS_WATCHDOG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+/// Legacy fused speed above this means the vehicle is moving (Parallax watchdog).
+const LEGACY_MOTION_MPH: f64 = 5.0;
 const CHARGE_DETECTOR_REHYDRATE_LOOKBACK_HOURS: i32 = 12;
 const CHARGE_DETECTOR_REHYDRATE_STALENESS_MINUTES: i32 = 120;
 const STATE_PERIOD_RECONCILE_LOOKBACK_HOURS: i64 = 24;
@@ -248,7 +250,7 @@ pub async fn run_vehicle_worker(
 
     let (ev_tx, mut ev_rx) = mpsc::channel::<WsInboundEvent>(256);
     // Keep Parallax delivery bounded and independent from the legacy socket.
-    let (parallax_tx, mut parallax_rx) = mpsc::channel::<(String, TelemetryEvent)>(256);
+    let (parallax_tx, mut parallax_rx) = mpsc::channel::<crate::parallax::ForwardedTelemetry>(256);
 
     // Get rivian_vehicle_id
     let riv_id: Option<String> =
@@ -327,6 +329,9 @@ pub async fn run_vehicle_worker(
     let (charging_tx, charging_rx) = watch::channel(false);
     let (active_session_tx, active_session_rx) =
         watch::channel::<ActiveSessionContext>(ActiveSessionContext::default());
+    // Source time of the latest legacy sample showing motion. The Parallax
+    // watchdog uses it to tell a quiet parked vehicle from a dead subscription.
+    let (legacy_motion_tx, legacy_motion_rx) = watch::channel::<Option<DateTime<Utc>>>(None);
 
     // Repair only the bounded active tail before detector rehydration.  The
     // service is transactional and journal-idempotent; broad historical
@@ -422,8 +427,11 @@ pub async fn run_vehicle_worker(
             vehicle_id,
             rivian_vehicle_id.clone(),
             age_key.clone(),
-            parallax_tx,
-            active_session_rx,
+            crate::parallax::InProcessChannels {
+                telemetry_tx: parallax_tx,
+                active_sessions: active_session_rx,
+                legacy_motion: legacy_motion_rx,
+            },
             shutdown.resubscribe(),
         ))
     } else {
@@ -482,6 +490,9 @@ pub async fn run_vehicle_worker(
     // Startup reconciliation above already covered the current tail.
     state_reconcile_interval.tick().await;
     loop {
+        // Set (with the vehicle's original timestamp) for Parallax state
+        // re-learned from a re-sent snapshot.
+        let mut snapshot_source_at: Option<DateTime<Utc>> = None;
         let inbound = tokio::select! {
             _ = worker_shutdown.recv() => {
                 break;
@@ -521,15 +532,18 @@ pub async fn run_vehicle_worker(
                 None => break,
             },
             parallax_event = parallax_rx.recv(), if parallax_handle.is_some() && !parallax_rx.is_closed() => match parallax_event {
-                Some((topic, event)) => WsInboundEvent {
-                    kind: WsInboundKind::Telemetry,
-                    received_at: Utc::now(),
-                    raw: String::new(),
-                    message_type: Some(format!("parallax:{topic}")),
-                    telemetry: Some(event),
-                    charging_session: None,
-                    battery_cell_type: None,
-                },
+                Some(forwarded) => {
+                    snapshot_source_at = forwarded.snapshot.then_some(forwarded.source_at);
+                    WsInboundEvent {
+                        kind: WsInboundKind::Telemetry,
+                        received_at: Utc::now(),
+                        raw: String::new(),
+                        message_type: Some(format!("parallax:{}", forwarded.topic)),
+                        telemetry: Some(forwarded.event),
+                        charging_session: None,
+                        battery_cell_type: None,
+                    }
+                }
                 None => continue,
             },
             // Monitor the WS task; log if it exits unexpectedly.
@@ -715,22 +729,41 @@ pub async fn run_vehicle_worker(
             tracing::debug!(vehicle_id=%vehicle_id, err=%e, "redis publish failed");
         }
 
-        // Update runtime state
-        upsert_seen(
-            &pool,
-            vehicle_id,
-            event.is_online.unwrap_or(true),
-            event.ts,
-            inbound.received_at,
-            SeenKind::Payload,
-        )
-        .await;
+        // Update runtime state. A re-sent snapshot is state learned again,
+        // not the vehicle reporting, so it must not refresh "last seen".
+        let is_snapshot = snapshot_source_at.is_some();
+        if !is_snapshot {
+            upsert_seen(
+                &pool,
+                vehicle_id,
+                event.is_online.unwrap_or(true),
+                event.ts,
+                inbound.received_at,
+                SeenKind::Payload,
+            )
+            .await;
+        }
 
-        if let Err(error) = upsert_latest_status(&pool, &event).await {
+        // A snapshot still updates the latest state, dated by the vehicle's
+        // original timestamp so the latest-event time does not jump to now.
+        let latest_status_result = match snapshot_source_at {
+            Some(source_at) => {
+                let mut dated = event.clone();
+                dated.ts = source_at;
+                upsert_latest_status(&pool, &dated).await
+            }
+            None => upsert_latest_status(&pool, &event).await,
+        };
+        if let Err(error) = latest_status_result {
             tracing::warn!(vehicle_id=%vehicle_id, err=%error, "latest-status upsert failed");
         }
 
-        let persistence_decision = if config.rivian_suppress_duplicate_telemetry {
+        // Re-learned state is a re-sent value, not a new reading: it adds no
+        // telemetry history row (counted as a duplicate) and no state-period
+        // transition dated now.
+        let persistence_decision = if is_snapshot {
+            PersistenceDecision::Suppress(SuppressionReason::Duplicate)
+        } else if config.rivian_suppress_duplicate_telemetry {
             persistence_gate.decide(&event)
         } else {
             PersistenceDecision::Persist
@@ -752,7 +785,7 @@ pub async fn run_vehicle_worker(
         // ── State period tracking ────────────────────────────────────────────
         let charge_active = charge_det.active_session_id().is_some();
         let lifecycle = lifecycle_updates(&event, is_parallax, charge_active);
-        if lifecycle.state_period {
+        if lifecycle.state_period && !is_snapshot {
             let current_state = infer_vehicle_state(&event);
             match transition_state_period(
                 &pool,
@@ -824,6 +857,13 @@ pub async fn run_vehicle_worker(
 
         // ── Trip detection ───────────────────────────────────────────────────
         let (trip_sample, fusion) = trip_signals.fuse_from(&event, is_parallax);
+        if !is_parallax
+            && trip_sample
+                .speed_mph
+                .is_some_and(|speed| speed > LEGACY_MOTION_MPH)
+        {
+            let _ = legacy_motion_tx.send(Some(trip_sample.speed_mph_ts.unwrap_or(event.ts)));
+        }
         let start_decision = trip_det.start_decision(&trip_sample);
         let trip_event = trip_det.process(&trip_sample);
         if capturing {
@@ -1323,6 +1363,7 @@ fn patch_event(target: &mut TelemetryEvent, source: &TelemetryEvent) {
     patch_opt!(target, source, time_to_end_of_charge_min_ts);
     patch_opt!(target, source, drive_mode);
     patch_opt!(target, source, gear_status);
+    patch_opt!(target, source, gear_status_ts);
     patch_opt!(target, source, cabin_temp_c);
     patch_opt!(target, source, driver_temp_c);
     patch_opt!(target, source, outside_temp_c);
@@ -1390,6 +1431,7 @@ fn patch_event(target: &mut TelemetryEvent, source: &TelemetryEvent) {
     patch_opt!(target, source, window_fr_closed);
     patch_opt!(target, source, window_rl_closed);
     patch_opt!(target, source, window_rr_closed);
+    patch_opt!(target, source, window_rear_closed);
     patch_opt!(target, source, gear_guard_locked);
     patch_opt!(target, source, gear_guard_video_status);
     patch_opt!(target, source, wiper_fluid_low);
@@ -1484,6 +1526,7 @@ fn event_is_duplicate_patch(event: &TelemetryEvent, state: &TelemetryEvent) -> b
         && duplicate_field!(event, state, window_fr_closed)
         && duplicate_field!(event, state, window_rl_closed)
         && duplicate_field!(event, state, window_rr_closed)
+        && duplicate_field!(event, state, window_rear_closed)
         && duplicate_field!(event, state, gear_guard_locked)
         && duplicate_field!(event, state, gear_guard_video_status)
         && duplicate_field!(event, state, wiper_fluid_low)
@@ -1547,6 +1590,7 @@ fn closure_or_lock_change(event: &TelemetryEvent, prev: &TelemetryEvent) -> bool
         || changed_bool(event.window_fr_closed, prev.window_fr_closed)
         || changed_bool(event.window_rl_closed, prev.window_rl_closed)
         || changed_bool(event.window_rr_closed, prev.window_rr_closed)
+        || changed_bool(event.window_rear_closed, prev.window_rear_closed)
         || changed_bool(event.gear_guard_locked, prev.gear_guard_locked)
         || changed_bool(event.charge_port_open, prev.charge_port_open)
         || changed_bool(event.charger_derate_active, prev.charger_derate_active)
@@ -2066,12 +2110,13 @@ async fn write_telemetry(
             side_bin_left_closed, side_bin_right_closed,
             window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
             gear_guard_locked, gear_guard_video_status,
-            wiper_fluid_low, brake_fluid_low, alarm_active, service_mode)
+            wiper_fluid_low, brake_fluid_low, alarm_active, service_mode,
+            window_rear_closed)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
                     $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,
                     $41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58,$59,$60,
                     $61,$62,$63,$64,$65,$66,$67,$68,$69,$70,$71,$72,$73,$74,$75,$76,$77,$78,$79,$80,
-                    $81,$82,$83,$84,$85,$86,$87,$88,$89)
+                    $81,$82,$83,$84,$85,$86,$87,$88,$89,$90)
             ON CONFLICT (vehicle_id, ts) DO UPDATE
             SET
               latitude                  = COALESCE(EXCLUDED.latitude, timeseries.telemetry.latitude),
@@ -2157,6 +2202,7 @@ async fn write_telemetry(
               window_fr_closed            = COALESCE(EXCLUDED.window_fr_closed, timeseries.telemetry.window_fr_closed),
               window_rl_closed            = COALESCE(EXCLUDED.window_rl_closed, timeseries.telemetry.window_rl_closed),
               window_rr_closed            = COALESCE(EXCLUDED.window_rr_closed, timeseries.telemetry.window_rr_closed),
+              window_rear_closed          = COALESCE(EXCLUDED.window_rear_closed, timeseries.telemetry.window_rear_closed),
               gear_guard_locked           = COALESCE(EXCLUDED.gear_guard_locked, timeseries.telemetry.gear_guard_locked),
               gear_guard_video_status     = COALESCE(EXCLUDED.gear_guard_video_status, timeseries.telemetry.gear_guard_video_status),
               wiper_fluid_low             = COALESCE(EXCLUDED.wiper_fluid_low, timeseries.telemetry.wiper_fluid_low),
@@ -2255,6 +2301,7 @@ async fn write_telemetry(
         .bind(e.brake_fluid_low)
         .bind(e.alarm_active)
         .bind(e.service_mode)
+        .bind(e.window_rear_closed)
     .execute(pool)
     .await?;
     Ok(())
@@ -2287,7 +2334,7 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
              side_bin_left_closed, side_bin_right_closed,
              window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
              gear_guard_locked, gear_guard_video_status, wiper_fluid_low, brake_fluid_low,
-             alarm_active, service_mode, updated_at
+             alarm_active, service_mode, window_rear_closed, updated_at
             ) VALUES (
               $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
               $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
@@ -2298,7 +2345,7 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
               $61,$62,$63,$64,$65,$66,$67,$68,$69,$70,
               $71,$72,$73,$74,$75,$76,$77,$78,$79,$80,
               $81,$82,$83,$84,$85,$86,$87,$88,$89,$90,
-              $91,$92,$93,now()
+              $91,$92,$93,$94,now()
             )
            ON CONFLICT (vehicle_id) DO UPDATE SET
              ts = GREATEST(EXCLUDED.ts, riviamigo.vehicle_latest_status.ts),
@@ -2492,6 +2539,7 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
              window_fr_closed = COALESCE(EXCLUDED.window_fr_closed, riviamigo.vehicle_latest_status.window_fr_closed),
              window_rl_closed = COALESCE(EXCLUDED.window_rl_closed, riviamigo.vehicle_latest_status.window_rl_closed),
              window_rr_closed = COALESCE(EXCLUDED.window_rr_closed, riviamigo.vehicle_latest_status.window_rr_closed),
+             window_rear_closed = COALESCE(EXCLUDED.window_rear_closed, riviamigo.vehicle_latest_status.window_rear_closed),
              gear_guard_locked = COALESCE(EXCLUDED.gear_guard_locked, riviamigo.vehicle_latest_status.gear_guard_locked),
              gear_guard_video_status = COALESCE(EXCLUDED.gear_guard_video_status, riviamigo.vehicle_latest_status.gear_guard_video_status),
              wiper_fluid_low = COALESCE(EXCLUDED.wiper_fluid_low, riviamigo.vehicle_latest_status.wiper_fluid_low),
@@ -2593,6 +2641,7 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
     .bind(e.brake_fluid_low)
     .bind(e.alarm_active)
     .bind(e.service_mode)
+    .bind(e.window_rear_closed)
     .execute(pool)
     .await?;
 
@@ -2734,6 +2783,7 @@ fn build_snapshot(e: &TelemetryEvent, motion: Option<&ClosureMotionMap>) -> Stri
     set_opt!("window_fr_closed", e.window_fr_closed);
     set_opt!("window_rl_closed", e.window_rl_closed);
     set_opt!("window_rr_closed", e.window_rr_closed);
+    set_opt!("window_rear_closed", e.window_rear_closed);
     set_opt!("gear_guard_locked", e.gear_guard_locked);
     set_opt!(
         "gear_guard_video_status",
@@ -4167,6 +4217,9 @@ fn trip_diagnostics_fields(
         "power_outcome": fusion.power_outcome,
         "reported_power_outcome": fusion.reported_power_outcome,
         "power_age_seconds": field_age(trip_sample, trip_sample.power_state.is_some(), trip_sample.power_state_ts),
+        "effective_gear": trip_sample.gear_status,
+        "gear_origin": fusion.gear_origin,
+        "gear_age_seconds": field_age(trip_sample, trip_sample.gear_status.is_some(), trip_sample.gear_status_ts),
         "speed_mph": trip_sample.speed_mph,
         "speed_origin": fusion.speed_origin,
         "reported_speed_outcome": fusion.reported_speed_outcome,

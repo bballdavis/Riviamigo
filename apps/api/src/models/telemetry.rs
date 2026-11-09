@@ -36,6 +36,10 @@ pub struct TelemetryEvent {
     pub time_to_end_of_charge_min_ts: Option<DateTime<Utc>>,
     pub drive_mode: Option<DriveMode>,
     pub gear_status: Option<String>,
+    /// When the vehicle reported `gear_status`. Kept in memory for trip
+    /// fusion ordering; not stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gear_status_ts: Option<DateTime<Utc>>,
 
     pub cabin_temp_c: Option<f64>,
     pub driver_temp_c: Option<f64>,
@@ -111,6 +115,8 @@ pub struct TelemetryEvent {
     pub window_fr_closed: Option<bool>,
     pub window_rl_closed: Option<bool>,
     pub window_rr_closed: Option<bool>,
+    /// The R2 liftgate's drop glass (Parallax closure position 16).
+    pub window_rear_closed: Option<bool>,
     pub gear_guard_locked: Option<bool>,
     pub gear_guard_video_status: Option<String>,
     pub wiper_fluid_low: Option<bool>,
@@ -160,6 +166,7 @@ impl TelemetryEvent {
             time_to_end_of_charge_min_ts: None,
             drive_mode: None,
             gear_status: None,
+            gear_status_ts: None,
             cabin_temp_c: None,
             driver_temp_c: None,
             outside_temp_c: None,
@@ -226,6 +233,7 @@ impl TelemetryEvent {
             window_fr_closed: None,
             window_rl_closed: None,
             window_rr_closed: None,
+            window_rear_closed: None,
             gear_guard_locked: None,
             gear_guard_video_status: None,
             wiper_fluid_low: None,

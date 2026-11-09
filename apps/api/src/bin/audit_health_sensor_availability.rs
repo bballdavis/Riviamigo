@@ -221,6 +221,7 @@ fn inventory() -> &'static [SensorInventory] {
                 "window_fr_closed",
                 "window_rl_closed",
                 "window_rr_closed",
+                "window_rear_closed",
             ],
         },
         SensorInventory {

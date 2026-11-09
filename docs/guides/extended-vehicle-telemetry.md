@@ -38,6 +38,31 @@ Error means its latest token, socket, subscription, or heartbeat attempt
 failed and will be retried. Error does not by itself indicate a vehicle fault
 or canonical telemetry failure; the Health info tooltip explains this alongside
 the latest frame and diagnostic counts.
+
+The tooltip also shows **Vehicle last reported**: the newest timestamp the
+vehicle itself put on a Parallax value. Each time the subscription is sent,
+Rivian re-sends the latest value of every topic with its original timestamp.
+Those re-sent values keep the socket busy without the vehicle saying anything
+new, so a recent frame next to an old "Vehicle last reported" time means the
+vehicle is asleep or not reaching Rivian, not that live data is flowing.
+
+When the subscription delivers nothing for 60 seconds, Riviamigo sends it
+again on the open socket. While the canonical connection shows the vehicle
+moving, Parallax must also deliver a fresh value within two minutes; re-sent
+values do not count. If two re-sends go unanswered, the socket is replaced.
+A sleeping vehicle answers each re-send with its re-sent values, so its socket
+is kept rather than torn down, and the wait before the next re-send doubles
+each time, up to ten minutes. Fresh data or motion on the canonical connection
+returns it to one minute.
+
+Both Rivian sockets share one hold when Rivian closes a socket as
+**Rate limited** or **Unauthenticated**, or does not acknowledge it within 20
+seconds: neither reconnects until the hold ends. Holds start at 30 seconds plus
+random jitter, double with each consecutive hold up to 15 minutes, and reset
+once vehicle data arrives. An Unauthenticated close waits at least five
+minutes, because only a credential refresh or reauthorization fixes it.
+Ordinary reconnect delays also carry random jitter. A database error while the
+socket is open is logged and retried; it does not close the socket.
 Legacy charging-session and repair-journal details are not part of that compact
 summary. When Parallax acquisition is unavailable,
 canonical telemetry and Riviamigo's derived Phantom Drain history continue
@@ -56,6 +81,35 @@ history. Availability still depends on what that vehicle and Rivian send. A
 missing or unrecognized value does not become an inferred state, and Parallax
 readings do not start or end charging sessions.
 
+Tire readings carry the vehicle's validity flag. An invalid sensor shows as
+**Invalid Sensor** without its stale pressure. Tire status keeps its kind:
+OK, hard warning, soft warning, or puncture, and a puncture shows as a danger
+state. The R2 liftgate's rear drop glass is reported as the **Rear window**:
+it counts toward the Windows status and open-closure list when the vehicle
+reports it. The outside temperature in the cabin-temperature frame is recorded
+when the vehicle sends it, and trip outside temperatures prefer it over the
+weather estimate. Preconditioning status and type use the same values as the
+canonical connection, including **Unavailable**, which the vehicle reports
+while driving.
+
+While the vehicle is navigating, its navigation progress carries a live
+position, speed, and heading about every five seconds. Riviamigo uses only
+that position fix, which makes trip paths much denser; the destination,
+route, and arrival times in the same message are never decoded or stored. A
+position more than five minutes older than the message is ignored, because
+the vehicle keeps re-sending its last progress after navigation ends.
+
+Parallax charging status decides whether charging power is flowing. Live
+charging power (about every five seconds), the energy-breakdown power, and the
+charging-curve power update the active session only while that status says
+the vehicle is connecting or charging, because the vehicle does not send a
+final zero reading when charging stops; when it stops, the session's live
+power is set to zero. Predicted charging-curve segments are not stored as
+observations, and only a valid charging time estimate is used. Charge
+sessions still start and end from the canonical connection, so there is one
+charge lifecycle. The R2's charge-port door is manual, so its door state is
+shown only as open or closed and never as plugged in.
+
 Parallax also reports when a door, gate, frunk, or window is moving. The
 vehicle status page then shows **Opening…** or **Closing…** for that closure
 until it settles. When Rivian only reports that a closure is ajar, the
@@ -65,11 +119,42 @@ stored in telemetry history; the stored value is simply "not closed".
 
 Power state keeps the freshness rule of its source. Parallax reports state when
 it changes, so the latest recognized Parallax state stays current until a newer
-state arrives. Legacy periodic `vehicleState` power samples are considered
+state arrives. The values Rivian re-sends on each subscribe are accepted for
+state that only reports changes (power, gear, closures, locks, preconditioning,
+and defrost), even when their timestamps are older than five minutes, because
+they are still the vehicle's current state. This lets Riviamigo learn that the
+vehicle is in Go or in gear after a restart mid-drive. They keep their original
+timestamp for ordering, do not refresh the vehicle's "last seen" time, and are
+handled once even when Rivian re-sends them again. Old positions, odometer
+readings, tire pressures, and temperatures are not accepted this way. Legacy periodic `vehicleState` power samples are considered
 fresh for at most two minutes. When both sources contribute, the newest
 accepted sample by source timestamp controls the cached state and its freshness
 rule follows that sample's source. Unrecognized power values remain unknown and
 do not become sleep or drive decisions.
+
+Parallax GNSS frames carry the vehicle's own ground speed and heading, which
+Riviamigo records as speed and heading. Position and speed take the time of
+the fix itself. Some vehicles send it in GPS time, which is recognised by its
+distance from the frame's timestamp and converted, and a fix time more than
+ten minutes from the frame's timestamp is ignored. A fix that leaves speed off
+(proto3 omits zero, as when parked) reports no speed rather than zero until
+the vehicle's GNSS frames have carried a speed at least once; after that it
+means stopped. A vehicle that never sends speed keeps its derived estimate.
+
+A Parallax frame that holds an unknown or transitional value is never
+rejected as a whole: only that value is skipped and described in the capture
+notes. Power states such as OTA update, vehicle reset, and shutdown, an empty
+GNSS frame, an undefined gear or defrost value, and a tire's warning or bad
+reading no longer drop the frame, so a puncture warning on one tire keeps all
+four pressures.
+
+Gear also marks a trip in progress. A drive or reverse gear that is at least
+as recent as the power state wakes the vehicle for trip start, even when power
+is missing or still says sleep, and a sleep state older than that gear does
+not end the trip. The shift into gear (or into Go) anchors the backdated start
+at the time the vehicle reported it, so late power frames no longer move the
+start. Gear keeps the same freshness rule as power: change-only Parallax gear
+holds until the next change, periodic legacy gear is fresh for two minutes.
 
 Trip processing uses the vehicle's direct numeric speed when one is present.
 Only when direct speed is absent can shared telemetry fusion estimate speed:
@@ -113,7 +198,7 @@ A capture file contains:
   was reached;
 - `parallax_envelope`: every Parallax frame with its topic, source timestamp
   and age, decode outcome, whether it reached the canonical worker, the decoded
-  values, and the raw payload bytes (except GNSS and network frames). Body
+  values, and the raw payload bytes (except GNSS, navigation, and network frames). Body
   frames also list each closure or lock position with the field it maps to, or
   `null` when Riviamigo does not know the position;
 - `parallax_connection` and `legacy_connection`: subscribe, close, and

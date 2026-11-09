@@ -29,7 +29,7 @@ A capture file contains:
   was reached;
 - `parallax_envelope`: every Parallax frame with its topic, source timestamp
   and age, decode outcome, whether it reached the canonical worker, the decoded
-  values, and the raw payload bytes (except GNSS and network frames). Body
+  values, and the raw payload bytes (except GNSS, navigation, and network frames). Body
   frames also list each closure or lock position with the field it maps to, or
   `null` when Riviamigo does not know the position;
 - `parallax_connection` and `legacy_connection`: subscribe, close, and
@@ -65,7 +65,20 @@ field timestamps for the same change.
   lock position the decoder does not map. Note the position and what was
   physically operated at that time.
 - `forward_outcome` is `stale`: compare `source_age_ms` with the freshness
-  window (five minutes old, thirty seconds ahead).
+  window (five minutes old, thirty seconds ahead). Older values of change-only
+  state topics (power, gear, closures, locks, preconditioning, defrost) are
+  not stale: they carry `"snapshot": true` and are forwarded as current state.
+- Envelope `outcome` is `duplicate`: Rivian re-sent a value already handled,
+  with the same timestamp, typically right after a subscribe.
+- `parallax_connection` rows with `resubscribed` or `silence_reconnect`: the
+  silence watchdog re-sent the subscription or replaced the socket.
+  `legacy_moving: true` means the canonical connection showed motion while
+  Parallax sent no fresh value. `session_hold` and `not_acknowledged` rows
+  name a hold that both sockets wait out (also `legacy_connection`
+  `session_hold`).
+- Acquisition shows a recent frame but an old **Vehicle last reported** time:
+  the socket is receiving re-sent values only. The vehicle is asleep or not
+  reaching Rivian.
 - `forward_outcome` is `full` or `closed`: inspect worker health and
   backpressure. Parallax collection keeps its independent persistence path.
 - No `parallax_envelope` rows at all: check the `parallax_connection` rows and
@@ -77,6 +90,12 @@ field timestamps for the same change.
   live-session polling while a charge session is open.
 - `ingestion` `persistence` is `suppressed_duplicate`: the sample matched the
   stored state, so it left no new telemetry row.
+- `trip` rows also show `effective_gear`, `gear_origin`, and
+  `gear_age_seconds`. A drive or reverse gear at least as recent as the power
+  state makes the start decision eligible even when power reads sleep.
+- `parallax_envelope` `notes` such as `skipped transitional power state 6`
+  or `skipped tire 2 with status Some(9)`: only that value was skipped; the
+  rest of the frame was used.
 - `trip` rows: check the effective power source and freshness. Change-only
   Parallax power remains latched until a newer state arrives; periodic legacy
   `vehicleState` power is fresh for at most two minutes. Check that direct

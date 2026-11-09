@@ -138,6 +138,48 @@ pub struct TripDetectorState {
 /// now (a missed drive must not be attributed to a much later one).
 const GEAR_ANCHOR_MAX_AGE_SECS: i64 = 15 * 60;
 
+/// Drive or reverse: the vehicle is being driven whatever power says.
+fn gear_engaged(gear: Option<&str>) -> Option<bool> {
+    let gear = gear?;
+    Some(gear.eq_ignore_ascii_case("drive") || gear.eq_ignore_ascii_case("reverse"))
+}
+
+/// Whether the gear reading is at least as recent as the power reading, so
+/// it describes the vehicle now. Late or missing power then cannot hide a
+/// shift into drive, and an old "park" cannot hide a newer "go".
+fn gear_is_current(event: &TelemetryEvent) -> bool {
+    match (event.gear_status.as_ref(), event.power_state.as_ref()) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some(_), Some(_)) => {
+            let gear_at = event.gear_status_ts.unwrap_or(event.ts);
+            let power_at = event.power_state_ts.unwrap_or(event.ts);
+            gear_at >= power_at
+        }
+    }
+}
+
+/// In drive or reverse according to the newest of power and gear.
+fn in_gear_now(event: &TelemetryEvent) -> Option<bool> {
+    if gear_is_current(event) {
+        return gear_engaged(event.gear_status.as_deref());
+    }
+    event
+        .power_state
+        .as_ref()
+        .map(|power| matches!(power, PowerState::Drive | PowerState::Go))
+}
+
+/// When the signal that decides `in_gear_now` was observed.
+fn in_gear_observed_at(event: &TelemetryEvent) -> DateTime<Utc> {
+    if gear_is_current(event) {
+        event.gear_status_ts.unwrap_or(event.ts)
+    } else {
+        event.power_state_ts.unwrap_or(event.ts)
+    }
+    .min(event.ts)
+}
+
 impl TripDetectorState {
     pub fn new(vehicle_id: Uuid) -> Self {
         Self {
@@ -154,14 +196,20 @@ impl TripDetectorState {
 
     /// The same start predicate used by process, exposed without trip contents.
     pub fn start_decision(&self, event: &TelemetryEvent) -> &'static str {
+        // A current drive or reverse gear wakes the vehicle for trip start
+        // even when power is missing or older.
+        let gear_wakes =
+            gear_is_current(event) && gear_engaged(event.gear_status.as_deref()).unwrap_or(false);
         if self.active_trip_id.is_some() {
             "already_active"
-        } else if event.power_state.is_none() {
+        } else if event.power_state.is_none() && !gear_wakes {
             "power_missing"
-        } else if !matches!(
-            event.power_state,
-            Some(PowerState::Drive | PowerState::Go | PowerState::Ready)
-        ) {
+        } else if !gear_wakes
+            && !matches!(
+                event.power_state,
+                Some(PowerState::Drive | PowerState::Go | PowerState::Ready)
+            )
+        {
             "power_not_awake"
         } else if event.speed_mph.is_none() {
             "speed_missing"
@@ -196,13 +244,18 @@ impl TripDetectorState {
         }
 
         let is_moving = speed > STOPPED_SPEED_MPH;
-        let is_asleep = matches!(power, Some(PowerState::Sleep));
+        // Sleep ends a trip unless a newer drive or reverse gear says the
+        // vehicle is still being driven.
+        let is_asleep = matches!(power, Some(PowerState::Sleep))
+            && !(gear_is_current(event)
+                && gear_engaged(event.gear_status.as_deref()).unwrap_or(false));
 
-        if let Some(power) = power {
-            let in_gear = matches!(power, PowerState::Drive | PowerState::Go);
+        if let Some(in_gear) = in_gear_now(event) {
             if in_gear && !self.in_gear {
                 self.gear_odometer = prior_odometer.or(event.odometer_miles);
-                self.gear_at = Some(ts);
+                // The shift happened when the deciding signal was observed,
+                // which can be well before a late frame is processed.
+                self.gear_at = Some(in_gear_observed_at(event));
             } else if !in_gear {
                 self.gear_odometer = None;
                 self.gear_at = None;
@@ -534,6 +587,85 @@ pub fn haversine_miles(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    mod gear_signals {
+        use super::super::*;
+        use chrono::Duration;
+
+        fn sample(ts: DateTime<Utc>) -> TelemetryEvent {
+            TelemetryEvent::empty(Uuid::nil(), ts)
+        }
+
+        #[test]
+        fn a_current_drive_gear_wakes_a_vehicle_with_stale_sleep_power() {
+            let at = Utc::now();
+            let mut detector = TripDetectorState::new(Uuid::nil());
+            let mut event = sample(at);
+            event.power_state = Some(PowerState::Sleep);
+            event.power_state_ts = Some(at - Duration::hours(8));
+            event.gear_status = Some("drive".into());
+            event.gear_status_ts = Some(at - Duration::seconds(20));
+            event.speed_mph = Some(25.0);
+            assert_eq!(detector.start_decision(&event), "eligible");
+            assert!(matches!(
+                detector.process(&event),
+                TripEvent::TripStarted { .. }
+            ));
+            // The stale sleep does not end the trip on the next frame.
+            event.ts = at + Duration::seconds(30);
+            assert_eq!(detector.process(&event), TripEvent::NoChange);
+        }
+
+        #[test]
+        fn newer_sleep_or_park_still_wins() {
+            let at = Utc::now();
+            let detector = TripDetectorState::new(Uuid::nil());
+            let mut event = sample(at);
+            event.power_state = Some(PowerState::Sleep);
+            event.power_state_ts = Some(at);
+            event.gear_status = Some("drive".into());
+            event.gear_status_ts = Some(at - Duration::minutes(10));
+            event.speed_mph = Some(25.0);
+            assert_eq!(detector.start_decision(&event), "power_not_awake");
+            event.power_state = None;
+            event.gear_status = Some("park".into());
+            assert_eq!(detector.start_decision(&event), "power_missing");
+        }
+
+        #[test]
+        fn gear_alone_backdates_the_start_when_power_is_late() {
+            let at = Utc::now();
+            let mut detector = TripDetectorState::new(Uuid::nil());
+            let mut parked = sample(at);
+            parked.odometer_miles = Some(100.0);
+            parked.latitude = Some(30.0);
+            parked.longitude = Some(-97.0);
+            detector.process(&parked);
+            let mut shift = sample(at + Duration::seconds(30));
+            shift.gear_status = Some("drive".into());
+            shift.gear_status_ts = Some(shift.ts);
+            detector.process(&shift);
+            // Motion is first seen after the odometer has already stepped.
+            let mut moving = sample(at + Duration::seconds(120));
+            moving.gear_status = Some("drive".into());
+            moving.gear_status_ts = Some(shift.ts);
+            moving.odometer_miles = Some(101.24);
+            moving.speed_mph = Some(30.0);
+            let TripEvent::TripStarted { started_at, .. } = detector.process(&moving) else {
+                panic!("expected a trip start");
+            };
+            assert_eq!(started_at, shift.ts, "start is the shift into drive");
+            let mut parked_again = sample(at + Duration::seconds(600));
+            parked_again.gear_status = Some("park".into());
+            parked_again.gear_status_ts = Some(parked_again.ts);
+            parked_again.power_state = Some(PowerState::Sleep);
+            parked_again.power_state_ts = Some(parked_again.ts);
+            let TripEvent::TripEnded { trip } = detector.process(&parked_again) else {
+                panic!("expected the trip to end");
+            };
+            assert_eq!(trip.start_odometer_mi, Some(100.0));
+        }
+    }
+
     use super::*;
     use crate::models::telemetry::PowerState;
     use chrono::Duration;

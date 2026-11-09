@@ -101,6 +101,7 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
         time_to_end_of_charge_min_ts: extract_timestamp(state, "/timeToEndOfCharge/timeStamp"),
         drive_mode: extract_str(state, "/driveMode/value").and_then(|s| s.parse().ok()),
         gear_status: extract_str(state, "/gearStatus/value").map(String::from),
+        gear_status_ts: extract_timestamp(state, "/gearStatus/timeStamp"),
 
         cabin_temp_c: extract_f64(state, "/cabinClimateInteriorTemperature/value"),
         driver_temp_c: extract_f64(state, "/cabinClimateDriverTemperature/value"),
@@ -187,6 +188,8 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
         window_fr_closed: extract_closed(state, "/windowFrontRightClosed/value"),
         window_rl_closed: extract_closed(state, "/windowRearLeftClosed/value"),
         window_rr_closed: extract_closed(state, "/windowRearRightClosed/value"),
+        // Not in the legacy vehicleState subscription; Parallax reports it.
+        window_rear_closed: None,
         gear_guard_locked: extract_bool(state, "/gearGuardLocked/value"),
         gear_guard_video_status: extract_str(state, "/gearGuardVideoStatus/value")
             .map(String::from),

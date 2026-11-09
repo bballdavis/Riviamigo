@@ -72,7 +72,11 @@ struct ParallaxHealth {
     status: String,
     last_frame_at: Option<DateTime<Utc>>,
     last_meaningful_frame_at: Option<DateTime<Utc>>,
+    /// Newest timestamp the vehicle itself reported. Re-sent snapshots keep
+    /// `last_frame_at` moving without advancing this.
+    last_vehicle_reported_at: Option<DateTime<Utc>>,
     reconnect_count: i64,
+    resubscribe_count: i64,
     decode_error_count: i64,
     empty_frame_count: i64,
     ambiguity_count: i64,
@@ -267,7 +271,7 @@ async fn fetch_extended_telemetry(
         )
         .bind(vid)
         .fetch_optional(pool),
-        sqlx::query_as::<_, ParallaxHealth>(r#"SELECT CASE WHEN status='connected' AND updated_at < now()-interval '2 minutes' THEN 'stale' ELSE status END AS status,last_frame_at,last_meaningful_frame_at,reconnect_count,decode_error_count,empty_frame_count,ambiguity_count,last_error FROM riviamigo.parallax_collector_state WHERE vehicle_id=$1"#)
+        sqlx::query_as::<_, ParallaxHealth>(r#"SELECT CASE WHEN status='connected' AND updated_at < now()-interval '2 minutes' THEN 'stale' ELSE status END AS status,last_frame_at,last_meaningful_frame_at,last_vehicle_reported_at,reconnect_count,resubscribe_count,decode_error_count,empty_frame_count,ambiguity_count,last_error FROM riviamigo.parallax_collector_state WHERE vehicle_id=$1"#)
             .bind(vid).fetch_optional(pool),
         sqlx::query_as::<_, LegacyChargingHealth>(r#"SELECT
             COALESCE(legacy_last_classification,'not_observed') AS classification,
