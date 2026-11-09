@@ -341,7 +341,7 @@ function ClosureLabel({ className, closed, locked, title, icon, description }: {
   // Custom closure glyphs carry more detail than the stock icons, so they get a larger badge.
   const size = icon ? 'h-9 w-9' : 'h-6 w-6';
   const tone = open
-    ? icon ? 'border-status-danger bg-status-danger text-white' : 'border-accent/60 bg-bg-elevated/90 text-accent'
+    ? icon ? 'border-status-danger bg-status-danger text-fg-on-accent' : 'border-accent/60 bg-bg-elevated/90 text-accent'
     : known ? 'border-status-positive/60 bg-bg-elevated/90 text-status-positive' : 'border-border bg-bg-elevated/60 text-fg-tertiary';
   const badge = (
     <span
