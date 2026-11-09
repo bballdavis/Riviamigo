@@ -43,6 +43,20 @@ describe('network proxy URL resolution', () => {
     }
   });
 
+  it('allows protected vehicle artwork object URLs through the SPA content security policy', () => {
+    // Protected artwork is fetched with the bearer token and rendered from a
+    // blob: object URL. Without blob: in img-src the browser rejects every
+    // cached Rivian image and the UI silently drops to packaged fallbacks.
+    const nginxConfig = readFileSync(resolve(process.cwd(), '../../compose/nginx/nginx.conf'), 'utf8');
+    const apiRoutes = readFileSync(resolve(process.cwd(), '../api/src/routes/mod.rs'), 'utf8');
+
+    for (const shellLocation of [/location\s+=\s+\/index\.html\s*\{([\s\S]*?)\n {8}\}/, /location\s+\/\s*\{([\s\S]*?)\n {8}\}/]) {
+      const imgSrc = nginxConfig.match(shellLocation)?.[1]?.match(/img-src ([^;]+);/)?.[1];
+      expect(imgSrc?.split(/\s+/)).toEqual(expect.arrayContaining(["'self'", 'blob:']));
+    }
+    expect(apiRoutes.match(/img-src ([^;]+);/)?.[1]?.split(/\s+/)).toEqual(expect.arrayContaining(["'self'", 'blob:']));
+  });
+
   it('keeps REST calls same-origin for localhost browsers when VITE_API_URL targets localhost', () => {
     const baseUrl = resolveApiBaseUrl('http://localhost:3001', {
       hostname: 'localhost',

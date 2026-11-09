@@ -380,7 +380,7 @@ pub fn build_router(state: AppState) -> Router {
         .layer(SetResponseHeaderLayer::overriding(
             CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(
-                "default-src 'self'; img-src 'self' data:; \
+                "default-src 'self'; img-src 'self' data: blob:; \
                  style-src 'self' 'unsafe-inline'; script-src 'self'; \
                  connect-src 'self' wss:; font-src 'self' data:; frame-ancestors 'none'",
             ),

@@ -133,9 +133,6 @@ export function CurrentVehicleStatePanel({
     ? status?.closure_tailgate_locked
     : status?.closure_liftgate_locked ?? status?.closure_tailgate_locked;
   const rearGateLockTitle = vehicleModel === 'R1T' ? 'Tailgate lock' : 'Rear gate lock';
-  const demoArtworkNudgeRight = isDemoVehicle
-    && (vehicleModel === 'R1S' || vehicleModel === 'R1T' || vehicleModel === 'R2' || vehicleModel === 'R2S');
-
   useEffect(() => {
     const element = imageStageRef.current;
     if (!element || typeof ResizeObserver === 'undefined') return;
@@ -152,7 +149,7 @@ export function CurrentVehicleStatePanel({
 
   return (
     <section
-      className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border p-4 shadow-sm"
+      className="@container/overview flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border p-4 shadow-sm"
       style={{ background: 'var(--rm-bg-surface)' }}
     >
       <div className="mb-4 flex shrink-0 items-center justify-between gap-3">
@@ -161,16 +158,25 @@ export function CurrentVehicleStatePanel({
           {freshnessLabel}
         </span>
       </div>
-      <div className="grid flex-1 min-h-0 content-stretch gap-4 md:grid-cols-2 xl:grid-cols-[16rem_minmax(22rem,1fr)_18rem]">
+      {/* Tiers follow the widget's own width, not the viewport: the dashboard
+          gives this widget a fixed-height cell from 640px up, so every tier
+          that can appear there must keep all three regions on one row. The
+          stacked tier only renders in auto-height cells (phones), and the
+          vertical overflow guard keeps a narrow custom layout scrollable
+          rather than silently clipped. */}
+      <div
+        data-testid="overview-layout"
+        className="grid flex-1 min-h-0 content-stretch gap-4 overflow-y-auto @min-[34rem]/overview:grid-cols-[11.25rem_minmax(0,1fr)_8.75rem] @min-[34rem]/overview:gap-3 @min-[58rem]/overview:grid-cols-[16rem_minmax(22rem,1fr)_18rem] @min-[58rem]/overview:gap-4"
+      >
         <div
-          className="grid min-h-60 grid-cols-[3.75rem_minmax(0,1fr)] gap-4 rounded-2xl border p-4"
+          className="grid min-h-60 grid-cols-[3.75rem_minmax(0,1fr)] gap-4 rounded-2xl border p-4 @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:grid-cols-[2.25rem_minmax(0,1fr)] @min-[34rem]/overview:gap-3 @min-[34rem]/overview:p-3 @min-[58rem]/overview:min-h-60 @min-[58rem]/overview:grid-cols-[3.75rem_minmax(0,1fr)] @min-[58rem]/overview:gap-4 @min-[58rem]/overview:p-4"
           style={{
             backgroundColor: 'color-mix(in srgb, var(--rm-accent) 8%, var(--rm-bg-surface))',
             borderColor: 'color-mix(in srgb, var(--rm-accent) 28%, var(--rm-border-default))',
           }}
         >
           <div
-            className="relative h-full min-h-48 overflow-hidden rounded-2xl border bg-bg-surface"
+            className="relative h-full min-h-48 overflow-hidden rounded-2xl border bg-bg-surface @min-[34rem]/overview:min-h-0"
             style={{ borderColor: 'color-mix(in srgb, var(--rm-accent) 32%, var(--rm-border-default))' }}
           >
             <div data-testid="overview-soc-rail" className="absolute inset-1 flex items-end overflow-hidden rounded-xl p-1">
@@ -185,12 +191,12 @@ export function CurrentVehicleStatePanel({
             </div>
             <Battery className="absolute left-1/2 top-3 h-4 w-4 -translate-x-1/2 text-fg/80" />
           </div>
-          <div className="flex min-w-0 flex-col justify-between gap-4">
+          <div className="flex min-w-0 flex-col justify-between gap-4 @min-[34rem]/overview:gap-3 @min-[58rem]/overview:gap-4">
             <div>
               <span className="text-xs uppercase tracking-[0.16em] text-fg-tertiary">SoC</span>
-              <p className="mt-1 font-mono text-4xl font-semibold tabular-nums text-fg">{formatPercent(status?.battery_level)}</p>
+              <p className="mt-1 font-mono text-4xl font-semibold tabular-nums text-fg @min-[34rem]/overview:text-3xl @min-[58rem]/overview:text-4xl">{formatPercent(status?.battery_level)}</p>
             </div>
-            <div className="grid gap-2 text-sm">
+            <div className="grid gap-2 text-sm @min-[34rem]/overview:gap-1.5 @min-[58rem]/overview:gap-2">
               <SocDatum label="Range" value={formatMiles(status?.range_miles)} />
               <SocDatum label="Limit" value={formatPercent(status?.battery_limit)} />
               <SocDatum label="Charging" value={<ChargingGlyph status={status} />} />
@@ -200,7 +206,7 @@ export function CurrentVehicleStatePanel({
             </div>
           </div>
         </div>
-        <div ref={imageStageRef} className="relative min-h-60 overflow-hidden rounded-2xl border border-border bg-bg-surface/70 p-1">
+        <div ref={imageStageRef} data-testid="overview-image-stage" className="relative min-h-60 overflow-hidden rounded-2xl border border-border bg-bg-surface/70 p-1 @min-[34rem]/overview:min-h-0 @min-[58rem]/overview:min-h-60">
           <div className="absolute right-3 top-3 z-30 inline-flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 px-2 py-1 text-[11px] text-fg-tertiary shadow-sm backdrop-blur">
             {status?.doors_locked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3 text-accent" />}
             {locksKnown ? (status?.doors_locked ? 'Locked' : 'Unlocked') : 'Locks pending'}
@@ -208,8 +214,8 @@ export function CurrentVehicleStatePanel({
           <div className="absolute inset-1 z-10 flex items-center justify-center">
             {overheadArtworkAvailable ? (
               <VehicleArtFrame source={apiOverheadFallback} fallbackSource={localOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth}>
-                <VehicleOverheadLayers base={baseOverheadLight ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} isR1tFallback={vehicleModel === 'R1T'} artworkNudgeRight={demoArtworkNudgeRight} />
-                <VehicleOverheadLayers base={baseOverheadDark ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" isR1tFallback={vehicleModel === 'R1T'} artworkNudgeRight={demoArtworkNudgeRight} />
+                <VehicleOverheadLayers base={baseOverheadLight ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} isR1tFallback={vehicleModel === 'R1T'} />
+                <VehicleOverheadLayers base={baseOverheadDark ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" isR1tFallback={vehicleModel === 'R1T'} />
                 <VehicleLabel className={anchors.tire.rl} value={tires.rl.value} tone={tires.rl.tone} targetTirePressurePsi={targetTirePressurePsi} />
                 <VehicleLabel className={anchors.tire.fl} value={tires.fl.value} tone={tires.fl.tone} targetTirePressurePsi={targetTirePressurePsi} />
                 <VehicleLabel className={anchors.tire.rr} value={tires.rr.value} tone={tires.rr.tone} targetTirePressurePsi={targetTirePressurePsi} />
@@ -238,14 +244,22 @@ export function CurrentVehicleStatePanel({
             )}
           </div>
         </div>
-        <div className="md:col-span-2 xl:col-span-1 grid auto-rows-fr gap-2 md:grid-cols-2 xl:grid-cols-1">
+        <div data-testid="overview-stats" className="grid auto-rows-fr gap-2 @min-[34rem]/overview:gap-1.5 @min-[58rem]/overview:gap-2">
           {stats.map((stat) => (
-            <div key={stat.label} className="flex min-h-10 items-center justify-between gap-3 rounded-xl border border-border bg-bg-surface px-3 py-2 text-sm">
-              <span className="inline-flex min-w-0 items-center gap-2 truncate text-fg-tertiary">
+            <div
+              key={stat.label}
+              className="flex min-h-10 min-w-0 items-center justify-between gap-3 rounded-xl border border-border bg-bg-surface px-3 py-2 text-sm @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:flex-col @min-[34rem]/overview:items-start @min-[34rem]/overview:justify-center @min-[34rem]/overview:gap-0.5 @min-[34rem]/overview:px-2.5 @min-[34rem]/overview:py-1.5 @min-[58rem]/overview:min-h-10 @min-[58rem]/overview:flex-row @min-[58rem]/overview:items-center @min-[58rem]/overview:justify-between @min-[58rem]/overview:gap-3 @min-[58rem]/overview:px-3 @min-[58rem]/overview:py-2"
+            >
+              <span className="inline-flex min-w-0 max-w-full items-center gap-2 truncate text-fg-tertiary @min-[34rem]/overview:gap-1.5 @min-[34rem]/overview:text-[11px] @min-[58rem]/overview:gap-2 @min-[58rem]/overview:text-sm">
                 {stat.icon}
                 <span className="truncate">{stat.label}</span>
               </span>
-              <span className="shrink-0 font-mono font-medium tabular-nums text-fg">{stat.value}</span>
+              <span
+                className="max-w-full shrink-0 truncate font-mono font-medium tabular-nums text-fg"
+                title={typeof stat.value === 'string' ? stat.value : undefined}
+              >
+                {stat.value}
+              </span>
             </div>
           ))}
         </div>
@@ -256,7 +270,7 @@ export function CurrentVehicleStatePanel({
 
 function SocDatum({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex min-h-10 min-w-0 items-center justify-between gap-2 rounded-lg border border-accent/15 bg-bg-surface/55 px-3 py-2 leading-none">
+    <div className="flex min-h-10 min-w-0 items-center justify-between gap-2 rounded-lg border border-accent/15 bg-bg-surface/55 px-3 py-2 leading-none @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:flex-col @min-[34rem]/overview:items-start @min-[34rem]/overview:gap-1 @min-[34rem]/overview:px-2.5 @min-[34rem]/overview:py-1.5 @min-[58rem]/overview:min-h-10 @min-[58rem]/overview:flex-row @min-[58rem]/overview:items-center @min-[58rem]/overview:gap-2 @min-[58rem]/overview:px-3 @min-[58rem]/overview:py-2">
       <span className="min-w-0 truncate text-sm text-fg-tertiary">{label}</span>
       <span className="shrink-0 font-mono text-sm font-medium tabular-nums text-fg">{value}</span>
     </div>
@@ -425,7 +439,9 @@ function VehicleArtFrame({
     if (frameArtworkSrc) image.src = frameArtworkSrc;
   }, [frameArtworkSrc]);
   const maxHeight = heightPx > 0 ? Math.max(120, (heightPx - 34) / 1.12) : 216;
-  const maxWidth = widthPx > 0 ? Math.max(260, (widthPx - 34) / 1.04) : 520;
+  // The compact tier's stage can be narrower than 260px; a larger floor would
+  // size the frame past the stage and clip the vehicle.
+  const maxWidth = widthPx > 0 ? Math.max(160, (widthPx - 34) / 1.04) : 520;
   const frameHeight = Math.round(Math.min(maxHeight, maxWidth / rotatedAspectRatio));
   const frameWidth = Math.round(frameHeight * rotatedAspectRatio);
   return (
@@ -453,7 +469,6 @@ function VehicleOverheadLayers({
   darkClassName,
   vehicleName,
   isR1tFallback,
-  artworkNudgeRight,
 }: {
   base: string | null | undefined;
   fallbackBase?: string | null | undefined;
@@ -461,7 +476,6 @@ function VehicleOverheadLayers({
   darkClassName: string;
   vehicleName?: string | undefined;
   isR1tFallback: boolean;
-  artworkNudgeRight: boolean;
 }) {
   const imageStyle = {
     height: 'var(--vehicle-frame-width)',
@@ -472,10 +486,11 @@ function VehicleOverheadLayers({
   const fallbackProps = {
     style: {
       ...imageStyle,
-      // The shared rear/front lock anchors sit at 4% and 102%. Center only
-      // the packaged demo fallback at their midpoint, leaving Rivian artwork
-      // and all annotations on their established coordinates.
-      left: artworkNudgeRight ? '53%' : '50%',
+      // The shared rear/front lock anchors sit at 4% and 102%. Center the
+      // packaged fallback at their midpoint whenever it is displayed, for real
+      // and demo vehicles alike, leaving Rivian artwork and all annotations on
+      // their established coordinates.
+      left: '53%',
       transform: isR1tFallback
         ? `translate(-50%, -50%) rotate(90deg) scaleX(${R1T_OVERVIEW_FALLBACK_CROSS_AXIS_SCALE})`
         : imageStyle.transform,

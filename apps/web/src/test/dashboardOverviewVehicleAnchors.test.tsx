@@ -257,13 +257,34 @@ describe('overview vehicle anchors', () => {
     expect(screen.getByTitle('Rear left door lock')).toHaveClass(anchors.locks.rl);
   });
 
-  it.each(['R1T', 'R2'] as const)('centers only the packaged %s demo fallback between the lock anchors', (model) => {
-    overviewMocks.isDemo = true;
+  it.each([
+    ['R1T', true],
+    ['R2', true],
+    ['R1T', false],
+    ['R2', false],
+  ] as const)('centers the packaged %s fallback between the lock anchors (demo=%s)', (model, isDemo) => {
+    overviewMocks.isDemo = isDemo;
     overviewMocks.hasApiArtwork = false;
     renderOverviewForModel(model);
 
-    for (const image of Array.from(document.querySelectorAll('img[data-artwork-fallback]'))) {
+    const fallbackImages = Array.from(document.querySelectorAll('img[data-artwork-fallback]'));
+    expect(fallbackImages).toHaveLength(2);
+    for (const image of fallbackImages) {
       expect(image).toHaveStyle({ left: '53%' });
+    }
+  });
+
+  it('sizes the overview layout from the widget container, not the viewport', () => {
+    // From 640px the dashboard gives this widget a fixed-height cell. Viewport
+    // breakpoints stacked the regions inside it and clipped the vehicle, so
+    // every multi-column tier must key off the widget's own width.
+    renderOverviewForModel('R1T');
+    const layout = screen.getByTestId('overview-layout');
+    expect(layout.closest('section')).toHaveClass('@container/overview');
+    expect(layout.className).toContain('@min-[34rem]/overview:grid-cols-[11.25rem_minmax(0,1fr)_8.75rem]');
+    expect(layout.className).toContain('@min-[58rem]/overview:grid-cols-[16rem_minmax(22rem,1fr)_18rem]');
+    for (const element of [layout, ...Array.from(layout.querySelectorAll('*'))].filter((node) => !node.closest('[data-testid="overview-vehicle-art-frame"]'))) {
+      expect(element.getAttribute('class') ?? '').not.toMatch(/(^|\s)(sm|md|lg|xl):/);
     }
   });
 
