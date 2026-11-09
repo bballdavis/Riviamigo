@@ -190,6 +190,21 @@ async fn stop_ingestion_capture(
 
 const CAPTURE_EXPORT_PAGE: i64 = 1000;
 
+fn capture_export_body<S>(header_line: String, rows: S) -> Body
+where
+    S: futures::Stream<Item = Result<axum::body::Bytes, std::io::Error>> + Send + 'static,
+{
+    let body = futures::StreamExt::chain(
+        futures::stream::once(async move {
+            Ok::<_, std::io::Error>(axum::body::Bytes::from(header_line))
+        }),
+        rows,
+    );
+    // HTTP body consumers may poll after EOF. Chain's final `unfold` is
+    // otherwise polled again after termination and panics (issue #76).
+    Body::from_stream(futures::StreamExt::fuse(body))
+}
+
 /// Stream the vehicle's latest capture as NDJSON: one header line, then one
 /// line per event. Neither carries the vehicle id, VIN, or name.
 async fn export_ingestion_capture(
@@ -226,14 +241,7 @@ async fn export_ingestion_capture(
             }
         }
     });
-    let body = futures::StreamExt::chain(
-        futures::stream::once(async move {
-            Ok::<_, std::io::Error>(axum::body::Bytes::from(header_line))
-        }),
-        rows,
-    );
-
-    let mut response = Response::new(Body::from_stream(body));
+    let mut response = Response::new(capture_export_body(header_line, rows));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/x-ndjson"),
@@ -5306,9 +5314,55 @@ mod tests {
     use axum::body::Body;
     use axum::extract::State;
     use axum::Json;
+    use futures::StreamExt;
     use http::{Request, StatusCode};
     use tower::ServiceExt;
     use uuid::Uuid;
+
+    /// HTTP consumers may poll a body again after EOF. `unfold` itself is
+    /// not safe to poll after completion, including on a header-only export.
+    #[tokio::test]
+    async fn capture_export_body_remains_complete_after_eof() {
+        for page_count in [0, 1, 3] {
+            let rows = futures::stream::unfold(0, move |page| async move {
+                (page < page_count).then(|| {
+                    (
+                        Ok::<_, std::io::Error>(axum::body::Bytes::from(format!(
+                            "{{\"page\":{page}}}\n"
+                        ))),
+                        page + 1,
+                    )
+                })
+            });
+            let mut body = super::capture_export_body("{\"kind\":\"header\"}\n".into(), rows)
+                .into_data_stream();
+            let mut downloaded = Vec::new();
+            while let Some(chunk) = body.next().await {
+                downloaded.extend_from_slice(&chunk.expect("download chunk"));
+            }
+            let mut expected = "{\"kind\":\"header\"}\n".to_owned();
+            for page in 0..page_count {
+                expected.push_str(&format!("{{\"page\":{page}}}\n"));
+            }
+            assert_eq!(downloaded, expected.as_bytes());
+            for _ in 0..3 {
+                assert!(body.next().await.is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn capture_export_body_propagates_page_errors() {
+        let rows = futures::stream::unfold(Some(()), |state| async move {
+            state.map(|()| (Err(std::io::Error::other("page query failed")), None))
+        });
+        let mut body = super::capture_export_body("header\n".into(), rows).into_data_stream();
+        assert_eq!(body.next().await.unwrap().unwrap(), "header\n");
+        assert!(body.next().await.unwrap().is_err());
+        for _ in 0..3 {
+            assert!(body.next().await.is_none());
+        }
+    }
 
     #[test]
     fn maps_rejected_rivian_credentials_to_an_actionable_error() {

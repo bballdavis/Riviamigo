@@ -83,6 +83,10 @@ field timestamps for the same change.
   speed is used when present and that a GNSS or odometer estimate is used only
   when direct speed is absent, then read the start decision and transition.
 
+Capture downloads terminate safely after the last NDJSON page, including when
+only the header is available. A page-query failure still fails the download;
+it is not presented as a successful truncated capture.
+
 ## Exact-SHA real-drive acceptance
 
 Decoder tests and a successful build establish code behavior. They do not prove
