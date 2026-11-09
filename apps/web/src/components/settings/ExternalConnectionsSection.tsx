@@ -1,16 +1,20 @@
 import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, BASEMAP_CONFIG_QUERY_KEY } from '@riviamigo/hooks';
+import { api, BASEMAP_CONFIG_QUERY_KEY, queryKeys } from '@riviamigo/hooks';
 import type {
   ExternalConnectionMode,
   ExternalConnectionRecord,
+  UpdateCheckSettings,
   UpdateExternalConnectionBody,
 } from '@riviamigo/types';
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker } from '@riviamigo/ui/primitives';
+import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker, Switch } from '@riviamigo/ui/primitives';
 import { ExternalLink, RefreshCw, Save, ShieldOff, Trash2 } from 'lucide-react';
 import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
+import { useReleaseCheckStatus } from '../../hooks/useGithubReleaseCheck';
+import { RELEASES_URL } from '../../lib/releaseCheck';
 
 const CONNECTION_QUERY_KEY = ['external-connections'] as const;
+const GITHUB_RELEASES_ID = 'github_releases';
 
 export function ExternalConnectionsSection() {
   const queryClient = useQueryClient();
@@ -31,8 +35,15 @@ export function ExternalConnectionsSection() {
   const canManage = connections.data?.can_manage ?? false;
   const items = connections.data?.connections ?? [];
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
-  const selected = items.find((connection) => connection.id === selectedId) ?? items[0];
-
+  const releaseCheckSettings = useQuery({
+    queryKey: queryKeys.updateCheck.current,
+    queryFn: () => api.getUpdateCheckSettings(),
+    staleTime: 60_000,
+    retry: false,
+  });
+  const releaseChecksEnabled = releaseCheckSettings.data?.enabled === true;
+  const showReleases = selectedId === GITHUB_RELEASES_ID;
+  const selected = showReleases ? undefined : (items.find((connection) => connection.id === selectedId) ?? items[0]);
   React.useEffect(() => {
     if (selected && selected.id !== selectedId) setSelectedId(selected.id);
   }, [selected, selectedId]);
@@ -45,7 +56,7 @@ export function ExternalConnectionsSection() {
             <div>
               <CardTitle>External Connections</CardTitle>
               <p className="mt-1 max-w-3xl text-sm text-fg-tertiary">
-                See exactly what leaves this Riviamigo installation, choose remote or self-hosted providers, and understand what stops when a connection is disabled.
+                See what leaves this installation, choose remote or self-hosted providers, and understand what stops when a connection is disabled. GitHub release checks, if enabled, connect directly from this browser.
               </p>
             </div>
             {canManage ? (
@@ -69,7 +80,7 @@ export function ExternalConnectionsSection() {
         <CardContent>
           <div className="grid gap-3 md:grid-cols-3">
             <SummaryItem label="Policy" value="Installation-wide" />
-            <SummaryItem label="Browser egress" value="Proxied through Riviamigo" />
+            <SummaryItem label="Provider egress" value="Per-service disclosure" />
             <SummaryItem label="Weather precision" value="Approx. 1 km by default" />
           </div>
           {!canManage && !connections.isLoading ? (
@@ -92,7 +103,7 @@ export function ExternalConnectionsSection() {
         </Card>
       ) : null}
 
-      {items.length > 0 ? (
+      {!connections.isLoading ? (
         <div className="grid gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]">
           <nav aria-label="External connections" className="flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">
             {items.map((connection) => {
@@ -113,11 +124,158 @@ export function ExternalConnectionsSection() {
                 </button>
               );
             })}
+            <button
+              type="button"
+              onClick={() => setSelectedId(GITHUB_RELEASES_ID)}
+              className={`min-w-44 rounded-xl border px-3 py-2.5 text-left transition lg:min-w-0 ${showReleases ? 'border-accent bg-accent/10' : 'border-border bg-bg-elevated/30 hover:bg-bg-elevated/60'}`}
+            >
+              <span className="flex items-center justify-between gap-2">
+                <span className="truncate text-sm font-medium text-fg">GitHub Releases</span>
+                <Badge variant={releaseChecksEnabled ? 'success' : 'default'}>{releaseChecksEnabled ? 'Enabled' : 'Disabled'}</Badge>
+              </span>
+              <span className="mt-1 block truncate text-xs text-fg-tertiary">{releaseChecksEnabled ? 'Browser-side release check' : 'No outbound requests'}</span>
+            </button>
           </nav>
+          {showReleases ? <GitHubReleasesCard canManage={canManage} connectionsLoaded={connections.isSuccess} /> : null}
           {selected ? <ConnectionCard connection={selected} canManage={canManage} onUpdated={(data) => queryClient.setQueryData(CONNECTION_QUERY_KEY, data)} /> : null}
         </div>
       ) : null}
     </div>
+  );
+}
+
+function GitHubReleasesCard({ canManage, connectionsLoaded }: { canManage: boolean; connectionsLoaded: boolean }) {
+  const queryClient = useQueryClient();
+  const releaseStatus = useReleaseCheckStatus();
+  const [updateCheckMessage, setUpdateCheckMessage] = React.useState<string | null>(null);
+  const updateCheckSettings = useQuery({
+    queryKey: queryKeys.updateCheck.current,
+    queryFn: () => api.getUpdateCheckSettings(),
+    staleTime: 60_000,
+    retry: false,
+  });
+  const appVersion = useQuery({
+    queryKey: queryKeys.appVersion.current,
+    queryFn: () => api.getAppVersion(),
+    enabled: updateCheckSettings.data?.enabled === true,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const updateCheckMutation = useMutation({
+    mutationFn: (settings: UpdateCheckSettings) => api.updateUpdateCheckSettings(settings),
+    onMutate: async (settings) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.updateCheck.current });
+      const previous = queryClient.getQueryData<UpdateCheckSettings>(queryKeys.updateCheck.current);
+      queryClient.setQueryData(queryKeys.updateCheck.current, settings);
+      setUpdateCheckMessage(null);
+      return { previous };
+    },
+    onSuccess: (settings) => {
+      queryClient.setQueryData(queryKeys.updateCheck.current, settings);
+      setUpdateCheckMessage('GitHub release check settings saved.');
+    },
+    onError: (_error, _settings, context) => {
+      if (context?.previous) queryClient.setQueryData(queryKeys.updateCheck.current, context.previous);
+      setUpdateCheckMessage('GitHub release check settings could not be saved. The previous settings remain active.');
+    },
+  });
+  const releaseSettings = updateCheckSettings.data;
+  const releaseStatusMessage = updateCheckSettings.data?.enabled && (
+    appVersion.isError || !appVersion.data?.version || appVersion.data.version === 'unknown'
+  )
+    ? 'The running version is unknown, so this browser cannot compare releases.'
+    : releaseStatus.checking
+      ? 'Checking GitHub for the latest stable release…'
+      : releaseStatus.updateAvailable && releaseStatus.latestVersion
+        ? `${releaseStatus.error ? 'The latest check failed. ' : ''}Version ${releaseStatus.latestVersion} is available.`
+        : releaseStatus.error
+          ? 'GitHub could not be checked. The last successful result is retained in this browser.'
+          : releaseStatus.updateAvailable === false && releaseStatus.latestVersion
+            ? `This browser found no newer release than ${releaseStatus.latestVersion}.`
+            : releaseStatus.latestVersion
+              ? `Latest stable release: ${releaseStatus.latestVersion}.`
+              : 'No release check has run in this browser yet.';
+
+
+  return (
+    <Card className="min-w-0">
+          <CardHeader className="items-start">
+            <div className="flex w-full flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle>GitHub Releases</CardTitle>
+                <p className="mt-1 max-w-3xl text-sm text-fg-tertiary">
+                  Optionally check GitHub’s latest stable release directly from this browser. The request contains no user, vehicle, or usage data. Riviamigo receives no check counts or results, and checks run only while this app is open.
+                </p>
+              </div>
+              <a href={RELEASES_URL} target="_blank" rel="noopener noreferrer" className="inline-flex shrink-0 items-center gap-1 text-sm text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+                View releases <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+              </a>
+            </div>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-fg">Enable release checks</p>
+                <p className="mt-0.5 text-xs text-fg-tertiary">Disabled by default for this installation.</p>
+              </div>
+              <Switch
+                checked={releaseSettings?.enabled ?? false}
+                onChange={(enabled) => updateCheckMutation.mutate({
+                  enabled,
+                  frequency: releaseSettings?.frequency ?? 'daily',
+                })}
+                aria-label="Enable GitHub release checks"
+                disabled={!canManage || updateCheckSettings.isLoading || updateCheckSettings.isError || updateCheckMutation.isPending}
+              />
+            </div>
+
+            {releaseSettings?.enabled ? (
+              <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,0.8fr)] sm:items-end">
+                <div>
+                  <p className="text-sm font-medium text-fg">Check frequency</p>
+                  <p className="mt-0.5 text-xs text-fg-tertiary">Each browser checks when first enabled or when its selected interval is due.</p>
+                </div>
+                <SelectPicker
+                  className="w-full"
+                  value={releaseSettings.frequency}
+                  onChange={(frequency) => updateCheckMutation.mutate({
+                    enabled: releaseSettings.enabled,
+                    frequency: frequency as UpdateCheckSettings['frequency'],
+                  })}
+                  aria-label="GitHub release check frequency"
+                  disabled={!canManage || updateCheckMutation.isPending}
+                  options={[
+                    { value: 'hourly', label: 'Hourly' },
+                    { value: 'daily', label: 'Daily' },
+                    { value: 'weekly', label: 'Weekly' },
+                    { value: 'monthly', label: 'Monthly (every 30 days)' },
+                  ]}
+                />
+              </div>
+            ) : null}
+
+            {updateCheckSettings.isError ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-status-warning/25 bg-status-warning/10 px-3 py-2.5">
+                <p role="alert" className="text-sm text-fg">Release check settings could not be loaded.</p>
+                <Button variant="secondary" size="sm" iconLeft={<RefreshCw className="h-3.5 w-3.5" />} onClick={() => updateCheckSettings.refetch()}>Retry</Button>
+              </div>
+            ) : null}
+            {updateCheckSettings.isSuccess ? (
+              <div className="grid gap-1 rounded-lg border border-border bg-bg-elevated/35 px-3 py-2.5">
+                <p role="status" className={`text-sm ${releaseStatus.updateAvailable ? 'font-medium text-status-positive' : 'text-fg-secondary'}`}>
+                  {releaseStatusMessage}
+                </p>
+                {releaseStatus.lastAttemptAt ? (
+                  <p className="text-xs text-fg-tertiary">Last check: {new Date(releaseStatus.lastAttemptAt).toLocaleString()}</p>
+                ) : null}
+              </div>
+            ) : null}
+            {updateCheckMessage ? <p role="status" className="text-xs text-fg-tertiary">{updateCheckMessage}</p> : null}
+            {connectionsLoaded && !canManage ? (
+              <p className="text-xs text-fg-tertiary">All signed-in users can view this status. An administrator controls the installation-wide setting.</p>
+            ) : null}
+          </CardContent>
+        </Card>
   );
 }
 

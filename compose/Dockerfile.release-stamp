@@ -1,0 +1,6 @@
+# Adds only the release identity on top of an already-tested candidate image.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ARG RIVIAMIGO_BUILD_VERSION
+ENV RIVIAMIGO_BUILD_VERSION=${RIVIAMIGO_BUILD_VERSION}
+LABEL org.opencontainers.image.version=${RIVIAMIGO_BUILD_VERSION}

@@ -95,8 +95,9 @@ COPY packages/ui/ packages/ui/
 RUN pnpm --filter @riviamigo/web build
 
 FROM postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296 AS runtime
+ARG RIVIAMIGO_BUILD_VERSION=unknown
 LABEL org.opencontainers.image.source="https://github.com/bballdavis/Riviamigo"
-ENV TZ=UTC XDG_CACHE_HOME=/data/cache
+ENV TZ=UTC XDG_CACHE_HOME=/data/cache RIVIAMIGO_BUILD_VERSION=${RIVIAMIGO_BUILD_VERSION}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl libpcre2-8-0 libssl3 nginx tini util-linux \

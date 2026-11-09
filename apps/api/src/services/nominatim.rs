@@ -159,7 +159,9 @@ pub async fn search(
     let endpoint = endpoint(&settings, "search")?;
     let slot = acquire_slot(NominatimLane::InteractiveSearch).await;
     external_connections::record_attempt(pool, external_connections::NOMINATIM).await;
-    let response = match safe_client()
+    let allowlist = crate::services::outbound::configured_private_network_allowlist(&settings)?;
+    let client = crate::services::outbound::outbound_client_for_url(&endpoint, &allowlist).await?;
+    let response = match client
         .get(endpoint)
         .header(reqwest::header::USER_AGENT, user_agent(&settings))
         .query(&[
@@ -199,7 +201,13 @@ pub async fn search(
             "Address provider returned an error".into(),
         ));
     }
-    let rows = response.json::<Vec<Value>>().await.map_err(|_| {
+    let rows = crate::services::outbound::read_json::<Vec<Value>>(
+        response,
+        crate::services::outbound::operator_security()?.geocoder_max_response_bytes,
+        "Address provider",
+    )
+    .await
+    .map_err(|_| {
         AppError::DependencyUnavailable("Address provider returned invalid data".into())
     })?;
     external_connections::record_success(pool, external_connections::NOMINATIM).await;
@@ -217,7 +225,9 @@ pub async fn reverse(
     let endpoint = endpoint(&settings, "reverse")?;
     let slot = acquire_slot(NominatimLane::BackgroundReverseGeocode).await;
     external_connections::record_attempt(pool, external_connections::NOMINATIM).await;
-    let response = match safe_client()
+    let allowlist = crate::services::outbound::configured_private_network_allowlist(&settings)?;
+    let client = crate::services::outbound::outbound_client_for_url(&endpoint, &allowlist).await?;
+    let response = match client
         .get(endpoint)
         .header(reqwest::header::USER_AGENT, user_agent(&settings))
         .query(&[
@@ -255,7 +265,13 @@ pub async fn reverse(
         tracing::warn!(status = %status, lane = ?slot.lane, queued_ms = slot.queued_ms, gate_wait_ms = slot.gate_wait_ms, "nominatim.reverse_http_error");
         return Ok(None);
     }
-    let value = response.json::<Value>().await.map_err(|_| {
+    let value = crate::services::outbound::read_json::<Value>(
+        response,
+        crate::services::outbound::operator_security()?.geocoder_max_response_bytes,
+        "Address provider",
+    )
+    .await
+    .map_err(|_| {
         AppError::DependencyUnavailable("Address provider returned invalid data".into())
     })?;
     external_connections::record_success(pool, external_connections::NOMINATIM).await;
@@ -282,15 +298,4 @@ fn user_agent(settings: &external_connections::ConnectionSettingsRow) -> String 
         .clone()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "Riviamigo (+https://github.com/bretterer/rivian-telemetry)".into())
-}
-
-fn safe_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(12))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("static Nominatim HTTP client should build")
-    })
 }

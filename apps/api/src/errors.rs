@@ -13,6 +13,8 @@ pub enum AppError {
     Unauthorized,
     #[error("Forbidden")]
     Forbidden,
+    #[error("Resource capacity reached: {0}")]
+    ResourceLimited(&'static str),
     #[error("First-owner setup requires the configured setup token")]
     SetupProofRequired,
     #[error("The first-owner setup token is invalid")]
@@ -59,6 +61,11 @@ impl IntoResponse for AppError {
             AppError::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND", self.to_string()),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED", self.to_string()),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN", self.to_string()),
+            AppError::ResourceLimited(_) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "RATE_LIMITED",
+                "Server capacity reached. Please retry shortly.".into(),
+            ),
             AppError::SetupProofRequired => (
                 StatusCode::FORBIDDEN,
                 "SETUP_PROOF_REQUIRED",
@@ -151,6 +158,18 @@ impl IntoResponse for AppError {
             }
         };
         let body = json!({ "error": { "code": code, "message": message } });
-        (status, Json(body)).into_response()
+        let mut response = (status, Json(body)).into_response();
+        if let AppError::ResourceLimited(class) = self {
+            response
+                .headers_mut()
+                .insert("retry-after", "5".parse().unwrap());
+            response
+                .headers_mut()
+                .insert("x-ratelimit-source", "application".parse().unwrap());
+            response
+                .headers_mut()
+                .insert("x-ratelimit-class", class.parse().unwrap());
+        }
+        response
     }
 }

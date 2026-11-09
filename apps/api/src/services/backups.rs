@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
-    io::{Cursor, Read, Write},
+    io::{Cursor, Read},
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
     time::Duration as StdDuration,
@@ -19,7 +19,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::{
-    config::Config,
+    config::{Config, RecoveryConfig},
     db::migrations,
     errors::AppError,
     ingestion::session_store::decrypt_json,
@@ -47,7 +47,6 @@ pub const MAX_RECOVERY_EXPANDED_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 pub const MAX_RECOVERY_MEMBER_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 pub const MAX_RECOVERY_MEMBERS: usize = 10_000;
 pub const MAX_RECOVERY_COMPRESSION_RATIO: u64 = 200;
-const MAX_RECOVERY_MANIFEST_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 pub enum BackupRunTrigger {
@@ -150,19 +149,41 @@ impl Drop for RecoveryMutationLock {
 pub async fn acquire_recovery_mutation_lock(
     pool: &PgPool,
 ) -> Result<RecoveryMutationLock, AppError> {
-    let mut connection = pool.acquire().await?;
+    // Own the connection before the lock query: cancellation can occur after
+    // PostgreSQL acquires the lock but before its result reaches this future.
+    let mut guard = RecoveryMutationLock {
+        connection: Some(pool.acquire().await?),
+    };
     let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
         .bind(RECOVERY_MUTATION_ADVISORY_LOCK_ID)
-        .fetch_one(&mut *connection)
+        .fetch_one(guard.connection.as_deref_mut().expect("owned connection"))
         .await?;
     if !locked {
+        // A completed false result guarantees this session acquired no lock.
+        drop(guard.connection.take());
         return Err(AppError::RecoveryConflict(
             "Another recovery upload or restore is already running.".into(),
         ));
     }
-    Ok(RecoveryMutationLock {
-        connection: Some(connection),
+    Ok(guard)
+}
+
+/// Once admitted, bounded recovery work owns its lifetime independently of
+/// the HTTP waiter. Dropping that waiter must not release admission while an
+/// uncancellable spawn_blocking validator/extractor is still running.
+pub async fn run_recovery_operation<F, T>(pool: PgPool, operation: F) -> Result<T, AppError>
+where
+    F: std::future::Future<Output = Result<T, AppError>> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::spawn(async move {
+        let guard = acquire_recovery_mutation_lock(&pool).await?;
+        let result = operation.await;
+        guard.release().await;
+        result
     })
+    .await
+    .map_err(|error| AppError::Internal(anyhow::anyhow!("recovery operation failed: {error}")))?
 }
 
 #[derive(Debug, Clone)]
@@ -452,14 +473,12 @@ async fn run_backup_inner_for_run(
     };
     let driver = BackupDriver::from_config(&config.backup_driver);
     let created_at = Utc::now();
-    let artifact_path = build_artifact_path(config, &settings.prefix, created_at, run_id);
+    let artifact_path = build_artifact_path(config, &settings.prefix, created_at, run_id)?;
 
     let execution = async {
         update_backup_progress(pool, run_id, "preparing", 5).await?;
 
-        if let Some(parent) = artifact_path.parent() {
-            fs::create_dir_all(parent).await?;
-        }
+        fs::create_dir_all(&config.backup_artifact_dir).await?;
 
         let package_manifest = execute_recovery_package(
             pool,
@@ -477,8 +496,9 @@ async fn run_backup_inner_for_run(
             .and_then(|name| name.to_str())
             .ok_or_else(|| AppError::Internal(anyhow::anyhow!("backup artifact path is invalid")))?
             .to_string();
-        let metadata = fs::metadata(&artifact_path).await?;
-        let checksum_sha256 = compute_sha256(&artifact_path).await?;
+        let opened = crate::services::artifact_files::open(Path::new(&config.backup_artifact_dir), &artifact_path)?;
+        let metadata = opened.metadata()?;
+        let checksum_sha256 = validate_open_recovery_package(opened, &config.recovery).await?.checksum_sha256;
         let database_name = current_database_name(pool).await?;
         let timescale_version = current_timescale_version(pool).await?;
         let base_manifest = json!({
@@ -518,7 +538,7 @@ async fn run_backup_inner_for_run(
         if settings.s3_enabled && !matches!(trigger, BackupRunTrigger::PreRestore) {
             update_backup_progress(pool, run_id, "uploading", 92).await?;
             let s3 = settings.s3.as_ref().ok_or_else(|| AppError::Validation("S3 is enabled but its credentials are incomplete".into()))?;
-            let key = s3_backups::object_key(&settings.prefix, created_at, run_id);
+            let key = s3_backups::object_key(&settings.prefix, created_at, run_id).map_err(|e| AppError::Validation(e.to_string()))?;
             if let Err(error) = s3_backups::upload(s3, &key, &artifact_path, &checksum_sha256, run_id, created_at).await {
                 if !retain_local {
                     artifact_ids.push(
@@ -559,7 +579,7 @@ async fn run_backup_inner_for_run(
         }
 
         update_backup_progress(pool, run_id, "finalizing", 98).await?;
-        prune_retained_artifacts(pool, settings.retention_count).await?;
+        prune_retained_artifacts(pool, config, settings.retention_count).await?;
         if let Some(s3) = settings.s3.as_ref().filter(|_| settings.s3_enabled && !matches!(trigger, BackupRunTrigger::PreRestore)) {
             if let Err(error) = prune_remote_artifacts(pool, s3, settings.retention_count).await {
                 if !retain_local {
@@ -728,7 +748,7 @@ async fn load_settings(pool: &PgPool, config: &Config) -> Result<BackupSettings,
                 day_of_week: row.day_of_week,
                 day_of_month: row.day_of_month,
                 retention_count: row.retention_count.max(1),
-                prefix: normalize_prefix(&row.prefix),
+                prefix: normalize_prefix(&row.prefix)?,
                 local_enabled: row.local_enabled,
                 s3_enabled: row.s3_enabled,
                 s3,
@@ -798,6 +818,7 @@ fn resolve_s3_settings(
         prefix: row.prefix.clone(),
         access_key,
         secret_key,
+        policy: crate::services::s3_transport::S3Policy::from_config(config)?,
     }))
 }
 
@@ -813,7 +834,8 @@ fn build_artifact_path(
     prefix: &str,
     created_at: DateTime<Utc>,
     run_id: Uuid,
-) -> PathBuf {
+) -> Result<PathBuf, AppError> {
+    let prefix = crate::services::artifact_files::validate_prefix(prefix)?;
     let mut path = PathBuf::from(&config.backup_artifact_dir);
     for segment in prefix.split('/').filter(|segment| !segment.is_empty()) {
         path.push(segment);
@@ -825,7 +847,7 @@ fn build_artifact_path(
         created_at.format("%Y%m%dT%H%M%SZ"),
         run_id.simple(),
     ));
-    path
+    Ok(path)
 }
 
 async fn execute_recovery_package(
@@ -836,8 +858,11 @@ async fn execute_recovery_package(
     trigger: BackupRunTrigger,
     created_at: DateTime<Utc>,
 ) -> Result<serde_json::Value, AppError> {
-    let temp_root = std::env::temp_dir().join(format!("riviamigo-recovery-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_root).await?;
+    let workspace = crate::services::recovery_workspace::RecoveryWorkspace::new(
+        Path::new(&config.backup_artifact_dir),
+        &config.recovery,
+    )?;
+    let temp_root = workspace.path();
     let dump_path = temp_root.join("database.dump");
     let settings_path = temp_root.join("backup-settings.json");
     let history_path = temp_root.join("operational-history.json");
@@ -862,8 +887,12 @@ async fn execute_recovery_package(
         .await?;
         let manifest_bytes = serde_json::to_vec_pretty(&manifest)
             .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
-        write_recovery_archive(
+        let output = crate::services::artifact_files::create(
+            Path::new(&config.backup_artifact_dir),
             artifact_path,
+        )?;
+        write_recovery_archive_to_file(
+            output,
             &dump_path,
             &settings_path,
             &history_path,
@@ -872,46 +901,83 @@ async fn execute_recovery_package(
         )
         .await?;
         update_backup_progress(pool, run_id, "validating", 90).await?;
-        validate_recovery_package(artifact_path).await?;
+        validate_recovery_package_with_limits(artifact_path, &config.recovery).await?;
         Ok::<serde_json::Value, AppError>(manifest)
     }
     .await;
 
-    let _ = fs::remove_dir_all(&temp_root).await;
     result
 }
 
 pub async fn validate_recovery_package(
     package_path: &Path,
 ) -> Result<ValidatedRecoveryPackage, AppError> {
-    let package_path = package_path.to_path_buf();
-    tokio::task::spawn_blocking(move || validate_recovery_package_sync(&package_path))
+    validate_recovery_package_with_limits(package_path, &RecoveryConfig::default()).await
+}
+
+pub async fn validate_recovery_package_with_limits(
+    package_path: &Path,
+    limits: &RecoveryConfig,
+) -> Result<ValidatedRecoveryPackage, AppError> {
+    let package_path = package_path.to_owned();
+    let limits = limits.clone();
+    tokio::task::spawn_blocking(move || {
+        validate_recovery_package_sync_with_limits(&package_path, &limits)
+    })
+    .await
+    .map_err(|error| {
+        AppError::Internal(anyhow::anyhow!("package validation task failed: {error}"))
+    })?
+    .map_err(classify_recovery_error)
+}
+
+pub async fn validate_open_recovery_package(
+    file: File,
+    limits: &RecoveryConfig,
+) -> Result<ValidatedRecoveryPackage, AppError> {
+    let limits = limits.clone();
+    tokio::task::spawn_blocking(move || validate_recovery_file_sync(file, &limits))
         .await
-        .map_err(|error| {
-            AppError::Internal(anyhow::anyhow!("package validation task failed: {error}"))
-        })?
+        .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?
         .map_err(classify_recovery_error)
 }
 
-/// Extract a recovery package only after applying the same validation contract
-/// used for imports, catalog reconciliation, and restore preflight.  This is
-/// intentionally not `Archive::unpack`: tar's convenient extractor does not
-/// give us a single place to enforce member, path, and expansion limits.
 pub async fn extract_recovery_package(
     package_path: &Path,
     destination: &Path,
 ) -> Result<(), AppError> {
-    let package_path = package_path.to_path_buf();
-    let destination = destination.to_path_buf();
-    tokio::task::spawn_blocking(move || extract_recovery_package_sync(&package_path, &destination))
+    extract_recovery_package_with_limits(package_path, destination, &RecoveryConfig::default())
         .await
-        .map_err(|error| {
-            AppError::Internal(anyhow::anyhow!("package extraction task failed: {error}"))
-        })?
-        .map_err(classify_recovery_error)
 }
 
-fn classify_recovery_error(error: AppError) -> AppError {
+pub async fn extract_recovery_package_with_limits(
+    package_path: &Path,
+    destination: &Path,
+    limits: &RecoveryConfig,
+) -> Result<(), AppError> {
+    let package_path = package_path.to_owned();
+    let destination = destination.to_owned();
+    let limits = limits.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::services::recovery_extract::extract(&package_path, &destination, &limits)
+    })
+    .await
+    .map_err(|error| {
+        AppError::Internal(anyhow::anyhow!("package extraction task failed: {error}"))
+    })?
+    .map_err(classify_recovery_error)
+}
+
+pub(crate) fn metadata_limit(name: &str, limits: &RecoveryConfig) -> u64 {
+    match name {
+        "manifest.json" => limits.max_manifest_bytes.min(limits.max_member_bytes),
+        "backup-settings.json" => limits.max_settings_bytes.min(limits.max_member_bytes),
+        "operational-history.json" => limits.max_history_bytes.min(limits.max_member_bytes),
+        _ => limits.max_member_bytes,
+    }
+}
+
+pub(crate) fn classify_recovery_error(error: AppError) -> AppError {
     match error {
         AppError::Validation(message) => {
             let too_large = message.contains("exceeds")
@@ -953,140 +1019,59 @@ pub async fn reconcile_running_runs(pool: &PgPool) -> Result<u64, AppError> {
 }
 
 /// Rebuild missing local catalog rows from the persistent backup directory.
-/// Restore never deletes this directory, so the files are authoritative when
-/// operational-history rows are absent or came from a different host.
-pub async fn reconcile_local_catalog(pool: &PgPool, config: &Config) -> Result<usize, AppError> {
-    let root = PathBuf::from(&config.backup_artifact_dir);
-    if !fs::try_exists(&root).await.unwrap_or(false) {
-        return Ok(0);
-    }
-    let scan_root = root.clone();
-    let paths = tokio::task::spawn_blocking(move || {
-        let mut paths = WalkDir::new(scan_root)
-            .into_iter()
-            .filter_entry(|entry| {
-                entry
-                    .file_name()
-                    .to_str()
-                    .is_none_or(|name| !name.starts_with('.'))
-            })
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_file())
-            .map(|entry| entry.into_path())
-            .filter(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.ends_with(".rma.tar.gz"))
-            })
-            .collect::<Vec<_>>();
-        paths.sort();
-        paths
-    })
-    .await
-    .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+pub use crate::services::backup_catalog::reconcile_local_catalog;
 
-    let mut inserted = 0;
-    for path in paths {
-        if let Some(run_id) = backup_run_id_from_artifact_path(&path) {
-            let active_run: bool = sqlx::query_scalar(
-                "SELECT EXISTS (SELECT 1 FROM riviamigo.backup_runs WHERE id = $1 AND status IN ('pending', 'running'))",
-            )
-            .bind(run_id)
-            .fetch_one(pool)
-            .await?;
-            if active_run {
-                continue;
-            }
-        }
-
-        let storage_path = path.to_string_lossy().into_owned();
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM riviamigo.backup_artifacts WHERE storage_type <> 's3' AND storage_path = $1)",
-        )
-        .bind(&storage_path)
-        .fetch_one(pool)
-        .await?;
-        if exists {
-            continue;
-        }
-        let validated = match validate_recovery_package(&path).await {
-            Ok(validated) => validated,
-            Err(error) => {
-                tracing::warn!(path = %path.display(), error = %error, "backup.catalog.invalid_local_package");
-                continue;
-            }
-        };
-        let storage_type = if path.starts_with(root.join("imports")) {
-            "uploaded"
-        } else if validated
-            .manifest
-            .get("trigger")
-            .and_then(serde_json::Value::as_str)
-            == Some("pre_restore")
-        {
-            "safety"
-        } else {
-            "local"
-        };
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("recovery-package.rma.tar.gz");
-        let created_at = validated
-            .manifest
-            .get("created_at")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|value| value.parse::<DateTime<Utc>>().ok())
-            .unwrap_or_else(Utc::now);
-        let result = sqlx::query(
-            r#"
-            INSERT INTO riviamigo.backup_artifacts
-              (run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at)
-            SELECT NULL, $1, $2, $3, $4, $5, $6, $7
-            WHERE NOT EXISTS (
-              SELECT 1 FROM riviamigo.backup_artifacts
-              WHERE storage_type <> 's3' AND storage_path = $3
-            )
-            "#,
-        )
-        .bind(storage_type)
-        .bind(file_name)
-        .bind(&storage_path)
-        .bind(validated.size_bytes)
-        .bind(&validated.checksum_sha256)
-        .bind(json!({
-            "artifact_kind": "recovery_package",
-            "format": validated.manifest.get("format").cloned().unwrap_or(serde_json::Value::Null),
-            "package": validated.manifest,
-            "restore_availability": "available",
-            "catalog_source": "filesystem_rescan"
-        }))
-        .bind(created_at)
-        .execute(pool)
-        .await?;
-        inserted += result.rows_affected() as usize;
-    }
-    Ok(inserted)
-}
-
-fn backup_run_id_from_artifact_path(path: &Path) -> Option<Uuid> {
-    let file_name = path.file_name()?.to_str()?.strip_suffix(".rma.tar.gz")?;
-    let (_, run_id) = file_name.rsplit_once('-')?;
-    Uuid::parse_str(run_id).ok()
-}
-
+#[cfg(test)]
 fn validate_recovery_package_sync(
     package_path: &Path,
 ) -> Result<ValidatedRecoveryPackage, AppError> {
-    let metadata = std::fs::metadata(package_path)?;
-    if metadata.len() > MAX_RECOVERY_PACKAGE_BYTES {
+    validate_recovery_package_sync_with_limits(package_path, &RecoveryConfig::default())
+}
+
+pub(crate) fn validate_recovery_package_sync_with_limits(
+    package_path: &Path,
+    limits: &RecoveryConfig,
+) -> Result<ValidatedRecoveryPackage, AppError> {
+    validate_recovery_file_sync(File::open(package_path)?, limits)
+}
+
+fn validate_recovery_file_sync(
+    mut file: File,
+    limits: &RecoveryConfig,
+) -> Result<ValidatedRecoveryPackage, AppError> {
+    use std::io::{Seek, SeekFrom};
+    let deadline =
+        std::time::Instant::now() + StdDuration::from_secs(limits.restore_deadline_seconds);
+    let metadata = file.metadata()?;
+    if metadata.len() > limits.max_upload_bytes {
         return Err(AppError::Validation(format!(
             "Recovery package exceeds the {} GiB compressed size limit.",
-            MAX_RECOVERY_PACKAGE_BYTES / 1024 / 1024 / 1024
+            limits.max_upload_bytes / 1024 / 1024 / 1024
         )));
     }
-    let package_checksum = sha256_file(package_path).map_err(AppError::from)?;
-    let file = File::open(package_path)?;
+    let mut checksum = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut read_bytes = 0_u64;
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Err(AppError::RecoveryDeadline(
+                "Recovery validation deadline exceeded.".into(),
+            ));
+        }
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        read_bytes = read_bytes.saturating_add(read as u64);
+        if read_bytes > limits.max_upload_bytes {
+            return Err(AppError::RecoveryTooLarge(
+                "Recovery package exceeds the compressed byte limit.".into(),
+            ));
+        }
+        checksum.update(&buffer[..read]);
+    }
+    let package_checksum = hex::encode(checksum.finalize());
+    file.seek(SeekFrom::Start(0))?;
     let decoder = GzDecoder::new(file);
     let mut archive = Archive::new(decoder);
     let mut manifest_bytes = None;
@@ -1117,7 +1102,13 @@ fn validate_recovery_package_sync(
         }
         if path.is_absolute()
             || normalized.starts_with('/')
-            || normalized.split('/').any(|segment| segment == "..")
+            || normalized.trim_end_matches('/').split('/').any(|segment| {
+                segment == "."
+                    || segment == ".."
+                    || segment.is_empty()
+                    || segment.contains(':')
+                    || segment.chars().any(char::is_control)
+            })
         {
             return Err(AppError::Validation(format!(
                 "Unsafe recovery package path: {normalized}"
@@ -1126,9 +1117,10 @@ fn validate_recovery_package_sync(
         member_count = member_count.checked_add(1).ok_or_else(|| {
             AppError::Validation("Recovery package has too many archive members.".into())
         })?;
-        if member_count > MAX_RECOVERY_MEMBERS {
+        if member_count > limits.max_members {
             return Err(AppError::Validation(format!(
-                "Recovery package exceeds the {MAX_RECOVERY_MEMBERS} member limit."
+                "Recovery package exceeds the {} member limit.",
+                limits.max_members
             )));
         }
         if !members.insert(normalized.clone()) {
@@ -1150,29 +1142,37 @@ fn validate_recovery_package_sync(
             continue;
         }
 
+        if std::time::Instant::now() >= deadline {
+            return Err(AppError::RecoveryDeadline(
+                "Recovery validation deadline exceeded.".into(),
+            ));
+        }
         let entry_size = entry.size();
-        if entry_size > MAX_RECOVERY_MEMBER_BYTES {
+        if entry_size > metadata_limit(&normalized, limits) {
+            return Err(AppError::Validation(format!("Recovery package member {normalized} exceeds its configured metadata or member size limit.")));
+        }
+        if entry_size > limits.max_member_bytes {
             return Err(AppError::Validation(format!(
-                "Recovery package member {normalized} exceeds the 64 GiB limit."
+                "Recovery package member {normalized} exceeds the configured member byte limit."
             )));
         }
         expanded_bytes = expanded_bytes.checked_add(entry_size).ok_or_else(|| {
             AppError::Validation("Recovery package expanded size overflowed.".into())
         })?;
-        if expanded_bytes > MAX_RECOVERY_EXPANDED_BYTES {
+        if expanded_bytes > limits.max_expanded_bytes {
             return Err(AppError::Validation(
-                "Recovery package exceeds the 64 GiB expanded size limit.".into(),
+                "Recovery package exceeds the configured expanded byte limit.".into(),
             ));
         }
         let compressed_bytes = metadata.len().max(1);
-        if expanded_bytes > compressed_bytes.saturating_mul(MAX_RECOVERY_COMPRESSION_RATIO) {
+        if expanded_bytes > compressed_bytes.saturating_mul(limits.max_compression_ratio) {
             return Err(AppError::Validation(
                 "Recovery package exceeds the maximum expansion ratio.".into(),
             ));
         }
 
         if normalized == "manifest.json" {
-            if entry_size > MAX_RECOVERY_MANIFEST_BYTES {
+            if entry_size > limits.max_manifest_bytes {
                 return Err(AppError::Validation(
                     "Recovery package manifest is unexpectedly large.".into(),
                 ));
@@ -1188,6 +1188,11 @@ fn validate_recovery_package_sync(
         let mut hasher = Sha256::new();
         let mut buffer = [0_u8; 64 * 1024];
         loop {
+            if std::time::Instant::now() >= deadline {
+                return Err(AppError::RecoveryDeadline(
+                    "Recovery validation deadline exceeded.".into(),
+                ));
+            }
             let read = entry.read(&mut buffer).map_err(|error| {
                 AppError::Validation(format!(
                     "Recovery package member {normalized} is truncated: {error}"
@@ -1376,128 +1381,6 @@ fn validate_recovery_package_sync(
     })
 }
 
-fn extract_recovery_package_sync(package_path: &Path, destination: &Path) -> Result<(), AppError> {
-    // Validate before extraction and then perform a second constrained stream
-    // pass. Validation is not reusable state: callers may replace a path
-    // between two operations, so the extractor must defend itself as well.
-    validate_recovery_package_sync(package_path)?;
-    std::fs::create_dir_all(destination)?;
-
-    let compressed_bytes = std::fs::metadata(package_path)?.len();
-    if compressed_bytes > MAX_RECOVERY_PACKAGE_BYTES {
-        return Err(AppError::Validation(
-            "Recovery package exceeds the 16 GiB compressed size limit.".into(),
-        ));
-    }
-    let file = File::open(package_path)?;
-    let decoder = GzDecoder::new(file);
-    let mut archive = Archive::new(decoder);
-    let mut created = Vec::<PathBuf>::new();
-    let result = (|| -> Result<(), AppError> {
-        let mut members = HashSet::<String>::new();
-        let mut expanded_bytes = 0_u64;
-        let mut member_count = 0_usize;
-        for entry in archive
-            .entries()
-            .map_err(|error| AppError::Validation(format!("Invalid recovery archive: {error}")))?
-        {
-            let mut entry = entry.map_err(|error| {
-                AppError::Validation(format!("Invalid recovery archive entry: {error}"))
-            })?;
-            let path = entry
-                .path()
-                .map_err(|error| AppError::Validation(format!("Invalid archive path: {error}")))?;
-            let normalized = path.to_string_lossy().replace('\\', "/");
-            let entry_type = entry.header().entry_type();
-            if !entry_type.is_file() && !entry_type.is_dir()
-                || path.is_absolute()
-                || normalized.starts_with('/')
-                || normalized.split('/').any(|segment| segment == "..")
-                || !members.insert(normalized.clone())
-            {
-                return Err(AppError::Validation(
-                    "Unsafe recovery archive member.".into(),
-                ));
-            }
-            member_count += 1;
-            if member_count > MAX_RECOVERY_MEMBERS {
-                return Err(AppError::Validation(
-                    "Recovery package has too many archive members.".into(),
-                ));
-            }
-            let allowed = matches!(
-                normalized.as_str(),
-                "manifest.json"
-                    | "database.dump"
-                    | "backup-settings.json"
-                    | "operational-history.json"
-            ) || normalized == "vehicle-image-cache"
-                || normalized.starts_with("vehicle-image-cache/");
-            if !allowed {
-                return Err(AppError::Validation(format!(
-                    "Unexpected recovery package member: {normalized}"
-                )));
-            }
-            if entry_type.is_dir() {
-                continue;
-            }
-            let entry_size = entry.size();
-            expanded_bytes = expanded_bytes.checked_add(entry_size).ok_or_else(|| {
-                AppError::Validation("Recovery package expanded size overflowed.".into())
-            })?;
-            if entry_size > MAX_RECOVERY_MEMBER_BYTES
-                || expanded_bytes > MAX_RECOVERY_EXPANDED_BYTES
-            {
-                return Err(AppError::Validation(
-                    "Recovery package exceeds extraction limits.".into(),
-                ));
-            }
-            if expanded_bytes
-                > compressed_bytes
-                    .max(1)
-                    .saturating_mul(MAX_RECOVERY_COMPRESSION_RATIO)
-            {
-                return Err(AppError::Validation(
-                    "Recovery package exceeds the maximum expansion ratio.".into(),
-                ));
-            }
-            let target = destination.join(&path);
-            let parent = target
-                .parent()
-                .ok_or_else(|| AppError::Validation("Invalid recovery archive path.".into()))?;
-            std::fs::create_dir_all(parent)?;
-            let mut output = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&target)
-                .map_err(|error| {
-                    AppError::Validation(format!(
-                        "Recovery package would overwrite an existing file: {error}"
-                    ))
-                })?;
-            let copied = std::io::copy(&mut entry, &mut output).map_err(|error| {
-                AppError::Validation(format!(
-                    "Recovery package member {normalized} is truncated: {error}"
-                ))
-            })?;
-            if copied != entry_size {
-                return Err(AppError::Validation(format!(
-                    "Recovery package member {normalized} size changed during extraction."
-                )));
-            }
-            output.flush()?;
-            created.push(target);
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        for path in created.into_iter().rev() {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-    result
-}
-
 fn verify_manifest_component(
     manifest: &serde_json::Value,
     checksums: &HashMap<String, String>,
@@ -1631,6 +1514,7 @@ async fn execute_pg_dump(config: &Config, dump_path: &Path) -> Result<(), AppErr
         .await
         .ok_or_else(|| AppError::DependencyUnavailable(PG_DUMP_UNAVAILABLE_MESSAGE.to_string()))?;
     let mut cmd = Command::new(pg_dump);
+    cmd.kill_on_drop(true);
     if let Some(host) = url.host_str() {
         cmd.arg(format!("--host={host}"));
     }
@@ -1651,20 +1535,11 @@ async fn execute_pg_dump(config: &Config, dump_path: &Path) -> Result<(), AppErr
         .arg("--format=custom")
         .arg("--no-owner")
         .arg("--no-privileges")
-        .arg("--exclude-table-data=riviamigo.vehicle_credentials")
-        .arg("--exclude-table-data=riviamigo.external_connection_settings")
-        .arg("--exclude-table-data=riviamigo.system_config")
-        .arg("--exclude-table-data=riviamigo.authentication_settings")
-        .arg("--exclude-table-data=riviamigo.refresh_tokens")
-        // Activity rows reference redacted external connection settings and
-        // cannot be restored without the corresponding provider records.
-        .arg("--exclude-table-data=riviamigo.external_connection_activity")
-        // Backup settings are restored from backup-settings.json after the
-        // dump, which keeps the encrypted target secret out of the package.
-        .arg("--exclude-table-data=riviamigo.backup_settings")
-        .arg("--exclude-table-data=riviamigo.backup_runs")
-        .arg("--exclude-table-data=riviamigo.backup_artifacts")
-        .arg("--exclude-table-data=riviamigo.backup_restore_requests")
+        .args(
+            crate::services::restore_policy::PROTECTED_TABLES
+                .iter()
+                .map(|table| format!("--exclude-table-data=riviamigo.{table}")),
+        )
         .arg(format!("--file={}", dump_path.display()))
         .output()
         .await
@@ -1840,7 +1715,7 @@ async fn build_recovery_manifest(
                 "external_connection_settings table data (provider bearer tokens and target secrets)",
                 "system_config table data (installation cryptographic keys)",
                 "authentication_settings table data (OIDC provider configuration and client secret)",
-                "refresh_tokens",
+                "session families, refresh tokens, API keys, and invitation proofs",
                 "backup_settings.secret_key_encrypted"
             ],
             "excluded": [
@@ -1856,7 +1731,7 @@ async fn build_recovery_manifest(
                 "sha256": database_checksum,
                 "size_bytes": std::fs::metadata(dump_path).map(|metadata| metadata.len()).unwrap_or(0),
                 "restore_policy": "replace_isolated_candidate",
-                "redactions": ["vehicle_credentials", "external_connection_settings", "system_config", "authentication_settings", "refresh_tokens", "external_connection_activity", "backup_settings", "backup_runs", "backup_artifacts", "backup_restore_requests"]
+                "redactions": crate::services::restore_policy::PROTECTED_TABLES
             },
             "backup_settings": {
                 "version": 1,
@@ -1970,6 +1845,7 @@ async fn collect_cache_files(cache_root: &Path) -> Result<Vec<serde_json::Value>
     .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?
 }
 
+#[cfg(test)]
 async fn write_recovery_archive(
     artifact_path: &Path,
     dump_path: &Path,
@@ -1978,7 +1854,25 @@ async fn write_recovery_archive(
     cache_root: &Path,
     manifest_bytes: &[u8],
 ) -> Result<(), AppError> {
-    let artifact_path = artifact_path.to_path_buf();
+    write_recovery_archive_to_file(
+        File::create(artifact_path)?,
+        dump_path,
+        settings_path,
+        history_path,
+        cache_root,
+        manifest_bytes,
+    )
+    .await
+}
+
+async fn write_recovery_archive_to_file(
+    file: File,
+    dump_path: &Path,
+    settings_path: &Path,
+    history_path: &Path,
+    cache_root: &Path,
+    manifest_bytes: &[u8],
+) -> Result<(), AppError> {
     let dump_path = dump_path.to_path_buf();
     let settings_path = settings_path.to_path_buf();
     let history_path = history_path.to_path_buf();
@@ -2013,7 +1907,6 @@ async fn write_recovery_archive(
             Ok(())
         }
 
-        let file = File::create(&artifact_path)?;
         let encoder = GzEncoder::new(file, Compression::default());
         let mut archive = Builder::new(encoder);
 
@@ -2161,7 +2054,11 @@ async fn insert_artifact(
     .await?)
 }
 
-async fn prune_retained_artifacts(pool: &PgPool, retention_count: i32) -> Result<(), AppError> {
+async fn prune_retained_artifacts(
+    pool: &PgPool,
+    config: &Config,
+    retention_count: i32,
+) -> Result<(), AppError> {
     let rows = sqlx::query_as::<_, PrunableArtifactRow>(
         r#"
         SELECT a.id, a.run_id, a.storage_path
@@ -2176,7 +2073,14 @@ async fn prune_retained_artifacts(pool: &PgPool, retention_count: i32) -> Result
     .await?;
 
     for row in rows {
-        let _ = fs::remove_file(&row.storage_path).await;
+        if let Err(error) = crate::services::artifact_files::remove(
+            Path::new(&config.backup_artifact_dir),
+            Path::new(&row.storage_path),
+        ) {
+            tracing::warn!(artifact_id = %row.id, error = %error, "backup.retention.unsafe_or_unavailable_artifact");
+            sqlx::query("UPDATE riviamigo.backup_artifacts SET manifest = CASE WHEN jsonb_typeof(manifest) = 'object' THEN manifest ELSE '{}'::jsonb END || '{\"restore_availability\":\"unavailable\"}'::jsonb WHERE id = $1").bind(row.id).execute(pool).await?;
+            continue;
+        }
         sqlx::query("UPDATE riviamigo.backup_runs SET artifact_key = NULL, updated_at = now() WHERE id = $1")
             .bind(row.run_id)
             .execute(pool)
@@ -2210,13 +2114,13 @@ async fn prune_remote_artifacts(
     Ok(())
 }
 
-fn normalize_prefix(value: &str) -> String {
-    let trimmed = value.trim().trim_matches('/');
-    if trimmed.is_empty() {
+fn normalize_prefix(value: &str) -> Result<String, AppError> {
+    let prefix = crate::services::artifact_files::validate_prefix(value)?;
+    Ok(if prefix.is_empty() {
         "riviamigo".into()
     } else {
-        trimmed.into()
-    }
+        prefix
+    })
 }
 
 fn compute_due_run_at(
@@ -2470,6 +2374,29 @@ mod tests {
             matches!(validate_recovery_package_sync(&expansion_bomb), Err(AppError::Validation(message)) if message.contains("expansion ratio"))
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recovery_metadata_uses_independent_configured_limits_before_decoding() {
+        let root = tempfile::tempdir().unwrap();
+        let limits = super::RecoveryConfig {
+            max_manifest_bytes: 8,
+            max_settings_bytes: 8,
+            max_history_bytes: 8,
+            ..Default::default()
+        };
+        for name in [
+            "manifest.json",
+            "backup-settings.json",
+            "operational-history.json",
+        ] {
+            let archive = root.path().join(format!("{name}.rma.tar.gz"));
+            write_test_archive(&archive, &[(name, b"123456789")]);
+            assert!(
+                matches!(super::validate_recovery_package_sync_with_limits(&archive, &limits), Err(AppError::Validation(message)) if message.contains("configured metadata")),
+                "{name}"
+            );
+        }
     }
 
     fn write_test_archive(path: &std::path::Path, entries: &[(&str, &[u8])]) {

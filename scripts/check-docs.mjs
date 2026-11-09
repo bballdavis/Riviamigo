@@ -340,7 +340,13 @@ function checkEnvironmentReferenceCoverage() {
   );
   const runtimeFields = [...configBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
     .map((match) => match[1].toUpperCase())
-    .filter((name) => !["RATE_LIMIT", "RECOVERY", "ORIGIN_BIND"].includes(name));
+    .filter((name) => !["RATE_LIMIT", "RECOVERY", "ORIGIN_BIND", "SECURITY"].includes(name));
+  const securityBlock = configContent.slice(
+    configContent.indexOf("pub struct SecurityConfig"),
+    configContent.indexOf("impl Default for SecurityConfig"),
+  );
+  const securityFields = [...securityBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
+    .map((match) => match[1].toUpperCase());
   const rateBlock = configContent.slice(
     configContent.indexOf("pub struct RateLimitConfig"),
     configContent.indexOf("pub struct RecoveryConfig"),
@@ -362,6 +368,7 @@ function checkEnvironmentReferenceCoverage() {
   const directRuntimeVars = ["RIVIAN_GRAPHQL_GATEWAY_URL", "RUST_LOG"];
   for (const name of [
     ...runtimeFields,
+    ...securityFields,
     ...rateFields,
     ...recoveryFields,
     ...originFields,
@@ -391,7 +398,7 @@ function checkProductionDeploymentContract() {
   }
 
   for (const requiredSnippet of [
-    '"${RIVIAMIGO_HOST_BIND_ADDRESS:-0.0.0.0}:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"',
+    '"${RIVIAMIGO_HOST_BIND_ADDRESS:-127.0.0.1}:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"',
     "ghcr.io/bballdavis}/riviamigo:${IMAGE_TAG:-latest}",
     "RIVIAMIGO_DB_SOURCE",
     "RIVIAMIGO_BACKUPS_SOURCE",

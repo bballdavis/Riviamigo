@@ -53,6 +53,7 @@ overrides:
   nanoid: 3.3.18
   postcss: 8.5.23
   serialize-javascript: 7.0.5
+  seroval: 1.6.3
   svgo: 3.3.5
   undici: 7.29.0
   ws: 8.21.0

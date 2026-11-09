@@ -6,6 +6,11 @@ slug: /operations/backup-and-restore/
 
 # Backup and restore
 
+Backup creation, preflight and restore staging use the configured backup
+storage volume. Provision room there for the package, extracted database dump
+and safety backup; the service preserves at least 2 GiB of free space by
+default. Temporary recovery work is removed when the operation finishes.
+
 Chart definitions, personal overrides, dashboard placements, and chart baseline metadata are included in the PostgreSQL backup. A restore keeps compatible chart records and rejects a newer unsupported definition with a visible compatibility error rather than silently dropping it.
 
 Riviamigo recovery packages are full durable-state packages. They include the PostgreSQL database and the persistent vehicle artwork cache, so a downloaded package can be restored into a clean installation running the same or a newer Riviamigo release.
@@ -30,11 +35,37 @@ The cutover release uses the `riviamigo-recovery-v3` contract and contains:
 
 The API must have `pg_dump` available. `BACKUP_DRIVER=json` is no longer a valid recovery mode and is rejected as manifest-only metadata.
 
+## Package trust and limits
+
+Only restore packages from a trusted producer. PostgreSQL dumps contain
+executable SQL; administrator-only restore and a restricted import role reduce
+risk but do not turn a package into a sandbox. Credentials, session families,
+API keys and invitation proofs are discarded during restore. Authentication
+returns to password login enabled and OIDC disabled, subject to operator-owned
+environment overrides. Reconfigure providers and regenerate integration keys.
+
+Manifest and settings JSON each default to a 1 MiB limit; operational history
+defaults to 16 MiB and imports incrementally. Large database dumps retain their
+separate 64 GiB member limit. S3 materialization uses the compressed-package,
+free-space and deadline limits before extraction. A restored catalog's path or
+availability flag never authorizes access outside the configured artifact root.
+
+Custom S3 targets require HTTPS by default. An operator can explicitly allow
+private CIDRs and the trusted-LAN HTTP exception through the environment
+reference; backup files cannot grant themselves this permission. Prefixes are
+ordinary relative paths, without traversal, hidden directories or drive names.
+
 ## Import and restore in the app
 
 On the target installation, sign in as an administrator and open **Settings > Backups**. In **Restore from backup**, choose a package from the local catalog or select **Import recovery package** to upload a `.rma.tar.gz` file from another Riviamigo server. Wait for upload and package validation to finish. The default upload limit is 16 GiB; validation also limits expanded archive and individual-member size to 64 GiB, member count to 10,000, and compression ratio to 200:1. The artifact volume must retain at least 2 GiB free before and during import. Any tunnel or reverse proxy in front of Riviamigo must also permit streaming uploads of the package size you use.
 
 Upload and restore share one recovery-mutation lock. A 30-minute upload deadline and four-hour restore deadline prevent an interrupted operation from holding it indefinitely. The service returns explicit too-large, insufficient-storage, validation, and deadline errors; repair the package or capacity and retry only after the active operation clears. Imported archives are streamed to a temporary file, fully validated before cataloging, and rejected for traversal/duplicate paths, unsupported members, unexpected content, or a resource-envelope breach. Operators can tighten these `RECOVERY_*` limits in the [environment reference](../environment-variables.md).
+
+Disconnecting the browser does not release admission while validation or
+extraction is still running. The admitted operation finishes its bounded work
+and cleanup before another recovery operation can begin. If candidate
+preparation reaches the restore deadline, the supervisor removes the candidate
+and disables the temporary import credentials before releasing admission.
 
 Select **Restore selected backup**. Riviamigo first performs an authenticated compatibility preflight and shows the source and target chain identities, schema heads, pending migrations, warnings, or a stable blocking reason. A source with an exact ledger prefix is upgraded normally. A v3 archive with historical SQLx bookkeeping may also proceed, but only after its isolated candidate matches both the archive's declared schema fingerprint and the immutable public baseline contract. Starting the restore requires that exact plan ID and package checksum. Review the replacement warning and type `RESTORE`. Riviamigo then:
 

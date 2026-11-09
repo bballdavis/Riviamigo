@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::{DefaultBodyLimit, Query, State},
     routing::{get, post},
     Json, Router,
 };
@@ -23,6 +23,7 @@ pub fn router() -> Router<AppState> {
         .route("/metrics/value", get(get_value))
         .route("/metrics/series", get(get_series))
         .route("/metrics/batch", post(get_batch))
+        .layer(DefaultBodyLimit::max(64 * 1024))
 }
 
 #[derive(Clone, Copy)]
@@ -126,22 +127,6 @@ struct MetricBatchMetricRequest {
     include_latest: bool,
     #[serde(default = "default_true")]
     include_series: bool,
-}
-
-#[derive(Serialize)]
-struct MetricBatchSeriesResponse {
-    metric: String,
-    points: Vec<MetricSeriesPoint>,
-}
-
-#[derive(Serialize)]
-struct MetricBatchResponse {
-    values: Vec<MetricValueResponse>,
-    series: Vec<MetricBatchSeriesResponse>,
-    bucket: String,
-    density: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_points: Option<usize>,
 }
 
 const DASHBOARD_METRIC_MAX_POINTS: usize = 96;
@@ -470,30 +455,39 @@ async fn get_value(
     let metric = find_metric(&p.metric)?;
 
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
-    let (value, ts) = metric_value(
-        &state.pool,
-        vid,
-        metric,
-        from,
-        to,
-        &TripTagFilter::default(),
+    let permit = state
+        .resources
+        .heavy(auth.user_id, &state.config.security)?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(state.config.security.metrics_timeout_seconds),
+        async {
+            let mut tx = crate::services::admitted_read::AdmittedRead::begin(
+                &state.pool,
+                permit,
+                state.config.security.metrics_timeout_seconds,
+            )
+            .await?;
+            let (value, ts) =
+                metric_value(&mut tx, vid, metric, from, to, &TripTagFilter::default()).await?;
+            tx.commit().await?;
+            Ok(Json(MetricValueResponse {
+                metric: metric.id.to_owned(),
+                value,
+                unit: metric.unit,
+                label: metric.label,
+                ts,
+            }))
+        },
     )
-    .await?;
-
-    Ok(Json(MetricValueResponse {
-        metric: metric.id.to_string(),
-        value,
-        unit: metric.unit,
-        label: metric.label,
-        ts,
-    }))
+    .await
+    .map_err(|_| AppError::DependencyUnavailable("Metric query deadline exceeded".into()))?
 }
 
 async fn get_series(
     State(state): State<AppState>,
     auth: AuthUser,
     Query(p): Query<SeriesParams>,
-) -> Result<Json<Vec<MetricSeriesPoint>>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
@@ -503,41 +497,32 @@ async fn get_series(
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
     let bucket = resolve_bucket(p.bucket.as_deref(), from, to)?;
 
-    let points = match metric.source {
-        MetricSource::Summary => {
-            summary_series(
-                &state.pool,
-                vid,
-                metric.id,
-                from,
-                to,
-                bucket,
-                &TripTagFilter::default(),
-            )
-            .await?
-        }
-        MetricSource::Telemetry(column) => {
-            telemetry_daily_series(
-                &state.pool,
-                vid,
-                column,
-                from,
-                to,
-                metric.default_aggregation,
-                bucket,
-            )
-            .await?
-        }
-    };
-
-    Ok(Json(points))
+    let query = metric_series(metric, bucket, &TripTagFilter::default())?;
+    let permit = state
+        .resources
+        .heavy(auth.user_id, &state.config.security)?;
+    Ok(stream_metrics(
+        state,
+        StreamRequest {
+            vehicle_id: vid,
+            from,
+            to,
+            tag_filter: TripTagFilter::default(),
+            metrics: vec![(metric, false, true, Some(query))],
+            bucket,
+            density: "full",
+            max_points: None,
+            standalone: true,
+        },
+        permit,
+    ))
 }
 
 async fn get_batch(
     State(state): State<AppState>,
     auth: AuthUser,
     Json(p): Json<MetricBatchRequest>,
-) -> Result<Json<MetricBatchResponse>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     if p.metrics.is_empty() {
         return Err(AppError::Validation(
             "at least one metric is required".into(),
@@ -579,49 +564,37 @@ async fn get_batch(
         to,
     )?;
 
-    let mut values = Vec::new();
-    let mut series = Vec::new();
-    for (metric, include_latest, include_series) in requested {
-        if include_latest {
-            let (value, ts) =
-                metric_value(&state.pool, p.vehicle_id, metric, from, to, &tag_filter).await?;
-            values.push(MetricValueResponse {
-                metric: metric.id.to_string(),
-                value,
-                unit: metric.unit,
-                label: metric.label,
-                ts,
-            });
-        }
-        if include_series {
-            let points = metric_series(
-                &state.pool,
-                p.vehicle_id,
-                metric,
-                from,
-                to,
-                bucket,
-                &tag_filter,
-            )
-            .await?;
-            series.push(MetricBatchSeriesResponse {
-                metric: metric.id.to_string(),
-                points: max_points.map_or(points.clone(), |limit| cap_metric_points(points, limit)),
-            });
-        }
+    let mut metrics = Vec::with_capacity(requested.len());
+    for (metric, latest, series) in requested {
+        let query = if series {
+            Some(metric_series(metric, bucket, &tag_filter)?)
+        } else {
+            None
+        };
+        metrics.push((metric, latest, series, query));
     }
-
-    Ok(Json(MetricBatchResponse {
-        values,
-        series,
-        bucket: bucket.to_string(),
-        density: density.to_string(),
-        max_points,
-    }))
+    let permit = state
+        .resources
+        .heavy(auth.user_id, &state.config.security)?;
+    Ok(stream_metrics(
+        state,
+        StreamRequest {
+            vehicle_id: p.vehicle_id,
+            from,
+            to,
+            tag_filter,
+            metrics,
+            bucket,
+            density,
+            max_points,
+            standalone: false,
+        },
+        permit,
+    ))
 }
 
 async fn metric_value(
-    pool: &sqlx::PgPool,
+    conn: &mut sqlx::PgConnection,
     vehicle_id: Uuid,
     metric: &MetricDef,
     from: DateTime<Utc>,
@@ -630,40 +603,290 @@ async fn metric_value(
 ) -> Result<(Option<f64>, Option<DateTime<Utc>>), AppError> {
     match metric.source {
         MetricSource::Summary => {
-            summary_value(pool, vehicle_id, metric.id, from, to, tag_filter).await
+            summary_value(conn, vehicle_id, metric.id, from, to, tag_filter).await
         }
-        MetricSource::Telemetry(column) => latest_telemetry_value(pool, vehicle_id, column).await,
+        MetricSource::Telemetry(column) => latest_telemetry_value(conn, vehicle_id, column).await,
     }
 }
 
-async fn metric_series(
-    pool: &sqlx::PgPool,
-    vehicle_id: Uuid,
+fn metric_series(
     metric: &MetricDef,
-    from: DateTime<Utc>,
-    to: DateTime<Utc>,
     bucket: &str,
     tag_filter: &TripTagFilter,
-) -> Result<Vec<MetricSeriesPoint>, AppError> {
+) -> Result<SeriesQuery, AppError> {
     match metric.source {
-        MetricSource::Summary => {
-            summary_series(pool, vehicle_id, metric.id, from, to, bucket, tag_filter).await
-        }
+        MetricSource::Summary => summary_series(metric.id, bucket, tag_filter),
         MetricSource::Telemetry(column) => {
-            telemetry_daily_series(
-                pool,
-                vehicle_id,
-                column,
-                from,
-                to,
-                metric.default_aggregation,
-                bucket,
-            )
-            .await
+            telemetry_daily_series(column, metric.default_aggregation, bucket)
         }
     }
 }
 
+struct SeriesQuery {
+    sql: String,
+    weighted: bool,
+    filtered: bool,
+}
+
+struct StreamRequest {
+    vehicle_id: Uuid,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    tag_filter: TripTagFilter,
+    metrics: Vec<(&'static MetricDef, bool, bool, Option<SeriesQuery>)>,
+    bucket: &'static str,
+    density: &'static str,
+    max_points: Option<usize>,
+    standalone: bool,
+}
+
+/// Bounded producer/consumer buffering. Dropping the response cancels the
+/// producer. Its read guard cancels the backend and retains admission until
+/// rollback has drained the server response and closed its cursor.
+/// Adapts the producer channel into a response body stream.
+///
+/// `unfold` panics if it is polled again after yielding `None`, and a response
+/// body may legitimately poll a finished stream, so the stream is fused.
+fn metric_body_stream(
+    receiver: tokio::sync::mpsc::Receiver<Result<axum::body::Bytes, std::io::Error>>,
+) -> impl futures::Stream<Item = Result<axum::body::Bytes, std::io::Error>> {
+    futures::StreamExt::fuse(futures::stream::unfold(
+        receiver,
+        |mut receiver| async move { receiver.recv().await.map(|chunk| (chunk, receiver)) },
+    ))
+}
+
+fn stream_metrics(
+    state: AppState,
+    request: StreamRequest,
+    permit: crate::services::resource_limits::ResourcePermit,
+) -> axum::response::Response {
+    use axum::{
+        body::{Body, Bytes},
+        response::IntoResponse,
+    };
+    let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(2);
+    tokio::spawn(async move {
+        let mut output = MetricOutput {
+            sender: sender.clone(),
+            buffer: Vec::with_capacity(64 * 1024),
+        };
+        let result = tokio::select! {
+            biased;
+            _ = sender.closed() => return,
+            result = tokio::time::timeout(std::time::Duration::from_secs(state.config.security.metrics_timeout_seconds),
+                produce_metrics(&state, &request, &mut output, permit)) => result.unwrap_or_else(|_| Err(AppError::DependencyUnavailable("Metric request timed out".into()))),
+        };
+        if let Err(error) = result {
+            tracing::warn!(?error, "metric response interrupted");
+            let _ = sender
+                .send(Err(std::io::Error::other("metric response interrupted")))
+                .await;
+        }
+    });
+    let stream = metric_body_stream(receiver);
+    (
+        [
+            ("content-type", "application/json"),
+            ("x-accel-buffering", "no"),
+        ],
+        Body::from_stream(stream),
+    )
+        .into_response()
+}
+
+struct MetricOutput {
+    sender: tokio::sync::mpsc::Sender<Result<axum::body::Bytes, std::io::Error>>,
+    buffer: Vec<u8>,
+}
+impl MetricOutput {
+    async fn write(&mut self, bytes: &[u8]) -> Result<(), AppError> {
+        self.buffer.extend_from_slice(bytes);
+        if self.buffer.len() >= 64 * 1024 {
+            self.flush().await?;
+        }
+        Ok(())
+    }
+    async fn json(&mut self, value: &impl Serialize) -> Result<(), AppError> {
+        self.write(&serde_json::to_vec(value).map_err(|e| AppError::Internal(e.into()))?)
+            .await
+    }
+    async fn flush(&mut self) -> Result<(), AppError> {
+        if !self.buffer.is_empty() {
+            self.sender
+                .send(Ok(std::mem::replace(
+                    &mut self.buffer,
+                    Vec::with_capacity(64 * 1024),
+                )
+                .into()))
+                .await
+                .map_err(|_| {
+                    AppError::DependencyUnavailable("Metric client disconnected".into())
+                })?;
+        }
+        Ok(())
+    }
+}
+
+async fn produce_metrics(
+    state: &AppState,
+    request: &StreamRequest,
+    output: &mut MetricOutput,
+    permit: crate::services::resource_limits::ResourcePermit,
+) -> Result<(), AppError> {
+    use sqlx::Row;
+    let mut tx = crate::services::admitted_read::AdmittedRead::begin(
+        &state.pool,
+        permit,
+        state.config.security.metrics_timeout_seconds,
+    )
+    .await?;
+    if !request.standalone {
+        output.write(b"{\"values\":[").await?;
+        let mut first = true;
+        for (metric, latest, _, _) in &request.metrics {
+            if *latest {
+                let (value, ts) = metric_value(
+                    &mut tx,
+                    request.vehicle_id,
+                    metric,
+                    request.from,
+                    request.to,
+                    &request.tag_filter,
+                )
+                .await?;
+                if !first {
+                    output.write(b",").await?;
+                }
+                first = false;
+                output
+                    .json(&MetricValueResponse {
+                        metric: metric.id.into(),
+                        value,
+                        unit: metric.unit,
+                        label: metric.label,
+                        ts,
+                    })
+                    .await?;
+            }
+        }
+        output.write(b"],\"series\":[").await?;
+    }
+    let mut first_series = true;
+    for (metric, _, include_series, query) in &request.metrics {
+        if !*include_series {
+            continue;
+        }
+        let query = query.as_ref().expect("series validated before response");
+        if !first_series {
+            output.write(b",").await?;
+        }
+        first_series = false;
+        if !request.standalone {
+            output.write(b"{\"metric\":").await?;
+            output.json(&metric.id).await?;
+            output.write(b",\"points\":").await?;
+        }
+        output.write(b"[").await?;
+        // Compact mode retains its existing evenly spaced samples, with the
+        // count and cursor in the same snapshot and no full-vector allocation.
+        let count = if request.max_points.is_some() {
+            let count_sql = format!(
+                "SELECT COUNT(*)::bigint AS count FROM ({}) AS metric_count",
+                query.sql
+            );
+            let row = bind_series(&count_sql, request, query.filtered)
+                .fetch_one(&mut *tx)
+                .await?;
+            row.try_get::<i64, _>("count")? as usize
+        } else {
+            0
+        };
+        let declare = format!("DECLARE metric_points NO SCROLL CURSOR FOR {}", query.sql);
+        bind_series(&declare, request, query.filtered)
+            .persistent(false)
+            .execute(&mut *tx)
+            .await?;
+        let mut index = 0usize;
+        let mut emitted = 0usize;
+        loop {
+            let rows = sqlx::query("FETCH FORWARD 10000 FROM metric_points")
+                .fetch_all(&mut *tx)
+                .await?;
+            if rows.is_empty() {
+                break;
+            }
+            for row in rows {
+                let selected = request
+                    .max_points
+                    .is_none_or(|max| count <= max || index == emitted * (count - 1) / (max - 1));
+                index += 1;
+                if !selected {
+                    continue;
+                }
+                let point = MetricSeriesPoint {
+                    ts: row.try_get("ts")?,
+                    value: if query.weighted {
+                        weighted_average_from_totals(
+                            row.try_get("total_distance_miles")?,
+                            row.try_get("weighted_efficiency_wh_mi")?,
+                        )
+                    } else {
+                        row.try_get("value")?
+                    },
+                };
+                if emitted > 0 {
+                    output.write(b",").await?;
+                }
+                output.json(&point).await?;
+                emitted += 1;
+            }
+        }
+        sqlx::query("CLOSE metric_points").execute(&mut *tx).await?;
+        if !request.standalone {
+            output.write(b"]}").await?;
+        }
+    }
+    // Commit before completing the JSON document. Any failure or deadline
+    // aborts the body, so the browser cannot cache a partial successful array.
+    tx.commit().await?;
+    if request.standalone {
+        output.write(b"]").await?;
+    }
+    if !request.standalone {
+        output.write(b"],\"bucket\":").await?;
+        output.json(&request.bucket).await?;
+        output.write(b",\"density\":").await?;
+        output.json(&request.density).await?;
+        if let Some(max) = request.max_points {
+            output.write(b",\"max_points\":").await?;
+            output.json(&max).await?;
+        }
+        output.write(b"}").await?;
+    }
+    output.flush().await
+}
+
+fn bind_series<'a>(
+    sql: &'a str,
+    request: &StreamRequest,
+    filtered: bool,
+) -> sqlx::query::Query<'a, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    let query = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(request.vehicle_id)
+        .bind(request.from)
+        .bind(request.to);
+    if filtered {
+        query
+            .bind(request.tag_filter.tag_ids.clone())
+            .bind(request.tag_filter.match_all)
+            .bind(request.tag_filter.untagged)
+    } else {
+        query
+    }
+}
+
+#[cfg(test)]
 fn cap_metric_points(points: Vec<MetricSeriesPoint>, max_points: usize) -> Vec<MetricSeriesPoint> {
     if points.len() <= max_points {
         return points;
@@ -702,7 +925,7 @@ const ALLOWED_TELEMETRY_COLUMNS: &[&str] = &[
 ];
 
 async fn latest_telemetry_value(
-    pool: &sqlx::PgPool,
+    conn: &mut sqlx::PgConnection,
     vid: Uuid,
     column: &str,
 ) -> Result<(Option<f64>, Option<DateTime<Utc>>), AppError> {
@@ -717,13 +940,13 @@ async fn latest_telemetry_value(
     );
     let row = sqlx::query_as::<_, MetricSeriesPoint>(sqlx::AssertSqlSafe(sql.as_str()))
         .bind(vid)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?;
     Ok(row.map(|r| (r.value, Some(r.ts))).unwrap_or((None, None)))
 }
 
 async fn summary_value(
-    pool: &sqlx::PgPool,
+    conn: &mut sqlx::PgConnection,
     vid: Uuid,
     metric: &str,
     from: DateTime<Utc>,
@@ -731,7 +954,7 @@ async fn summary_value(
     tag_filter: &TripTagFilter,
 ) -> Result<(Option<f64>, Option<DateTime<Utc>>), AppError> {
     if tag_filter.is_active() && is_trip_metric(metric) {
-        return filtered_summary_value(pool, vid, metric, from, to, tag_filter).await;
+        return filtered_summary_value(conn, vid, metric, from, to, tag_filter).await;
     }
     let value = match metric {
         "total_miles" => sqlx::query_scalar(
@@ -743,7 +966,7 @@ async fn summary_value(
         .bind(vid)
         .bind(from)
         .bind(to)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .flatten(),
         "total_trips" => sqlx::query_scalar(
@@ -752,7 +975,7 @@ async fn summary_value(
         .bind(vid)
         .bind(from)
         .bind(to)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .flatten(),
         "trip_miles" => sqlx::query_scalar(
@@ -763,7 +986,7 @@ async fn summary_value(
         .bind(vid)
         .bind(from)
         .bind(to)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .flatten(),
         "energy_charged" => sqlx::query_scalar(
@@ -772,7 +995,7 @@ async fn summary_value(
         .bind(vid)
         .bind(from)
         .bind(to)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .flatten(),
         "charging_sessions" => sqlx::query_scalar(
@@ -781,7 +1004,7 @@ async fn summary_value(
         .bind(vid)
         .bind(from)
         .bind(to)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .flatten(),
         "total_cost" => sqlx::query_scalar(
@@ -790,7 +1013,7 @@ async fn summary_value(
         .bind(vid)
         .bind(from)
         .bind(to)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .flatten(),
         "avg_session_energy" => sqlx::query_scalar(
@@ -799,7 +1022,7 @@ async fn summary_value(
         .bind(vid)
         .bind(from)
         .bind(to)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .flatten(),
         "avg_efficiency" => sqlx::query_as::<_, WeightedEfficiencyRow>(
@@ -815,7 +1038,7 @@ async fn summary_value(
         .bind(vid)
         .bind(from)
         .bind(to)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .and_then(|row| {
             weighted_average_from_totals(
@@ -829,7 +1052,7 @@ async fn summary_value(
         .bind(vid)
         .bind(from)
         .bind(to)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .flatten(),
         "avg_outside_temp_c" => sqlx::query_scalar(
@@ -843,7 +1066,7 @@ async fn summary_value(
         .bind(vid)
         .bind(from)
         .bind(to)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .flatten(),
         "avg_trip_duration" => sqlx::query_scalar(
@@ -852,7 +1075,7 @@ async fn summary_value(
         .bind(vid)
         .bind(from)
         .bind(to)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .flatten(),
         _ => None,
@@ -861,17 +1084,13 @@ async fn summary_value(
     Ok((value, Some(to)))
 }
 
-async fn summary_series(
-    pool: &sqlx::PgPool,
-    vid: Uuid,
+fn summary_series(
     metric: &str,
-    from: DateTime<Utc>,
-    to: DateTime<Utc>,
     bucket: &str,
     tag_filter: &TripTagFilter,
-) -> Result<Vec<MetricSeriesPoint>, AppError> {
+) -> Result<SeriesQuery, AppError> {
     if tag_filter.is_active() && is_trip_metric(metric) {
-        return filtered_summary_series(pool, vid, metric, from, to, bucket, tag_filter).await;
+        return filtered_summary_series(metric, bucket);
     }
     if bucket == "raw" {
         let sql = match metric {
@@ -879,60 +1098,59 @@ async fn summary_series(
                 "SELECT started_at AS ts, distance_miles::float8 AS value
                  FROM riviamigo.trips
                  WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
-                 ORDER BY started_at",
+                 ORDER BY started_at, id",
             "total_trips" =>
                 "SELECT started_at AS ts, 1.0::float8 AS value
                  FROM riviamigo.trips
                  WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
-                 ORDER BY started_at",
+                 ORDER BY started_at, id",
             "energy_charged" | "avg_session_energy" =>
                 "SELECT started_at AS ts, COALESCE(kwh_added, energy_added_wh / 1000.0)::float8 AS value
                  FROM riviamigo.charge_sessions
                  WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
-                 ORDER BY started_at",
+                 ORDER BY started_at, id",
             "charging_sessions" =>
                 "SELECT started_at AS ts, 1.0::float8 AS value
                  FROM riviamigo.charge_sessions
                  WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
-                 ORDER BY started_at",
+                 ORDER BY started_at, id",
             "total_cost" =>
                 "SELECT started_at AS ts, cost_usd::float8 AS value
                  FROM riviamigo.charge_sessions
                  WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
-                 ORDER BY started_at",
+                 ORDER BY started_at, id",
             "avg_efficiency" =>
                 "SELECT started_at AS ts, efficiency_wh_per_mile::float8 AS value
                  FROM riviamigo.trips
                  WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
                  AND efficiency_wh_per_mile IS NOT NULL AND distance_miles > 0
-                 ORDER BY started_at",
+                 ORDER BY started_at, id",
             "avg_gross_efficiency" =>
                 "SELECT started_at AS ts,
                         (energy_wh + COALESCE(regen_wh, 0)) / NULLIF(distance_miles, 0)::float8 AS value
                  FROM riviamigo.trips
                  WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
                  AND energy_wh IS NOT NULL AND distance_miles > 0
-                 ORDER BY started_at",
+                 ORDER BY started_at, id",
             "avg_outside_temp_c" =>
                 "SELECT started_at AS ts, outside_temp_c::float8 AS value
                  FROM riviamigo.trips
                  WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
                  AND outside_temp_c IS NOT NULL
-                 ORDER BY started_at",
+                 ORDER BY started_at, id",
             "avg_trip_duration" =>
                 "SELECT started_at AS ts, (duration_seconds / 60.0)::float8 AS value
                  FROM riviamigo.trips
                  WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
                  AND duration_seconds IS NOT NULL
-                 ORDER BY started_at",
-            _ => return Ok(Vec::new()),
+                 ORDER BY started_at, id",
+            _ => return Err(AppError::Validation("unsupported series metric".into())),
         };
-        return Ok(sqlx::query_as::<_, MetricSeriesPoint>(sql)
-            .bind(vid)
-            .bind(from)
-            .bind(to)
-            .fetch_all(pool)
-            .await?);
+        return Ok(SeriesQuery {
+            sql: sql.into(),
+            weighted: false,
+            filtered: false,
+        });
     }
 
     let summary_bucket_expr = match bucket {
@@ -1031,37 +1249,14 @@ async fn summary_series(
              AND duration_seconds IS NOT NULL
              GROUP BY 1 ORDER BY 1"
         ),
-        _ => return Ok(Vec::new()),
+        _ => return Err(AppError::Validation("unsupported series metric".into())),
     };
 
-    if metric == "avg_efficiency" {
-        let rows = sqlx::query_as::<_, WeightedEfficiencyRow>(sqlx::AssertSqlSafe(sql.as_str()))
-            .bind(vid)
-            .bind(from)
-            .bind(to)
-            .fetch_all(pool)
-            .await?;
-
-        return Ok(rows
-            .into_iter()
-            .map(|row| MetricSeriesPoint {
-                ts: row.ts,
-                value: weighted_average_from_totals(
-                    row.total_distance_miles,
-                    row.weighted_efficiency_wh_mi,
-                ),
-            })
-            .collect());
-    }
-
-    Ok(
-        sqlx::query_as::<_, MetricSeriesPoint>(sqlx::AssertSqlSafe(sql.as_str()))
-            .bind(vid)
-            .bind(from)
-            .bind(to)
-            .fetch_all(pool)
-            .await?,
-    )
+    Ok(SeriesQuery {
+        sql,
+        weighted: metric == "avg_efficiency",
+        filtered: false,
+    })
 }
 
 fn is_trip_metric(metric: &str) -> bool {
@@ -1086,7 +1281,7 @@ fn filtered_trip_scope() -> String {
 }
 
 async fn filtered_summary_value(
-    pool: &sqlx::PgPool,
+    conn: &mut sqlx::PgConnection,
     vid: Uuid,
     metric: &str,
     from: DateTime<Utc>,
@@ -1128,7 +1323,7 @@ async fn filtered_summary_value(
             .bind(filter.tag_ids.clone())
             .bind(filter.match_all)
             .bind(filter.untagged)
-            .fetch_one(pool)
+            .fetch_one(&mut *conn)
             .await?;
         weighted_average_from_totals(row.total_distance_miles, row.weighted_efficiency_wh_mi)
     } else {
@@ -1139,22 +1334,14 @@ async fn filtered_summary_value(
             .bind(filter.tag_ids.clone())
             .bind(filter.match_all)
             .bind(filter.untagged)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *conn)
             .await?
             .flatten()
     };
     Ok((value, Some(to)))
 }
 
-async fn filtered_summary_series(
-    pool: &sqlx::PgPool,
-    vid: Uuid,
-    metric: &str,
-    from: DateTime<Utc>,
-    to: DateTime<Utc>,
-    bucket: &str,
-    filter: &TripTagFilter,
-) -> Result<Vec<MetricSeriesPoint>, AppError> {
+fn filtered_summary_series(metric: &str, bucket: &str) -> Result<SeriesQuery, AppError> {
     let scope = filtered_trip_scope();
     let bucket_expr = match bucket {
         "raw" => "started_at".to_string(),
@@ -1171,7 +1358,7 @@ async fn filtered_summary_series(
         "avg_gross_efficiency" => ("(SUM(energy_wh + COALESCE(regen_wh, 0)) / NULLIF(SUM(distance_miles), 0))::float8", "energy_wh IS NOT NULL AND distance_miles > 0", true),
         "avg_outside_temp_c" => ("CASE WHEN SUM(duration_seconds) > 0 THEN SUM(outside_temp_c * duration_seconds) / SUM(duration_seconds) ELSE NULL END::float8", "outside_temp_c IS NOT NULL AND duration_seconds > 0", true),
         "avg_trip_duration" => ("AVG(duration_seconds / 60.0)::float8", "duration_seconds IS NOT NULL", true),
-        _ => return Ok(Vec::new()),
+        _ => return Err(AppError::Validation("unsupported series metric".into())),
     };
     let group = if aggregate {
         " GROUP BY 1 ORDER BY 1"
@@ -1192,48 +1379,25 @@ async fn filtered_summary_series(
              FROM filtered_trips WHERE efficiency_wh_per_mile IS NOT NULL AND distance_miles > 0 \
              GROUP BY 1 ORDER BY 1"
         );
-        let rows = sqlx::query_as::<_, WeightedEfficiencyRow>(sqlx::AssertSqlSafe(sql.as_str()))
-            .bind(vid)
-            .bind(from)
-            .bind(to)
-            .bind(filter.tag_ids.clone())
-            .bind(filter.match_all)
-            .bind(filter.untagged)
-            .fetch_all(pool)
-            .await?;
-        return Ok(rows
-            .into_iter()
-            .map(|row| MetricSeriesPoint {
-                ts: row.ts,
-                value: weighted_average_from_totals(
-                    row.total_distance_miles,
-                    row.weighted_efficiency_wh_mi,
-                ),
-            })
-            .collect());
+        return Ok(SeriesQuery {
+            sql,
+            weighted: true,
+            filtered: true,
+        });
     }
 
-    sqlx::query_as::<_, MetricSeriesPoint>(sqlx::AssertSqlSafe(sql.as_str()))
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .bind(filter.tag_ids.clone())
-        .bind(filter.match_all)
-        .bind(filter.untagged)
-        .fetch_all(pool)
-        .await
-        .map_err(AppError::from)
+    Ok(SeriesQuery {
+        sql,
+        weighted: false,
+        filtered: true,
+    })
 }
 
-async fn telemetry_daily_series(
-    pool: &sqlx::PgPool,
-    vid: Uuid,
+fn telemetry_daily_series(
     column: &str,
-    from: DateTime<Utc>,
-    to: DateTime<Utc>,
     aggregation: &str,
     bucket: &str,
-) -> Result<Vec<MetricSeriesPoint>, AppError> {
+) -> Result<SeriesQuery, AppError> {
     if !ALLOWED_TELEMETRY_COLUMNS.contains(&column) {
         return Err(AppError::Validation(format!(
             "unknown telemetry column: {column}"
@@ -1246,14 +1410,11 @@ async fn telemetry_daily_series(
              WHERE vehicle_id = $1 AND ts >= $2 AND ts <= $3 AND {column} IS NOT NULL \
              ORDER BY ts"
         );
-        return Ok(
-            sqlx::query_as::<_, MetricSeriesPoint>(sqlx::AssertSqlSafe(sql.as_str()))
-                .bind(vid)
-                .bind(from)
-                .bind(to)
-                .fetch_all(pool)
-                .await?,
-        );
+        return Ok(SeriesQuery {
+            sql,
+            weighted: false,
+            filtered: false,
+        });
     }
     let aggregate = match aggregation {
         "avg" | "mean" => "AVG",
@@ -1279,14 +1440,11 @@ async fn telemetry_daily_series(
          WHERE vehicle_id = $1 AND ts >= $2 AND ts <= $3 AND {column} IS NOT NULL \
          GROUP BY 1 ORDER BY 1"
     );
-    Ok(
-        sqlx::query_as::<_, MetricSeriesPoint>(sqlx::AssertSqlSafe(sql.as_str()))
-            .bind(vid)
-            .bind(from)
-            .bind(to)
-            .fetch_all(pool)
-            .await?,
-    )
+    Ok(SeriesQuery {
+        sql,
+        weighted: false,
+        filtered: false,
+    })
 }
 
 #[cfg(test)]
@@ -1342,6 +1500,24 @@ mod tests {
         for m in METRICS {
             assert!(seen.insert(m.id), "duplicate metric id: {}", m.id);
         }
+    }
+
+    #[tokio::test]
+    async fn metric_body_stream_tolerates_polling_after_completion() {
+        use futures::StreamExt;
+        let (sender, receiver) = tokio::sync::mpsc::channel(2);
+        sender
+            .send(Ok(axum::body::Bytes::from_static(b"{}")))
+            .await
+            .unwrap();
+        drop(sender);
+
+        let mut stream = Box::pin(metric_body_stream(receiver));
+        assert_eq!(stream.next().await.unwrap().unwrap().as_ref(), b"{}");
+        assert!(stream.next().await.is_none());
+        // Regression: polling a finished stream used to panic inside `unfold`,
+        // aborting every /v1/metrics/batch response.
+        assert!(stream.next().await.is_none());
     }
 
     #[test]

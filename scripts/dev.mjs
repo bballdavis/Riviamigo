@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveBuildVersionFromGit } from './resolve-build-version.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(scriptDir, '..');
@@ -633,6 +634,7 @@ function apiEnv() {
     DATABASE_URL: `postgresql://riviamigo:devpassword@localhost:${ports.postgres}/riviamigo?options=-c%20search_path%3Driviamigo,timeseries,public`,
     REDIS_URL: `redis://localhost:${ports.redis}`,
     S3_ENDPOINT: `http://localhost:${ports.garageApi}`,
+    S3_ALLOW_DEVELOPMENT_GARAGE: 'true',
     S3_ACCESS_KEY: 'GKdeadbeef0000000000000000000000',
     S3_SECRET_KEY: 'deadbeef0000000000000000000000000000000000000000000000000000cafe',
     PORT: String(ports.api),
@@ -641,6 +643,7 @@ function apiEnv() {
     // session continuity and trigger repeated 401/WS reconnect churn.
     COOKIE_INSECURE: 'true',
     RIVIAMIGO_ENV: 'development',
+    RIVIAMIGO_BUILD_VERSION: resolveBuildVersionFromGit(),
     RESTORE_AGENT_URL: `http://127.0.0.1:${ports.restoreAgent}`,
     RESTORE_AGENT_KEY_FILE: devRestoreAgentKeyFile,
     RESTORE_AGENT_PORT: String(ports.restoreAgent),

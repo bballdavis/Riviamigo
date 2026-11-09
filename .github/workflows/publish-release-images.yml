@@ -62,6 +62,9 @@ jobs:
     outputs:
       digest: ${{ steps.promote.outputs.digest }}
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.validate-tag.outputs.source_sha }}
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
@@ -77,11 +80,21 @@ jobs:
         run: |
           set -euo pipefail
           started=$(date +%s)
-          sources=("$IMAGE:candidate-$SOURCE_SHA-amd64")
-          docker buildx imagetools inspect "${sources[0]}" >/dev/null
+          # Stamp each tested candidate with the release version (one metadata
+          # layer; no rebuild) so the running app reports the real release.
+          stamp() {
+            local arch="$1" candidate="$2"
+            docker buildx imagetools inspect "$candidate" >/dev/null
+            docker buildx build --platform "linux/$arch" --provenance=false --push \
+              --build-arg "BASE_IMAGE=$candidate" \
+              --build-arg "RIVIAMIGO_BUILD_VERSION=$VERSION" \
+              --tag "$IMAGE:release-$VERSION-$arch" - < compose/Dockerfile.release-stamp
+          }
+          stamp amd64 "$IMAGE:candidate-$SOURCE_SHA-amd64"
+          sources=("$IMAGE:release-$VERSION-amd64")
           if [[ "$INCLUDE_ARM64" == "true" ]]; then
-            sources+=("$IMAGE:candidate-$SOURCE_SHA-arm64")
-            docker buildx imagetools inspect "${sources[1]}" >/dev/null
+            stamp arm64 "$IMAGE:candidate-$SOURCE_SHA-arm64"
+            sources+=("$IMAGE:release-$VERSION-arm64")
           fi
           docker buildx imagetools create --metadata-file "$RUNNER_TEMP/release-image-metadata.json" \
             --tag "$IMAGE:$VERSION" --tag "$IMAGE:latest" "${sources[@]}"

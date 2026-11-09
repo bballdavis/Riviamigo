@@ -2,7 +2,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -21,6 +21,15 @@ const targetPassword = `target-${nonce}-password`;
 const s3AccessKey = 'GKdeadbeef0000000000000000000000';
 const s3SecretKey = 'deadbeef0000000000000000000000000000000000000000000000000000cafe';
 const projects = [];
+const reportPath = join(root, 'tools', 'restore-lab', 'local', 'reports', `s3-${nonce}.json`);
+let report = { status: 'failed', created_at: new Date().toISOString() };
+
+function imageIdentity(project, envFile, env) {
+  const container = execFileSync('docker', [...composeArgs(project, envFile), 'ps', '-q', 'riviamigo'],
+    { cwd: root, env, encoding: 'utf8' }).trim();
+  return execFileSync('docker', ['inspect', '--format', '{{.Image}}', container],
+    { cwd: root, encoding: 'utf8' }).trim();
+}
 
 function run(command, args, options = {}) {
   return execFileSync(command, args, { cwd: root, stdio: 'inherit', ...options });
@@ -54,6 +63,8 @@ function environmentFile(name, port) {
     `REDIS_URL=redis://default:${name}-redis-password@redis:6379`,
     `ALLOWED_ORIGINS=http://localhost:${port}`,
     'RIVIAMIGO_ENV=development',
+    `S3_ENDPOINT=http://host.docker.internal:${garagePort}`,
+    'S3_ALLOW_DEVELOPMENT_GARAGE=true',
     'COOKIE_INSECURE=true',
     'BACKUP_ARTIFACT_DIR=/backups',
     'VEHICLE_IMAGE_CACHE_DIR=/data/cache/riviamigo/vehicle-images',
@@ -100,8 +111,8 @@ function backupSettings(endpoint) {
 
 function startStack(project, dataDir, envFile, port) {
   const env = { ...process.env, RIVIAMIGO_DATA_DIR: dataDir.replaceAll('\\', '/'), RIVIAMIGO_ENV_FILE: envFile, RIVIAMIGO_ORIGIN_PORT: String(port) };
-  run('docker', [...composeArgs(project, envFile), 'up', ...(sourceBuild ? ['--build'] : []), '-d'], { env });
   projects.push({ project, envFile, env });
+  run('docker', [...composeArgs(project, envFile), 'up', ...(sourceBuild ? ['--build'] : []), '-d'], { env });
 }
 
 function runDataCommand(dataDir, script) {
@@ -152,6 +163,9 @@ function verifyArtworkSentinel(dataDir) {
 }
 
 function cleanupData() {
+  const cleanupRelative = relative(resolve(tmpdir()), resolve(tempRoot));
+  if (!cleanupRelative || cleanupRelative.startsWith('..') || !basename(tempRoot).startsWith('riviamigo-s3-drill-'))
+    throw new Error('Refusing cleanup outside the disposable S3 drill directory.');
   const cleanup = spawnSync('docker', ['run', '--rm', '--user', '0:0', '--mount', `type=bind,source=${tempRoot},target=/cleanup`, 'alpine:3.22.1', 'sh', '-c', 'rm -rf /cleanup/* /cleanup/.[!.]* /cleanup/..?*'], { cwd: root, stdio: 'ignore' });
   if (cleanup.status === 0) rmSync(tempRoot, { recursive: true, force: true });
 }
@@ -186,6 +200,20 @@ try {
   const overview = await request(targetUrl, '/v1/admin/backups', { token: targetToken });
   const remote = overview.artifacts?.find((artifact) => artifact.storage_type === 's3');
   if (!remote) throw new Error('Clean target did not discover the Garage recovery package.');
+  // Exercise the Linux runtime's no-follow workspace boundary before the
+  // successful restore. The escape destination is disposable fixture storage.
+  runDataCommand(targetData, 'mkdir -p /data/cache/workspace-escape; chown 1001:1001 /data/cache/workspace-escape; ln -s /data/cache/workspace-escape /data/backups/.recovery-work');
+  try {
+    const rejected = await fetch(`${targetUrl}/v1/admin/backups/restores/preflight`, {
+      method: 'POST', headers: { authorization: `Bearer ${targetToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ artifact_id: remote.id }),
+    });
+    await rejected.arrayBuffer();
+    if (rejected.ok) throw new Error('Preflight followed a symlinked recovery workspace.');
+    runDataCommand(targetData, 'test -z "$(ls -A /data/cache/workspace-escape)"; test -z "$(ls -A /data/backups/.remote-staging)"');
+  } finally {
+    runDataCommand(targetData, 'rm /data/backups/.recovery-work; rmdir /data/cache/workspace-escape');
+  }
   const preflight = await request(targetUrl, '/v1/admin/backups/restores/preflight', { token: targetToken, method: 'POST', body: { artifact_id: remote.id } });
   if (!preflight.plan?.compatible) throw new Error(`Remote restore preflight was blocked: ${JSON.stringify(preflight.plan?.blocking_errors ?? [])}`);
   const started = await request(targetUrl, '/v1/admin/backups/restores', { token: targetToken, method: 'POST', body: {
@@ -219,6 +247,8 @@ try {
   }
   if (phase !== 'completed') throw new Error(`Remote restore did not complete; final phase was ${phase ?? 'unknown'}.`);
   await waitFor(`${targetUrl}/health`);
+  const oldSession = await fetch(`${targetUrl}/v1/auth/me`, { headers: { authorization: `Bearer ${targetToken}` } });
+  if (![401, 403].includes(oldSession.status)) throw new Error('The previous target session remained usable after restore.');
   const restoredToken = await login(targetUrl, 'source-owner@example.test', sourcePassword);
   const dashboards = await request(targetUrl, '/v1/dashboards', { token: restoredToken });
   if (!Array.isArray(dashboards) || dashboards.length < 5) throw new Error('Restored source dashboards were not available.');
@@ -227,11 +257,26 @@ try {
   if (restoredOverview.settings.has_secret_key) throw new Error('The S3 secret key was unexpectedly present after restore.');
   await request(targetUrl, '/v1/admin/backups/settings', { token: restoredToken, method: 'PUT', body: backupSettings(endpoint) });
   await request(targetUrl, '/v1/admin/backups/s3/test', { token: restoredToken, method: 'POST', body: backupSettings(endpoint) });
+  const sourceImage = imageIdentity(sourceProject, sourceEnv, projects[0].env);
+  const targetImage = imageIdentity(targetProject, targetEnv, projects[1].env);
+  if (sourceImage !== targetImage) throw new Error('Source and target used different application images.');
+  report = {
+    status: 'passed', created_at: new Date().toISOString(), image_id: targetImage,
+    package_sha256: preflight.plan.package_checksum_sha256,
+    local_source_removed: true, remote_discovered: true, preflight_compatible: true,
+    workspace_symlink_rejected: true,
+    in_app_restore_completed: true, previous_session_rejected: true,
+    restored_password_login: true, restored_dashboard_count: dashboards.length,
+    artwork_restored: true, s3_secret_discarded: true, s3_reconfigured_and_tested: true,
+  };
   console.log('S3 backup and clean-target restore drill passed.');
 } catch (error) {
   for (const item of projects) spawnSync('docker', [...composeArgs(item.project, item.envFile), 'logs', '--no-color', '--tail', '200'], { cwd: root, stdio: 'inherit', env: item.env });
   throw error;
 } finally {
+  mkdirSync(dirname(reportPath), { recursive: true });
+  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  console.log(`S3 restore drill report: ${reportPath}`);
   for (const item of projects.reverse()) spawnSync('docker', [...composeArgs(item.project, item.envFile), 'down', '-v', '--remove-orphans'], { cwd: root, stdio: 'ignore', env: item.env });
   spawnSync('docker', ['compose', '-p', garageProject, '-f', 'compose/docker-compose.dev.yml', 'down', '-v', '--remove-orphans'], { cwd: root, stdio: 'ignore', env: { ...process.env, DEV_GARAGE_PORT: String(garagePort), DEV_GARAGE_ADMIN_PORT: String(garagePort + 3) } });
   cleanupData();

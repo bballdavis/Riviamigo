@@ -1,13 +1,15 @@
 import * as React from 'react';
-import { Wifi, WifiOff, Loader2, TriangleAlert } from 'lucide-react';
 import {
-  TbBattery1,
-  TbBattery2,
-  TbBattery3,
-  TbBattery4,
-  TbBatteryCharging,
-  TbBatteryOff,
-} from 'react-icons/tb';
+  BatteryCharging,
+  BatteryFull,
+  BatteryLow,
+  BatteryMedium,
+  BatteryWarning,
+  Loader2,
+  TriangleAlert,
+  Wifi,
+  WifiOff,
+} from 'lucide-react';
 import { cn, formatMiles } from '../lib/utils';
 
 export type VehicleOnlineState = 'online' | 'offline' | 'connecting' | 'unhealthy' | 'error';
@@ -23,12 +25,12 @@ export interface StatusBarProps {
   className?: string | undefined;
 }
 
-function getBatteryIcon(socPercent: number) {
-  if (socPercent > 75) return { Component: TbBattery4, variant: 'four' };
-  if (socPercent > 50) return { Component: TbBattery3, variant: 'three' };
-  if (socPercent > 25) return { Component: TbBattery2, variant: 'two' };
-  if (socPercent > 5) return { Component: TbBattery1, variant: 'one' };
-  return { Component: TbBatteryOff, variant: 'off' };
+/** Lucide offers three fill levels, so charge is bucketed into thirds plus a critical warning. */
+export function getBatteryIcon(socPercent: number) {
+  if (socPercent > 66) return { Component: BatteryFull, variant: 'full' };
+  if (socPercent > 33) return { Component: BatteryMedium, variant: 'medium' };
+  if (socPercent > 10) return { Component: BatteryLow, variant: 'low' };
+  return { Component: BatteryWarning, variant: 'critical' };
 }
 
 export function StatusBar({
@@ -44,7 +46,7 @@ export function StatusBar({
   const batteryIcon =
     socPercent !== undefined
       ? isCharging
-        ? { Component: TbBatteryCharging, variant: 'charging' }
+        ? { Component: BatteryCharging, variant: 'charging' }
         : getBatteryIcon(socPercent)
       : undefined;
   const statusLabel =
@@ -119,7 +121,8 @@ export function StatusBar({
           {batteryIcon && (
             <batteryIcon.Component
               className={cn(
-                size === 'menu' ? 'h-5 w-5' : 'h-4 w-4',
+                size === 'menu' ? 'h-6 w-6' : 'h-5 w-5',
+                'relative top-px',
                 'shrink-0',
                 isCharging
                   ? 'text-accent'
@@ -129,14 +132,16 @@ export function StatusBar({
                       ? 'text-status-warning'
                       : 'text-status-danger'
               )}
-              data-battery-icon={`tb-battery-${batteryIcon.variant}`}
+              data-battery-icon={`battery-${batteryIcon.variant}`}
             />
           )}
           {!compact && (
-            <span className="text-sm font-medium tabular-nums text-fg">{Math.round(socPercent)}%</span>
-          )}
-          {!compact && rangeEstimateMi !== undefined && (
-            <span className="text-sm font-medium tabular-nums text-fg-tertiary">- {formatMiles(rangeEstimateMi)}</span>
+            <span className="text-sm font-medium tabular-nums">
+              <span className="text-fg">{Math.round(socPercent)}%</span>
+              {rangeEstimateMi !== undefined && (
+                <span className="text-fg-tertiary">({formatMiles(rangeEstimateMi).replace(' ', '')})</span>
+              )}
+            </span>
           )}
         </div>
       )}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook as renderHookBase, act } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { VehicleStatus } from '@riviamigo/types';
@@ -8,6 +8,8 @@ import {
   useVehicleStatus,
   useCurrentVehicleStatus,
   useLiveStatusStore,
+  useAuth,
+  api,
 } from '@riviamigo/hooks';
 
 // ---------------------------------------------------------------------------
@@ -71,6 +73,11 @@ class MockWS {
   }
 }
 
+const renderHook: typeof renderHookBase = (callback, options) => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return renderHookBase(callback, { wrapper: ({ children }) => React.createElement(QueryClientProvider, { client }, children), ...options });
+};
+
 function wsAt(index: number) {
   const ws = MockWS.instances[index];
   if (!ws) throw new Error(`Missing MockWS instance ${index}`);
@@ -90,6 +97,7 @@ describe('useVehicleStatus', () => {
     MockWS.instances = [];
     vi.stubGlobal('WebSocket', MockWS);
     useLiveStatusStore.setState({ status: {}, connected: {} });
+    useAuth.setState({ accessToken: 'tok', isAuthenticated: true, activeVehicleId: null, defaultVehicleId: null });
     vi.useFakeTimers();
   });
 
@@ -97,6 +105,7 @@ describe('useVehicleStatus', () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   // ---- connection setup ----
@@ -511,6 +520,75 @@ describe('useVehicleStatus', () => {
     });
 
     expect(MockWS.instances).toHaveLength(2);
+  });
+
+  it('clears removed-vehicle data and selection without reconnecting on 4403', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(['vehicles'], [{ id: 'vid-1' }, { id: 'vid-2' }]);
+    client.setQueryData(['vehicles', 'status', 'vid-1'], { battery_level: 80 });
+    client.setQueryData(['trips', 'detail', 'trip-1', 'vid-1'], { id: 'trip-1' });
+    client.setQueryData(['metrics', 'vid-1', 'battery_level'], [80]);
+    client.setQueryData(['metrics', 'vid-2', 'battery_level'], [70]);
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    useAuth.setState({ activeVehicleId: 'vid-1', defaultVehicleId: 'vid-1' });
+    const { result } = renderHook(() => useVehicleStatus('vid-1', 'tok'), {
+      wrapper: ({ children }) => React.createElement(QueryClientProvider, { client }, children),
+    });
+    act(() => {
+      wsAt(0)._open();
+      wsAt(0)._message(JSON.stringify({ type: 'status', data: { battery_level: 80 } }));
+      wsAt(0)._close(4403);
+    });
+    await act(async () => { vi.advanceTimersByTime(120_000); });
+    expect(MockWS.instances).toHaveLength(1);
+    expect(result.current.connectionState).toBe('idle');
+    expect(useLiveStatusStore.getState().status['vid-1']).toBeUndefined();
+    expect(useAuth.getState().activeVehicleId).toBeNull();
+    expect(useAuth.getState().defaultVehicleId).toBeNull();
+    expect(client.getQueryData(['vehicles', 'status', 'vid-1'])).toBeUndefined();
+    expect(client.getQueryData(['trips', 'detail', 'trip-1', 'vid-1'])).toBeUndefined();
+    expect(client.getQueryData(['metrics', 'vid-1', 'battery_level'])).toBeUndefined();
+    expect(client.getQueryData(['metrics', 'vid-2', 'battery_level'])).toEqual([70]);
+    expect(client.getQueryData(['vehicles'])).toEqual([{ id: 'vid-2' }]);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['vehicles'] });
+    expect(useAuth.getState().isAuthenticated).toBe(true);
+  });
+
+  it('retries renewal after transient 4401 failure, then clears a rejected session', async () => {
+    const refresh = vi.spyOn(api, 'refresh')
+      .mockRejectedValueOnce({ status: 0, code: 'NETWORK_ERROR' })
+      .mockRejectedValueOnce({ status: 401 });
+    const { result } = renderHook(() => useVehicleStatus('vid-1', 'tok'));
+    await act(async () => { wsAt(0)._close(4401); });
+    expect(result.current.connectionState).toBe('failed');
+    expect(useAuth.getState().isAuthenticated).toBe(true);
+    expect(MockWS.instances).toHaveLength(1);
+    await act(async () => { vi.advanceTimersByTime(1_000); });
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(useAuth.getState().isAuthenticated).toBe(false);
+    await act(async () => { vi.advanceTimersByTime(120_000); });
+    expect(MockWS.instances).toHaveLength(1);
+  });
+
+  it('does not reconnect with an expired JWT while renewal is pending', async () => {
+    vi.spyOn(api, 'refresh').mockImplementation(() => new Promise(() => {}));
+    renderHook(() => useVehicleStatus('vid-1', 'expired-token'));
+    await act(async () => { wsAt(0)._close(4401); });
+    await act(async () => { vi.advanceTimersByTime(120_000); });
+    act(() => window.dispatchEvent(new Event('focus')));
+    act(() => notifyVehicleCredentialsRefreshed('vid-1'));
+    expect(MockWS.instances).toHaveLength(1);
+    expect(useAuth.getState().isAuthenticated).toBe(true);
+  });
+
+  it('cancels a pending renewal retry on unmount', async () => {
+    const refresh = vi.spyOn(api, 'refresh').mockRejectedValue({ status: 0 });
+    const { unmount } = renderHook(() => useVehicleStatus('vid-1', 'tok'));
+    await act(async () => { wsAt(0)._close(4401); });
+    unmount();
+    await act(async () => { vi.advanceTimersByTime(120_000); });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(MockWS.instances).toHaveLength(1);
   });
 
   // ---- cleanup ----

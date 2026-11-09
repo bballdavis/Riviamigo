@@ -5,6 +5,7 @@ pub mod parser;
 pub mod poller;
 pub mod rivian_auth;
 pub mod rivian_poll;
+pub mod rivian_ws_backoff;
 pub mod session_store;
 pub mod supervisor;
 pub mod trip_detector;

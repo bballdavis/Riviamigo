@@ -140,14 +140,15 @@ fn trusted_client_ip<T>(req: &Request<T>) -> Option<IpAddr> {
 
 fn parse_forwarded_ip(headers: &HeaderMap) -> Option<IpAddr> {
     headers
-        .get("x-forwarded-for")
+        .get("x-real-ip")
         .and_then(|value| value.to_str().ok())
-        .and_then(|raw| raw.split(',').find_map(|part| part.trim().parse().ok()))
+        .and_then(|raw| raw.trim().parse().ok())
         .or_else(|| {
             headers
-                .get("x-real-ip")
+                .get("x-forwarded-for")
                 .and_then(|value| value.to_str().ok())
-                .and_then(|raw| raw.parse().ok())
+                // nginx supplies one authoritative peer, never an appended chain.
+                .and_then(|raw| raw.trim().parse().ok())
         })
 }
 

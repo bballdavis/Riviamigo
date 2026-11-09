@@ -388,6 +388,7 @@ async fn update_user(
         .transpose()?
         .map(|role| role.as_str().to_string());
 
+    let mut tx = state.pool.begin().await?;
     sqlx::query(
         "UPDATE riviamigo.users
          SET email = COALESCE($2, email),
@@ -400,8 +401,12 @@ async fn update_user(
     .bind(email)
     .bind(role_str)
     .bind(body.is_disabled)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
+    if body.is_disabled == Some(true) {
+        crate::services::sessions::revoke_user_sessions(&mut tx, target_user_id).await?;
+    }
+    tx.commit().await?;
     support_audit(
         state.pool.clone(),
         "admin_user_update",

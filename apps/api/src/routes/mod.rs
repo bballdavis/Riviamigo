@@ -25,6 +25,7 @@ use crate::middleware::{
 };
 
 pub mod api_keys;
+pub mod app_info;
 pub mod auth;
 pub mod backfill;
 pub mod backups;
@@ -252,6 +253,7 @@ pub fn build_router(state: AppState) -> Router {
     let v2_decoding_key = decoding_key.clone();
 
     let protected_common = Router::new()
+        .merge(app_info::router())
         .merge(api_keys::router())
         .merge(backups::router())
         .merge(backfill::router())

@@ -7,6 +7,11 @@ const logout = vi.fn();
 const { updateThemePreferences } = vi.hoisted(() => ({
   updateThemePreferences: vi.fn(async (...args: unknown[]) => ({ preferences: args[0], etag: 'theme-etag-2' })),
 }));
+const releaseCheck = vi.hoisted(() => ({
+  updateAvailable: false,
+  status: { latestVersion: null as string | null },
+  version: { data: { version: '2026.10.1+dev' } },
+}));
 let currentStatusData: Record<string, unknown> | null = null;
 let liveConnected = true;
 let liveConnectionState = 'online';
@@ -62,6 +67,10 @@ vi.mock('../hooks/useThemePreferenceController', () => ({
   }),
 }));
 
+vi.mock('../hooks/useGithubReleaseCheck', () => ({
+  useGithubReleaseCheck: () => releaseCheck,
+}));
+
 describe('AppLayout sidebar collapse', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -70,6 +79,64 @@ describe('AppLayout sidebar collapse', () => {
     currentStatusData = null;
     liveConnected = true;
     liveConnectionState = 'online';
+    releaseCheck.updateAvailable = false;
+    releaseCheck.status.latestVersion = null;
+  });
+
+  it('shows no release link when the build is not behind a newer release', () => {
+    render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>
+    );
+
+    expect(screen.queryByRole('link', { name: /GitHub Releases/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Collapse sidebar'));
+    expect(screen.queryByRole('link', { name: /GitHub Releases/ })).not.toBeInTheDocument();
+  });
+
+  it('shows the warning release link beside Settings in expanded and collapsed footers when an update exists', () => {
+    releaseCheck.updateAvailable = true;
+    releaseCheck.status.latestVersion = '2026.10.2';
+    render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>
+    );
+
+    const expandedLink = screen.getByRole('link', { name: /GitHub Releases/ });
+    expect(expandedLink).toHaveAttribute('href', 'https://github.com/bballdavis/Riviamigo/releases');
+    expect(expandedLink).toHaveAttribute('target', '_blank');
+    expect(expandedLink).toHaveClass('text-status-warning');
+    expect(screen.getByRole('button', { name: 'Open settings' }).parentElement).toContainElement(expandedLink);
+
+    fireEvent.click(screen.getByLabelText('Collapse sidebar'));
+    const collapsedLink = screen.getByRole('link', { name: /GitHub Releases/ });
+    expect(collapsedLink.closest('[class*="grid-cols-[24px_24px]"]')).toBeInTheDocument();
+  });
+
+  it('shows a versioned update marker on the keyboard-accessible link in the mobile drawer', () => {
+    releaseCheck.updateAvailable = true;
+    releaseCheck.status.latestVersion = '2026.10.1';
+    render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle navigation' }));
+    const sheet = within(screen.getByRole('dialog', { name: 'Navigation' }));
+    const releases = sheet.getByRole('link', { name: 'New release 2026.10.1 available. View GitHub Releases' });
+    expect(releases).toHaveAttribute('href', 'https://github.com/bballdavis/Riviamigo/releases');
+    expect(releases).toHaveAttribute('target', '_blank');
+    expect(releases).toHaveClass('h-12', 'w-12');
+    expect(releases.querySelector('svg')).toHaveClass('h-5', 'w-5');
+    expect(releases).toHaveClass('text-status-warning');
+    releases.focus();
+    expect(releases).toHaveFocus();
+    fireEvent.focus(releases);
+    expect(screen.getByRole('tooltip')).toHaveTextContent('2026.10.1+dev');
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Latest2026.10.1');
   });
 
   it('keeps the main content centered inside the current sidebar width', () => {

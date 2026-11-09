@@ -384,9 +384,11 @@ pub async fn reconcile_completed_jobs(pool: &PgPool, config: &Config) -> Result<
         }
 
         if job.catalog_snapshot.is_none() {
-            let imported =
-                crate::services::backups::validate_recovery_package(Path::new(&job.artifact_path))
-                    .await?;
+            let imported = crate::services::backups::validate_recovery_package_with_limits(
+                Path::new(&job.artifact_path),
+                &config.recovery,
+            )
+            .await?;
             insert_reconciled_artifact(
                 pool,
                 job.id,
@@ -403,8 +405,11 @@ pub async fn reconcile_completed_jobs(pool: &PgPool, config: &Config) -> Result<
             job.safety_artifact_id,
             job.safety_artifact_path.as_deref(),
         ) {
-            let safety =
-                crate::services::backups::validate_recovery_package(Path::new(path)).await?;
+            let safety = crate::services::backups::validate_recovery_package_with_limits(
+                Path::new(path),
+                &config.recovery,
+            )
+            .await?;
             insert_reconciled_artifact(
                 pool,
                 run_id,
@@ -463,6 +468,13 @@ pub async fn merge_catalog_snapshot(
             .bind(run.updated_at).execute(pool).await?;
     }
     for artifact in &snapshot.artifacts {
+        let mut tx = pool.begin().await?;
+        // The target catalog is merged last. Preserve older history/FKs but
+        // never let an imported ID claim the unique operational S3 locator.
+        if artifact.storage_type == "s3" {
+            sqlx::query("UPDATE riviamigo.backup_artifacts SET manifest = CASE WHEN jsonb_typeof(manifest)='object' THEN manifest ELSE '{}'::jsonb END || jsonb_build_object('historical_storage_path',storage_path,'restore_availability','unavailable'), storage_path = 'unavailable:' || id::text WHERE storage_type='s3' AND storage_path=$1 AND id<>$2")
+                .bind(&artifact.storage_path).bind(artifact.id).execute(&mut *tx).await?;
+        }
         sqlx::query(r#"
             INSERT INTO riviamigo.backup_artifacts (id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -473,7 +485,8 @@ pub async fn merge_catalog_snapshot(
         "#).bind(artifact.id).bind(artifact.run_id).bind(&artifact.storage_type)
             .bind(&artifact.file_name).bind(&artifact.storage_path).bind(artifact.size_bytes)
             .bind(&artifact.checksum_sha256).bind(&artifact.manifest).bind(artifact.created_at)
-            .execute(pool).await?;
+            .execute(&mut *tx).await?;
+        tx.commit().await?;
     }
     for request in &snapshot.restore_requests {
         sqlx::query(r#"
@@ -506,33 +519,15 @@ pub fn mark_source_artifact_availability(
     source: &mut BackupCatalogSnapshot,
     target: Option<&BackupCatalogSnapshot>,
 ) {
+    let _ = target; // Source claims never authorize access. Verified target rows merge last.
     for artifact in &mut source.artifacts {
-        let available = target.is_some_and(|target| {
-            target.artifacts.iter().any(|candidate| {
-                candidate.storage_type == artifact.storage_type
-                    && candidate.storage_path == artifact.storage_path
-                    && candidate.checksum_sha256 == artifact.checksum_sha256
-                    && (candidate.storage_type != "s3"
-                        || candidate
-                            .manifest
-                            .get("restore_availability")
-                            .and_then(Value::as_str)
-                            == Some("available"))
-            })
-        });
-        if let Some(manifest) = artifact.manifest.as_object_mut() {
-            manifest.insert(
-                "restore_availability".into(),
-                Value::String(
-                    if available {
-                        "available"
-                    } else {
-                        "unavailable"
-                    }
-                    .into(),
-                ),
-            );
+        if !artifact.manifest.is_object() {
+            artifact.manifest = serde_json::json!({});
         }
+        artifact.manifest.as_object_mut().unwrap().insert(
+            "restore_availability".into(),
+            Value::String("unavailable".into()),
+        );
     }
 }
 

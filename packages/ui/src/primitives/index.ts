@@ -42,7 +42,7 @@ export type { PageLayoutProps, ChartSectionProps } from './PageLayout';
 export { Sidebar, DEFAULT_NAV_ITEMS } from './Sidebar';
 export type { SidebarProps, NavItem } from './Sidebar';
 
-export { StatusBar } from './StatusBar';
+export { StatusBar, getBatteryIcon } from './StatusBar';
 export type { StatusBarProps, VehicleOnlineState } from './StatusBar';
 
 export { AmbientOrbs } from './AmbientOrbs';
@@ -58,3 +58,5 @@ export type { ResponsiveDialogProps } from './ResponsiveDialog';
 
 export { ColorPicker } from './ColorPicker';
 export type { ColorPickerProps, ColorPickerSwatch } from './ColorPicker';
+
+export { FrunkIcon, LiftgateIcon } from './ClosureIcons';

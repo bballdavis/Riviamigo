@@ -1,8 +1,14 @@
 import React from 'react';
-import { render, screen, act } from '@testing-library/react';
+import { render as renderBase, screen, act } from '@testing-library/react';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { useVehicleStatus, useLiveStatusStore } from '@riviamigo/hooks';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StatusBar } from '@riviamigo/ui/primitives';
+
+const render: typeof renderBase = (ui, options) => {
+  const client = new QueryClient();
+  return renderBase(<QueryClientProvider client={client}>{ui}</QueryClientProvider>, options);
+};
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
@@ -125,9 +131,9 @@ describe('StatusBar', () => {
 
     expect(screen.getByLabelText('Battery status: 68%')).toBeInTheDocument();
     expect(screen.queryByText('68%')).not.toBeInTheDocument();
-    const batteryIcon = container.querySelector('[data-battery-icon="tb-battery-three"]');
+    const batteryIcon = container.querySelector('[data-battery-icon="battery-full"]');
     expect(batteryIcon).toBeInTheDocument();
-    expect(batteryIcon).toHaveClass('h-4', 'w-4');
+    expect(batteryIcon).toHaveClass('h-5', 'w-5');
   });
 
   it('renders an unhealthy upstream feed separately from a local connection failure', () => {
@@ -138,13 +144,13 @@ describe('StatusBar', () => {
     expect(screen.queryByLabelText('Battery status: 68%')).not.toBeInTheDocument();
   });
 
-  it('uses the quarter battery icon for low charge', () => {
+  it('uses the low battery icon for low charge', () => {
     const { container } = render(<StatusBar onlineState="online" socPercent={12} compact />);
 
     expect(screen.getByLabelText('Battery status: 12%')).toBeInTheDocument();
-    const batteryIcon = container.querySelector('[data-battery-icon="tb-battery-one"]');
+    const batteryIcon = container.querySelector('[data-battery-icon="battery-low"]');
     expect(batteryIcon).toBeInTheDocument();
-    expect(batteryIcon).toHaveClass('h-4', 'w-4');
+    expect(batteryIcon).toHaveClass('h-5', 'w-5');
   });
 
   it.each(['online', 'offline', 'connecting', 'unhealthy', 'error'] as const)('uses the shared menu typography and 20px status icons for %s', (onlineState) => {
@@ -153,7 +159,7 @@ describe('StatusBar', () => {
     expect(status?.querySelector('svg')).toHaveClass('h-5', 'w-5');
     expect(status?.querySelector('span')).toHaveClass('text-sm');
     if (onlineState === 'online') {
-      expect(container.querySelector('[aria-label^="Battery status:"] svg')).toHaveClass('h-5', 'w-5');
+      expect(container.querySelector('[aria-label^="Battery status:"] svg')).toHaveClass('h-6', 'w-6');
       expect(container.querySelector('[aria-label^="Battery status:"] span')).toHaveClass('text-sm', 'tabular-nums');
     }
   });

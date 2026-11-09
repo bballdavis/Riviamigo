@@ -57,6 +57,8 @@ import {
   Skeleton,
   Tooltip,
   type BadgeProps,
+  FrunkIcon,
+  LiftgateIcon,
 } from '@riviamigo/ui/primitives';
 import {
   DEFAULT_TARGET_TIRE_PRESSURE_PSI,
@@ -742,11 +744,16 @@ function formatAcquisitionTooltip(extended: VehicleHealth['extended_telemetry'] 
   const frame = parallax?.last_meaningful_frame_at
     ? formatAppDateTime(parallax.last_meaningful_frame_at)
     : parallax?.last_error ?? 'No meaningful frame observed';
-  const diagnostics = `${parallax?.reconnect_count ?? 0} reconnects · ${parallax?.decode_error_count ?? 0} decode · ${parallax?.empty_frame_count ?? 0} empty · ${parallax?.ambiguity_count ?? 0} ambiguous`;
+  const reported = parallax?.last_vehicle_reported_at
+    ? formatAppDateTime(parallax.last_vehicle_reported_at)
+    : 'Not reported yet';
+  const diagnostics = `${parallax?.reconnect_count ?? 0} reconnects · ${parallax?.resubscribe_count ?? 0} resubscribes · ${parallax?.decode_error_count ?? 0} decode · ${parallax?.empty_frame_count ?? 0} empty · ${parallax?.ambiguity_count ?? 0} ambiguous`;
   return (
     <div className="grid gap-1">
       <span className="font-medium text-fg">Meaningful frame</span>
       <span>{frame}</span>
+      <span className="font-medium text-fg">Vehicle last reported</span>
+      <span>{reported}</span>
       <span>{diagnostics}</span>
     </div>
   );
@@ -1078,43 +1085,6 @@ function ClosureIcon({
   );
 }
 
-function FrunkIcon({ className }: { className: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M5 20v-1.6c0-2.1 1.4-3.8 3.5-4.2l9.5-1.9" />
-      <path d="m8.5 5.5 2.7-1.4 8.9 8.8-3.2.8-8.4-8.2Z" />
-      <path d="M5 14v-4m0 0h4m-4 0 6 6" />
-    </svg>
-  );
-}
-
-function LiftgateIcon({ className }: { className: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M5 4h7.2c1.5 0 2.8.6 3.8 1.7l2.4 2.8H12" />
-      <path d="M5 20c2.1-.2 3.5-1.6 3.5-4V8.5C8.5 6 7.2 4.5 5 4" />
-      <path d="M12 15h7" />
-      <path d="m16 12 3 3-3 3" />
-    </svg>
-  );
-}
-
 function summarizeTires(
   wheels: Array<ReturnType<typeof normalizeTireWheels>[number] & { availability: StatusAvailabilitySummary | null }>,
   targetPsi: number
@@ -1276,7 +1246,7 @@ function getTireState(
       variant: 'success',
       lastUpdatedLabel: formatAvailabilityLastUpdated(availability ?? nullSummary()),
     };
-  if (/critical|fault/i.test(status)) return { label: titleCase(status), variant: 'danger' };
+  if (/critical|fault|puncture/i.test(status)) return { label: titleCase(status), variant: 'danger' };
   return {
     label: titleCase(status),
     variant: 'warning',

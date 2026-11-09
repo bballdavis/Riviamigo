@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -22,6 +22,7 @@ const suppliedPackage = value('--package');
 const sourceBuild = args.includes('--source-build');
 const reuseImage = args.includes('--reuse-image');
 const keep = args.includes('--keep');
+const verifyRollback = args.includes('--verify-rollback');
 
 if (!suppliedPackage) throw new Error('--package is required.');
 const packagePath = resolve(suppliedPackage);
@@ -105,6 +106,56 @@ async function fetchJson(path) {
   const text = await response.text();
   if (!response.ok) throw new Error(`GET ${path} failed (${response.status}): ${text}`);
   return text ? JSON.parse(text) : null;
+}
+
+async function verifyActivatedRollback() {
+  const probeEmail = `restore-rollback-${nonce}@example.test`;
+  const artworkProbe = join(dataRoot, 'cache', 'riviamigo', 'vehicle-images', 'rollback-probe.txt');
+  sql(`INSERT INTO riviamigo.users(email,is_disabled) VALUES('${probeEmail}',TRUE)`);
+  writeFileSync(artworkProbe, 'previous artwork must survive rollback\n');
+  const engine = (command, commandArgs = []) => run('docker', [
+    ...compose, 'run', '--rm', '--no-deps',
+    '--entrypoint', '/app/riviamigo-restore-agent',
+    ...(command === 'host-restore' ? ['-v', `${copiedPackage}:/restore-package:ro`] : []),
+    'riviamigo', command, ...commandArgs,
+  ]);
+  engine('host-restore', ['/restore-package', '--force']);
+  run('docker', [...compose, 'stop', 'riviamigo']);
+  engine('host-activate');
+  if (sql(`SELECT count(*) FROM riviamigo.users WHERE email='${probeEmail}'`) !== '0')
+    throw new Error('Rollback probe remained in the activated candidate database.');
+  if (existsSync(artworkProbe))
+    throw new Error('Rollback probe remained in the activated candidate artwork.');
+  engine('host-rollback');
+  if (sql(`SELECT count(*) FROM riviamigo.users WHERE email='${probeEmail}'`) !== '1')
+    throw new Error('Rollback did not restore the previous database.');
+  if (!existsSync(artworkProbe) || readFileSync(artworkProbe, 'utf8') !== 'previous artwork must survive rollback\n')
+    throw new Error('Rollback did not restore the previous artwork.');
+  if (existsSync(join(dataRoot, 'backups', '.host-restore-state.json')))
+    throw new Error('Rollback left an unfinished host restore state.');
+  const reportRoot = join(dataRoot, 'backups', '.restore-reports');
+  const rolledBack = readdirSync(reportRoot).some(file => file.endsWith('.json')
+    && JSON.parse(readFileSync(join(reportRoot, file), 'utf8')).status === 'rolled_back');
+  if (!rolledBack) throw new Error('Rollback did not write its durable report.');
+  sql(`DELETE FROM riviamigo.users WHERE email='${probeEmail}'`);
+  rmSync(artworkProbe);
+  run('docker', [...compose, 'up', '-d', 'riviamigo']);
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://localhost:${port}/health`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      const body = await response.text();
+      if (!response.ok || body.trim() !== 'ok')
+        throw new Error(`Rollback health check returned HTTP ${response.status}.`);
+      console.log('Rollback verified: previous database and artwork restored; application healthy.');
+      return { database_restored: true, artwork_restored: true, durable_report: true, application_healthy: true };
+    } catch {
+      await new Promise(resolveWait => setTimeout(resolveWait, 1000));
+    }
+  }
+  throw new Error('Application did not become healthy after rollback.');
 }
 
 function parseManifest() {
@@ -351,6 +402,9 @@ try {
     if (artworkFiles < 1) throw new Error('Restored vehicle artwork is missing.');
     if (sha256(packagePath) !== originalChecksum)
       throw new Error('Source recovery package changed during the lab run.');
+    const rollback = verifyRollback ? await verifyActivatedRollback() : null;
+    const containerId = capture('docker', [...compose, 'ps', '-q', 'riviamigo']);
+    const imageId = capture('docker', ['inspect', '--format', '{{.Image}}', containerId]);
     report = {
       status: 'passed',
       created_at: new Date().toISOString(),
@@ -362,12 +416,13 @@ try {
         source: manifest.source,
         release_checkpoint_id: releaseCheckpoint?.id ?? null,
       },
-      target: { source_build: sourceBuild, origin: `http://localhost:${port}` },
+      target: { source_build: sourceBuild, image_id: imageId, origin: `http://localhost:${port}` },
       setup_required: setup.setup_required,
       restore_supervisor_healthy: true,
       host_backup_directory_preserved: true,
       artwork_files: artworkFiles,
       database,
+      rollback,
       restore_plan: restoreReport.plan,
       validation_report: restoreReport.validation_report,
       source_migration_versions: sourceMigrationVersions,
@@ -396,6 +451,9 @@ try {
       stdio: 'ignore',
       env: environment,
     });
+    const cleanupRelative = relative(resolve(tmpdir()), resolve(tempRoot));
+    if (!cleanupRelative || cleanupRelative.startsWith('..') || !basename(tempRoot).startsWith('riviamigo-restore-lab-'))
+      throw new Error('Refusing cleanup outside the disposable restore-lab directory.');
     rmSync(tempRoot, { recursive: true, force: true });
   } else {
     console.log(`Restore lab retained: project=${project} data=${dataRoot}`);

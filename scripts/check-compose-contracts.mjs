@@ -18,7 +18,7 @@ assert(
 );
 assert(
   standard.services.riviamigo.ports?.includes(
-    '${RIVIAMIGO_HOST_BIND_ADDRESS:-0.0.0.0}:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080'
+    '${RIVIAMIGO_HOST_BIND_ADDRESS:-127.0.0.1}:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080'
   ),
   'standard Compose must use configurable host publication'
 );

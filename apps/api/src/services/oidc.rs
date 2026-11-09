@@ -9,16 +9,16 @@ use openidconnect::{
         CoreRevocableToken, CoreRevocationErrorResponse, CoreTokenIntrospectionResponse,
         CoreTokenType,
     },
-    reqwest as oidc_reqwest, AdditionalClaims, AsyncHttpClient, AuthType, AuthorizationCode,
-    Client, ClientId, ClientSecret, EmptyExtraTokenFields, HttpClientError, HttpRequest,
-    HttpResponse, IdTokenFields, IssuerUrl, Nonce, OAuth2TokenResponse, PkceCodeVerifier,
-    RedirectUrl, StandardErrorResponse, StandardTokenResponse, SubjectIdentifier, UserInfoClaims,
+    AdditionalClaims, AsyncHttpClient, AuthType, AuthorizationCode, Client, ClientId, ClientSecret,
+    EmptyExtraTokenFields, HttpRequest, HttpResponse, IdTokenFields, IssuerUrl, Nonce,
+    OAuth2TokenResponse, PkceCodeVerifier, RedirectUrl, StandardErrorResponse,
+    StandardTokenResponse, SubjectIdentifier, UserInfoClaims,
 };
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{future::Future, pin::Pin};
 use url::Url;
 
 use crate::{
@@ -51,10 +51,12 @@ enum HttpsOnlyClientError {
     #[error("OIDC provider attempted a non-HTTPS request")]
     UnsafeEndpoint,
     #[error(transparent)]
-    Request(#[from] HttpClientError<oidc_reqwest::Error>),
+    Request(#[from] AppError),
+    #[error("Invalid OIDC HTTP response")]
+    InvalidResponse,
 }
 
-struct HttpsOnlyClient(oidc_reqwest::Client);
+struct HttpsOnlyClient(crate::config::SecurityConfig);
 
 impl<'c> AsyncHttpClient<'c> for HttpsOnlyClient {
     type Error = HttpsOnlyClientError;
@@ -66,21 +68,42 @@ impl<'c> AsyncHttpClient<'c> for HttpsOnlyClient {
             let request_url = request.uri().to_string();
             validate_https_provider_endpoint("request", &request_url)
                 .map_err(|_| HttpsOnlyClientError::UnsafeEndpoint)?;
-            AsyncHttpClient::call(&self.0, request)
+            let url = Url::parse(&request_url).map_err(|_| HttpsOnlyClientError::UnsafeEndpoint)?;
+            let allowlist = crate::services::outbound::operator_allowlist(
+                &self.0.oidc_private_network_allowlist,
+            )?;
+            let client =
+                crate::services::outbound::outbound_client_for_url(&url, &allowlist).await?;
+            let (parts, body) = request.into_parts();
+            let response = client
+                .request(parts.method, url)
+                .headers(parts.headers)
+                .body(body)
+                .send()
                 .await
-                .map_err(HttpsOnlyClientError::Request)
+                .map_err(|_| AppError::DependencyUnavailable("OIDC request failed".into()))?;
+            let status = response.status();
+            let headers = response.headers().clone();
+            let bytes = crate::services::outbound::read_response_limited(
+                response,
+                self.0.oidc_max_response_bytes,
+                "OIDC provider",
+            )
+            .await?;
+            let mut result = http::Response::builder()
+                .status(status)
+                .body(bytes)
+                .map_err(|_| HttpsOnlyClientError::InvalidResponse)?;
+            *result.headers_mut() = headers;
+            Ok(result)
         })
     }
 }
 
 fn https_only_client() -> Result<HttpsOnlyClient, AppError> {
-    oidc_reqwest::ClientBuilder::new()
-        .redirect(oidc_reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map(HttpsOnlyClient)
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("failed to create OIDC HTTP client")))
+    Ok(HttpsOnlyClient(
+        crate::services::outbound::operator_security()?,
+    ))
 }
 type OidcClient<
     HasAuthUrl = openidconnect::EndpointNotSet,
@@ -220,21 +243,23 @@ pub async fn discover(
         issuer.trim_end_matches('/')
     ))
     .map_err(|_| AppError::Validation("OIDC issuer is invalid".into()))?;
-    let metadata = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("failed to create OIDC HTTP client")))?
+    let security = crate::services::outbound::operator_security()?;
+    let allowlist =
+        crate::services::outbound::operator_allowlist(&security.oidc_private_network_allowlist)?;
+    let response = crate::services::outbound::outbound_client_for_url(&endpoint, &allowlist)
+        .await?
         .get(endpoint)
         .send()
         .await
         .map_err(|_| AppError::Validation("OIDC provider is unavailable".into()))?
         .error_for_status()
-        .map_err(|_| AppError::Validation("OIDC provider discovery failed".into()))?
-        .json::<ProviderMetadata>()
-        .await
-        .map_err(|_| AppError::Validation("OIDC provider metadata is invalid".into()))?;
+        .map_err(|_| AppError::Validation("OIDC provider discovery failed".into()))?;
+    let metadata: ProviderMetadata = crate::services::outbound::read_json(
+        response,
+        security.oidc_max_response_bytes,
+        "OIDC discovery",
+    )
+    .await?;
     if metadata.issuer.trim_end_matches('/') != issuer.trim_end_matches('/') {
         return Err(AppError::Validation("OIDC issuer mismatch".into()));
     }

@@ -117,8 +117,10 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         supervisor,
+        resources: Default::default(),
     };
     let _backup_scheduler = services::backups::start_backup_scheduler(pool.clone(), config.clone());
+    let _basemap_cache_maintenance = services::basemap_cache::start_maintenance(redis.clone());
     let _restore_job_reconciler =
         services::restore_jobs::start_reconciler(pool.clone(), config.clone());
     let _weather_enrichment_worker =

@@ -20,6 +20,23 @@ pub enum RivianAuthError {
     UnexpectedResponse(String),
 }
 
+async fn bounded_json<T: serde::de::DeserializeOwned>(
+    response: reqwest::Response,
+) -> Result<T, RivianAuthError> {
+    let limit = crate::services::outbound::operator_security()
+        .map_err(|_| {
+            RivianAuthError::UnexpectedResponse("invalid response limit configuration".into())
+        })?
+        .rivian_max_response_bytes;
+    crate::services::outbound::read_json(response, limit, "Rivian provider")
+        .await
+        .map_err(|_| {
+            RivianAuthError::UnexpectedResponse(
+                "Rivian response invalid or exceeded the byte limit".into(),
+            )
+        })
+}
+
 #[derive(Debug, Clone)]
 pub struct RivianOtpChallenge {
     pub email: String,
@@ -405,7 +422,7 @@ pub async fn rivian_user_vehicles(
         return Err(RivianAuthError::InvalidCredentials);
     }
 
-    let parsed = response.json::<UserInfoResponse>().await?;
+    let parsed = bounded_json::<UserInfoResponse>(response).await?;
     if let Some(errors) = parsed.errors {
         if !errors.is_empty() {
             return Err(RivianAuthError::UnexpectedResponse(format_gql_error(
@@ -493,19 +510,14 @@ pub async fn rivian_vehicle_images(
                 .header("U-Sess", &tokens.user_session_token)
                 .json(&body);
 
-            let status = req
-                .send()
-                .await?
-                .error_for_status()
-                .map_err(|e| {
-                    if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED) {
-                        RivianAuthError::InvalidCredentials
-                    } else {
-                        RivianAuthError::Network(e)
-                    }
-                })?
-                .json::<VehicleImagesResponse>()
-                .await?;
+            let response = req.send().await?.error_for_status().map_err(|e| {
+                if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED) {
+                    RivianAuthError::InvalidCredentials
+                } else {
+                    RivianAuthError::Network(e)
+                }
+            })?;
+            let status = bounded_json::<VehicleImagesResponse>(response).await?;
 
             if status
                 .errors
@@ -627,7 +639,7 @@ async fn post_graphql(
 
     let response = req.send().await?;
     let status = response.status();
-    let parsed = response.json::<LoginResponse>().await?;
+    let parsed = bounded_json::<LoginResponse>(response).await?;
 
     if status == reqwest::StatusCode::UNAUTHORIZED {
         return Err(RivianAuthError::InvalidCredentials);

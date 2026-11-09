@@ -2,7 +2,6 @@
 
 use chrono::{DateTime, Utc};
 use futures::{SinkExt, StreamExt};
-use rand::Rng;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
@@ -14,13 +13,19 @@ use uuid::Uuid;
 use crate::models::telemetry::TelemetryEvent;
 use crate::{
     config::Config,
-    ingestion::{parser, session_store::RivianTokenBundle},
+    ingestion::{
+        parser,
+        rivian_ws_backoff::{self, HoldReason, SessionHold},
+        session_store::RivianTokenBundle,
+    },
 };
 
 const WS_URL: &str = "wss://api.rivian.com/gql-consumer-subscriptions/graphql";
 const RIVIAN_CONNECTION_TTL_EXPIRED_CODE: u16 = 4420;
 const RIVIAN_CONNECTION_TTL_EXPIRED_REASON: &str = "Connection TTL expired";
 const RIVIAN_NO_ACTIVE_SUBSCRIPTIONS_CODE: u16 = 4410;
+/// How long Rivian may take to acknowledge `connection_init`.
+const CONNECTION_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 const VEHICLE_STATE_FIELD_FAILURE_DISABLE_THRESHOLD: u32 = 2;
 const KNOWN_UNSUPPORTED_VEHICLE_STATE_FIELDS: &[&str] = &[
     "cabinClimateExteriorTemperature",
@@ -563,13 +568,27 @@ pub async fn run_ws_loop(
             Err(error) => {
                 tracing::warn!(vehicle_id=%vehicle_id, err=%error, "could not load current Rivian credentials for WS reconnect");
                 tokio::select! {
-                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)) => {}
+                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(jittered_backoff_secs(backoff_secs))) => {}
                     _ = shutdown.recv() => { break; }
                 }
                 backoff_secs = next_backoff_secs(backoff_secs, max_backoff);
                 continue;
             }
         };
+        // Rivian rate limits and credential rejections apply to the session,
+        // so a hold learned by the Parallax socket also applies here.
+        let session_key = rivian_ws_backoff::session_key(&tokens.user_session_token);
+        if let Some((remaining, reason)) = rivian_ws_backoff::remaining_hold(session_key) {
+            tracing::info!(
+                vehicle_id = %vehicle_id,
+                reason = reason.as_str(),
+                wait_seconds = remaining.as_secs(),
+                "Rivian WS waiting out a shared session hold before reconnecting"
+            );
+            if !rivian_ws_backoff::wait_for_hold(session_key, &mut shutdown).await {
+                break;
+            }
+        }
         let subscription_query = subscription_health.build_query();
         match connect_and_subscribe(
             &vehicle_id,
@@ -594,6 +613,36 @@ pub async fn run_ws_loop(
                     "Rivian WS connection TTL expired; renewing subscription"
                 );
                 backoff_secs = initial_backoff;
+            }
+            Err(e) if e.downcast_ref::<SessionHold>().is_some() => {
+                let Some(SessionHold(reason)) = e.downcast_ref::<SessionHold>().copied() else {
+                    unreachable!("guarded by downcast_ref");
+                };
+                let delay = rivian_ws_backoff::start_hold(session_key, reason);
+                tracing::warn!(
+                    vehicle_id = %vehicle_id,
+                    reason = reason.as_str(),
+                    hold_seconds = delay.as_secs(),
+                    "Rivian WS held off; both subscription sockets wait before reconnecting"
+                );
+                let _ = tx
+                    .send(WsInboundEvent {
+                        kind: WsInboundKind::Control,
+                        received_at: Utc::now(),
+                        raw: json!({
+                            "type": "reconnect",
+                            "hold_reason": reason.as_str(),
+                            "backoff_seconds": delay.as_secs(),
+                        })
+                        .to_string(),
+                        message_type: Some("reconnect".into()),
+                        telemetry: None,
+                        charging_session: None,
+                        battery_cell_type: None,
+                    })
+                    .await;
+                // The shared hold is waited out before the next connect.
+                backoff_secs = next_backoff_secs(backoff_secs, max_backoff);
             }
             Err(e) => {
                 if let Some(rejection) = e.downcast_ref::<RivianSubscriptionRejection>() {
@@ -729,9 +778,18 @@ async fn connect_and_subscribe(
         })
         .await;
 
-    // Wait for connection_ack; handle PING frames that may arrive before ack
+    // Wait for connection_ack; handle PING frames that may arrive before ack.
+    // A socket that never acknowledges is held off like a rate limit.
+    let ack_deadline = tokio::time::Instant::now() + CONNECTION_ACK_TIMEOUT;
     loop {
-        match ws.next().await {
+        let next = match tokio::time::timeout_at(ack_deadline, ws.next()).await {
+            Ok(next) => next,
+            Err(_) => {
+                tracing::warn!(vehicle_id = %vehicle_id, "Rivian WS did not acknowledge connection_init");
+                return Err(SessionHold(HoldReason::NotAcknowledged).into());
+            }
+        };
+        match next {
             Some(Ok(Message::Text(t))) => {
                 let v: Value = serde_json::from_str(&t).unwrap_or_default();
                 let message_type = message_type(&v);
@@ -758,10 +816,18 @@ async fn connect_and_subscribe(
             Some(Ok(Message::Ping(data))) => {
                 ws.send(Message::Pong(data)).await?;
             }
+            Some(Ok(Message::Close(frame))) => {
+                if let Some(reason) = rivian_ws_backoff::hold_reason_for_close(frame.as_ref()) {
+                    record_hold_close(vehicle_id, reason, frame.as_ref());
+                    return Err(SessionHold(reason).into());
+                }
+                anyhow::bail!("connection closed before ack")
+            }
             Some(Ok(_)) => {}
             _ => anyhow::bail!("connection closed before ack"),
         }
     }
+    let session_key = rivian_ws_backoff::session_key(&tokens.user_session_token);
 
     // Subscribe
     let sub = json!({
@@ -867,6 +933,9 @@ async fn connect_and_subscribe(
                         }
                         match classify_text_message(&text, *vehicle_id) {
                             Ok(inbound) => {
+                                if matches!(inbound.kind, WsInboundKind::Telemetry | WsInboundKind::ChargingSession) {
+                                    rivian_ws_backoff::mark_healthy(session_key);
+                                }
                                 let _ = tx.send(WsInboundEvent {
                                     received_at: Utc::now(),
                                     raw: text.to_string(),
@@ -892,6 +961,10 @@ async fn connect_and_subscribe(
                         ws.send(Message::Pong(data)).await?;
                     }
                     Some(Ok(Message::Close(frame))) => {
+                        if let Some(reason) = rivian_ws_backoff::hold_reason_for_close(frame.as_ref()) {
+                            record_hold_close(vehicle_id, reason, frame.as_ref());
+                            return Err(SessionHold(reason).into());
+                        }
                         let ttl_expired = is_rivian_connection_ttl_expired(frame.as_ref());
                         if ttl_expired {
                             tracing::info!(
@@ -1119,6 +1192,7 @@ fn event_has_meaningful_payload(event: &TelemetryEvent) -> bool {
         || event.window_fr_closed.is_some()
         || event.window_rl_closed.is_some()
         || event.window_rr_closed.is_some()
+        || event.window_rear_closed.is_some()
         || event.gear_guard_locked.is_some()
         || event.gear_guard_video_status.is_some()
         || event.wiper_fluid_low.is_some()
@@ -1132,11 +1206,26 @@ pub(crate) fn next_backoff_secs(current: u64, max: u64) -> u64 {
 }
 
 pub(crate) fn jittered_backoff_secs(base: u64) -> u64 {
-    if base <= 1 {
-        return 1;
-    }
-    let jitter = rand::thread_rng().gen_range(0..=base / 4);
-    base + jitter
+    rivian_ws_backoff::jittered_secs(base)
+}
+
+fn record_hold_close(vehicle_id: &Uuid, reason: HoldReason, frame: Option<&CloseFrame>) {
+    tracing::warn!(
+        vehicle_id = %vehicle_id,
+        reason = reason.as_str(),
+        close_code = frame.map(|f| f.code.to_string()),
+        "Rivian WS closed with a session hold"
+    );
+    crate::services::ingestion_capture::record(
+        *vehicle_id,
+        crate::services::ingestion_capture::Kind::LegacyConnection,
+        json!({
+            "message_type": "session_hold",
+            "hold_reason": reason.as_str(),
+            "close_code": frame.map(|f| u16::from(f.code)),
+            "close_reason": frame.map(|f| f.reason.to_string()),
+        }),
+    );
 }
 
 fn truncate_ws_message(value: &str) -> String {

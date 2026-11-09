@@ -10,7 +10,7 @@ use std::time::Duration;
 
 const JOB_KEY: &str = "charge_payload_identity";
 const ADVISORY_LOCK_KEY: &str = "riviamigo-charge-payload-identity-backfill";
-const PENDING_INDEX_NAME: &str = "rivian_charge_payloads_identity_pending_idx";
+pub const PENDING_INDEX_NAME: &str = "rivian_charge_payloads_identity_pending_idx";
 const DEFAULT_BATCH_SIZE: i64 = 1_000;
 const DEFAULT_PAUSE_MS: u64 = 100;
 const MIN_BATCH_SIZE: i64 = 100;
@@ -461,37 +461,4 @@ async fn mark_error(pool: &PgPool, error: &str) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_backfill_config_is_bounded() {
-        let config = BackfillConfig::default();
-        assert_eq!(config.batch_size, 1_000);
-        assert_eq!(config.pause, Duration::from_millis(100));
-    }
-
-    #[test]
-    fn invalid_batch_size_is_rejected() {
-        std::env::set_var("CHARGE_IDENTITY_BACKFILL_BATCH_SIZE", "99");
-        let error = BackfillConfig::from_env().expect_err("invalid batch size must fail");
-        std::env::remove_var("CHARGE_IDENTITY_BACKFILL_BATCH_SIZE");
-        assert!(error.to_string().contains("between 100 and 10000"));
-    }
-
-    #[test]
-    fn retry_backoff_doubles_and_is_bounded() {
-        assert_eq!(
-            next_retry_delay(Duration::from_secs(1)),
-            Duration::from_secs(2)
-        );
-        assert_eq!(
-            next_retry_delay(Duration::from_secs(32)),
-            Duration::from_secs(60)
-        );
-        assert_eq!(
-            next_retry_delay(Duration::from_secs(60)),
-            Duration::from_secs(60)
-        );
-    }
-}
+mod tests;

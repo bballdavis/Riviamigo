@@ -1,6 +1,8 @@
-use std::net::{IpAddr, SocketAddr};
-use std::str::FromStr;
-use std::time::Duration;
+use crate::services::outbound::{
+    configured_private_network_allowlist, endpoint_is_private, is_forbidden_ip,
+    is_link_local_or_metadata, is_private_ip, outbound_client_for_url,
+    parse_private_network_allowlist, read_response_limited,
+};
 
 use axum::{
     body::Body,
@@ -283,9 +285,9 @@ async fn cache_summary(state: &AppState, id: &str) -> Option<ConnectionCacheResp
             Some(ConnectionCacheResponse {
                 entries,
                 bytes,
-                persistent: true,
+                persistent: false,
                 purgeable: true,
-                description: "Persistent map tiles. Retained until manually purged or the basemap configuration changes.",
+                description: "Map tiles expire after seven days and share a bounded least-recently-used cache.",
             })
         }
         connections::NOMINATIM => {
@@ -1023,6 +1025,9 @@ async fn proxy_basemap_tile(
     if x >= tile_limit || y >= tile_limit {
         return Err(AppError::Validation("invalid tile coordinate".into()));
     }
+    if !matches!(style.as_str(), "light" | "dark") {
+        return Err(AppError::Validation("invalid tile style".into()));
+    }
     let template = if style == "dark" {
         settings
             .dark_url_template
@@ -1040,6 +1045,7 @@ async fn proxy_basemap_tile(
     let max_age_key = format!("{cache_key}:max-age");
     if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
         if let Ok(Some(bytes)) = redis.get::<_, Option<Vec<u8>>>(&cache_key).await {
+            crate::services::basemap_cache::touch(&mut redis, &cache_key).await;
             let content_type = redis
                 .get::<_, Option<String>>(&content_type_key)
                 .await
@@ -1114,15 +1120,16 @@ async fn proxy_basemap_tile(
         .unwrap_or("image/png")
         .to_string();
     let bytes = read_response_limited(response, 5 * 1024 * 1024, "Basemap tile").await?;
-    // The server-side copy is persistent and keyed by the provider/style
-    // configuration. Upstream cache-control still governs browser re-use, but
-    // repeated viewers never cause another upstream tile request until an
-    // administrator purges the cache or changes the basemap configuration.
-    if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
-        let _: Result<(), _> = redis.set(&cache_key, &bytes).await;
-        let _: Result<(), _> = redis.set(&content_type_key, &content_type).await;
-        let _: Result<(), _> = redis.set(&max_age_key, cache_ttl).await;
-    }
+    // Server cache TTL and shared byte budget are independent of browser reuse.
+    crate::services::basemap_cache::store(
+        &state.redis,
+        &cache_key,
+        &bytes,
+        &content_type,
+        cache_ttl,
+        &state.config.security,
+    )
+    .await;
     connections::record_success(&state.pool, connections::BASEMAP).await;
     tile_response(bytes, &content_type, cache_ttl)
 }
@@ -1176,6 +1183,7 @@ async fn proxy_openfreemap_resource(
     let max_age_key = format!("{cache_key}:max-age");
     if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
         if let Ok(Some(bytes)) = redis.get::<_, Option<Vec<u8>>>(&cache_key).await {
+            crate::services::basemap_cache::touch(&mut redis, &cache_key).await;
             let content_type = redis
                 .get::<_, Option<String>>(&content_type_key)
                 .await
@@ -1300,11 +1308,15 @@ async fn proxy_openfreemap_resource(
     } else {
         bytes
     };
-    if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
-        let _: Result<(), _> = redis.set(&cache_key, &bytes).await;
-        let _: Result<(), _> = redis.set(&content_type_key, &content_type).await;
-        let _: Result<(), _> = redis.set(&max_age_key, cache_ttl).await;
-    }
+    crate::services::basemap_cache::store(
+        &state.redis,
+        &cache_key,
+        &bytes,
+        &content_type,
+        cache_ttl,
+        &state.config.security,
+    )
+    .await;
     connections::record_success(&state.pool, connections::BASEMAP).await;
     // reqwest may transparently decode an upstream response. Do not copy its
     // Content-Encoding header unless the body is known to retain that encoding.
@@ -1582,35 +1594,6 @@ async fn proxy_json(
         .header(header::CACHE_CONTROL, "private, max-age=3600")
         .body(Body::from(bytes))
         .map_err(|error| AppError::Internal(error.into()))
-}
-
-async fn read_response_limited(
-    mut response: reqwest::Response,
-    limit: usize,
-    label: &str,
-) -> Result<Vec<u8>, AppError> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > limit as u64)
-    {
-        return Err(AppError::DependencyUnavailable(format!(
-            "{label} response exceeded the limit"
-        )));
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| AppError::DependencyUnavailable(format!("{label} response failed")))?
-    {
-        if bytes.len().saturating_add(chunk.len()) > limit {
-            return Err(AppError::DependencyUnavailable(format!(
-                "{label} response exceeded the limit"
-            )));
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    Ok(bytes)
 }
 
 fn tile_response(
@@ -1892,116 +1875,6 @@ fn canonical_allowlist(allowlist: Vec<IpNet>) -> Vec<String> {
         .collect()
 }
 
-fn parse_private_network_allowlist(values: &[String]) -> Result<Vec<IpNet>, AppError> {
-    let mut parsed = values
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            value.parse::<IpNet>().map_err(|_| {
-                AppError::Validation(format!("invalid private-network CIDR `{value}`"))
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    parsed.sort_by_key(ToString::to_string);
-    parsed.dedup();
-    for network in &parsed {
-        if !is_private_ip(network.network()) || !is_private_ip(network.broadcast()) {
-            return Err(AppError::Validation(format!(
-                "private-network CIDR `{network}` must be contained entirely in RFC1918 or IPv6 ULA space"
-            )));
-        }
-    }
-    Ok(parsed)
-}
-
-fn configured_private_network_allowlist(
-    settings: &ConnectionSettingsRow,
-) -> Result<Vec<IpNet>, AppError> {
-    if settings.private_network_policy_state == "migration_required" {
-        return Err(AppError::Validation(
-            "private-network access is disabled until an administrator confirms explicit CIDR allowlists".into(),
-        ));
-    }
-    parse_private_network_allowlist(&settings.private_network_allowlist)
-}
-
-fn endpoint_is_private(value: &str) -> bool {
-    let Ok(url) = Url::parse(value) else {
-        return false;
-    };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    IpAddr::from_str(host)
-        .map(|ip| match ip {
-            IpAddr::V4(ip) => ip.is_private() || ip.is_loopback(),
-            IpAddr::V6(ip) => ip.is_loopback() || is_ipv6_unique_local(ip),
-        })
-        .unwrap_or(false)
-}
-
-fn is_link_local_or_metadata(host: &str) -> bool {
-    if host.eq_ignore_ascii_case("metadata.google.internal") {
-        return true;
-    }
-    IpAddr::from_str(host).map(is_forbidden_ip).unwrap_or(false)
-}
-
-fn is_forbidden_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            let octets = ip.octets();
-            ip.is_unspecified()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_multicast()
-                || ip.is_broadcast()
-                || octets[0] == 0
-                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
-                || octets == [169, 254, 169, 254]
-                || octets == [192, 0, 0, 0]
-                || octets[..3] == [192, 0, 2]
-                || octets[..3] == [192, 88, 99]
-                || octets[..3] == [192, 175, 48]
-                || (octets[0] == 198 && matches!(octets[1], 18 | 19))
-                || octets[..3] == [198, 51, 100]
-                || octets[..3] == [203, 0, 113]
-                || octets[0] >= 240
-        }
-        IpAddr::V6(ip) => {
-            let segments = ip.segments();
-            ip.is_unspecified()
-                || ip.is_loopback()
-                || ip.is_multicast()
-                || is_ipv6_unicast_link_local(ip)
-                || (segments[0] & 0xffc0) == 0xfec0
-                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
-                || ip
-                    .to_ipv4_mapped()
-                    .is_some_and(|mapped| is_forbidden_ip(IpAddr::V4(mapped)))
-        }
-    }
-}
-
-fn is_private_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => ip.is_private(),
-        IpAddr::V6(ip) => is_ipv6_unique_local(ip),
-    }
-}
-
-fn is_ipv6_unique_local(ip: std::net::Ipv6Addr) -> bool {
-    (ip.segments()[0] & 0xfe00) == 0xfc00
-}
-
-fn is_ipv6_unicast_link_local(ip: std::net::Ipv6Addr) -> bool {
-    (ip.segments()[0] & 0xffc0) == 0xfe80
-}
-
 fn active_endpoint(settings: &ConnectionSettingsRow) -> Option<String> {
     match settings.id.as_str() {
         connections::OPEN_METEO => settings.forecast_url.clone(),
@@ -2032,71 +1905,6 @@ fn normalize(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-}
-/// Resolve and pin the target for one outbound request.  Resolving at request
-/// time closes the save-time DNS rebinding gap; passing the approved addresses
-/// to reqwest keeps the URL hostname for Host and TLS SNI while preventing a
-/// second resolver result from changing the TCP destination.
-async fn outbound_client_for_url(
-    url: &Url,
-    allowlist: &[IpNet],
-) -> Result<reqwest::Client, AppError> {
-    let host = url
-        .host_str()
-        .ok_or_else(|| AppError::Validation("connection endpoint host is required".into()))?;
-    if is_link_local_or_metadata(host) {
-        return Err(AppError::Validation(
-            "link-local and cloud metadata endpoints are not allowed".into(),
-        ));
-    }
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| AppError::Validation("connection endpoint port is required".into()))?;
-    let addresses = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|_| {
-            AppError::DependencyUnavailable("connection endpoint could not be resolved".into())
-        })?
-        .collect::<Vec<SocketAddr>>();
-    if addresses.is_empty() {
-        return Err(AppError::DependencyUnavailable(
-            "connection endpoint could not be resolved".into(),
-        ));
-    }
-    let mut private = false;
-    let mut public = false;
-    for address in &addresses {
-        if is_forbidden_ip(address.ip()) {
-            return Err(AppError::Validation(
-                "connection endpoint resolved to a forbidden address".into(),
-            ));
-        }
-        if is_private_ip(address.ip()) {
-            private = true;
-            if !allowlist
-                .iter()
-                .any(|network| network.contains(&address.ip()))
-            {
-                return Err(AppError::Validation(
-                    "connection endpoint resolved outside its private CIDR allowlist".into(),
-                ));
-            }
-        } else {
-            public = true;
-        }
-    }
-    if private && public {
-        return Err(AppError::Validation(
-            "connection endpoint DNS returned mixed public and private addresses".into(),
-        ));
-    }
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::none())
-        .resolve_to_addrs(host, &addresses)
-        .build()
-        .map_err(|error| AppError::Internal(error.into()))
 }
 
 fn encrypt_secret(age_key: &str, secret: Option<&str>) -> Result<Option<Vec<u8>>, AppError> {

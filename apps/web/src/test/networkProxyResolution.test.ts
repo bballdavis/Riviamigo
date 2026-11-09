@@ -33,6 +33,16 @@ describe('network proxy URL resolution', () => {
     expect(nginxConfig).not.toMatch(/location\s+~\*\s+\\\.\(js\|css\|woff2\?/);
   });
 
+  it('allows the optional browser release check through the SPA content security policy', () => {
+    const nginxConfig = readFileSync(resolve(process.cwd(), '../../compose/nginx/nginx.conf'), 'utf8');
+
+    for (const shellLocation of [/location\s+=\s+\/index\.html\s*\{([\s\S]*?)\n {8}\}/, /location\s+\/\s*\{([\s\S]*?)\n {8}\}/]) {
+      const match = nginxConfig.match(shellLocation);
+      expect(match?.[1]).toContain('add_header Content-Security-Policy');
+      expect(match?.[1]).toContain('connect-src \'self\' https://api.github.com wss:');
+    }
+  });
+
   it('keeps REST calls same-origin for localhost browsers when VITE_API_URL targets localhost', () => {
     const baseUrl = resolveApiBaseUrl('http://localhost:3001', {
       hostname: 'localhost',

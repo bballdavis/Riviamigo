@@ -5,6 +5,8 @@ import {
   StatusBar,
   ThemeToggle,
   AmbientOrbs,
+  Tooltip,
+  getBatteryIcon,
   DEFAULT_NAV_ITEMS,
   type NavItem,
   type VehicleOnlineState,
@@ -18,20 +20,14 @@ import {
   useVehicleStatus,
 } from '@riviamigo/hooks';
 import { isVehicleCharging } from '@riviamigo/types';
-import { CalendarClock, Loader2, LogOut, Settings, TriangleAlert, UserCog, Wifi, WifiOff } from 'lucide-react';
+import { BatteryCharging, CalendarClock, Download, Loader2, LogOut, Settings, TriangleAlert, UserCog, Wifi, WifiOff } from 'lucide-react';
 import { GiRestingVampire } from 'react-icons/gi';
-import {
-  TbBattery1,
-  TbBattery2,
-  TbBattery3,
-  TbBattery4,
-  TbBatteryCharging,
-  TbBatteryOff,
-  TbCarSuv,
-} from 'react-icons/tb';
+import { TbCarSuv } from 'react-icons/tb';
 import { FaTruckPickup } from 'react-icons/fa6';
 import { emitToast } from '../feedback/toast';
 import { useThemePreferenceController } from '../../hooks/useThemePreferenceController';
+import { useGithubReleaseCheck } from '../../hooks/useGithubReleaseCheck';
+import { RELEASES_URL } from '../../lib/releaseCheck';
 import {
   getRivianCredentialRenewalNotice,
   type RivianCredentialRenewalNotice,
@@ -75,6 +71,52 @@ function CredentialRenewalNotice({
       <CalendarClock className="h-4 w-4 shrink-0" aria-hidden="true" />
       {!compact ? <span className="min-w-0 text-sm font-medium leading-5">{notice.label}</span> : null}
     </button>
+  );
+}
+
+/** Only rendered when a newer release exists; otherwise the footer has no update affordance. */
+function GitHubReleasesLink({
+  updateAvailable,
+  currentVersion,
+  latestVersion,
+  size = 'desktop',
+}: {
+  updateAvailable: boolean;
+  currentVersion: string | null;
+  latestVersion: string | null;
+  size?: 'desktop' | 'mobile' | 'collapsed';
+}) {
+  if (!updateAvailable || !latestVersion) return null;
+  const dimensions = size === 'mobile'
+    ? 'h-12 w-12'
+    : size === 'collapsed'
+      ? 'h-8 w-6'
+      : 'h-8 w-8';
+  const tooltip = (
+    <span className="flex flex-col gap-1">
+      <span className="font-medium text-status-warning">Update available</span>
+      <span className="flex items-center justify-between gap-3">
+        <span className="text-fg-tertiary">Current</span>
+        <span className="font-mono">{currentVersion && currentVersion !== 'unknown' ? currentVersion : 'Unknown'}</span>
+      </span>
+      <span className="flex items-center justify-between gap-3">
+        <span className="text-fg-tertiary">Latest</span>
+        <span className="font-mono text-status-warning">{latestVersion}</span>
+      </span>
+    </span>
+  );
+  return (
+    <Tooltip content={tooltip} align="end">
+      <a
+        href={RELEASES_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={`New release ${latestVersion} available. View GitHub Releases`}
+        className={`flex shrink-0 items-center justify-center rounded-lg text-status-warning transition-colors hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${dimensions}`}
+      >
+        <Download className={`${size === 'desktop' ? 'h-4 w-4' : 'h-5 w-5'} shrink-0`} aria-hidden="true" />
+      </a>
+    </Tooltip>
   );
 }
 
@@ -136,15 +178,8 @@ export function resolveVehicleOnlineState({
   return 'online';
 }
 
-function getCompactBatteryIcon(socPercent: number) {
-  if (socPercent > 75) return { Component: TbBattery4, variant: 'four' };
-  if (socPercent > 50) return { Component: TbBattery3, variant: 'three' };
-  if (socPercent > 25) return { Component: TbBattery2, variant: 'two' };
-  if (socPercent > 5) return { Component: TbBattery1, variant: 'one' };
-  return { Component: TbBatteryOff, variant: 'off' };
-}
-
 export function AppLayout({ children, activeKey }: AppLayoutProps) {
+  const releaseCheck = useGithubReleaseCheck();
   const navigate = useNavigate();
   const accessToken = useAuth((s) => s.accessToken);
   const logout = useAuth((s) => s.logout);
@@ -226,11 +261,14 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
   const showCompactBattery = compactBatteryLevel !== undefined && onlineState === 'online';
   const compactBatteryIcon = showCompactBattery
     ? compactIsCharging
-      ? { Component: TbBatteryCharging, variant: 'charging' }
-      : getCompactBatteryIcon(compactBatteryLevel)
+      ? { Component: BatteryCharging, variant: 'charging' }
+      : getBatteryIcon(compactBatteryLevel)
     : undefined;
   const collapsedFooterRow =
     '-mx-1 grid w-[calc(100%+0.5rem)] grid-cols-[24px_24px] items-center justify-between';
+  const collapsedSettingsRow = releaseCheck.updateAvailable
+    ? collapsedFooterRow
+    : '-mx-1 flex w-[calc(100%+0.5rem)] items-center justify-center';
   const collapsedStatusRow = compactBatteryIcon
     ? collapsedFooterRow
     : 'flex w-full items-center justify-center';
@@ -314,18 +352,26 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 size="menu"
               />
 
-              <button
-                type="button"
-                onClick={() => {
-                  navigate({ to: '/settings' });
-                  closeMobileNavigation(false);
-                }}
-                aria-label="Open settings"
-                className="flex h-12 w-full items-center gap-3 rounded-lg px-4 text-sm font-medium text-fg-secondary transition-colors hover:bg-bg-elevated hover:text-fg"
-              >
-                <Settings className="h-5 w-5 shrink-0" />
-                <span>Settings</span>
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigate({ to: '/settings' });
+                    closeMobileNavigation(false);
+                  }}
+                  aria-label="Open settings"
+                  className="flex h-12 min-w-0 flex-1 items-center gap-3 rounded-lg px-4 text-sm font-medium text-fg-secondary transition-colors hover:bg-bg-elevated hover:text-fg"
+                >
+                  <Settings className="h-5 w-5 shrink-0" />
+                  <span>Settings</span>
+                </button>
+                <GitHubReleasesLink
+                  size="mobile"
+                  updateAvailable={releaseCheck.updateAvailable}
+                  currentVersion={releaseCheck.version.data?.version ?? null}
+                  latestVersion={releaseCheck.status.latestVersion}
+                />
+              </div>
 
               <button
                 type="button"
@@ -381,7 +427,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 >
                   {compactBatteryIcon && (
                     <compactBatteryIcon.Component
-                      className={`h-4 w-4 ${
+                      className={`h-5 w-5 ${
                         compactBatteryIcon.variant === 'charging'
                           ? 'text-accent'
                           : (compactBatteryLevel ?? 0) > 50
@@ -390,7 +436,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                               ? 'text-status-warning'
                               : 'text-status-danger'
                       }`}
-                      data-battery-icon={`tb-battery-${compactBatteryIcon.variant}`}
+                      data-battery-icon={`battery-${compactBatteryIcon.variant}`}
                     />
                   )}
                 </div>
@@ -404,15 +450,23 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 />
               ) : null}
 
-              <button
-                type="button"
-                onClick={() => navigate({ to: '/settings' })}
-                title="Settings"
-                aria-label="Open settings"
-                className="-mx-1 flex h-8 w-[calc(100%+0.5rem)] items-center justify-center rounded-lg text-fg-tertiary transition-colors hover:bg-bg-elevated hover:text-fg"
-              >
-                <Settings className="h-4 w-4 shrink-0" />
-              </button>
+              <div className={collapsedSettingsRow}>
+                <button
+                  type="button"
+                  onClick={() => navigate({ to: '/settings' })}
+                  title="Settings"
+                  aria-label="Open settings"
+                  className="flex h-8 w-6 items-center justify-center rounded-lg text-fg-tertiary transition-colors hover:bg-bg-elevated hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  <Settings className="h-4 w-4 shrink-0" />
+                </button>
+                <GitHubReleasesLink
+                  size="collapsed"
+                  updateAvailable={releaseCheck.updateAvailable}
+                  currentVersion={releaseCheck.version.data?.version ?? null}
+                  latestVersion={releaseCheck.status.latestVersion}
+                />
+              </div>
 
               <div className={collapsedFooterRow}>
                 <button
@@ -424,7 +478,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 >
                   <LogOut className="h-4 w-4 shrink-0" />
                 </button>
-                <ThemeToggle mode={themeController.mode} onModeChange={themeController.onModeChange} disabled={themeController.isPending} variant="ghost" className="h-8 w-8" ariaLabel="Theme options" />
+                <ThemeToggle mode={themeController.mode} onModeChange={themeController.onModeChange} disabled={themeController.isPending} variant="ghost" className="h-8 w-6" iconClassName="h-5 w-5" ariaLabel="Theme options" />
               </div>
             </div>
           ) : (
@@ -443,16 +497,23 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 compact={collapsed}
               />
 
-              <button
-                type="button"
-                onClick={() => navigate({ to: '/settings' })}
-                title="Settings"
-                aria-label="Open settings"
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-fg-tertiary transition-colors hover:bg-bg-elevated hover:text-fg"
-              >
-                <Settings className="h-4 w-4 shrink-0" />
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => navigate({ to: '/settings' })}
+                  title="Settings"
+                  aria-label="Open settings"
+                  className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-2 text-fg-tertiary transition-colors hover:bg-bg-elevated hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  <Settings className="h-4 w-4 shrink-0" />
                   <span className="text-sm font-medium">Settings</span>
-              </button>
+                </button>
+                <GitHubReleasesLink
+                  updateAvailable={releaseCheck.updateAvailable}
+                  currentVersion={releaseCheck.version.data?.version ?? null}
+                  latestVersion={releaseCheck.status.latestVersion}
+                />
+              </div>
 
               <div className="flex items-center justify-between">
                 <button

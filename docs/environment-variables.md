@@ -28,7 +28,7 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 | `RIVIAMIGO_IMAGE_REGISTRY` | `ghcr.io/bballdavis` | Registry namespace containing the unified `riviamigo` image. |
 | `IMAGE_TAG` | `latest` | Image tag; use a Calendar Version for repeatable deployments. |
 | `RIVIAMIGO_ORIGIN_PORT` | `8080` | Host port mapped to the unified app container. Protect it with host firewall rules when using a remote gateway. |
-| `RIVIAMIGO_HOST_BIND_ADDRESS` | `0.0.0.0` | Docker host-side address for the published origin port. This Compose-only setting is separate from the application's internal listener. Restrict it with a host firewall. |
+| `RIVIAMIGO_HOST_BIND_ADDRESS` | `127.0.0.1` | Docker host-side address for the published origin port. Prefer the loopback default or remove host publication when the gateway shares the Docker network. A non-loopback override needs an explicit firewall boundary. |
 | `RIVIAMIGO_BIND_ADDRESS` | `127.0.0.1` | Application listener address inside the container. It is not the Docker host publication address. |
 | `ALLOW_PUBLIC_ORIGIN_BIND` | `false` | Required, with the literal value `true`, before a non-loopback application `RIVIAMIGO_BIND_ADDRESS` is accepted. This is an explicit exposure opt-in, not a substitute for the authenticated gateway and firewall. |
 | `ALLOW_INSECURE_LAN_HTTP_AUTH` | `false` | **LAN-only exception.** With the literal value `true`, permits non-Secure refresh cookies only when `ALLOW_PUBLIC_ORIGIN_BIND=true`, the API binds to an unspecified/private/loopback/link-local IP, and every `ALLOWED_ORIGINS` entry is an exact `http://` private/loopback/link-local IP literal. It rejects hostnames, public IPs, HTTPS/HTTP mixes, paths, and credentials. Browser credentials and telemetry can be intercepted; prefer HTTPS. |
@@ -62,6 +62,9 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 | `RECOVERY_MAX_UPLOAD_BYTES` | `17179869184` (16 GiB) | Largest accepted imported recovery package. |
 | `RECOVERY_MAX_EXPANDED_BYTES` | `68719476736` (64 GiB) | Largest permitted expanded recovery archive. |
 | `RECOVERY_MAX_MEMBER_BYTES` | `68719476736` (64 GiB) | Largest permitted individual archive member. Cannot exceed the expanded limit. |
+| `RECOVERY_MAX_MANIFEST_BYTES` | `1048576` (1 MiB) | Independent manifest JSON limit during validation and extraction. |
+| `RECOVERY_MAX_SETTINGS_BYTES` | `1048576` (1 MiB) | Independent backup-settings JSON limit. |
+| `RECOVERY_MAX_HISTORY_BYTES` | `16777216` (16 MiB) | Operational-history JSON limit; records are parsed and merged incrementally. |
 | `RECOVERY_MAX_MEMBERS` | `10000` | Maximum archive-member count. |
 | `RECOVERY_MAX_COMPRESSION_RATIO` | `200` | Maximum permitted expanded-to-compressed archive ratio. |
 | `RECOVERY_MIN_FREE_BYTES` | `2147483648` (2 GiB) | Minimum free artifact-volume space before import/write steps. Values below 2 GiB are rejected. |
@@ -70,6 +73,36 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 | `S3_ENDPOINT` | Unset | Optional fallback endpoint when the saved S3 endpoint is empty. Custom endpoints use path-style addressing. |
 | `S3_ACCESS_KEY` | Unset | Optional fallback access key used only when a complete saved credential pair is unavailable. |
 | `S3_SECRET_KEY` | Unset | Optional fallback secret key paired with `S3_ACCESS_KEY`; never returned by the API or stored in recovery packages. |
+
+## Resource and outbound controls
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `WS_MAX_PER_USER` | `8` | Concurrent live sockets per account. |
+| `WS_MAX_PER_VEHICLE` | `32` | Concurrent live sockets per vehicle. |
+| `WS_MAX_GLOBAL` | `128` | Concurrent live sockets per API process. Admission precedes Redis subscription allocation. |
+| `METRICS_MAX_PER_USER` | `4` | Concurrent metric/Grafana operations per account. |
+| `METRICS_MAX_GLOBAL` | `8` | Concurrent metric/Grafana operations per API process; maximum configurable value is 16 to retain database connection capacity. |
+| `METRICS_TIMEOUT_SECONDS` | `600` | Whole metric-operation deadline. Match upstream proxy timeouts when changing it. |
+| `BASEMAP_CACHE_MAX_BYTES` | `134217728` (128 MiB) | Shared basemap payload, metadata and index budget. Cache pressure produces misses, not global operational-key eviction. |
+| `BASEMAP_CACHE_TTL_SECONDS` | `604800` (7 days) | Lifetime of each cached basemap payload and response metadata. |
+| `REDIS_MAXMEMORY` | `192mb` | Production Compose Redis limit beneath its 256 MiB container limit. Uses `noeviction`; operational writes can fail if the remaining headroom is exhausted. |
+| `WEATHER_MAX_RESPONSE_BYTES` | `10485760` | Actual weather response-body byte limit. |
+| `RIVIAN_MAX_RESPONSE_BYTES` | `10485760` | Actual Rivian HTTP response-body byte limit. |
+| `GEOCODER_MAX_RESPONSE_BYTES` | `2097152` | Actual geocoder response-body byte limit. |
+| `OIDC_MAX_RESPONSE_BYTES` | `2097152` | Discovery, token and JWKS response-body byte limit. |
+| `OIDC_PRIVATE_NETWORK_ALLOWLIST` | Empty | Operator-owned comma-separated private CIDRs for HTTPS OIDC providers. Restores cannot populate this policy. |
+| `S3_PRIVATE_NETWORK_ALLOWLIST` | Empty | Operator-owned comma-separated private CIDRs for custom S3 endpoints. |
+| `S3_ALLOW_INSECURE_PRIVATE_HTTP` | `false` | Explicit trusted-LAN S3 HTTP exception; also requires matching private CIDRs. Public HTTP is always rejected. |
+| `S3_ALLOW_DEVELOPMENT_GARAGE` | `false` | Development-only exception for the exact operator-configured `S3_ENDPOINT` origin resolving exclusively to local/private addresses. The dev launcher and dev Compose enable it for Garage. Ignored in production. |
+| `DEV_HOST_BIND_ADDRESS` | `127.0.0.1` | Development Compose publication address for API, PostgreSQL, Redis and Garage ports. Override only for intentional network sharing. |
+
+Weather/geocoder private-network policy remains in **External Connections**.
+Every outbound connection validates all current DNS answers and pins those
+addresses while retaining the hostname for TLS/signing. Mixed public/private
+answers, metadata/link-local addresses and redirects are rejected. Environment
+HTTP proxies do not bypass this policy. Public providers use HTTPS; private
+exceptions must be explicit and limited to their intended CIDRs.
 
 ## OIDC and authentication overrides
 
@@ -123,12 +156,14 @@ The setup endpoint reports whether a proof is required and available, but never
 reveals its source or value. An unclaimed production installation without a
 configured proof remains healthy but refuses registration.
 
-Generated application keys are part of the PostgreSQL backup and therefore
-survive restore. This is an explicitly accepted **P2 shared-fate risk**: a
-database compromise or loss can affect both application state and locally
-generated keys. Operators who need separate key custody should supply all three
-external overrides from their secret manager and maintain a tested recovery path
-for that manager. Administrators can inspect the active source through
+Generated application keys live in PostgreSQL, but Riviamigo recovery packages
+exclude them. Restore generates fresh keys unless the complete external trio is
+configured; provider credentials and sessions must be recreated. This is an
+explicitly accepted **P2 shared-fate risk**: compromise of the live database can
+affect both application state and locally generated keys. Operators who need
+separate key custody should supply all three external overrides from their
+secret manager and maintain a tested recovery path for that manager.
+Administrators can inspect the active source through
 `GET /v1/admin/security/status`; startup logs expose only the source category,
 never key material. Supplying a new explicit
 age key to an existing database can make stored encrypted credentials unreadable;

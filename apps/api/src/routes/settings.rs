@@ -17,6 +17,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/settings/timezone", get(get_timezone).put(update_timezone))
         .route(
+            "/settings/update-check",
+            get(get_update_check_settings).put(update_update_check_settings),
+        )
+        .route(
             "/settings/authentication",
             get(get_authentication).put(update_authentication),
         )
@@ -77,6 +81,51 @@ struct UpdateTimezoneBody {
     timezone: String,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum UpdateCheckFrequency {
+    Hourly,
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+impl UpdateCheckFrequency {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Hourly => "hourly",
+            Self::Daily => "daily",
+            Self::Weekly => "weekly",
+            Self::Monthly => "monthly",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, AppError> {
+        match value {
+            "hourly" => Ok(Self::Hourly),
+            "daily" => Ok(Self::Daily),
+            "weekly" => Ok(Self::Weekly),
+            "monthly" => Ok(Self::Monthly),
+            _ => Err(AppError::Internal(anyhow::anyhow!(
+                "unknown update check frequency in database"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateCheckSettingsResponse {
+    enabled: bool,
+    frequency: UpdateCheckFrequency,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateCheckSettingsBody {
+    enabled: bool,
+    frequency: UpdateCheckFrequency,
+}
+
 #[derive(Debug, Serialize)]
 struct SecurityStatusResponse {
     cryptographic_key_source: &'static str,
@@ -91,6 +140,53 @@ async fn get_timezone(
 ) -> Result<Json<TimezoneResponse>, AppError> {
     Ok(Json(TimezoneResponse {
         timezone: app_settings::load_app_timezone_name(&state.pool).await?,
+    }))
+}
+
+async fn get_update_check_settings(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+) -> Result<Json<UpdateCheckSettingsResponse>, AppError> {
+    let (enabled, frequency): (bool, String) = sqlx::query_as(
+        "SELECT enabled, frequency FROM riviamigo.update_check_settings WHERE id = TRUE",
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(UpdateCheckSettingsResponse {
+        enabled,
+        frequency: UpdateCheckFrequency::parse(&frequency)?,
+    }))
+}
+
+async fn update_update_check_settings(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+    Json(body): Json<UpdateCheckSettingsBody>,
+) -> Result<Json<UpdateCheckSettingsResponse>, AppError> {
+    require_admin(&state, auth.user_id).await?;
+    let mut transaction = state.pool.begin().await?;
+    let (enabled, frequency): (bool, String) = sqlx::query_as(
+        "INSERT INTO riviamigo.update_check_settings (id, enabled, frequency, updated_by) \
+         VALUES (TRUE, $1, $2, $3) \
+         ON CONFLICT (id) DO UPDATE SET enabled = EXCLUDED.enabled, \
+             frequency = EXCLUDED.frequency, updated_by = EXCLUDED.updated_by, updated_at = now() \
+         RETURNING enabled, frequency",
+    )
+    .bind(body.enabled)
+    .bind(body.frequency.as_str())
+    .bind(auth.user_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    SecurityAuditEvent::success("github_release_check_settings_updated", Some(auth.user_id))
+        .target("system_config:github_release_check")
+        .request_id_from_headers(&headers)
+        .record_tx(&mut transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(Json(UpdateCheckSettingsResponse {
+        enabled,
+        frequency: UpdateCheckFrequency::parse(&frequency)?,
     }))
 }
 
@@ -139,8 +235,47 @@ async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> 
         .fetch_optional(&state.pool)
         .await?;
 
-    match role.as_deref() {
-        Some("admin") | Some("super_user") => Ok(()),
-        _ => Err(AppError::Forbidden),
+    if role_can_manage_installation(role.as_deref()) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
+
+fn role_can_manage_installation(role: Option<&str>) -> bool {
+    matches!(role, Some("admin" | "super_user"))
+}
+
+#[cfg(test)]
+mod update_check_tests {
+    use super::{role_can_manage_installation, UpdateCheckFrequency};
+
+    #[test]
+    fn only_administrator_roles_can_change_installation_settings() {
+        assert!(role_can_manage_installation(Some("admin")));
+        assert!(role_can_manage_installation(Some("super_user")));
+        assert!(!role_can_manage_installation(Some("user")));
+        assert!(!role_can_manage_installation(None));
+    }
+
+    #[test]
+    fn supports_only_the_persisted_update_check_frequencies() {
+        assert_eq!(
+            UpdateCheckFrequency::parse("hourly").unwrap(),
+            UpdateCheckFrequency::Hourly
+        );
+        assert_eq!(
+            UpdateCheckFrequency::parse("daily").unwrap(),
+            UpdateCheckFrequency::Daily
+        );
+        assert_eq!(
+            UpdateCheckFrequency::parse("weekly").unwrap(),
+            UpdateCheckFrequency::Weekly
+        );
+        assert_eq!(
+            UpdateCheckFrequency::parse("monthly").unwrap(),
+            UpdateCheckFrequency::Monthly
+        );
+        assert!(UpdateCheckFrequency::parse("fortnightly").is_err());
     }
 }

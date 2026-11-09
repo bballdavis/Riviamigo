@@ -7,6 +7,135 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 const MIN_SETUP_TOKEN_BYTES: usize = 32;
+#[derive(Debug, Clone, Deserialize)]
+pub struct SecurityConfig {
+    #[serde(
+        default = "default_ws_max_per_user",
+        deserialize_with = "deserialize_from_str"
+    )]
+    pub ws_max_per_user: usize,
+    #[serde(
+        default = "default_ws_max_per_vehicle",
+        deserialize_with = "deserialize_from_str"
+    )]
+    pub ws_max_per_vehicle: usize,
+    #[serde(
+        default = "default_ws_max_global",
+        deserialize_with = "deserialize_from_str"
+    )]
+    pub ws_max_global: usize,
+    #[serde(
+        default = "default_metrics_max_per_user",
+        deserialize_with = "deserialize_from_str"
+    )]
+    pub metrics_max_per_user: usize,
+    #[serde(
+        default = "default_metrics_max_global",
+        deserialize_with = "deserialize_from_str"
+    )]
+    pub metrics_max_global: usize,
+    #[serde(
+        default = "default_metrics_timeout_seconds",
+        deserialize_with = "deserialize_from_str"
+    )]
+    pub metrics_timeout_seconds: u64,
+    #[serde(
+        default = "default_basemap_cache_max_bytes",
+        deserialize_with = "deserialize_from_str"
+    )]
+    pub basemap_cache_max_bytes: u64,
+    #[serde(
+        default = "default_basemap_cache_ttl_seconds",
+        deserialize_with = "deserialize_from_str"
+    )]
+    pub basemap_cache_ttl_seconds: u64,
+    #[serde(
+        default = "default_weather_max_response_bytes",
+        deserialize_with = "deserialize_from_str"
+    )]
+    pub weather_max_response_bytes: usize,
+    #[serde(
+        default = "default_rivian_max_response_bytes",
+        deserialize_with = "deserialize_from_str"
+    )]
+    pub rivian_max_response_bytes: usize,
+    #[serde(
+        default = "default_geocoder_max_response_bytes",
+        deserialize_with = "deserialize_from_str"
+    )]
+    pub geocoder_max_response_bytes: usize,
+    #[serde(
+        default = "default_oidc_max_response_bytes",
+        deserialize_with = "deserialize_from_str"
+    )]
+    pub oidc_max_response_bytes: usize,
+    #[serde(default)]
+    pub oidc_private_network_allowlist: String,
+    #[serde(default)]
+    pub s3_private_network_allowlist: String,
+    #[serde(default, deserialize_with = "deserialize_from_str")]
+    pub s3_allow_insecure_private_http: bool,
+    #[serde(default, deserialize_with = "deserialize_from_str")]
+    pub s3_allow_development_garage: bool,
+}
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            ws_max_per_user: 8,
+            ws_max_per_vehicle: 32,
+            ws_max_global: 128,
+            metrics_max_per_user: 4,
+            metrics_max_global: 8,
+            metrics_timeout_seconds: 600,
+            basemap_cache_max_bytes: 134217728,
+            basemap_cache_ttl_seconds: 604800,
+            weather_max_response_bytes: 10485760,
+            rivian_max_response_bytes: 10485760,
+            geocoder_max_response_bytes: 2097152,
+            oidc_max_response_bytes: 2097152,
+            oidc_private_network_allowlist: String::new(),
+            s3_private_network_allowlist: String::new(),
+            s3_allow_insecure_private_http: false,
+            s3_allow_development_garage: false,
+        }
+    }
+}
+fn default_ws_max_per_user() -> usize {
+    8
+}
+fn default_ws_max_per_vehicle() -> usize {
+    32
+}
+fn default_ws_max_global() -> usize {
+    128
+}
+fn default_metrics_max_per_user() -> usize {
+    4
+}
+fn default_metrics_max_global() -> usize {
+    8
+}
+fn default_metrics_timeout_seconds() -> u64 {
+    600
+}
+fn default_basemap_cache_max_bytes() -> u64 {
+    134217728
+}
+fn default_basemap_cache_ttl_seconds() -> u64 {
+    604800
+}
+fn default_weather_max_response_bytes() -> usize {
+    10485760
+}
+fn default_rivian_max_response_bytes() -> usize {
+    10485760
+}
+fn default_geocoder_max_response_bytes() -> usize {
+    2097152
+}
+fn default_oidc_max_response_bytes() -> usize {
+    2097152
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -42,6 +171,8 @@ pub struct Config {
     pub recovery: RecoveryConfig,
     #[serde(flatten)]
     pub origin_bind: OriginBindConfig,
+    #[serde(flatten)]
+    pub security: SecurityConfig,
     #[serde(default = "default_rivian_ws_reconnect_initial_seconds")]
     pub rivian_ws_reconnect_initial_seconds: u64,
     #[serde(default = "default_rivian_ws_reconnect_max_seconds")]
@@ -111,6 +242,24 @@ pub struct RecoveryConfig {
         deserialize_with = "deserialize_from_str"
     )]
     pub max_member_bytes: u64,
+    #[serde(
+        rename = "recovery_max_manifest_bytes",
+        default = "default_recovery_max_manifest_bytes",
+        deserialize_with = "deserialize_from_str"
+    )]
+    pub max_manifest_bytes: u64,
+    #[serde(
+        rename = "recovery_max_settings_bytes",
+        default = "default_recovery_max_settings_bytes",
+        deserialize_with = "deserialize_from_str"
+    )]
+    pub max_settings_bytes: u64,
+    #[serde(
+        rename = "recovery_max_history_bytes",
+        default = "default_recovery_max_history_bytes",
+        deserialize_with = "deserialize_from_str"
+    )]
+    pub max_history_bytes: u64,
     #[serde(
         rename = "recovery_max_members",
         default = "default_recovery_max_members",
@@ -243,6 +392,18 @@ fn default_recovery_max_expanded_bytes() -> u64 {
 fn default_recovery_max_member_bytes() -> u64 {
     64 * 1024 * 1024 * 1024
 }
+fn default_recovery_max_manifest_bytes() -> u64 {
+    1048576
+}
+
+fn default_recovery_max_settings_bytes() -> u64 {
+    1048576
+}
+
+fn default_recovery_max_history_bytes() -> u64 {
+    16777216
+}
+
 fn default_recovery_max_members() -> usize {
     10_000
 }
@@ -338,6 +499,32 @@ impl Config {
     ///
     /// Hard-rejects insecure configurations when `RIVIAMIGO_ENV=production`.
     pub fn validate(&self) -> anyhow::Result<()> {
+        let s = &self.security;
+        crate::services::outbound::operator_allowlist(&s.oidc_private_network_allowlist)
+            .map_err(|e| anyhow::anyhow!("OIDC_PRIVATE_NETWORK_ALLOWLIST: {e}"))?;
+        crate::services::outbound::operator_allowlist(&s.s3_private_network_allowlist)
+            .map_err(|e| anyhow::anyhow!("S3_PRIVATE_NETWORK_ALLOWLIST: {e}"))?;
+        anyhow::ensure!(
+            s.ws_max_per_user > 0 && s.ws_max_per_vehicle > 0 && s.ws_max_global > 0,
+            "WS_MAX_PER_USER, WS_MAX_PER_VEHICLE and WS_MAX_GLOBAL must be positive"
+        );
+        anyhow::ensure!(
+            s.metrics_max_per_user > 0 && s.metrics_max_global > 0 && s.metrics_max_global <= 16,
+            "METRICS_MAX_GLOBAL must be 1..=16 and METRICS_MAX_PER_USER must be positive"
+        );
+        anyhow::ensure!(
+            s.metrics_timeout_seconds > 0
+                && s.basemap_cache_max_bytes > 0
+                && s.basemap_cache_ttl_seconds > 0,
+            "Metric deadline and basemap cache limits must be positive"
+        );
+        anyhow::ensure!(
+            s.weather_max_response_bytes > 0
+                && s.rivian_max_response_bytes > 0
+                && s.geocoder_max_response_bytes > 0
+                && s.oidc_max_response_bytes > 0,
+            "Response byte limits must be positive"
+        );
         OidcEnvOverrides::from_env()?.validate()?;
         let is_production = self.is_production();
         let bind_address: IpAddr =
@@ -471,6 +658,9 @@ impl Config {
     fn validate_recovery_limits(&self) -> anyhow::Result<()> {
         if self.recovery.max_upload_bytes == 0
             || self.recovery.max_expanded_bytes == 0
+            || self.recovery.max_manifest_bytes == 0
+            || self.recovery.max_settings_bytes == 0
+            || self.recovery.max_history_bytes == 0
             || self.recovery.max_member_bytes == 0
             || self.recovery.max_members == 0
             || self.recovery.max_compression_ratio == 0
@@ -769,6 +959,9 @@ impl Default for RecoveryConfig {
             max_upload_bytes: default_recovery_max_upload_bytes(),
             max_expanded_bytes: default_recovery_max_expanded_bytes(),
             max_member_bytes: default_recovery_max_member_bytes(),
+            max_manifest_bytes: default_recovery_max_manifest_bytes(),
+            max_settings_bytes: default_recovery_max_settings_bytes(),
+            max_history_bytes: default_recovery_max_history_bytes(),
             max_members: default_recovery_max_members(),
             max_compression_ratio: default_recovery_max_compression_ratio(),
             min_free_bytes: default_recovery_min_free_bytes(),
@@ -853,6 +1046,7 @@ mod tests {
             restore_agent_key_file: default_restore_agent_key_file(),
             recovery: RecoveryConfig::default(),
             origin_bind: OriginBindConfig::default(),
+            security: Default::default(),
             rivian_ws_reconnect_initial_seconds: default_rivian_ws_reconnect_initial_seconds(),
             rivian_ws_reconnect_max_seconds: default_rivian_ws_reconnect_max_seconds(),
             rivian_raw_event_retention_days: default_rivian_raw_event_retention_days(),

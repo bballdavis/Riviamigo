@@ -1545,6 +1545,7 @@ mod tests {
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
             recovery: crate::config::RecoveryConfig::default(),
             origin_bind: crate::config::OriginBindConfig::default(),
+            security: Default::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
@@ -1567,6 +1568,7 @@ mod tests {
                 std::collections::HashMap::new(),
             )),
             supervisor: crate::ingestion::supervisor::SupervisorHandle::noop(),
+            resources: Default::default(),
         };
 
         crate::routes::build_router(state)

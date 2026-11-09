@@ -190,6 +190,21 @@ async fn stop_ingestion_capture(
 
 const CAPTURE_EXPORT_PAGE: i64 = 1000;
 
+fn capture_export_body<S>(header_line: String, rows: S) -> Body
+where
+    S: futures::Stream<Item = Result<axum::body::Bytes, std::io::Error>> + Send + 'static,
+{
+    let body = futures::StreamExt::chain(
+        futures::stream::once(async move {
+            Ok::<_, std::io::Error>(axum::body::Bytes::from(header_line))
+        }),
+        rows,
+    );
+    // HTTP body consumers may poll after EOF. Chain's final `unfold` is
+    // otherwise polled again after termination and panics (issue #76).
+    Body::from_stream(futures::StreamExt::fuse(body))
+}
+
 /// Stream the vehicle's latest capture as NDJSON: one header line, then one
 /// line per event. Neither carries the vehicle id, VIN, or name.
 async fn export_ingestion_capture(
@@ -226,14 +241,7 @@ async fn export_ingestion_capture(
             }
         }
     });
-    let body = futures::StreamExt::chain(
-        futures::stream::once(async move {
-            Ok::<_, std::io::Error>(axum::body::Bytes::from(header_line))
-        }),
-        rows,
-    );
-
-    let mut response = Response::new(Body::from_stream(body));
+    let mut response = Response::new(capture_export_body(header_line, rows));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/x-ndjson"),
@@ -271,9 +279,7 @@ struct AddVehicleBody {
     name: Option<String>,
     home_lat: Option<f64>,
     home_lng: Option<f64>,
-    model: Option<String>,
     trim: Option<String>,
-    vin: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -432,6 +438,7 @@ struct LatestVehicleTelemetry {
     window_fr_closed: Option<bool>,
     window_rl_closed: Option<bool>,
     window_rr_closed: Option<bool>,
+    window_rear_closed: Option<bool>,
     gear_guard_locked: Option<bool>,
     gear_guard_video_status: Option<String>,
     wiper_fluid_low: Option<bool>,
@@ -538,6 +545,7 @@ struct VehicleStatusFieldSeenRow {
     window_fr_closed_at: Option<chrono::DateTime<chrono::Utc>>,
     window_rl_closed_at: Option<chrono::DateTime<chrono::Utc>>,
     window_rr_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    window_rear_closed_at: Option<chrono::DateTime<chrono::Utc>>,
     gear_guard_locked_at: Option<chrono::DateTime<chrono::Utc>>,
     gear_guard_video_status_at: Option<chrono::DateTime<chrono::Utc>>,
     wiper_fluid_low_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -692,6 +700,7 @@ struct VehicleStatusResponse {
     window_fr_closed: Option<bool>,
     window_rl_closed: Option<bool>,
     window_rr_closed: Option<bool>,
+    window_rear_closed: Option<bool>,
     gear_guard_locked: Option<bool>,
     gear_guard_video_status: Option<String>,
     wiper_fluid_low: Option<bool>,
@@ -1372,7 +1381,7 @@ async fn add_vehicle(
     auth: AuthUser,
     Json(body): Json<AddVehicleBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let rivian_vehicle_id = body.rivian_vehicle_id.clone();
+    let rivian_vehicle_id = body.rivian_vehicle_id.trim().to_owned();
 
     info!(
         user_id = %auth.user_id,
@@ -1396,17 +1405,28 @@ async fn add_vehicle(
         AppError::RivianConnectSessionExpired
     })?;
 
-    let identity = age_identity(&state)?;
-    let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
-        .map_err(AppError::Internal)?;
+    // The connect session proves sign-in, not access to the ID supplied by the browser.
+    let verified = verify_account_vehicle(&tokens, &rivian_vehicle_id).await?;
+
+    let mut tx = state.pool.begin().await?;
+    // Serialize both first enrollment of a remote vehicle and default selection
+    // for one user. Hash collisions only delay work; they cannot grant access.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("enrollment:user:{}", auth.user_id))
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("enrollment:vehicle:{rivian_vehicle_id}"))
+        .execute(&mut *tx)
+        .await?;
 
     let existing_vehicle_id: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM riviamigo.vehicles WHERE rivian_vehicle_id = $1")
             .bind(&rivian_vehicle_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&mut *tx)
             .await?;
 
-    let mut tx = state.pool.begin().await?;
+    let is_new = existing_vehicle_id.is_none();
 
     let vehicle_id = if let Some(existing_vehicle_id) = existing_vehicle_id {
         let already_member = sqlx::query_scalar::<_, bool>(
@@ -1424,7 +1444,7 @@ async fn add_vehicle(
         if !already_member {
             sqlx::query(
                 "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
-                 VALUES ($1, $2, 'owner', FALSE)",
+                 VALUES ($1, $2, 'viewer', FALSE)",
             )
             .bind(existing_vehicle_id)
             .bind(auth.user_id)
@@ -1456,10 +1476,10 @@ async fn add_vehicle(
         .bind(auth.user_id)
         .bind(&rivian_vehicle_id)
         .bind(canonical_vehicle_model(
-            body.model.as_deref().unwrap_or("R1T"),
+            verified.model.as_deref().unwrap_or("R1T"),
         ))
         .bind(body.trim.as_deref())
-        .bind(body.vin.as_deref())
+        .bind(verified.vin.as_deref())
         .bind(body.name.as_deref().map(canonical_vehicle_name))
         .bind(body.home_lat)
         .bind(body.home_lng)
@@ -1492,7 +1512,11 @@ async fn add_vehicle(
         vehicle_id
     };
 
-    sqlx::query(
+    if is_new {
+        let identity = age_identity(&state)?;
+        let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
+            .map_err(AppError::Internal)?;
+        sqlx::query(
         "INSERT INTO riviamigo.vehicle_credentials (vehicle_id, encrypted_tokens, token_created_at) \
          VALUES ($1,$2,now())
          ON CONFLICT (vehicle_id) DO UPDATE
@@ -1504,6 +1528,7 @@ async fn add_vehicle(
     .bind(encrypted.as_slice())
     .execute(&mut *tx)
     .await?;
+    }
 
     // Set as default vehicle if user has none.
     sqlx::query(
@@ -1530,7 +1555,8 @@ async fn add_vehicle(
     .execute(&mut *tx)
     .await?;
 
-    sqlx::query(
+    if is_new {
+        sqlx::query(
         "INSERT INTO riviamigo.vehicle_runtime_state
          (vehicle_id, is_online, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at)
          VALUES ($1, FALSE, 'starting', 'Initializing Rivian telemetry collector', 'authorized', NULL, now())
@@ -1545,12 +1571,15 @@ async fn add_vehicle(
     .bind(vehicle_id)
     .execute(&mut *tx)
     .await?;
+    }
 
     tx.commit().await?;
 
     // The vehicle and credentials are durable after commit. Artwork and one-time
     // session cleanup must not turn a successful add into a client-visible error.
-    queue_vehicle_artwork_repair(&state, vehicle_id).await;
+    if is_new {
+        queue_vehicle_artwork_repair(&state, vehicle_id).await;
+    }
 
     if let Err(error) = redis::AsyncCommands::del::<_, ()>(&mut conn, &key).await {
         warn!(
@@ -1567,21 +1596,41 @@ async fn add_vehicle(
         "vehicle.add.persisted"
     );
 
-    let telemetry_start_queued = state
-        .supervisor
-        .send(SupervisorCommand::StartWorker { vehicle_id })
-        .await;
+    let telemetry_start_queued = is_new
+        && state
+            .supervisor
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
 
     Ok(Json(serde_json::json!({
         "vehicle_id": vehicle_id,
         "vehicle_saved": true,
-        "telemetry_status": if telemetry_start_queued { "starting" } else { "delayed" },
-        "telemetry_error": if telemetry_start_queued {
+        "telemetry_status": if !is_new { "unchanged" } else if telemetry_start_queued { "starting" } else { "delayed" },
+        "telemetry_error": if !is_new || telemetry_start_queued {
             serde_json::Value::Null
         } else {
             serde_json::Value::String("worker supervisor unavailable; retry telemetry start".into())
         },
     })))
+}
+
+async fn verify_account_vehicle(
+    tokens: &crate::ingestion::session_store::RivianTokenBundle,
+    vehicle_id: &str,
+) -> Result<RivianVehicleSummary, AppError> {
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| AppError::Internal(e.into()))?;
+    let vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, tokens)
+        .await
+        .map_err(|_| AppError::RivianApi("Unable to verify Rivian vehicle access".into()))?;
+    vehicles
+        .into_iter()
+        .find(|vehicle| vehicle.id == vehicle_id)
+        .ok_or_else(|| AppError::Validation("Rivian account does not include this vehicle".into()))
 }
 
 async fn refresh_vehicle_credentials(
@@ -1610,24 +1659,7 @@ async fn refresh_vehicle_credentials(
     .await?
     .ok_or(AppError::RivianConnectSessionExpired)?;
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .unwrap_or_default();
-    let account_vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, &tokens)
-        .await
-        .map_err(|e| {
-            warn!(vehicle_id = %vid, user_id = %auth.user_id, error = %e, "vehicle.refresh_credentials.fetch_user_vehicles_failed");
-            AppError::RivianApi("Unable to verify Rivian vehicle access".into())
-        })?;
-    if !account_vehicles
-        .iter()
-        .any(|vehicle| vehicle.id == rivian_vehicle_id)
-    {
-        return Err(AppError::Validation(
-            "Rivian account does not include this vehicle".into(),
-        ));
-    }
+    verify_account_vehicle(&tokens, &rivian_vehicle_id).await?;
 
     let identity = age_identity(&state)?;
     let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
@@ -2609,6 +2641,7 @@ async fn vehicle_status(
           tonneau_locked, tonneau_closed, side_bin_left_locked, side_bin_right_locked,
           side_bin_left_closed, side_bin_right_closed,
           window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
+          window_rear_closed,
           gear_guard_locked, gear_guard_video_status, wiper_fluid_low, brake_fluid_low,
           alarm_active, service_mode
         FROM riviamigo.vehicle_latest_status
@@ -2705,6 +2738,7 @@ async fn vehicle_status(
         window_fr_closed: None,
         window_rl_closed: None,
         window_rr_closed: None,
+        window_rear_closed: None,
         gear_guard_locked: None,
         gear_guard_video_status: None,
         wiper_fluid_low: None,
@@ -2758,6 +2792,7 @@ async fn vehicle_status(
           max(ts) FILTER (WHERE window_fr_closed IS NOT NULL) AS window_fr_closed_at,
           max(ts) FILTER (WHERE window_rl_closed IS NOT NULL) AS window_rl_closed_at,
           max(ts) FILTER (WHERE window_rr_closed IS NOT NULL) AS window_rr_closed_at,
+          max(ts) FILTER (WHERE window_rear_closed IS NOT NULL) AS window_rear_closed_at,
           max(ts) FILTER (WHERE gear_guard_locked IS NOT NULL) AS gear_guard_locked_at,
           max(ts) FILTER (WHERE gear_guard_video_status IS NOT NULL) AS gear_guard_video_status_at,
           max(ts) FILTER (WHERE wiper_fluid_low IS NOT NULL) AS wiper_fluid_low_at,
@@ -2851,6 +2886,7 @@ async fn vehicle_status(
         ("Front right window", latest.window_fr_closed),
         ("Rear left window", latest.window_rl_closed),
         ("Rear right window", latest.window_rr_closed),
+        ("Rear window", latest.window_rear_closed),
     ]);
     let software_update_status: Option<String> = latest
         .ota_status
@@ -3079,6 +3115,13 @@ async fn vehicle_status(
         "window_rr_closed",
         latest_event_at,
         seen.window_rr_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "window_rear_closed",
+        latest_event_at,
+        seen.window_rear_closed_at,
         None,
     );
     insert_field_availability(
@@ -3411,6 +3454,7 @@ async fn vehicle_status(
         window_fr_closed: latest.window_fr_closed,
         window_rl_closed: latest.window_rl_closed,
         window_rr_closed: latest.window_rr_closed,
+        window_rear_closed: latest.window_rear_closed,
         gear_guard_locked: latest.gear_guard_locked,
         gear_guard_video_status: latest.gear_guard_video_status,
         wiper_fluid_low: latest.wiper_fluid_low,
@@ -5285,9 +5329,55 @@ mod tests {
     use axum::body::Body;
     use axum::extract::State;
     use axum::Json;
+    use futures::StreamExt;
     use http::{Request, StatusCode};
     use tower::ServiceExt;
     use uuid::Uuid;
+
+    /// HTTP consumers may poll a body again after EOF. `unfold` itself is
+    /// not safe to poll after completion, including on a header-only export.
+    #[tokio::test]
+    async fn capture_export_body_remains_complete_after_eof() {
+        for page_count in [0, 1, 3] {
+            let rows = futures::stream::unfold(0, move |page| async move {
+                (page < page_count).then(|| {
+                    (
+                        Ok::<_, std::io::Error>(axum::body::Bytes::from(format!(
+                            "{{\"page\":{page}}}\n"
+                        ))),
+                        page + 1,
+                    )
+                })
+            });
+            let mut body = super::capture_export_body("{\"kind\":\"header\"}\n".into(), rows)
+                .into_data_stream();
+            let mut downloaded = Vec::new();
+            while let Some(chunk) = body.next().await {
+                downloaded.extend_from_slice(&chunk.expect("download chunk"));
+            }
+            let mut expected = "{\"kind\":\"header\"}\n".to_owned();
+            for page in 0..page_count {
+                expected.push_str(&format!("{{\"page\":{page}}}\n"));
+            }
+            assert_eq!(downloaded, expected.as_bytes());
+            for _ in 0..3 {
+                assert!(body.next().await.is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn capture_export_body_propagates_page_errors() {
+        let rows = futures::stream::unfold(Some(()), |state| async move {
+            state.map(|()| (Err(std::io::Error::other("page query failed")), None))
+        });
+        let mut body = super::capture_export_body("header\n".into(), rows).into_data_stream();
+        assert_eq!(body.next().await.unwrap().unwrap(), "header\n");
+        assert!(body.next().await.unwrap().is_err());
+        for _ in 0..3 {
+            assert!(body.next().await.is_none());
+        }
+    }
 
     #[test]
     fn maps_rejected_rivian_credentials_to_an_actionable_error() {
@@ -5358,6 +5448,7 @@ mod tests {
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
             recovery: crate::config::RecoveryConfig::default(),
             origin_bind: crate::config::OriginBindConfig::default(),
+            security: Default::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
@@ -5379,6 +5470,7 @@ mod tests {
                 std::collections::HashMap::new(),
             )),
             supervisor: crate::ingestion::supervisor::SupervisorHandle::noop(),
+            resources: Default::default(),
         }
     }
 
@@ -5424,6 +5516,7 @@ mod tests {
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
             recovery: crate::config::RecoveryConfig::default(),
             origin_bind: crate::config::OriginBindConfig::default(),
+            security: Default::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
@@ -5446,6 +5539,7 @@ mod tests {
                 std::collections::HashMap::new(),
             )),
             supervisor: crate::ingestion::supervisor::SupervisorHandle::noop(),
+            resources: Default::default(),
         };
 
         crate::routes::build_router(state)
@@ -5648,6 +5742,7 @@ mod tests {
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
             recovery: crate::config::RecoveryConfig::default(),
             origin_bind: crate::config::OriginBindConfig::default(),
+            security: Default::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,

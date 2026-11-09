@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::{
     db::vehicles::get_default_vehicle_id,
     errors::AppError,
-    middleware::auth::{issue_access_token, AppState, AuthUser},
+    middleware::auth::{issue_session_access_token, AppState, AuthUser},
     routes::users_support::hash_password,
     services::security_audit::SecurityAuditEvent,
     services::{authentication_settings, oidc},
@@ -1120,8 +1120,8 @@ async fn register(
     tx.commit().await?;
 
     // auto-login: issue tokens so the client is immediately authenticated
-    let token = issue_access_token(user_id, None, &state.jwt_keys)?;
-    let refresh = issue_refresh_token(&state.pool, user_id).await?;
+    let (refresh, sid) = issue_new_session(&state.pool, user_id).await?;
+    let token = issue_session_access_token(user_id, None, Some(sid), &state.jwt_keys)?;
     let cookie = refresh_cookie(
         &refresh,
         2_592_000,
@@ -1253,8 +1253,8 @@ async fn accept_account_invitation(
         .record_tx(&mut tx)
         .await?;
     tx.commit().await?;
-    let token = issue_access_token(user_id, None, &state.jwt_keys)?;
-    let refresh = issue_refresh_token(&state.pool, user_id).await?;
+    let (refresh, sid) = issue_new_session(&state.pool, user_id).await?;
+    let token = issue_session_access_token(user_id, None, Some(sid), &state.jwt_keys)?;
     let cookie = refresh_cookie(
         &refresh,
         2_592_000,
@@ -1355,9 +1355,10 @@ async fn login(
 
     let user_id: Uuid = row.get("id");
     let default_vehicle_id = get_default_vehicle_id(&state.pool, user_id).await?;
-    let token = issue_access_token(user_id, default_vehicle_id, &state.jwt_keys)?;
     let mut tx = state.pool.begin().await?;
-    let refresh = issue_refresh_token(&mut *tx, user_id).await?;
+    let (refresh, sid) = issue_new_session(&mut *tx, user_id).await?;
+    let token =
+        issue_session_access_token(user_id, default_vehicle_id, Some(sid), &state.jwt_keys)?;
 
     SecurityAuditEvent::success("login_success", Some(user_id))
         .target(format!("user:{user_id}"))
@@ -1420,37 +1421,84 @@ async fn refresh_from_cookie(
 
     let hash = sha2_hash(token);
 
-    // Revoke the presented token and return its user_id atomically.
-    let Some(user_id) = sqlx::query_scalar(
-        "UPDATE riviamigo.refresh_tokens
-         SET revoked_at = now()
-         WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()
-         RETURNING user_id",
+    let mut tx = state.pool.begin().await?;
+    // Always lock the family first, so a replay cannot race a descendant rotation.
+    let Some((sid, user_id, family_revoked)) = sqlx::query_as::<_, (Uuid, Uuid, bool)>(
+        "SELECT f.id, f.user_id, f.revoked_at IS NOT NULL
+         FROM riviamigo.session_families f
+         JOIN riviamigo.refresh_tokens t ON t.family_id=f.id
+         WHERE t.token_hash=$1 FOR UPDATE OF f",
     )
     .bind(hash.as_slice())
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?
     else {
         return Ok(None);
     };
 
-    // A disabled account must not gain a new refresh token even if it held a
-    // valid cookie from before the administrator disabled it.
+    let (consumed, revoked, expired) = sqlx::query_as::<_, (bool, bool, bool)>(
+        "SELECT consumed_at IS NOT NULL, revoked_at IS NOT NULL, expires_at <= now()
+         FROM riviamigo.refresh_tokens WHERE token_hash=$1 FOR UPDATE",
+    )
+    .bind(hash.as_slice())
+    .fetch_one(&mut *tx)
+    .await?;
+    if consumed {
+        crate::services::sessions::revoke_family(&mut tx, sid).await?;
+        // Commit revocation before audit I/O: audit failure must never undo it.
+        tx.commit().await?;
+        if let Err(error) = SecurityAuditEvent::failure("refresh_token_replay", Some(user_id))
+            .target(format!("session:{sid}"))
+            .request_id_from_headers(headers)
+            .record(&state.pool)
+            .await
+        {
+            tracing::error!(
+                ?error,
+                "refresh replay audit failed after session revocation"
+            );
+        }
+        return Ok(None);
+    }
+    if family_revoked || revoked || expired {
+        return Ok(None);
+    }
+
     let enabled: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM riviamigo.users WHERE id=$1 AND NOT is_disabled)",
     )
     .bind(user_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
     if !enabled {
         return Ok(None);
     }
 
-    let default_vehicle_id = get_default_vehicle_id(&state.pool, user_id).await?;
+    let default_vehicle_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT vehicle_id FROM riviamigo.vehicle_memberships
+                         WHERE user_id=$1 AND is_default LIMIT 1), default_vehicle_id)
+         FROM riviamigo.users WHERE id=$1",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
 
-    // Issue a fresh refresh token on every use so a leaked token is limited to one use.
-    let new_refresh = issue_refresh_token(&state.pool, user_id).await?;
-    let access_token = issue_access_token(user_id, default_vehicle_id, &state.jwt_keys)?;
+    let new_refresh = random_refresh_token();
+    sqlx::query("UPDATE riviamigo.refresh_tokens SET consumed_at=now(), revoked_at=now() WHERE token_hash=$1")
+        .bind(hash.as_slice()).execute(&mut *tx).await?;
+    sqlx::query(
+        "INSERT INTO riviamigo.refresh_tokens(token_hash,user_id,family_id,parent_hash,expires_at)
+                 VALUES($1,$2,$3,$4,now()+INTERVAL '30 days')",
+    )
+    .bind(sha2_hash(&new_refresh).as_slice())
+    .bind(user_id)
+    .bind(sid)
+    .bind(hash.as_slice())
+    .execute(&mut *tx)
+    .await?;
+    let access_token =
+        issue_session_access_token(user_id, default_vehicle_id, Some(sid), &state.jwt_keys)?;
+    tx.commit().await?;
 
     let max_age = 30 * 24 * 3600;
     let cookie = refresh_cookie(
@@ -1482,12 +1530,19 @@ async fn logout(
             .find_map(|p| p.trim().strip_prefix("refresh_token="))
         {
             let hash = sha2_hash(token);
-            let _ = sqlx::query!(
-                "UPDATE riviamigo.refresh_tokens SET revoked_at = now() WHERE token_hash = $1",
-                hash.as_slice()
+            let mut tx = state.pool.begin().await?;
+            let family = sqlx::query_scalar::<_, Uuid>(
+                "SELECT f.id FROM riviamigo.session_families f
+                 JOIN riviamigo.refresh_tokens t ON t.family_id=f.id
+                 WHERE t.token_hash=$1 FOR UPDATE OF f",
             )
-            .execute(&state.pool)
-            .await;
+            .bind(hash.as_slice())
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some(family) = family {
+                crate::services::sessions::revoke_family(&mut tx, family).await?;
+            }
+            tx.commit().await?;
         }
     }
     let clear_cookie = refresh_cookie("", 0, state.config.allows_insecure_refresh_cookies());
@@ -1528,14 +1583,7 @@ async fn change_password(
         .bind(auth.user_id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query(
-        "UPDATE riviamigo.refresh_tokens
-         SET revoked_at = now()
-         WHERE user_id = $1 AND revoked_at IS NULL",
-    )
-    .bind(auth.user_id)
-    .execute(&mut *tx)
-    .await?;
+    crate::services::sessions::revoke_user_sessions(&mut tx, auth.user_id).await?;
     SecurityAuditEvent::success("password_changed", Some(auth.user_id))
         .target(format!("user:{}", auth.user_id))
         .metadata(serde_json::json!({ "refresh_sessions_revoked": true }))
@@ -1576,14 +1624,7 @@ async fn set_initial_password_after_oidc(
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query(
-        "UPDATE riviamigo.refresh_tokens \
-         SET revoked_at=now() \
-         WHERE user_id=$1 AND revoked_at IS NULL",
-    )
-    .bind(user_id)
-    .execute(&mut *tx)
-    .await?;
+    crate::services::sessions::revoke_user_sessions(&mut tx, user_id).await?;
     SecurityAuditEvent::success("password_set_with_oidc", Some(user_id))
         .target(format!("user:{user_id}"))
         .metadata(serde_json::json!({ "refresh_sessions_revoked": true }))
@@ -2056,21 +2097,43 @@ async fn issue_refresh_token<'e, E>(executor: E, user_id: Uuid) -> Result<String
 where
     E: Executor<'e, Database = Postgres>,
 {
+    Ok(issue_new_session(executor, user_id).await?.0)
+}
+
+fn random_refresh_token() -> String {
     use rand::Rng;
-    let raw: String = (0..32)
+    (0..48)
         .map(|_| rand::thread_rng().sample(rand::distributions::Alphanumeric) as char)
-        .collect();
+        .collect()
+}
+
+async fn issue_new_session<'e, E>(executor: E, user_id: Uuid) -> Result<(String, Uuid), AppError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let raw = random_refresh_token();
+    let sid = Uuid::new_v4();
     let hash = sha2_hash(&raw);
     let expires_at = chrono::Utc::now() + chrono::Duration::days(30);
-    sqlx::query(
-        "INSERT INTO riviamigo.refresh_tokens (token_hash, user_id, expires_at) VALUES ($1,$2,$3)",
+    let issued = sqlx::query(
+        "WITH account AS MATERIALIZED (
+             SELECT id FROM riviamigo.users WHERE id=$2 AND NOT is_disabled FOR SHARE
+         ), family AS (
+             INSERT INTO riviamigo.session_families(id,user_id)
+               SELECT $4,id FROM account RETURNING id
+         ) INSERT INTO riviamigo.refresh_tokens(token_hash,user_id,expires_at,family_id)
+           SELECT $1,$2,$3,id FROM family",
     )
     .bind(hash.as_slice())
     .bind(user_id)
     .bind(expires_at)
+    .bind(sid)
     .execute(executor)
     .await?;
-    Ok(raw)
+    if issued.rows_affected() != 1 {
+        return Err(AppError::Unauthorized);
+    }
+    Ok((raw, sid))
 }
 
 #[cfg(test)]
@@ -2190,6 +2253,7 @@ mod tests {
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
             recovery: crate::config::RecoveryConfig::default(),
             origin_bind: crate::config::OriginBindConfig::default(),
+            security: Default::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
@@ -2212,6 +2276,7 @@ mod tests {
                 std::collections::HashMap::new(),
             )),
             supervisor: crate::ingestion::supervisor::SupervisorHandle::noop(),
+            resources: Default::default(),
         };
 
         crate::routes::build_router(state)

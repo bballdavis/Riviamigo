@@ -34,6 +34,8 @@ import {
   Button, Badge, Input, SelectPicker, Tooltip,
 } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../../components/layout/AppLayout';
+import { useReleaseCheckStatus } from '../../hooks/useGithubReleaseCheck';
+import { RELEASES_URL } from '../../lib/releaseCheck';
 import { AccountIdentitySection } from '../../components/settings/AccountIdentitySection';
 import { AuthenticationSection } from '../../components/settings/AuthenticationSection';
 import { BackupSection } from '../../components/settings/BackupSection';
@@ -666,6 +668,38 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
     navigate({ to: '/settings', search: next === 'vehicles' ? {} : { section: next } });
   }
 
+  const appVersion = useQuery({
+    queryKey: queryKeys.appVersion.current,
+    queryFn: () => api.getAppVersion(),
+    enabled: authReady && !!accessToken,
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+  const runningVersionLabel = appVersion.isLoading
+    ? 'Loading version…'
+    : appVersion.data?.version && appVersion.data.version !== 'unknown'
+      ? appVersion.data.version
+      : 'Unknown version';
+  const releaseCheck = useReleaseCheckStatus();
+  const updateCheckSettings = useQuery({
+    queryKey: queryKeys.updateCheck.current,
+    queryFn: () => api.getUpdateCheckSettings(),
+    enabled: authReady && !!accessToken,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const versionSubtitle = releaseCheck.updateAvailable && releaseCheck.latestVersion
+    ? `${releaseCheck.latestVersion} available`
+    : releaseCheck.latestVersion
+      ? 'Up to date'
+      : updateCheckSettings.data?.enabled === false
+        ? 'Update checks off'
+        : releaseCheck.error
+          ? 'Update check failed'
+          : releaseCheck.checking || updateCheckSettings.data?.enabled
+            ? 'Checking for updates…'
+            : ' ';
+
   const apiKeys = useQuery({
     queryKey: queryKeys.apiKeys.all,
     queryFn: () => api.listApiKeys(),
@@ -1030,7 +1064,27 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
 
   return (
     <AppLayout activeKey="settings">
-      <PageLayout title="Settings" subtitle="Account, vehicle, and API controls for local troubleshooting.">
+      <PageLayout
+        title="Settings"
+        subtitle="Account, vehicle, and API controls for local troubleshooting."
+        actions={(
+          <a
+            href={RELEASES_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`${runningVersionLabel}. ${versionSubtitle}. View GitHub releases`}
+            title="View GitHub releases"
+            className="rounded-md text-right focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <span className="block font-mono text-2xl font-semibold font-display tracking-tight text-fg">
+              {runningVersionLabel}
+            </span>
+            <span className={`mt-0.5 block text-sm ${releaseCheck.updateAvailable ? 'text-status-warning' : 'text-fg-tertiary'}`}>
+              {versionSubtitle}
+            </span>
+          </a>
+        )}
+      >
         {oidcFeedback && (
           <p
             role={oidcFeedbackKind === 'error' ? 'alert' : 'status'}

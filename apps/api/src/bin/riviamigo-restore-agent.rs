@@ -20,8 +20,9 @@ use riviamigo_api::{
     config::Config,
     logging,
     services::{
-        backups, restore_compatibility,
+        backups, restore_compatibility, restore_history,
         restore_jobs::{self, RestorePhase},
+        restore_policy,
     },
 };
 
@@ -37,6 +38,7 @@ struct AgentState {
 async fn main() -> anyhow::Result<()> {
     logging::init();
     let config = Config::from_env()?;
+    cleanup_restore_roles(&config).await?;
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
     if let Some(command) = arguments.first().map(String::as_str) {
         match command {
@@ -117,24 +119,36 @@ fn host_restore_state_path(config: &Config) -> PathBuf {
 async fn host_restore(config: &Config, package: &Path, force: bool) -> anyhow::Result<()> {
     let lock_pool = riviamigo_api::db::pool::create_pool(&config.database_url).await?;
     let lock = backups::acquire_recovery_mutation_lock(&lock_pool).await?;
-    let result = tokio::time::timeout(
-        Duration::from_secs(config.recovery.restore_deadline_seconds),
-        host_restore_inner(config, package, force),
+    let job_id = Uuid::new_v4();
+    let result = with_restore_deadline(
+        config,
+        job_id,
+        host_restore_inner(config, package, force, job_id),
     )
-    .await
-    .map_err(|_| anyhow::anyhow!("host restore exceeded the configured deadline"))?;
+    .await;
     lock.release().await;
     lock_pool.close().await;
     result
 }
 
-async fn host_restore_inner(config: &Config, package: &Path, force: bool) -> anyhow::Result<()> {
+async fn host_restore_inner(
+    config: &Config,
+    package: &Path,
+    force: bool,
+    job_id: Uuid,
+) -> anyhow::Result<()> {
     let state_path = host_restore_state_path(config);
     if fs::try_exists(&state_path).await.unwrap_or(false) {
         anyhow::bail!("a host restore is already awaiting finalize or rollback");
     }
-    let validated = backups::validate_recovery_package(package).await?;
-    let dump_inspection = restore_compatibility::inspect_recovery_dump(package).await?;
+    let validated =
+        backups::validate_recovery_package_with_limits(package, &config.recovery).await?;
+    let dump_inspection = restore_compatibility::inspect_recovery_dump(
+        package,
+        Path::new(&config.backup_artifact_dir),
+        &config.recovery,
+    )
+    .await?;
     let current_pool = riviamigo_api::db::pool::create_pool(&config.database_url).await?;
     let mut users_table: bool =
         sqlx::query_scalar("SELECT to_regclass('riviamigo.users') IS NOT NULL")
@@ -184,21 +198,20 @@ async fn host_restore_inner(config: &Config, package: &Path, force: bool) -> any
     }
     let target_history = restore_jobs::snapshot_catalog(&current_pool).await.ok();
 
-    let job_id = Uuid::new_v4();
     let staging = Path::new(&config.backup_artifact_dir)
         .join(".restore-staging")
         .join(format!("host-{job_id}"));
     fs::create_dir_all(&staging).await?;
     ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
-    let staged_package = staging.join("recovery-package.rma.tar.gz");
-    fs::copy(package, &staged_package).await?;
+    let staged_package = stage_recovery_package(&config, job_id, true, package).await?;
     ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
-    let staged_validation = backups::validate_recovery_package(&staged_package).await?;
+    let staged_validation =
+        backups::validate_recovery_package_with_limits(&staged_package, &config.recovery).await?;
     if staged_validation.checksum_sha256 != validated.checksum_sha256 {
         let _ = fs::remove_dir_all(&staging).await;
         anyhow::bail!("recovery package changed while it was being staged");
     }
-    extract_package(&staged_package, &staging).await?;
+    extract_package(&config, &staged_package, &staging).await?;
     ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
     let prepared = prepare_restore_database(
         &config,
@@ -630,15 +643,71 @@ async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
     let lock_pool = riviamigo_api::db::pool::create_pool(&config.database_url).await?;
     let config = config_with_active_keys(config, &lock_pool).await?;
     let lock = backups::acquire_recovery_mutation_lock(&lock_pool).await?;
-    let result = tokio::time::timeout(
-        Duration::from_secs(config.recovery.restore_deadline_seconds),
-        perform_restore_inner(&config, job_id),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("restore exceeded the four hour deadline"))?;
+    let result =
+        with_restore_deadline(&config, job_id, perform_restore_inner(&config, job_id)).await;
     lock.release().await;
     lock_pool.close().await;
     result
+}
+
+async fn with_restore_deadline<T>(
+    config: &Config,
+    job_id: Uuid,
+    restore: impl std::future::Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<T> {
+    match tokio::time::timeout(
+        Duration::from_secs(config.recovery.restore_deadline_seconds),
+        restore,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            // Dropping the inner future skips its ordinary Err cleanup. This
+            // cleanup runs while the outer recovery lock remains held.
+            cleanup_failed_candidate(config, job_id)
+                .await
+                .context("restore deadline exceeded; candidate cleanup failed")?;
+            anyhow::bail!(
+                "restore exceeded the configured deadline; candidate and credentials cleaned up"
+            )
+        }
+    }
+}
+
+async fn cleanup_failed_candidate(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
+    let maintenance = config_with_database(config, "postgres")?;
+    let role = format!("riviamigo_restore_owner_{}", job_id.simple());
+    let pool = riviamigo_api::db::pool::create_pool(&maintenance.database_url).await?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=$1)")
+        .bind(&role)
+        .fetch_one(&pool)
+        .await?;
+    if exists {
+        // Stop the role's transaction first: it may hold the catalog lock
+        // needed by ALTER ROLE (including through an archive-defined function).
+        sqlx::query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename=$1 AND pid <> pg_backend_pid()")
+            .bind(&role).execute(&pool).await?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "ALTER ROLE {} NOLOGIN PASSWORD NULL",
+            quote_identifier(&role)
+        )))
+        .execute(&pool)
+        .await?;
+        sqlx::query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename=$1 AND pid <> pg_backend_pid()")
+            .bind(&role).execute(&pool).await?;
+    }
+    pool.close().await;
+    let dropped = drop_database(
+        &maintenance,
+        &format!("riviamigo_restore_{}", job_id.simple()),
+    )
+    .await;
+    // Also covers role creation which was still in flight when timeout fired:
+    // DROP DATABASE FORCE first terminates every candidate backend.
+    let roles = cleanup_restore_roles(&maintenance).await;
+    dropped?;
+    roles
 }
 
 async fn config_with_active_keys(config: &Config, pool: &sqlx::PgPool) -> anyhow::Result<Config> {
@@ -665,10 +734,11 @@ async fn perform_restore_inner(config: &Config, job_id: Uuid) -> anyhow::Result<
     }
     fs::create_dir_all(&staging).await?;
     ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
-    let staged_package = staging.join("recovery-package.rma.tar.gz");
-    fs::copy(Path::new(&job.artifact_path), &staged_package).await?;
+    let staged_package =
+        stage_recovery_package(config, job_id, false, Path::new(&job.artifact_path)).await?;
     ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
-    let validated = backups::validate_recovery_package(&staged_package).await?;
+    let validated =
+        backups::validate_recovery_package_with_limits(&staged_package, &config.recovery).await?;
     if job
         .plan
         .as_ref()
@@ -682,7 +752,7 @@ async fn perform_restore_inner(config: &Config, job_id: Uuid) -> anyhow::Result<
         anyhow::bail!("recovery package checksum changed after restore preflight");
     }
     inject_restore_fault("package_validated")?;
-    extract_package(&staged_package, &staging).await?;
+    extract_package(config, &staged_package, &staging).await?;
     ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
 
     restore_jobs::update(
@@ -1076,9 +1146,28 @@ async fn stop_api_process() -> anyhow::Result<()> {
     anyhow::bail!("Riviamigo API did not stop before restore")
 }
 
-async fn extract_package(package: &Path, staging: &Path) -> anyhow::Result<()> {
-    backups::extract_recovery_package(package, staging).await?;
+async fn extract_package(config: &Config, package: &Path, staging: &Path) -> anyhow::Result<()> {
+    backups::extract_recovery_package_with_limits(package, staging, &config.recovery).await?;
     Ok(())
+}
+
+async fn stage_recovery_package(
+    config: &Config,
+    job_id: Uuid,
+    host: bool,
+    package: &Path,
+) -> anyhow::Result<PathBuf> {
+    let mut source = fs::File::open(package).await?;
+    Ok(
+        riviamigo_api::services::artifact_files::stage_restore_reader(
+            Path::new(&config.backup_artifact_dir),
+            job_id,
+            host,
+            &mut source,
+            &config.recovery,
+        )
+        .await?,
+    )
 }
 
 fn ensure_recovery_free_space(path: &Path, minimum: u64) -> anyhow::Result<()> {
@@ -1114,7 +1203,7 @@ async fn build_restore_toc(dump: &Path, toc_path: &Path) -> anyhow::Result<()> {
     }
     let list = String::from_utf8_lossy(&output.stdout)
         .lines()
-        .filter(|line| !line.contains(" TABLE DATA riviamigo external_connection_activity "))
+        .filter(|line| !restore_policy::skip_toc_entry(line))
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(toc_path, format!("{list}\n")).await?;
@@ -1126,8 +1215,6 @@ async fn run_pg_restore(config: &Config, dump: &Path, toc_path: &Path) -> anyhow
     let output = command
         .arg("--no-owner")
         .arg("--no-privileges")
-        .arg("--clean")
-        .arg("--if-exists")
         .arg("--exit-on-error")
         .arg("--single-transaction")
         .arg(format!("--use-list={}", toc_path.display()))
@@ -1167,33 +1254,57 @@ async fn prepare_restore_database(
         drop_database(config, &restore_database).await?;
     }
     create_database(config, &restore_database).await?;
+    let restore_role = format!("riviamigo_restore_owner_{}", job_id.simple());
+    let mut role_password_bytes = [0_u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut role_password_bytes);
+    let role_password = hex::encode(role_password_bytes);
+    let mut archive_config = restore_config.clone();
+    let mut archive_url = url::Url::parse(&archive_config.database_url)?;
+    archive_url
+        .set_username(&restore_role)
+        .map_err(|_| anyhow::anyhow!("invalid restore role"))?;
+    archive_url
+        .set_password(Some(&role_password))
+        .map_err(|_| anyhow::anyhow!("invalid restore password"))?;
+    archive_config.database_url = archive_url.to_string();
     let restore_result = async {
         inject_restore_fault("timescale_pre_restore")?;
         run_psql_with_retry(
             &restore_config,
-            "CREATE EXTENSION IF NOT EXISTS timescaledb; SELECT timescaledb_pre_restore();",
+            "CREATE SCHEMA IF NOT EXISTS riviamigo; CREATE EXTENSION IF NOT EXISTS timescaledb WITH SCHEMA public; CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public; CREATE EXTENSION IF NOT EXISTS cube WITH SCHEMA riviamigo; CREATE EXTENSION IF NOT EXISTS earthdistance WITH SCHEMA riviamigo; SELECT timescaledb_pre_restore();",
             30,
         )
         .await?;
-        build_restore_toc(dump, &toc_path).await?;
-        run_pg_restore(&restore_config, dump, &toc_path).await?;
-        inject_restore_fault("dump_restored")?;
         let pool = riviamigo_api::db::pool::create_pool(&restore_config.database_url).await?;
+        let valid_until = chrono::Utc::now() + chrono::Duration::seconds(config.recovery.restore_deadline_seconds as i64);
+        // No memberships, superuser privileges, cluster administration or file/
+        // program roles. Only this fresh candidate receives object privileges.
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE ROLE {} LOGIN PASSWORD {} VALID UNTIL {} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4", quote_identifier(&restore_role), quote_literal(&role_password), quote_literal(&valid_until.to_rfc3339()))))
+            .execute(&pool).await?;
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("REVOKE CONNECT ON DATABASE {} FROM PUBLIC; GRANT CONNECT, CREATE, TEMPORARY ON DATABASE {} TO {}; GRANT USAGE, CREATE ON SCHEMA public, riviamigo TO {}; ALTER SCHEMA riviamigo OWNER TO {};", quote_identifier(&restore_database), quote_identifier(&restore_database), quote_identifier(&restore_role), quote_identifier(&restore_role), quote_identifier(&restore_role))))
+            .execute(&pool).await?;
+        // Timescale's installed extension owns its catalog tables. COPY needs
+        // data privileges, never extension ownership or a superuser fallback.
+        for schema in ["_timescaledb_catalog", "_timescaledb_config", "_timescaledb_internal"] {
+            if schema == "_timescaledb_internal" {
+                sqlx::raw_sql(sqlx::AssertSqlSafe(format!("GRANT CREATE ON SCHEMA _timescaledb_internal TO {};", quote_identifier(&restore_role)))).execute(&pool).await?;
+            }
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!("GRANT USAGE ON SCHEMA {} TO {}; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {} TO {}; GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA {} TO {};", quote_identifier(schema), quote_identifier(&restore_role), quote_identifier(schema), quote_identifier(&restore_role), quote_identifier(schema), quote_identifier(&restore_role)))).execute(&pool).await?;
+        }
+        pool.close().await;
+        build_restore_toc(dump, &toc_path).await?;
+        run_pg_restore(&archive_config, dump, &toc_path).await?;
+        inject_restore_fault("dump_restored")?;
+        let pool = riviamigo_api::db::pool::create_pool(&archive_config.database_url).await?;
         let validation_report = restore_compatibility::prepare_candidate_schema(
             &pool,
-            &restore_config.database_url,
+            &config.database_url,
             manifest,
         )
         .await?;
         if let Some(history) = history {
             if fs::try_exists(history).await.unwrap_or(false) {
-                let mut source_history: restore_jobs::BackupCatalogSnapshot =
-                    serde_json::from_slice(&fs::read(history).await?)?;
-                restore_jobs::mark_source_artifact_availability(
-                    &mut source_history,
-                    target_history,
-                );
-                restore_jobs::merge_catalog_snapshot(&pool, &source_history).await?;
+                restore_history::merge(&pool, history, config.recovery.max_history_bytes).await?;
             }
         }
         if let Some(target_history) = target_history {
@@ -1201,14 +1312,19 @@ async fn prepare_restore_database(
         }
         pool.close().await;
         run_psql(&restore_config, "SELECT timescaledb_post_restore();").await?;
-        restore_backup_settings(&restore_config, settings).await?;
+        restore_backup_settings(&archive_config, settings).await?;
+        // Keep object ownership on this unprivileged role. Promoting archive
+        // functions to the bootstrap owner would undo the execution boundary.
+        run_psql(config, &format!("ALTER ROLE {} NOLOGIN PASSWORD NULL;", quote_identifier(&restore_role))).await?;
         Ok::<_, anyhow::Error>(validation_report)
     }
     .await;
     let validation_report = match restore_result {
         Ok(report) => report,
         Err(error) => {
-            let _ = drop_database(config, &restore_database).await;
+            if let Err(cleanup) = cleanup_failed_candidate(config, job_id).await {
+                tracing::error!(job_id = %job_id, ?cleanup, "failed candidate cleanup failed");
+            }
             let _ = fs::remove_file(&toc_path).await;
             return Err(error);
         }
@@ -1227,6 +1343,38 @@ fn config_with_database(config: &Config, database: &str) -> anyhow::Result<Confi
     url.set_path(&format!("/{database}"));
     cloned.database_url = url.to_string();
     Ok(cloned)
+}
+
+/// Make interrupted credentials unusable at startup. Roles with live object
+/// dependencies remain NOLOGIN owners; orphan roles are removed after DB cleanup.
+async fn cleanup_restore_roles(config: &Config) -> anyhow::Result<()> {
+    // Application database names may be temporarily absent during a swap.
+    let maintenance = config_with_database(config, "postgres")?;
+    let pool = riviamigo_api::db::pool::create_pool(&maintenance.database_url).await?;
+    let roles: Vec<String> = sqlx::query_scalar(
+        "SELECT rolname FROM pg_roles WHERE rolname ~ '^riviamigo_restore_owner_[0-9a-f]{32}$'",
+    )
+    .fetch_all(&pool)
+    .await?;
+    for role in roles {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "ALTER ROLE {} NOLOGIN PASSWORD NULL",
+            quote_identifier(&role)
+        )))
+        .execute(&pool)
+        .await?;
+        let dependent: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_shdepend WHERE refclassid = 'pg_authid'::regclass AND refobjid = (SELECT oid FROM pg_roles WHERE rolname = $1))").bind(&role).fetch_one(&pool).await?;
+        if !dependent {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DROP ROLE {}",
+                quote_identifier(&role)
+            )))
+            .execute(&pool)
+            .await?;
+        }
+    }
+    pool.close().await;
+    Ok(())
 }
 
 async fn create_database(config: &Config, database: &str) -> anyhow::Result<()> {
@@ -1284,7 +1432,8 @@ async fn drop_database(config: &Config, database: &str) -> anyhow::Result<()> {
         "DROP DATABASE IF EXISTS {database} WITH (FORCE);",
         database = quote_identifier(database)
     );
-    run_psql_on_database(config, "postgres", &sql).await
+    run_psql_on_database(config, "postgres", &sql).await?;
+    cleanup_restore_roles(config).await
 }
 
 async fn database_exists(config: &Config, database: &str) -> anyhow::Result<bool> {
@@ -1362,6 +1511,7 @@ fn postgres_command_for_database(
 ) -> anyhow::Result<Command> {
     let url = url::Url::parse(&config.database_url)?;
     let mut command = Command::new(program);
+    command.kill_on_drop(true);
     if let Some(host) = url.host_str() {
         command.arg(format!("--host={host}"));
     }
@@ -1389,10 +1539,17 @@ fn quote_literal(value: &str) -> String {
 }
 
 async fn restore_backup_settings(config: &Config, path: &Path) -> anyhow::Result<()> {
-    let value: serde_json::Value = serde_json::from_slice(&fs::read(path).await?)?;
+    let value: serde_json::Value =
+        restore_history::read_bounded_json(path, config.recovery.max_settings_bytes)?;
     if value.get("present").and_then(|value| value.as_bool()) != Some(true) {
         return Ok(());
     }
+    riviamigo_api::services::artifact_files::validate_prefix(
+        value
+            .get("prefix")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default(),
+    )?;
     let json_literal = serde_json::to_string(&value)?.replace('\'', "''");
     let sql = format!(
         r#"
@@ -1538,4 +1695,233 @@ async fn verify_api_state(config: &Config) -> anyhow::Result<()> {
         anyhow::bail!("restored application unexpectedly requires owner setup");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires a disposable Timescale server and PostgreSQL client tools"]
+    async fn restore_deadline_cleans_a_role_and_candidate_while_pg_restore_is_executing() {
+        let mut config = Config::from_env().expect("isolated fixture configuration");
+        config.recovery.restore_deadline_seconds = 10;
+        let files = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4();
+        let source = format!("riviamigo_timeout_source_{}", id.simple());
+        create_database(&config, &source).await.unwrap();
+        let source_config = config_with_database(&config, &source).unwrap();
+        // pg_dump records the slow replacement function and index definition;
+        // pg_restore must execute the index expression against the copied row.
+        run_psql(&source_config, "CREATE SCHEMA riviamigo; CREATE FUNCTION public.slow_restore_index(integer) RETURNS integer LANGUAGE SQL IMMUTABLE AS 'SELECT $1'; CREATE TABLE riviamigo.timeout_probe(id integer); INSERT INTO riviamigo.timeout_probe VALUES (1); CREATE INDEX timeout_probe_idx ON riviamigo.timeout_probe(public.slow_restore_index(id)); CREATE OR REPLACE FUNCTION public.slow_restore_index(integer) RETURNS integer LANGUAGE SQL IMMUTABLE AS 'SELECT $1 FROM pg_sleep(30)';").await.unwrap();
+        let dump = files.path().join("database.dump");
+        let dumped = postgres_command("pg_dump", &source_config)
+            .unwrap()
+            .arg("--format=custom")
+            .arg(format!("--file={}", dump.display()))
+            .output()
+            .await
+            .unwrap();
+        assert!(dumped.status.success(), "fixture dump failed");
+        let job_config = config.clone();
+        let settings = files.path().join("backup-settings.json");
+        fs::write(&settings, b"{}").await.unwrap();
+        let worker = tokio::spawn(async move {
+            let manifest = json!({});
+            with_restore_deadline(
+                &job_config,
+                id,
+                prepare_restore_database(&job_config, id, &dump, &manifest, &settings, None, None),
+            )
+            .await
+        });
+        let admin = riviamigo_api::db::pool::create_pool(&config.database_url)
+            .await
+            .unwrap();
+        let role = format!("riviamigo_restore_owner_{}", id.simple());
+        tokio::time::timeout(Duration::from_secs(9), async {
+            loop {
+                let executing: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE usename=$1 AND state='active' AND wait_event='PgSleep' AND query LIKE '%CREATE INDEX%')")
+                    .bind(&role).fetch_one(&admin).await.unwrap();
+                if executing { break; }
+                sleep(Duration::from_millis(20)).await;
+            }
+        }).await.expect("actual pg_restore reached its sleeping archive-defined index");
+        let login: bool = sqlx::query_scalar("SELECT rolcanlogin FROM pg_roles WHERE rolname=$1")
+            .bind(&role)
+            .fetch_one(&admin)
+            .await
+            .unwrap();
+        assert!(login, "the temporary LOGIN exists before timeout");
+        let error = worker
+            .await
+            .unwrap()
+            .err()
+            .expect("restore deadline must expire");
+        assert!(error.to_string().contains("deadline"), "{error}");
+        assert!(
+            !database_exists(&config, &format!("riviamigo_restore_{}", id.simple()))
+                .await
+                .unwrap()
+        );
+        let remaining: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=$1)")
+                .bind(&role)
+                .fetch_one(&admin)
+                .await
+                .unwrap();
+        assert!(!remaining, "timed-out candidate owner and password removed");
+        let sessions: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE usename=$1")
+                .bind(&role)
+                .fetch_one(&admin)
+                .await
+                .unwrap();
+        assert_eq!(sessions, 0, "archive execution backend terminated");
+        admin.close().await;
+        drop_database(&config, &source).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable Timescale server and RIVIAMIGO_TEST_RESTORE_PACKAGE"]
+    async fn historical_restore_uses_an_unprivileged_nonlogin_object_owner() {
+        let package = PathBuf::from(
+            std::env::var("RIVIAMIGO_TEST_RESTORE_PACKAGE").expect("fixture package"),
+        );
+        let mut config = Config::from_env().expect("isolated fixture configuration");
+        let temp = tempfile::tempdir().unwrap();
+        config.backup_artifact_dir = temp.path().to_string_lossy().into_owned();
+        let staging = temp.path().join("extracted");
+        let package = backups::validate_recovery_package_with_limits(&package, &config.recovery)
+            .await
+            .unwrap();
+        let path = PathBuf::from(std::env::var("RIVIAMIGO_TEST_RESTORE_PACKAGE").unwrap());
+        extract_package(&config, &path, &staging).await.unwrap();
+        let id = Uuid::new_v4();
+        let prepared = prepare_restore_database(
+            &config,
+            id,
+            &staging.join("database.dump"),
+            &package.manifest,
+            &staging.join("backup-settings.json"),
+            Some(&staging.join("operational-history.json")),
+            None,
+        )
+        .await
+        .expect("historical candidate restore");
+        let admin = riviamigo_api::db::pool::create_pool(&config.database_url)
+            .await
+            .unwrap();
+        let role = format!("riviamigo_restore_owner_{}", id.simple());
+        let attributes: (bool, bool, bool, bool, bool, Option<String>) = sqlx::query_as("SELECT rolsuper, rolcreatedb, rolcreaterole, rolbypassrls, rolcanlogin, rolpassword FROM pg_authid WHERE rolname=$1").bind(&role).fetch_one(&admin).await.unwrap();
+        assert_eq!(attributes, (false, false, false, false, false, None));
+        let candidate = config_with_database(&config, &prepared.candidate_database).unwrap();
+        let pool = riviamigo_api::db::pool::create_pool(&candidate.database_url)
+            .await
+            .unwrap();
+        for table in restore_policy::PROTECTED_TABLES {
+            if *table == "authentication_settings"
+                || *table == "backup_settings"
+                || *table == "backup_runs"
+                || *table == "backup_artifacts"
+                || *table == "backup_restore_requests"
+                || *table == "system_config"
+            {
+                continue;
+            }
+            let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT count(*) FROM riviamigo.\"{table}\""
+            )))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(count, 0, "protected table {table}");
+        }
+        let auth: (bool, bool, Option<Vec<u8>>) = sqlx::query_as("SELECT oidc_enabled, password_login_enabled, client_secret_encrypted FROM riviamigo.authentication_settings").fetch_one(&pool).await.unwrap();
+        assert_eq!(auth, (false, true, None));
+        pool.close().await;
+        // Re-enable only this fixture's owner to test actual server permission
+        // denial, then remove the disposable candidate and role.
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "ALTER ROLE {} LOGIN PASSWORD 'isolated-role-denial-fixture'",
+            quote_identifier(&role)
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        let mut restricted_url = url::Url::parse(&candidate.database_url).unwrap();
+        restricted_url.set_username(&role).unwrap();
+        restricted_url
+            .set_password(Some("isolated-role-denial-fixture"))
+            .unwrap();
+        let restricted = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(restricted_url.as_str())
+            .await
+            .unwrap();
+        for sql in [
+            "SELECT pg_read_file('/etc/passwd')",
+            "COPY (SELECT 1) TO PROGRAM 'echo fixture'",
+            "CREATE DATABASE riviamigo_security_denial_probe",
+        ] {
+            let error = sqlx::query(sql)
+                .execute(&restricted)
+                .await
+                .expect_err("privileged operation must be denied");
+            assert_eq!(
+                error.as_database_error().unwrap().code().as_deref(),
+                Some("42501")
+            );
+        }
+        restricted.close().await;
+        admin.close().await;
+        drop_database(&config, &prepared.candidate_database)
+            .await
+            .unwrap();
+        let admin = riviamigo_api::db::pool::create_pool(&config.database_url)
+            .await
+            .unwrap();
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=$1)")
+                .bind(&role)
+                .fetch_one(&admin)
+                .await
+                .unwrap();
+        assert!(!exists, "orphan restore role removed");
+        admin.close().await;
+        let failed_id = Uuid::new_v4();
+        std::env::set_var("RIVIAMIGO_RESTORE_FAULT_PHASE", "dump_restored");
+        let failed = prepare_restore_database(
+            &config,
+            failed_id,
+            &staging.join("database.dump"),
+            &package.manifest,
+            &staging.join("backup-settings.json"),
+            Some(&staging.join("operational-history.json")),
+            None,
+        )
+        .await;
+        std::env::remove_var("RIVIAMIGO_RESTORE_FAULT_PHASE");
+        assert!(failed.is_err(), "injected candidate failure");
+        assert!(!database_exists(
+            &config,
+            &format!("riviamigo_restore_{}", failed_id.simple())
+        )
+        .await
+        .unwrap());
+        let admin = riviamigo_api::db::pool::create_pool(&config.database_url)
+            .await
+            .unwrap();
+        let orphan: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=$1)")
+                .bind(format!("riviamigo_restore_owner_{}", failed_id.simple()))
+                .fetch_one(&admin)
+                .await
+                .unwrap();
+        assert!(
+            !orphan,
+            "failed preparation removes candidate and credentials"
+        );
+        admin.close().await;
+    }
 }

@@ -92,17 +92,15 @@ pub async fn gql_request<T: for<'de> Deserialize<'de>>(
         return Err(anyhow!(AuthError));
     }
     if !status.is_success() {
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| String::from("<unreadable body>"));
-        return Err(anyhow!("Rivian API: HTTP {status} body={body} "));
+        return Err(anyhow!("Rivian API: HTTP {status}"));
     }
 
-    let envelope = response
-        .json::<GqlEnvelope<T>>()
-        .await
-        .context("failed to parse Rivian API response")?;
+    let envelope: GqlEnvelope<T> = crate::services::outbound::read_json(
+        response,
+        crate::services::outbound::operator_security()?.rivian_max_response_bytes,
+        "Rivian provider",
+    )
+    .await?;
 
     if let Some(errors) = &envelope.errors {
         if !errors.is_empty() {

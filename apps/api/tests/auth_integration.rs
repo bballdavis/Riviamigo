@@ -24,7 +24,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use riviamigo_api::{
-    config::{Config, OriginBindConfig, RateLimitConfig, RecoveryConfig},
+    config::{Config, OriginBindConfig, RateLimitConfig, RecoveryConfig, SecurityConfig},
     ingestion::supervisor::SupervisorHandle,
     keys::bootstrap_keys,
     middleware::auth::{AppState, JwtKeys},
@@ -43,6 +43,7 @@ struct TestResponse {
 struct TestApp {
     router: Router,
     pool: PgPool,
+    state: AppState,
 }
 
 impl TestApp {
@@ -57,6 +58,14 @@ impl TestApp {
     async fn new_with_rate_limit_and_pool_size(
         rate_limit: RateLimitConfig,
         max_connections: u32,
+    ) -> Self {
+        Self::new_with_security(rate_limit, max_connections, SecurityConfig::default()).await
+    }
+
+    async fn new_with_security(
+        rate_limit: RateLimitConfig,
+        max_connections: u32,
+        security: SecurityConfig,
     ) -> Self {
         let base_db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
             "postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo".into()
@@ -95,7 +104,11 @@ impl TestApp {
 
         let state = AppState {
             pool: pool.clone(),
-            redis: redis::Client::open("redis://127.0.0.1:6379/").expect("redis client"),
+            redis: redis::Client::open(
+                std::env::var("RIVIAMIGO_TEST_REDIS_URL")
+                    .unwrap_or_else(|_| "redis://127.0.0.1:6379/".into()),
+            )
+            .expect("redis client"),
             jwt_keys,
             age_key: keys.age_key,
             config: Config {
@@ -119,6 +132,7 @@ impl TestApp {
                 restore_agent_key_file: "/backups/.restore-agent-key".into(),
                 recovery: RecoveryConfig::default(),
                 origin_bind: OriginBindConfig::default(),
+                security,
                 rivian_ws_reconnect_initial_seconds: 10,
                 rivian_ws_reconnect_max_seconds: 900,
                 rivian_raw_event_retention_days: 7,
@@ -135,11 +149,13 @@ impl TestApp {
             },
             nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             supervisor: SupervisorHandle::noop(),
+            resources: Default::default(),
         };
 
         Self {
-            router: routes::build_router(state),
+            router: routes::build_router(state.clone()),
             pool,
+            state,
         }
     }
 
@@ -1170,6 +1186,382 @@ async fn refresh_returns_access_token_when_refresh_cookie_is_present() {
 
     assert_eq!(refresh.status, StatusCode::OK);
     assert!(refresh.body["access_token"].is_string());
+}
+
+fn response_cookie(response: &TestResponse) -> String {
+    response
+        .headers
+        .get(SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
+#[tokio::test]
+async fn full_metric_stream_preserves_points_across_cursor_chunks_and_compact_samples() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "metrics-stream@example.com").await;
+    let user: Uuid = sqlx::query_scalar(
+        "SELECT id FROM riviamigo.users WHERE email='metrics-stream@example.com'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    let vehicle = insert_vehicle(&app.pool, user, "metrics-fixture", "Metrics").await;
+    sqlx::query("INSERT INTO timeseries.telemetry (vehicle_id, ts, battery_level) SELECT $1, '2026-01-01T00:00:00Z'::timestamptz + n * interval '1 second', (n % 100)::float8 FROM generate_series(0, 25004) n")
+        .bind(vehicle).execute(&app.pool).await.unwrap();
+    let path = format!("/v1/metrics/series?vehicle_id={vehicle}&metric=battery_level&bucket=raw&from=2026-01-01T00:00:00Z&to=2026-01-02T00:00:00Z");
+    let full = app
+        .request(Method::GET, &path, None, Some(&token), None)
+        .await;
+    assert_eq!(full.status, StatusCode::OK, "{}", full.body);
+    let points = full.body.as_array().expect("complete JSON array");
+    assert_eq!(points.len(), 25005);
+    assert_eq!(points[0]["value"], 0.0);
+    assert_eq!(points[25004]["value"], 4.0);
+    let batch = app.request(Method::POST, "/v1/metrics/batch", Some(json!({"vehicle_id":vehicle,"metrics":[{"metric":"battery_level","include_series":true,"include_latest":false}],"bucket":"raw","density":"compact","max_points":200,"from":"2026-01-01T00:00:00Z","to":"2026-01-02T00:00:00Z"})), Some(&token), None).await;
+    assert_eq!(batch.status, StatusCode::OK, "{}", batch.body);
+    let sampled = batch.body["series"][0]["points"]
+        .as_array()
+        .expect("series points");
+    assert_eq!(sampled.len(), 96);
+    for (index, point) in sampled.iter().enumerate() {
+        assert_eq!(point, &points[index * 25004 / 95]);
+    }
+    let full_batch = app.request(Method::POST, "/v1/metrics/batch", Some(json!({"vehicle_id":vehicle,"metrics":[{"metric":"battery_level","include_series":true,"include_latest":false}],"density":"full","from":"2026-01-01T00:00:00Z","to":"2026-01-02T00:00:00Z"})), Some(&token), None).await;
+    assert_eq!(full_batch.body["series"][0]["points"], full.body);
+    // A slow/disconnected client must release both the snapshot connection and
+    // heavy-read admission; it cannot pin a pool slot indefinitely.
+    use futures::StreamExt;
+    let request = Request::builder()
+        .uri(&path)
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.router.clone().oneshot(request).await.unwrap();
+    let mut body = response.into_body().into_data_stream();
+    assert!(body.next().await.unwrap().is_ok());
+    drop(body);
+    let connection = tokio::time::timeout(std::time::Duration::from_secs(3), app.pool.acquire())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(connection);
+    let mut permits = Vec::new();
+    for _ in 0..app.state.config.security.metrics_max_per_user {
+        permits.push(
+            app.state
+                .resources
+                .heavy(user, &app.state.config.security)
+                .unwrap(),
+        );
+    }
+    assert!(app
+        .state
+        .resources
+        .heavy(user, &app.state.config.security)
+        .is_err());
+}
+
+#[tokio::test]
+async fn cancelled_metric_and_grafana_reads_cancel_active_database_work_before_releasing_quota() {
+    let app = TestApp::new_with_security(
+        RateLimitConfig::default(),
+        4,
+        SecurityConfig {
+            metrics_timeout_seconds: 2,
+            ..Default::default()
+        },
+    )
+    .await;
+    let token = register_and_login(&app, "active-query-cancel@example.com").await;
+    let user: Uuid = sqlx::query_scalar(
+        "SELECT id FROM riviamigo.users WHERE email='active-query-cancel@example.com'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    let vehicle = insert_vehicle(&app.pool, user, "active-query-cancel", "Cancellation").await;
+    for route in ["series", "value", "grafana"] {
+        let mut blocker = app.pool.begin().await.unwrap();
+        sqlx::query("LOCK TABLE timeseries.telemetry IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await
+            .unwrap();
+        let request = if route == "grafana" {
+            Request::builder().method(Method::POST).uri("/v1/grafana/query")
+                .header(CONTENT_TYPE, "application/json").header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(json!({"range":{"from":"2026-01-01T00:00:00Z","to":"2026-01-02T00:00:00Z"},"targets":[{"target":"battery_level","vehicleId":vehicle}]}).to_string())).unwrap()
+        } else {
+            Request::builder().uri(format!("/v1/metrics/{route}?vehicle_id={vehicle}&metric=battery_level&bucket=raw&from=2026-01-01T00:00:00Z&to=2026-01-02T00:00:00Z"))
+                .header(AUTHORIZATION, format!("Bearer {token}")).body(Body::empty()).unwrap()
+        };
+        let router = app.router.clone();
+        let waiter = tokio::spawn(async move {
+            let response = router.oneshot(request).await.unwrap();
+            // For a stream, leave body consumption pending on the blocked SQL.
+            to_bytes(response.into_body(), usize::MAX).await
+        });
+        let pid = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let pid: Option<i32> = sqlx::query_scalar("SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND state='active' AND wait_event_type='Lock' AND query LIKE '%timeseries.telemetry%' LIMIT 1")
+                    .fetch_optional(&app.pool).await.unwrap();
+                if let Some(pid) = pid { break pid; }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }).await.expect("actual database statement reached the lock");
+        let held: Vec<_> = (1..app.state.config.security.metrics_max_per_user)
+            .map(|_| {
+                app.state
+                    .resources
+                    .heavy(user, &app.state.config.security)
+                    .unwrap()
+            })
+            .collect();
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        tokio::task::yield_now().await;
+        // Cleanup owns the last permit while cancellation/drain is pending.
+        assert!(
+            app.state
+                .resources
+                .heavy(user, &app.state.config.security)
+                .is_err(),
+            "{route}"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let active: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND state='active')",
+                )
+                .bind(pid)
+                .fetch_one(&app.pool)
+                .await
+                .unwrap();
+                let permit = app.state.resources.heavy(user, &app.state.config.security);
+                if active {
+                    assert!(
+                        permit.is_err(),
+                        "active {route} backend must retain admission"
+                    );
+                }
+                if !active && permit.is_ok() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("cancelled backend drained and quota released");
+        // The table lock remains held: completion proves cancellation, rather
+        // than the blocked query simply becoming able to run.
+        blocker.rollback().await.unwrap();
+        drop(held);
+    }
+    // The database deadline must also end an actively blocked Grafana query
+    // when its client keeps waiting, rather than only timing out its future.
+    let mut blocker = app.pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE timeseries.telemetry IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let timed = tokio::time::timeout(std::time::Duration::from_secs(4), app.request(
+        Method::POST, "/v1/grafana/query",
+        Some(json!({"range":{"from":"2026-01-01T00:00:00Z","to":"2026-01-02T00:00:00Z"},"targets":[{"target":"battery_level","vehicleId":vehicle}]})),
+        Some(&token), None,
+    )).await.expect("database deadline returns while table is still locked");
+    assert!(!timed.status.is_success());
+    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND state='active' AND wait_event_type='Lock' AND query LIKE '%timeseries.telemetry%'")
+        .fetch_one(&app.pool).await.unwrap();
+    assert_eq!(pending, 0, "Grafana server statement ended at its deadline");
+    blocker.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn replay_revokes_the_rotated_descendant_and_its_access_token() {
+    let app = TestApp::new().await;
+    let register = app
+        .request(
+            Method::POST,
+            "/v1/auth/register",
+            Some(json!({"email":"replay@example.com","password":"hunter2hunter2"})),
+            None,
+            None,
+        )
+        .await;
+    let original = response_cookie(&register);
+    let rotation = app
+        .request(
+            Method::POST,
+            "/v1/auth/refresh",
+            None,
+            None,
+            Some(&original),
+        )
+        .await;
+    assert_eq!(rotation.status, StatusCode::OK);
+    let descendant = response_cookie(&rotation);
+    let token = rotation.body["access_token"].as_str().unwrap();
+    assert_eq!(
+        app.request(Method::GET, "/v1/auth/me", None, Some(token), None)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.request(
+            Method::POST,
+            "/v1/auth/refresh",
+            None,
+            None,
+            Some(&original)
+        )
+        .await
+        .status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.request(
+            Method::POST,
+            "/v1/auth/refresh",
+            None,
+            None,
+            Some(&descendant)
+        )
+        .await
+        .status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.request(Method::GET, "/v1/auth/me", None, Some(token), None)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let active: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM riviamigo.refresh_tokens WHERE revoked_at IS NULL",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(active, 0);
+}
+
+#[tokio::test]
+async fn disabled_and_deleted_accounts_fail_closed_for_existing_access_tokens() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "missing@example.com").await;
+    sqlx::query(
+        "UPDATE riviamigo.users SET is_disabled = TRUE WHERE email = 'missing@example.com'",
+    )
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        app.request(Method::GET, "/v1/auth/me", None, Some(&token), None)
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+    sqlx::query("DELETE FROM riviamigo.users WHERE email = 'missing@example.com'")
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        app.request(Method::GET, "/v1/auth/me", None, Some(&token), None)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn administrative_disablement_revokes_sessions_after_reenable() {
+    let app = TestApp::new().await;
+    let administrator = register_and_login(&app, "disable-admin@example.com").await;
+    let existing =
+        insert_user_and_login(&app, "disable-target@example.com", "hunter2hunter2").await;
+    let login = app
+        .request(
+            Method::POST,
+            "/v1/auth/login",
+            Some(json!({
+                "email":"disable-target@example.com", "password":"hunter2hunter2"
+            })),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(login.status, StatusCode::OK);
+    let cookie = response_cookie(&login);
+    let target: Uuid = sqlx::query_scalar("SELECT id FROM riviamigo.users WHERE email=$1")
+        .bind("disable-target@example.com")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    let path = format!("/v1/admin/users/{target}");
+    for disabled in [true, false] {
+        assert_eq!(
+            app.request(
+                Method::PATCH,
+                &path,
+                Some(json!({"is_disabled":disabled})),
+                Some(&administrator),
+                None
+            )
+            .await
+            .status,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        app.request(Method::GET, "/v1/auth/me", None, Some(&existing), None)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.request(Method::POST, "/v1/auth/refresh", None, None, Some(&cookie))
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let active: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM riviamigo.session_families WHERE user_id=$1 AND revoked_at IS NULL",
+    )
+    .bind(target)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(active, 0);
+    let fresh = app
+        .request(
+            Method::POST,
+            "/v1/auth/login",
+            Some(json!({
+                "email":"disable-target@example.com", "password":"hunter2hunter2"
+            })),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(fresh.status, StatusCode::OK);
+    assert_eq!(
+        app.request(
+            Method::GET,
+            "/v1/auth/me",
+            None,
+            fresh.body["access_token"].as_str(),
+            None
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
 }
 
 #[tokio::test]
@@ -2487,4 +2879,367 @@ async fn heavy_read_exhaustion_does_not_block_regular_authenticated_reads() {
         StatusCode::OK,
         "exhausting heavy-read traffic should not block normal auth reads"
     );
+}
+
+#[tokio::test]
+async fn verified_enrollment_rejects_unlisted_ids_and_preserves_existing_authority() {
+    use redis::AsyncCommands;
+    use riviamigo_api::ingestion::session_store::{encrypt_tokens, RivianTokenBundle};
+    let app = TestApp::new_with_rate_limit_and_pool_size(RateLimitConfig::default(), 4).await;
+    let owner_token = register_and_login(&app, "proof-owner@example.com").await;
+    let join_token =
+        insert_user_and_login(&app, "proof-joiner@example.com", "hunter2hunter2").await;
+    let owner: Uuid =
+        sqlx::query_scalar("SELECT id FROM riviamigo.users WHERE email='proof-owner@example.com'")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    let joiner: Uuid =
+        sqlx::query_scalar("SELECT id FROM riviamigo.users WHERE email='proof-joiner@example.com'")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    let vehicle = insert_vehicle(&app.pool, owner, "verified-existing", "Existing").await;
+    let original_credentials = vec![4_u8, 2, 0, 7];
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_credentials(vehicle_id,encrypted_tokens,token_created_at) VALUES ($1,$2,now())",
+    )
+    .bind(vehicle)
+    .bind(&original_credentials)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let gateway = Router::new().route("/graphql", axum::routing::post(|| async {
+        axum::Json(json!({"data":{"currentUser":{"vehicles":[{"id":"verified-existing","vin":"provider-vin","vehicle":{"model":"R1S"}},{"id":"verified-new","vin":"new-provider-vin","vehicle":{"model":"R1S"}}]}}}))
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, gateway).await.unwrap();
+    });
+    std::env::set_var(
+        "RIVIAN_GRAPHQL_GATEWAY_URL",
+        format!("http://{address}/graphql"),
+    );
+    let bundle = RivianTokenBundle {
+        access_token: "proof-access".into(),
+        refresh_token: "proof-refresh".into(),
+        app_session_token: "proof-app".into(),
+        user_session_token: "proof-user".into(),
+        csrf_token: "proof-csrf".into(),
+        created_at: chrono::Utc::now(),
+    };
+    let encrypted = encrypt_tokens(&bundle, &app.state.age_key.parse().unwrap()).unwrap();
+    let mut redis = app
+        .state
+        .redis
+        .get_multiplexed_async_connection()
+        .await
+        .unwrap();
+    let _: () = redis
+        .set_ex(format!("rivian:connect:{joiner}"), &encrypted, 60)
+        .await
+        .unwrap();
+    let denied = app
+        .request(
+            Method::POST,
+            "/v1/vehicles",
+            Some(json!({"rivian_vehicle_id":"unlisted-id","model":"R1T","vin":"browser-vin"})),
+            Some(&join_token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        denied.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        denied.body
+    );
+    let (a, b) = tokio::join!(
+        app.request(
+            Method::POST,
+            "/v1/vehicles",
+            Some(json!({"rivian_vehicle_id":"verified-existing"})),
+            Some(&join_token),
+            None
+        ),
+        app.request(
+            Method::POST,
+            "/v1/vehicles",
+            Some(json!({"rivian_vehicle_id":"verified-existing"})),
+            Some(&join_token),
+            None
+        )
+    );
+    assert!(a.status == StatusCode::OK || b.status == StatusCode::OK);
+    for response in [&a, &b] {
+        assert!(
+            matches!(response.status, StatusCode::OK | StatusCode::CONFLICT),
+            "{}",
+            response.body
+        );
+        if response.status == StatusCode::OK {
+            assert_eq!(response.body["telemetry_status"], "unchanged");
+        }
+    }
+    let role: String = sqlx::query_scalar(
+        "SELECT role FROM riviamigo.vehicle_memberships WHERE vehicle_id=$1 AND user_id=$2",
+    )
+    .bind(vehicle)
+    .bind(joiner)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(role, "viewer");
+    let credentials: Vec<u8> = sqlx::query_scalar(
+        "SELECT encrypted_tokens FROM riviamigo.vehicle_credentials WHERE vehicle_id=$1",
+    )
+    .bind(vehicle)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(credentials, original_credentials);
+    let owner_role: String = sqlx::query_scalar(
+        "SELECT role FROM riviamigo.vehicle_memberships WHERE vehicle_id=$1 AND user_id=$2",
+    )
+    .bind(vehicle)
+    .bind(owner)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(owner_role, "owner");
+    // Two independently verified accounts race to enroll one unseen vehicle.
+    // Exactly the creator becomes owner; the second verified account is Viewer.
+    for account in [owner, joiner] {
+        let _: () = redis
+            .set_ex(format!("rivian:connect:{account}"), &encrypted, 60)
+            .await
+            .unwrap();
+    }
+    let (first, second) = tokio::join!(
+        app.request(
+            Method::POST,
+            "/v1/vehicles",
+            Some(json!({"rivian_vehicle_id":"verified-new","vin":"forged-vin","model":"R1T"})),
+            Some(&owner_token),
+            None
+        ),
+        app.request(
+            Method::POST,
+            "/v1/vehicles",
+            Some(json!({"rivian_vehicle_id":"verified-new"})),
+            Some(&join_token),
+            None
+        )
+    );
+    assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+    assert_eq!(second.status, StatusCode::OK, "{}", second.body);
+    let created: (Uuid, String, String) = sqlx::query_as(
+        "SELECT id,model,vin FROM riviamigo.vehicles WHERE rivian_vehicle_id='verified-new'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(created.1, "R1S");
+    assert_eq!(created.2, "new-provider-vin");
+    let roles: Vec<String> = sqlx::query_scalar(
+        "SELECT role FROM riviamigo.vehicle_memberships WHERE vehicle_id=$1 ORDER BY role",
+    )
+    .bind(created.0)
+    .fetch_all(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(roles, vec!["owner", "viewer"]);
+    assert_eq!(
+        app.request(Method::GET, "/v1/auth/me", None, Some(&owner_token), None)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    std::env::remove_var("RIVIAN_GRAPHQL_GATEWAY_URL");
+    server.abort();
+}
+
+#[tokio::test]
+async fn live_sockets_enforce_quota_expiry_and_membership_revocation() {
+    use futures::{SinkExt, StreamExt};
+    use riviamigo_api::middleware::auth::Claims;
+    use tokio_tungstenite::{
+        connect_async,
+        tungstenite::{client::IntoClientRequest, Message},
+    };
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "live-security@example.com").await;
+    let user: Uuid = sqlx::query_scalar(
+        "SELECT id FROM riviamigo.users WHERE email='live-security@example.com'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    let vehicle = insert_vehicle(&app.pool, user, "live-fixture", "Live").await;
+    let mut state = app.state.clone();
+    state.config.security.ws_max_per_user = 1;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            routes::build_router(state).into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let request = |jwt: &str| {
+        let mut req = format!("ws://{address}/v1/vehicles/live?vehicle_id={vehicle}")
+            .into_client_request()
+            .unwrap();
+        req.headers_mut().insert(
+            "sec-websocket-protocol",
+            format!("bearer, bearer.{jwt}").parse().unwrap(),
+        );
+        req
+    };
+    let (mut socket, _) = connect_async(request(&token)).await.unwrap();
+    let denied = connect_async(request(&token)).await.unwrap_err();
+    match denied {
+        tokio_tungstenite::tungstenite::Error::Http(response) => {
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(response.headers()["retry-after"], "5");
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    // Let the initial authorization check complete, then remove membership.
+    tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    sqlx::query("DELETE FROM riviamigo.vehicle_memberships WHERE vehicle_id=$1 AND user_id=$2")
+        .bind(vehicle)
+        .bind(user)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(35), async {
+        loop {
+            match socket.next().await {
+                Some(Ok(Message::Close(Some(frame)))) => break frame.code,
+                Some(Ok(Message::Ping(bytes))) => {
+                    let _ = socket.send(Message::Pong(bytes)).await;
+                }
+                Some(Ok(_)) => {}
+                other => panic!("unexpected stream end: {other:?}"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(u16::from(closed), 4403);
+    drop(socket);
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_memberships(vehicle_id,user_id,role) VALUES ($1,$2,'owner')",
+    )
+    .bind(vehicle)
+    .bind(user)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let now = chrono::Utc::now().timestamp();
+    let short = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &Claims {
+            sub: user,
+            iss: "riviamigo.app".into(),
+            exp: now + 3,
+            iat: now,
+            default_vehicle_id: Some(vehicle),
+            sid: None,
+        },
+        &app.state.jwt_keys.encoding,
+    )
+    .unwrap();
+    let (mut socket, _) = connect_async(request(&short)).await.unwrap();
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match socket.next().await {
+                Some(Ok(Message::Close(Some(frame)))) => break frame.code,
+                Some(Ok(Message::Ping(bytes))) => {
+                    let _ = socket.send(Message::Pong(bytes)).await;
+                }
+                Some(Ok(_)) => {}
+                other => panic!("unexpected expiry stream end: {other:?}"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(u16::from(closed), 4401);
+    server.abort();
+}
+
+#[tokio::test]
+async fn history_import_is_bounded_inert_and_target_catalog_wins_locator_conflicts() {
+    use riviamigo_api::services::{
+        restore_history,
+        restore_jobs::{merge_catalog_snapshot, BackupArtifactSnapshot, BackupCatalogSnapshot},
+    };
+    let app = TestApp::new().await;
+    let source_id = Uuid::new_v4();
+    let target_id = Uuid::new_v4();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("history.json");
+    let source = BackupArtifactSnapshot {
+        id: source_id,
+        run_id: None,
+        storage_type: "s3".into(),
+        file_name: "fixture.rma.tar.gz".into(),
+        storage_path: "s3://fixture/riviamigo/fixture.rma.tar.gz".into(),
+        size_bytes: 1,
+        checksum_sha256: "unverified".into(),
+        manifest: json!({"restore_availability":"available"}),
+        created_at: chrono::Utc::now(),
+    };
+    // Historical field order is deliberately different from FK dependency order.
+    std::fs::write(
+        &path,
+        json!({"restore_requests":[],"artifacts":[source],"runs":[]}).to_string(),
+    )
+    .unwrap();
+    assert!(restore_history::merge(&app.pool, &path, 8).await.is_err());
+    restore_history::merge(&app.pool, &path, 4096)
+        .await
+        .unwrap();
+    let available: String = sqlx::query_scalar(
+        "SELECT manifest->>'restore_availability' FROM riviamigo.backup_artifacts WHERE id=$1",
+    )
+    .bind(source_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(available, "unavailable");
+    let mut target = source.clone();
+    target.id = target_id;
+    target.checksum_sha256 = "target-verified".into();
+    target.manifest = json!({"restore_availability":"available"});
+    merge_catalog_snapshot(
+        &app.pool,
+        &BackupCatalogSnapshot {
+            runs: vec![],
+            artifacts: vec![target],
+            restore_requests: vec![],
+        },
+    )
+    .await
+    .unwrap();
+    let old:(String,String)=sqlx::query_as("SELECT storage_path,manifest->>'restore_availability' FROM riviamigo.backup_artifacts WHERE id=$1").bind(source_id).fetch_one(&app.pool).await.unwrap();
+    assert!(old.0.starts_with("unavailable:"));
+    assert_eq!(old.1, "unavailable");
+    let checksum: String =
+        sqlx::query_scalar("SELECT checksum_sha256 FROM riviamigo.backup_artifacts WHERE id=$1")
+            .bind(target_id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(checksum, "target-verified");
 }

@@ -8,6 +8,22 @@ describe('api client dashboard contracts', () => {
     vi.useRealTimers();
   });
 
+  it('coalesces manual refresh and bootstrap requests through the shared session renewal', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return new Response(JSON.stringify({ access_token: 'renewed', expires_in: 900, default_vehicle_id: null }), { status: 200 });
+    });
+    const [manual, bootstrap] = await Promise.all([api.refresh(), api.resumeSession()]);
+    expect(manual?.access_token).toBe('renewed');
+    expect(bootstrap?.access_token).toBe('renewed');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects incomplete metric JSON without treating a partial document as success', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{"values":[],"series":[', { status: 200 }));
+    await expect(api.vehicleStatus('vehicle-1')).rejects.toMatchObject({ code: 'INCOMPLETE_RESPONSE' });
+  });
+
   it('calls the backend charging route that actually exists and normalizes pagination', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(

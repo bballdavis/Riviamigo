@@ -1,10 +1,11 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { create } from 'zustand';
-import type { VehicleStatus } from '@riviamigo/types';
+import type { Vehicle, VehicleStatus } from '@riviamigo/types';
 import { reportClientError } from '@riviamigo/ui/lib/clientDiagnostics';
 import { api } from './api';
 import { useAuthReady } from './useAuthState';
+import { useAuth } from './useAuth';
 import { queryKeys } from './queryKeys';
 
 interface LiveStatusStore {
@@ -12,6 +13,7 @@ interface LiveStatusStore {
   connected: Record<string, boolean>;
   setStatus: (vehicleId: string, status: Partial<VehicleStatus>) => void;
   setConnected: (vehicleId: string, connected: boolean) => void;
+  removeVehicle: (vehicleId: string) => void;
 }
 
 type VehicleConnectionState = 'idle' | 'connecting' | 'online' | 'failed';
@@ -37,6 +39,11 @@ export const useLiveStatusStore = create<LiveStatusStore>((set) => ({
     })),
   setConnected: (vehicleId, connected) =>
     set((s) => ({ connected: { ...s.connected, [vehicleId]: connected } })),
+  removeVehicle: (vehicleId) => set((s) => {
+    const status = { ...s.status }; const connected = { ...s.connected };
+    delete status[vehicleId]; delete connected[vehicleId];
+    return { status, connected };
+  }),
 }));
 
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -109,6 +116,9 @@ function stripNullsFromPatch(
 }
 
 export function useVehicleStatus(vehicleId: string | null, accessToken: string | null) {
+  const queryClient = useQueryClient();
+  const refreshAttemptedRef = useRef(false);
+  const removedVehicleRef = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const livenessIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
@@ -130,6 +140,7 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
   }, []);
 
   const cleanupSocket = useCallback(() => {
+    connectionKeyRef.current = null;
     shouldReconnectRef.current = false;
     clearTimeout(reconnectRef.current);
     reconnectRef.current = undefined;
@@ -151,6 +162,7 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
   }, [clearProbeTimeout]);
 
   const connect = useCallback(() => {
+    if (removedVehicleRef.current === vehicleId) return;
     if (!vehicleId || !accessToken) {
       setConnectionState('idle');
       if (vehicleId) setConnected(vehicleId, false);
@@ -178,6 +190,7 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
     setConnectionState('connecting');
 
     ws.onopen = () => {
+      refreshAttemptedRef.current = false;
       backoffRef.current = 1000;
       reconnectAttemptsRef.current = 0;
       socketOpenedAtRef.current = Date.now();
@@ -247,7 +260,7 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (wsRef.current !== ws) return;
       wsRef.current = null;
       clearProbeTimeout();
@@ -255,6 +268,43 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
       socketOpenedAtRef.current = null;
       lastMessageAtRef.current = null;
       setConnected(vehicleId, false);
+      if (event?.code === 4403) {
+        shouldReconnectRef.current = false;
+        removedVehicleRef.current = vehicleId;
+        useLiveStatusStore.getState().removeVehicle(vehicleId);
+        const auth = useAuth.getState();
+        if (auth.activeVehicleId === vehicleId) auth.setActiveVehicleId(null);
+        if (auth.defaultVehicleId === vehicleId) auth.setDefaultVehicleId(null);
+        // Detail, metric, dashboard, and status keys all carry the vehicle ID.
+        // A membership loss must remove every cached response for this vehicle.
+        queryClient.removeQueries({ predicate: (query) => query.queryKey.includes(vehicleId) });
+        queryClient.setQueryData<Vehicle[]>(queryKeys.vehicles.all, (previous) =>
+          previous?.filter((vehicle) => vehicle.id !== vehicleId));
+        void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+        setConnectionState('idle');
+        return;
+      }
+      if (event?.code === 4401) {
+        shouldReconnectRef.current = false;
+        setConnectionState('connecting');
+        if (refreshAttemptedRef.current) { useAuth.getState().clearSession(); return; }
+        refreshAttemptedRef.current = true;
+        const renewalKey = connectionKeyRef.current;
+        const renew = () => {
+          void api.refresh().catch((error: unknown) => {
+            if (connectionKeyRef.current !== renewalKey) return;
+            const status = error && typeof error === 'object' && 'status' in error ? error.status : null;
+            if (status === 401 || status === 403) { useAuth.getState().clearSession(); return; }
+            setConnectionState('failed');
+            // Keep the session on transient failures and retry renewal itself;
+            // reconnecting with the expired JWT cannot recover authentication.
+            reconnectRef.current = setTimeout(renew, backoffRef.current);
+            backoffRef.current = Math.min(backoffRef.current * 2, MAX_RECONNECT_DELAY_MS);
+          });
+        };
+        renew();
+        return;
+      }
       if (!shouldReconnectRef.current) {
         setConnectionState('idle');
         return;
@@ -296,10 +346,11 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
     setConnected,
     setStatus,
     vehicleId,
+    queryClient,
   ]);
 
   const forceReconnect = useCallback(() => {
-    shouldReconnectRef.current = true;
+    if (!shouldReconnectRef.current) return;
     clearProbeTimeout();
     const ws = wsRef.current;
     if (!ws || ws.readyState === WebSocket.CLOSED) {
@@ -340,6 +391,7 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
   }, [clearProbeTimeout, forceReconnect, setConnected, vehicleId]);
 
   useEffect(() => {
+    if (removedVehicleRef.current !== vehicleId) removedVehicleRef.current = null;
     const connectionKey = vehicleId && accessToken ? `${vehicleId}:${accessToken}` : null;
     if (connectionKeyRef.current !== connectionKey) {
       connectionKeyRef.current = connectionKey;
@@ -411,7 +463,7 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
     };
 
     const checkLiveness = () => {
-      if (document.visibilityState !== 'visible') return;
+      if (!shouldReconnectRef.current || document.visibilityState !== 'visible') return;
       const ws = wsRef.current;
       if (!ws) {
         if (!reconnectRef.current) connect();

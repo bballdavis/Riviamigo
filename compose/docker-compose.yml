@@ -14,7 +14,7 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "${RIVIAMIGO_HOST_BIND_ADDRESS:-0.0.0.0}:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"
+      - "${RIVIAMIGO_HOST_BIND_ADDRESS:-127.0.0.1}:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"
     user: "1001:1001"
     read_only: true
     cap_drop:
@@ -65,9 +65,14 @@ services:
         '${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}',
         '--appendonly',
         'yes',
+        '--maxmemory',
+        '${REDIS_MAXMEMORY:-192mb}',
+        '--maxmemory-policy',
+        'noeviction',
       ]
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    mem_limit: 256M
     volumes:
       - ${RIVIAMIGO_REDIS_SOURCE:-${RIVIAMIGO_DATA_DIR:-../data}/redis}:/data
     networks:

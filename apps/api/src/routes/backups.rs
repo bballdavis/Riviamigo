@@ -473,7 +473,18 @@ async fn upload_backup_artifact(
     body: Body,
 ) -> Result<(StatusCode, Json<UploadBackupResponse>), AppError> {
     require_admin(&state, auth.user_id).await?;
+    backup_service::run_recovery_operation(state.pool.clone(), async move {
+        upload_backup_artifact_admitted(state, auth, headers, body).await
+    })
+    .await
+}
 
+async fn upload_backup_artifact_admitted(
+    state: AppState,
+    auth: AuthUser,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<(StatusCode, Json<UploadBackupResponse>), AppError> {
     let declared_size = headers
         .get(header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
@@ -495,18 +506,12 @@ async fn upload_backup_artifact(
         ));
     }
     let run_id = Uuid::new_v4();
-    let import_dir = std::path::Path::new(&state.config.backup_artifact_dir).join("imports");
-    fs::create_dir_all(&import_dir).await?;
-    ensure_recovery_free_space(&import_dir, state.config.recovery.min_free_bytes)?;
-    let final_name = format!(
-        "import-{}-{}.rma.tar.gz",
-        Utc::now().format("%Y%m%dT%H%M%SZ"),
-        run_id.simple()
-    );
-    let final_path = import_dir.join(&final_name);
-    let temporary_path = import_dir.join(format!(".{run_id}.uploading"));
-
-    let recovery_lock = backup_service::acquire_recovery_mutation_lock(&state.pool).await?;
+    let root = std::path::Path::new(&state.config.backup_artifact_dir);
+    fs::create_dir_all(root).await?;
+    ensure_recovery_free_space(root, state.config.recovery.min_free_bytes)?;
+    let destination = crate::services::artifact_files::StagingFile::upload(root, run_id)?;
+    let final_path = destination.path.clone();
+    let final_name = destination.file_name().to_owned();
     let upload_result = async {
         sqlx::query(
             "INSERT INTO riviamigo.backup_runs (id, trigger, status, phase, progress_percent, requested_by, started_at, updated_at) VALUES ($1, 'upload', 'running', 'queued', 0, $2, now(), now())",
@@ -521,12 +526,13 @@ async fn upload_backup_artifact(
         .bind(run_id)
         .execute(&state.pool)
         .await?;
-        let mut output = fs::File::create(&temporary_path).await?;
+        let mut output = fs::File::from_std(destination.file.try_clone()?);
         let mut stream = body.into_data_stream();
         let deadline = Instant::now()
             + TokioDuration::from_secs(state.config.recovery.upload_deadline_seconds);
         let mut received = 0_u64;
-        while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
+        while let Some(chunk) = tokio::time::timeout_at(deadline, futures::StreamExt::next(&mut stream)).await
+            .map_err(|_| AppError::RecoveryDeadline("Recovery upload exceeded the configured deadline.".into()))? {
             if Instant::now() >= deadline {
                 return Err(AppError::RecoveryDeadline(
                     "Recovery upload exceeded the configured deadline.".into(),
@@ -543,8 +549,8 @@ async fn upload_backup_artifact(
                     "Recovery package exceeds the configured upload limit.".into(),
                 ));
             }
+            ensure_recovery_free_space(root, state.config.recovery.min_free_bytes.saturating_add(chunk.len() as u64))?;
             output.write_all(&chunk).await?;
-            ensure_recovery_free_space(&import_dir, state.config.recovery.min_free_bytes)?;
         }
         output.flush().await?;
         drop(output);
@@ -555,8 +561,10 @@ async fn upload_backup_artifact(
         .bind(run_id)
         .execute(&state.pool)
         .await?;
-        let validated = backup_service::validate_recovery_package(&temporary_path).await?;
-        fs::rename(&temporary_path, &final_path).await?;
+        let mut opened = destination.file.try_clone()?;
+        std::io::Seek::seek(&mut opened, std::io::SeekFrom::Start(0))?;
+        let validated = backup_service::validate_open_recovery_package(opened, &state.config.recovery).await?;
+        destination.publish()?;
         let storage_path = final_path.to_string_lossy().into_owned();
         let manifest = serde_json::json!({
             "artifact_kind": "recovery_package",
@@ -594,8 +602,7 @@ async fn upload_backup_artifact(
     let response = match upload_result {
         Ok(artifact) => Ok((StatusCode::CREATED, Json(UploadBackupResponse { artifact }))),
         Err(error) => {
-            let _ = fs::remove_file(&temporary_path).await;
-            let _ = fs::remove_file(&final_path).await;
+            let _ = crate::services::artifact_files::remove(root, &final_path);
             let _ = sqlx::query(
                 "UPDATE riviamigo.backup_runs SET status = 'failed', phase = 'failed', completed_at = now(), updated_at = now(), error_message = $2 WHERE id = $1 AND status = 'running'",
             )
@@ -606,7 +613,6 @@ async fn upload_backup_artifact(
             Err(error)
         }
     };
-    recovery_lock.release().await;
     response
 }
 
@@ -644,12 +650,10 @@ async fn delete_uploaded_artifact(
             "This package has an active restore job.".into(),
         ));
     }
-    fs::remove_file(&artifact.storage_path)
-        .await
-        .map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => AppError::NotFound,
-            _ => AppError::Io(error),
-        })?;
+    crate::services::artifact_files::remove(
+        std::path::Path::new(&state.config.backup_artifact_dir),
+        std::path::Path::new(&artifact.storage_path),
+    )?;
     sqlx::query("DELETE FROM riviamigo.backup_runs WHERE id = $1")
         .bind(artifact.run_id)
         .execute(&state.pool)
@@ -663,6 +667,17 @@ async fn start_restore(
     Json(body): Json<StartRestoreBody>,
 ) -> Result<(StatusCode, Json<StartRestoreResponse>), AppError> {
     require_admin(&state, auth.user_id).await?;
+    backup_service::run_recovery_operation(state.pool.clone(), async move {
+        start_restore_admitted(state, auth, body).await
+    })
+    .await
+}
+
+async fn start_restore_admitted(
+    state: AppState,
+    auth: AuthUser,
+    body: StartRestoreBody,
+) -> Result<(StatusCode, Json<StartRestoreResponse>), AppError> {
     if !restore_jobs::agent_is_ready(&state.config).await {
         return Err(AppError::DependencyUnavailable(
             "Automated restore is unavailable in this runtime; use scripts/restore-backup.mjs."
@@ -676,51 +691,63 @@ async fn start_restore(
         )));
     }
     let artifact = load_artifact_by_id(&state, body.artifact_id).await?;
-    let restore_path = materialize_artifact(&state, &artifact).await?;
-    let validated =
-        backup_service::validate_recovery_package(std::path::Path::new(&restore_path)).await?;
-    let dump_inspection =
-        restore_compatibility::inspect_recovery_dump(std::path::Path::new(&restore_path)).await?;
-    let plan = restore_compatibility::plan_restore(
-        &validated.manifest,
-        &validated.checksum_sha256,
-        &state.pool,
-        Some(&dump_inspection),
-    )
-    .await?;
-    if !plan.compatible {
-        cleanup_remote_staging_path(&restore_path).await;
-        return Err(AppError::Validation(
-            plan.blocking_errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join(" "),
-        ));
-    }
-    if body.plan_id != plan.plan_id || body.package_checksum_sha256 != validated.checksum_sha256 {
-        cleanup_remote_staging_path(&restore_path).await;
-        return Err(AppError::Conflict(
+    let staged = materialize_artifact(&state, &artifact).await?;
+    let restore_path = staged.path.clone();
+    let prepared = async {
+        let validated = backup_service::validate_recovery_package_with_limits(
+            std::path::Path::new(&restore_path),
+            &state.config.recovery,
+        )
+        .await?;
+        let dump_inspection = restore_compatibility::inspect_recovery_dump(
+            std::path::Path::new(&restore_path),
+            std::path::Path::new(&state.config.backup_artifact_dir),
+            &state.config.recovery,
+        )
+        .await?;
+        let plan = restore_compatibility::plan_restore(
+            &validated.manifest,
+            &validated.checksum_sha256,
+            &state.pool,
+            Some(&dump_inspection),
+        )
+        .await?;
+        if !plan.compatible {
+            return Err(AppError::Validation(
+                plan.blocking_errors
+                    .iter()
+                    .map(|error| error.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ));
+        }
+        if body.plan_id != plan.plan_id || body.package_checksum_sha256 != validated.checksum_sha256
+        {
+            return Err(AppError::Conflict(
             "The recovery package or target schema changed after preflight. Run preflight again."
                 .into(),
         ));
+        }
+        let request_id = backup_service::create_restore_request(
+            &state.pool,
+            body.artifact_id,
+            auth.user_id,
+            &body.confirmation_phrase,
+            body.notes,
+        )
+        .await?;
+        let (job, capability_token) = restore_jobs::create(
+            &state.config,
+            body.artifact_id,
+            restore_path.clone(),
+            request_id,
+            plan,
+        )
+        .await?;
+        Ok::<_, AppError>((job, capability_token, request_id))
     }
-    let request_id = backup_service::create_restore_request(
-        &state.pool,
-        body.artifact_id,
-        auth.user_id,
-        &body.confirmation_phrase,
-        body.notes,
-    )
-    .await?;
-    let (job, capability_token) = restore_jobs::create(
-        &state.config,
-        body.artifact_id,
-        restore_path,
-        request_id,
-        plan,
-    )
-    .await?;
+    .await;
+    let (job, capability_token, request_id) = prepared?;
     let background_state = state.clone();
     let job_id = job.id;
     tokio::spawn(async move {
@@ -738,6 +765,8 @@ async fn start_restore(
             .await;
         }
     });
+    // The durable job and its background worker now own the published path.
+    staged.retain();
 
     Ok((
         StatusCode::ACCEPTED,
@@ -754,14 +783,31 @@ async fn preflight_restore(
     Json(body): Json<PreflightRestoreBody>,
 ) -> Result<Json<RestorePreflightResponse>, AppError> {
     require_admin(&state, auth.user_id).await?;
+    backup_service::run_recovery_operation(state.pool.clone(), async move {
+        preflight_restore_admitted(state, body).await
+    })
+    .await
+}
+
+async fn preflight_restore_admitted(
+    state: AppState,
+    body: PreflightRestoreBody,
+) -> Result<Json<RestorePreflightResponse>, AppError> {
     let artifact = load_artifact_by_id(&state, body.artifact_id).await?;
-    let restore_path = materialize_artifact(&state, &artifact).await?;
+    let staged = materialize_artifact(&state, &artifact).await?;
+    let restore_path = &staged.path;
     let result = async {
-        let validated =
-            backup_service::validate_recovery_package(std::path::Path::new(&restore_path)).await?;
-        let dump_inspection =
-            restore_compatibility::inspect_recovery_dump(std::path::Path::new(&restore_path))
-                .await?;
+        let validated = backup_service::validate_recovery_package_with_limits(
+            std::path::Path::new(&restore_path),
+            &state.config.recovery,
+        )
+        .await?;
+        let dump_inspection = restore_compatibility::inspect_recovery_dump(
+            std::path::Path::new(&restore_path),
+            std::path::Path::new(&state.config.backup_artifact_dir),
+            &state.config.recovery,
+        )
+        .await?;
         let plan = restore_compatibility::plan_restore(
             &validated.manifest,
             &validated.checksum_sha256,
@@ -772,7 +818,6 @@ async fn preflight_restore(
         Ok::<_, AppError>(RestorePreflightResponse { plan })
     }
     .await;
-    cleanup_remote_staging_path(&restore_path).await;
     result.map(Json)
 }
 
@@ -861,12 +906,10 @@ async fn download_backup_artifact(
             .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?;
         Body::from_stream(ReaderStream::new(stream.into_async_read()))
     } else {
-        let file = fs::File::open(&artifact.storage_path)
-            .await
-            .map_err(|error| match error.kind() {
-                std::io::ErrorKind::NotFound => AppError::NotFound,
-                _ => AppError::Internal(anyhow::anyhow!("failed to open backup artifact: {error}")),
-            })?;
+        let file = fs::File::from_std(crate::services::artifact_files::open(
+            std::path::Path::new(&state.config.backup_artifact_dir),
+            std::path::Path::new(&artifact.storage_path),
+        )?);
         Body::from_stream(ReaderStream::new(file))
     };
 
@@ -925,7 +968,12 @@ async fn update_backup_settings(
         .filter(|value| !value.is_empty())
         .map(str::to_string);
     let normalized_bucket = body.bucket.trim().to_string();
-    let normalized_prefix = normalize_prefix(&body.prefix);
+    if body.s3_enabled {
+        crate::services::s3_transport::S3Policy::from_config(&state.config)?
+            .validate_endpoint(&body.endpoint)
+            .await?;
+    }
+    let normalized_prefix = normalize_prefix(&body.prefix)?;
     let normalized_access_key = body
         .access_key
         .as_deref()
@@ -998,47 +1046,70 @@ async fn update_backup_settings(
     Ok(Json(load_settings(&state).await?))
 }
 
+struct MaterializedArtifact {
+    root: std::path::PathBuf,
+    staging_id: Uuid,
+    path: String,
+    retained: bool,
+}
+
+impl MaterializedArtifact {
+    fn retain(mut self) {
+        self.retained = true;
+    }
+}
+
+impl Drop for MaterializedArtifact {
+    fn drop(&mut self) {
+        if !self.retained {
+            let _ = crate::services::artifact_files::remove_staged(&self.root, self.staging_id);
+        }
+    }
+}
+
 async fn materialize_artifact(
     state: &AppState,
     artifact: &BackupArtifactResponse,
-) -> Result<String, AppError> {
-    if artifact.storage_type != "s3" {
-        return Ok(artifact.storage_path.clone());
-    }
-    let (settings, key) = resolve_remote_artifact(state, artifact).await?;
-    let directory = std::path::Path::new(&state.config.backup_artifact_dir).join(".remote-staging");
-    let path = directory.join(format!("{}.rma.tar.gz", artifact.id));
-    if fs::try_exists(&path).await.unwrap_or(false) {
-        match backup_service::validate_recovery_package(&path).await {
-            Ok(validated)
-                if artifact.checksum_sha256.is_empty()
-                    || artifact.checksum_sha256 == validated.checksum_sha256 =>
-            {
-                return Ok(path.to_string_lossy().into_owned());
-            }
-            _ => {
-                let _ = fs::remove_file(&path).await;
-            }
-        }
-    }
-    s3_backups::download(&settings, &key, &path)
-        .await
-        .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?;
-    let validated = match backup_service::validate_recovery_package(&path).await {
-        Ok(value) => value,
-        Err(error) => {
-            let _ = fs::remove_file(&path).await;
-            return Err(error);
-        }
+) -> Result<MaterializedArtifact, AppError> {
+    // Both callers hold recovery admission through materialization, dump
+    // extraction/inspection and planning, so concurrent preflights cannot
+    // multiply the configured disk envelope.
+    let root = std::path::Path::new(&state.config.backup_artifact_dir);
+    let staging_id = Uuid::new_v4();
+    let path = if artifact.storage_type != "s3" {
+        let mut source = fs::File::from_std(crate::services::artifact_files::open(
+            root,
+            std::path::Path::new(&artifact.storage_path),
+        )?);
+        crate::services::artifact_files::stage_reader(
+            root,
+            staging_id,
+            &mut source,
+            &state.config.recovery,
+        )
+        .await?
+    } else {
+        let (settings, key) = resolve_remote_artifact(state, artifact).await?;
+        s3_backups::download(&settings, &key, root, staging_id, &state.config.recovery)
+            .await
+            .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?
     };
+    let staged = MaterializedArtifact {
+        root: root.to_owned(),
+        staging_id,
+        path: path.to_string_lossy().into_owned(),
+        retained: false,
+    };
+    let validated =
+        backup_service::validate_recovery_package_with_limits(&path, &state.config.recovery)
+            .await?;
     if !artifact.checksum_sha256.is_empty() && artifact.checksum_sha256 != validated.checksum_sha256
     {
-        let _ = fs::remove_file(&path).await;
         return Err(AppError::Validation(
-            "Downloaded S3 package checksum does not match its catalog metadata".into(),
+            "Recovery package checksum does not match its catalog metadata".into(),
         ));
     }
-    Ok(path.to_string_lossy().into_owned())
+    Ok(staged)
 }
 
 async fn resolve_remote_artifact(
@@ -1082,6 +1153,9 @@ async fn test_s3_connection(
         &body.endpoint,
         &body.bucket,
     )?;
+    crate::services::s3_transport::S3Policy::from_config(&state.config)?
+        .validate_endpoint(&body.endpoint)
+        .await?;
     let existing = backup_service::configured_s3_settings(&state.pool, &state.config)
         .await
         .ok()
@@ -1124,9 +1198,10 @@ async fn test_s3_connection(
             .unwrap_or("us-east-1")
             .to_string(),
         bucket: body.bucket.trim().to_string(),
-        prefix: normalize_prefix(&body.prefix),
+        prefix: normalize_prefix(&body.prefix)?,
         access_key,
         secret_key,
+        policy: crate::services::s3_transport::S3Policy::from_config(&state.config)?,
     };
     tokio::time::timeout(
         std::time::Duration::from_secs(30),
@@ -1518,13 +1593,13 @@ fn validate_target(
     Ok(())
 }
 
-fn normalize_prefix(value: &str) -> String {
-    let trimmed = value.trim().trim_matches('/');
-    if trimmed.is_empty() {
+fn normalize_prefix(value: &str) -> Result<String, AppError> {
+    let prefix = crate::services::artifact_files::validate_prefix(value)?;
+    Ok(if prefix.is_empty() {
         "riviamigo".into()
     } else {
-        trimmed.into()
-    }
+        prefix
+    })
 }
 
 fn encrypt_secret(age_key: &str, secret_key: Option<&str>) -> Result<Option<Vec<u8>>, AppError> {
@@ -1660,4 +1735,47 @@ async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> 
 struct BackupOverviewQuery {
     page: Option<u32>,
     per_page: Option<u32>,
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn materialized_preflight_cleans_published_files_unless_handed_to_a_durable_job() {
+        let root = tempfile::tempdir().unwrap();
+        let limits = crate::config::RecoveryConfig {
+            min_free_bytes: 0,
+            ..Default::default()
+        };
+        for retained in [false, true] {
+            let id = Uuid::new_v4();
+            let mut input: &[u8] = b"bounded published package";
+            let path =
+                crate::services::artifact_files::stage_reader(root.path(), id, &mut input, &limits)
+                    .await
+                    .unwrap();
+            let artifact = MaterializedArtifact {
+                root: root.path().to_owned(),
+                staging_id: id,
+                path: path.to_string_lossy().into_owned(),
+                retained: false,
+            };
+            if retained {
+                artifact.retain();
+            } else {
+                drop(artifact);
+            }
+            assert_eq!(path.exists(), retained);
+            if retained {
+                crate::services::artifact_files::remove_staged(root.path(), id).unwrap();
+            }
+        }
+        assert_eq!(
+            std::fs::read_dir(root.path().join(".remote-staging"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
 }

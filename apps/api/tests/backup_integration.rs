@@ -43,6 +43,10 @@ struct TestApp {
 
 impl TestApp {
     async fn new() -> Self {
+        Self::new_with_s3_development_origin(None).await
+    }
+
+    async fn new_with_s3_development_origin(endpoint: Option<String>) -> Self {
         let base_db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
             "postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo".into()
         });
@@ -93,7 +97,7 @@ impl TestApp {
                 age_encryption_key: None,
                 port: 0,
                 allowed_origins: vec![],
-                s3_endpoint: None,
+                s3_endpoint: endpoint.clone(),
                 s3_access_key: None,
                 s3_secret_key: None,
                 backup_artifact_dir: backup_dir.to_string_lossy().into_owned(),
@@ -103,12 +107,16 @@ impl TestApp {
                 restore_agent_key_file: "/backups/.restore-agent-key".into(),
                 recovery: riviamigo_api::config::RecoveryConfig::default(),
                 origin_bind: riviamigo_api::config::OriginBindConfig::default(),
+                security: riviamigo_api::config::SecurityConfig {
+                    s3_allow_development_garage: endpoint.is_some(),
+                    ..Default::default()
+                },
                 rivian_ws_reconnect_initial_seconds: 10,
                 rivian_ws_reconnect_max_seconds: 900,
                 rivian_raw_event_retention_days: 7,
                 rivian_persist_raw_events: true,
                 rivian_suppress_duplicate_telemetry: true,
-                riviamigo_env: None,
+                riviamigo_env: endpoint.map(|_| "development".into()),
                 cookie_insecure: None,
                 allow_insecure_lan_http_auth: false,
                 vehicle_image_cache_dir: std::env::temp_dir()
@@ -119,6 +127,7 @@ impl TestApp {
             },
             nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             supervisor: SupervisorHandle::noop(),
+            resources: Default::default(),
         };
 
         Self {
@@ -499,7 +508,9 @@ async fn app_timezone_reads_existing_backup_timezone_when_setting_is_missing() {
 
 #[tokio::test]
 async fn admin_can_update_backup_settings_and_store_encrypted_secret() {
-    let app = TestApp::new().await;
+    // Use an explicitly trusted local fixture origin, rather than a fictitious
+    // DNS name. No live object store or external DNS is needed for encryption.
+    let app = TestApp::new_with_s3_development_origin(Some("https://127.0.0.1:9".into())).await;
     let email = "backup-settings-admin@example.com";
     let token = register_and_login(&app, email).await;
     let user_id = lookup_user_id(&app.pool, email).await;
@@ -520,7 +531,7 @@ async fn admin_can_update_backup_settings_and_store_encrypted_secret() {
                 "day_of_month": 28,
                 "retention_count": 12,
                 "target_type": "s3",
-                "endpoint": "https://s3.example.com",
+                "endpoint": "https://127.0.0.1:9",
                 "region": "us-east-1",
                 "bucket": "riviamigo-backups",
                 "prefix": "prod/riviamigo",
@@ -559,6 +570,49 @@ async fn admin_can_update_backup_settings_and_store_encrypted_secret() {
 
     assert!(encrypted_secret.is_some());
     assert_ne!(encrypted_secret.unwrap(), b"super-secret-value");
+}
+
+#[tokio::test]
+async fn default_s3_policy_rejects_unsafe_endpoints_before_storing_secrets() {
+    let app = TestApp::new().await;
+    let email = "backup-policy-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    promote_admin(&app.pool, lookup_user_id(&app.pool, email).await).await;
+    for endpoint in [
+        "http://1.1.1.1",
+        "https://127.0.0.1:9",
+        "https://169.254.169.254",
+    ] {
+        let response = app
+            .request(
+                Method::PUT,
+                "/v1/admin/backups/settings",
+                Some(json!({
+                    "enabled":false, "local_enabled":true, "s3_enabled":true,
+                    "frequency":"daily", "run_at":"02:30", "timezone":"UTC",
+                    "day_of_week":null, "day_of_month":null, "retention_count":3,
+                    "target_type":"s3", "endpoint":endpoint, "region":"garage",
+                    "bucket":"security-fixture", "prefix":"integration",
+                    "access_key":"test-access-key", "secret_key":"test-secret-value"
+                })),
+                Some(&token),
+                None,
+            )
+            .await;
+        assert_eq!(
+            response.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{endpoint}"
+        );
+        assert!(!response.body.to_string().contains("test-secret-value"));
+    }
+    let stored: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM riviamigo.backup_settings WHERE id=TRUE AND secret_key_encrypted IS NOT NULL)",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert!(!stored);
 }
 
 #[tokio::test]
@@ -791,6 +845,21 @@ async fn admin_can_preflight_a_versioned_recovery_package() {
         .as_str()
         .expect("artifact id");
 
+    let admission = riviamigo_api::services::backups::acquire_recovery_mutation_lock(&app.pool)
+        .await
+        .expect("hold recovery admission");
+    let conflict = app
+        .request(
+            Method::POST,
+            "/v1/admin/backups/restores/preflight",
+            Some(json!({ "artifact_id": artifact_id })),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(conflict.status, StatusCode::CONFLICT, "{}", conflict.body);
+    admission.release().await;
+
     let preflight = app
         .request(
             Method::POST,
@@ -819,6 +888,84 @@ async fn admin_can_preflight_a_versioned_recovery_package() {
     assert!(preflight.body["plan"]["plan_id"]
         .as_str()
         .is_some_and(|value| !value.is_empty()));
+    let admission = riviamigo_api::services::backups::acquire_recovery_mutation_lock(&app.pool)
+        .await
+        .expect("preflight released recovery admission");
+    admission.release().await;
+    let artifact_path: String =
+        sqlx::query_scalar("SELECT storage_path FROM riviamigo.backup_artifacts WHERE id=$1")
+            .bind(Uuid::parse_str(artifact_id).unwrap())
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    let backup_root = std::path::Path::new(&artifact_path)
+        .ancestors()
+        .find(|path| path.join(".remote-staging").is_dir())
+        .expect("managed backup root");
+    for directory in [".remote-staging", ".recovery-work"] {
+        assert_eq!(
+            std::fs::read_dir(backup_root.join(directory))
+                .unwrap()
+                .count(),
+            0,
+            "{directory} cleaned after preflight"
+        );
+    }
+}
+
+#[tokio::test]
+async fn cancelled_recovery_waiter_keeps_admission_until_blocking_work_and_cleanup_finish() {
+    let app = TestApp::new().await;
+    let workspace = tempfile::tempdir().unwrap();
+    let private_path = workspace.path().join("working");
+    std::fs::create_dir(&private_path).unwrap();
+    let worker_path = private_path.clone();
+    let pool = app.pool.clone();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+    let (cleaned_tx, cleaned_rx) = tokio::sync::oneshot::channel();
+    let waiter = tokio::spawn(async move {
+        riviamigo_api::services::backups::run_recovery_operation(pool, async move {
+            tokio::task::spawn_blocking(move || {
+                std::fs::write(worker_path.join("database.dump"), b"bounded fixture").unwrap();
+                started_tx.send(()).unwrap();
+                finish_rx.recv().unwrap();
+                std::fs::remove_dir_all(worker_path).unwrap();
+            })
+            .await
+            .unwrap();
+            cleaned_tx.send(()).unwrap();
+            Ok::<_, riviamigo_api::errors::AppError>(())
+        })
+        .await
+    });
+    started_rx.await.unwrap();
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    assert!(private_path.join("database.dump").exists());
+    assert!(
+        matches!(
+            riviamigo_api::services::backups::acquire_recovery_mutation_lock(&app.pool).await,
+            Err(riviamigo_api::errors::AppError::RecoveryConflict(_))
+        ),
+        "disconnected waiter must not admit overlapping recovery work"
+    );
+    finish_tx.send(()).unwrap();
+    cleaned_rx.await.unwrap();
+    assert!(!private_path.exists());
+    let admission = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Ok(lock) =
+                riviamigo_api::services::backups::acquire_recovery_mutation_lock(&app.pool).await
+            {
+                break lock;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    admission.release().await;
 }
 
 #[tokio::test]

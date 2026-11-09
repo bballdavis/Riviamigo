@@ -56,8 +56,9 @@ Weather, geocoding, basemap, and Iconify policies are configured in **Settings >
 
 - `RIVIAMIGO_ORIGIN_PORT` changes the published app port from `8080`.
 - `RIVIAMIGO_HOST_BIND_ADDRESS` controls Docker's host-side published address;
-  it defaults to `0.0.0.0` for normal host publication. Set it to a specific
-  interface when required and protect the port with a firewall.
+  it defaults to `127.0.0.1`. A gateway on the same Docker network can reach
+  container port 8080 without host publication. Remote-gateway publication
+  requires an explicit interface override and firewall rule.
 - `RIVIAMIGO_BIND_ADDRESS` controls the application's internal listener and
   defaults to `127.0.0.1`; it is not the Docker host publication address. A
   non-loopback internal listener requires `ALLOW_PUBLIC_ORIGIN_BIND=true`.

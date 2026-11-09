@@ -17,6 +17,8 @@ export interface ThemeToggleProps {
   variant?: 'solid' | 'ghost';
   disabled?: boolean;
   size?: 'default' | 'menu';
+  /** Overrides the trigger icon size, e.g. to optically match neighbouring icons. */
+  iconClassName?: string;
   mode?: ThemeMode;
   onModeChange?: (mode: ThemeMode) => void;
 }
@@ -73,6 +75,7 @@ export function ThemeToggle({
   variant = 'solid',
   disabled = false,
   size = 'default',
+  iconClassName,
   mode: controlledMode,
   onModeChange,
 }: ThemeToggleProps) {
@@ -223,8 +226,8 @@ export function ThemeToggle({
         className
       )}
     >
-      <span className={cn('inline-flex shrink-0 items-center justify-center', size === 'menu' ? 'h-5 w-5' : 'h-4 w-4')}>
-        <ModeIcon className={size === 'menu' ? 'h-5 w-5' : 'h-4 w-4'} />
+      <span className={cn('inline-flex shrink-0 items-center justify-center', size === 'menu' ? 'h-5 w-5' : 'h-4 w-4', iconClassName)}>
+        <ModeIcon className={cn(size === 'menu' ? 'h-5 w-5' : 'h-4 w-4', iconClassName)} />
       </span>
       {showLabel && (
         <span className="min-w-0 flex-1 truncate text-left text-sm font-medium text-fg">

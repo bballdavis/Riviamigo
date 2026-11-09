@@ -67,6 +67,8 @@ import type {
   UserPreferencesResponse,
   DashboardChartFavorites,
   AppTimezone,
+  AppVersionResponse,
+  UpdateCheckSettings,
   CreateBackupRestoreRequestBody,
   BackupRestoreRequest,
   RestoreJob,
@@ -103,6 +105,7 @@ import type {
   ChargingNetworkPreference,
 } from '@riviamigo/types';
 import { liveFields } from './chargingSessionFields';
+import { withSessionLock } from './sessionLock';
 import { reportClientError } from '@riviamigo/ui/lib/clientDiagnostics';
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
@@ -280,7 +283,7 @@ type AuthChangeHandler = (tokens: AuthTokens | null) => void;
 export class AuthenticatedTransport {
   private accessToken: string | null = null;
   private authChangeHandler: AuthChangeHandler | null = null;
-  private refreshPromise: Promise<AuthTokens> | null = null;
+  private refreshPromise: Promise<AuthTokens | null> | null = null;
   private authExpiredReported = false;
   private rateLimitCooldowns = new Map<string, number>();
 
@@ -304,21 +307,31 @@ export class AuthenticatedTransport {
     this.authChangeHandler?.(null);
   }
 
-  private refreshAccessToken(): Promise<AuthTokens> {
+  private renewSession(bootstrap = false): Promise<AuthTokens | null> {
     if (!this.refreshPromise) {
-      this.refreshPromise = this.request<AuthTokens>(
-        'POST',
-        '/v1/auth/refresh',
-        undefined,
-        undefined,
-        false,
-        false
-      ).finally(() => {
+      this.refreshPromise = withSessionLock(async () => {
+        const abort = new AbortController();
+        const timeout = setTimeout(() => abort.abort(), 30_000);
+        try {
+          const res = await this.requestResponse('POST', bootstrap ? '/v1/auth/bootstrap' : '/v1/auth/refresh',
+            undefined, undefined, false, false, undefined, abort.signal);
+          if (res.status === 204) return null;
+          const tokens = await res.json() as AuthTokens;
+          this.applyTokens(tokens);
+          return tokens;
+        } finally { clearTimeout(timeout); }
+      }).finally(() => {
         this.refreshPromise = null;
       });
     }
 
     return this.refreshPromise;
+  }
+
+  private async refreshAccessToken(): Promise<AuthTokens> {
+    const tokens = await this.renewSession();
+    if (!tokens) throw Object.assign(new Error('Session expired. Sign in again.'), { status: 401, code: 'AUTH_EXPIRED' });
+    return tokens;
   }
 
   private headers(path: string): HeadersInit {
@@ -462,7 +475,15 @@ export class AuthenticatedTransport {
       reportErrors
     );
     if (res.status === 204) return undefined as T;
-    return res.json() as Promise<T>;
+    try { return await res.json() as T; }
+    catch (cause) {
+      const detail: ApiFailureDetail = { code: 'INCOMPLETE_RESPONSE',
+        message: 'The server response was interrupted. Please retry.', method, path,
+        requestId: res.headers.get('x-request-id') ?? undefined };
+      const error = Object.assign(new Error(formatApiError(detail)), { code: detail.code, detail, cause });
+      if (reportErrors) this.reportFailure(detail, error);
+      throw error;
+    }
   }
 
   async requestResponse(
@@ -471,7 +492,7 @@ export class AuthenticatedTransport {
     body?: unknown,
     params?: Record<string, string | number>,
     retryOnUnauthorized = true,
-    reportErrors = true, extraHeaders?: Record<string, string>
+    reportErrors = true, extraHeaders?: Record<string, string>, signal?: AbortSignal
   ): Promise<Response> {
     this.assertRateLimitCooldown(method, path);
 
@@ -491,6 +512,7 @@ export class AuthenticatedTransport {
         method,
         headers: { ...(this.headers(path) as Record<string, string>), ...extraHeaders },
         credentials: 'include',
+        ...(signal ? { signal } : {}),
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
     } catch (error) {
@@ -537,15 +559,14 @@ export class AuthenticatedTransport {
         try {
           const tokens = await this.refreshAccessToken();
           this.applyTokens(tokens);
-          return this.requestResponse(method, path, body, params, false, reportErrors, extraHeaders);
+          return this.requestResponse(method, path, body, params, false, reportErrors, extraHeaders, signal);
         } catch (refreshError) {
           const refreshFailure = apiFailureDetailFrom(refreshError);
           if (
-            refreshFailure &&
-            (refreshFailure.code === 'NETWORK_ERROR' ||
-              (refreshFailure.status != null && refreshFailure.status >= 500))
+            (refreshFailure?.code === 'NETWORK_ERROR' || (refreshError instanceof Error && 'code' in refreshError && refreshError.code === 'NETWORK_ERROR') ||
+              (refreshFailure?.status != null && refreshFailure.status >= 500))
           ) {
-            if (reportErrors) {
+            if (reportErrors && refreshFailure) {
               this.reportFailure(
                 refreshFailure,
                 refreshError instanceof Error ? refreshError : new Error(refreshFailure.message)
@@ -631,8 +652,7 @@ export class AuthenticatedTransport {
   }
 
   async refresh(): Promise<AuthTokens> {
-    // Used for automatic retry after a protected API call gets a 401.
-    return this.request('POST', '/v1/auth/refresh', undefined, undefined, true, false);
+    return this.refreshAccessToken();
   }
 
   async setup(): Promise<AuthSetupResponse> {
@@ -666,16 +686,7 @@ export class AuthenticatedTransport {
   }
 
   async resumeSession(): Promise<AuthTokens | null> {
-    const res = await this.requestResponse(
-      'POST',
-      '/v1/auth/bootstrap',
-      undefined,
-      undefined,
-      false,
-      false
-    );
-    if (res.status === 204) return null;
-    return res.json() as Promise<AuthTokens>;
+    return this.renewSession(true);
   }
 
   async me(): Promise<AuthMeResponse> {
@@ -737,6 +748,18 @@ export class AuthenticatedTransport {
 
   async getAppTimezone(): Promise<AppTimezone> {
     return this.request('GET', '/v1/settings/timezone');
+  }
+
+  async getAppVersion(): Promise<AppVersionResponse> {
+    return this.request('GET', '/v1/app/version');
+  }
+
+  async getUpdateCheckSettings(): Promise<UpdateCheckSettings> {
+    return this.request('GET', '/v1/settings/update-check');
+  }
+
+  async updateUpdateCheckSettings(body: UpdateCheckSettings): Promise<UpdateCheckSettings> {
+    return this.request('PUT', '/v1/settings/update-check', body);
   }
 
   async updateAppTimezone(timezone: string): Promise<AppTimezone> {
@@ -2433,7 +2456,7 @@ function friendlyApiError(detail: ApiFailureDetail): { title: string; message: s
 }
 
 function isFetchConnectionError(error: unknown): boolean {
-  return error instanceof TypeError || (error instanceof Error && error.name === 'NetworkError');
+  return error instanceof TypeError || (error instanceof Error && ['NetworkError', 'AbortError'].includes(error.name));
 }
 
 function apiFailureDetailFrom(error: unknown): ApiFailureDetail | undefined {

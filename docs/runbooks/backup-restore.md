@@ -2,6 +2,28 @@
 
 This runbook covers recovery-package validation and clean-install restore. The user-facing workflow is documented in [Backup and restore](../guides/backup-and-restore.md).
 
+## Trust and privilege boundary
+
+Restore only packages whose producer and contents you trust. Administrator
+authorization does not make a PostgreSQL archive passive data. Candidate SQL
+runs as a job-specific role without cluster administration, file/program roles
+or privileges on other application objects. The role retains restored object
+ownership and becomes NOLOGIN with its password removed after preparation.
+Its candidate grants disappear when the database is dropped; orphan roles are
+removed on cleanup. Startup also disables interrupted restore-role logins.
+The outer restore deadline explicitly runs cleanup: it terminates the job
+role's sessions, disables its login/password, force-drops only that job's
+candidate, and removes the orphaned role. Cleanup uses the maintenance database
+so a temporarily absent application database during a swap cannot skip it.
+Never work around an import permission error by rerunning `pg_restore` as the
+bootstrap superuser. Preserve the package and diagnose extension compatibility.
+
+The bootstrap role preinstalls TimescaleDB, pgcrypto, cube and earthdistance,
+runs known Timescale hooks and handles the database swap. This still shares the
+PostgreSQL server; functions, background jobs and SQL resource consumption in
+trusted archives remain accepted restore risk. A separate PostgreSQL sandbox
+is outside this hardening change.
+
 ## Validate a package before an incident
 
 Run the restore command against an isolated Compose project and a disposable env file:
@@ -25,7 +47,7 @@ pnpm verify:restore-compatibility -- `
   --source-build
 ```
 
-The lab rechecks the package SHA-256, reads the expected source head and chain information from `manifest.json`, creates disposable Compose storage and credentials, verifies the API and restore supervisor, records a data-free report under `tools/restore-lab/local/reports/`, and removes the stack unless `--keep` is supplied. Never commit packages or lab credentials. Checkpoints from the former five-migration chain are expected rejection cases, not successful migration fixtures.
+The lab rechecks the package SHA-256, reads the expected source head and chain information from `manifest.json`, creates disposable Compose storage and credentials, verifies the API and restore supervisor, records a data-free report under `tools/restore-lab/local/reports/`, and removes the stack unless `--keep` is supplied. Add `--verify-rollback` to prepare and activate a second candidate, roll it back, and prove that the previous database and artwork return with a healthy application and durable rollback report. Never commit packages or lab credentials. Checkpoints from the former five-migration chain are expected rejection cases, not successful migration fixtures.
 
 ## Incident restore
 
@@ -49,15 +71,34 @@ start a second import, restore, or recovery intervention while one is active.
 The imported package is streamed to a temporary artifact only after a free-space
 check and is rechecked while receiving bytes. The default envelope is 16 GiB
 compressed upload, 64 GiB expanded/member size, 10,000 members, 200:1 maximum
-compression ratio, and at least 2 GiB free artifact storage. Upload has a
+compression ratio, and at least 2 GiB free artifact storage. Manifest/settings
+JSON each have an independent 1 MiB cap; operational history has a 16 MiB cap
+and merges one record at a time. S3 downloads and internal restore copies enforce
+the compressed cap, reserved free space and restore deadline while writing actual
+bytes, even without Content-Length. Partial staging files are removed on failure. Upload has a
 30-minute deadline; the restore supervisor has a four-hour deadline. Limits
 are configuration, not estimates—an archive that exceeds any one is rejected.
+
+Backup creation and restore preflight use UUID workspaces beneath
+`BACKUP_ARTIFACT_DIR/.recovery-work` and remove them when the operation ends.
+Preflight extraction uses the same configured recovery limits as activation;
+dump inspection streams output with bounded diagnostic memory. Keep free
+space on this volume for the package, extracted dump and safety backup. The
+container's small `/tmp` filesystem is not recovery storage.
+
+Migration 0030 includes the charge-payload backfill index in the canonical
+schema. A freshly migrated candidate and an installation that has processed
+historical payloads therefore retain the same strict schema fingerprint. Do not
+bypass a fingerprint mismatch by removing indexes or disabling compatibility
+validation; preserve the package and investigate the differing objects.
 
 When a limit, free-space, or deadline error occurs, preserve the original
 package and journal, correct the condition, and retry after the active lock has
 cleared. Do not bypass the check by copying unvalidated content into staging.
 The service rejects unsafe or duplicate paths and validates the entire package
-before extraction or cataloging.
+before extraction or cataloging. Imported catalog rows are unavailable until
+physical artifacts are verified, and all local reads/deletes reject traversal,
+symlinks and service control paths outside the artifact contract.
 
 For an in-app restore:
 
@@ -65,7 +106,7 @@ For an in-app restore:
 2. Confirm the isolated candidate reaches validation before the safety package is written and before the API stops.
 3. Follow the phase shown in the UI or inspect `.restore-jobs/<job-id>.json` for the plan, candidate validation report, retryability, and rollback state.
 4. If verification fails, confirm rollback state becomes `succeeded` and the previous API becomes healthy. Preserve the uploaded package, safety package, failed candidate, and journal if rollback fails.
-5. Do not edit `_sqlx_migrations` manually. Normal ledger reconstruction occurs only in an isolated candidate after its exact-prefix ledger and complete source schema contract pass. Packages from the former five-migration chain are unsupported by the cutover release; use the explicit database-adoption runbook with a verified dump and matching old image instead. Partial or contradictory historical schemas fail closed.
+5. Do not edit `_sqlx_migrations` manually. Normal ledger reconstruction occurs only in an isolated candidate after its source fingerprint and ledger are verified. A historical baseline package may precede the charts relation introduced in migration 11; forward migrations create it, and the final target contract always requires it. An unrecognized v3 ledger is accepted only when the restored physical schema exactly matches the immutable public baseline. Packages from the former five-migration chain are unsupported by the cutover release; use the explicit database-adoption runbook with a verified dump and matching old image instead. Partial or contradictory historical schemas fail closed.
 
 The container healthcheck treats an active restore supervisor as healthy so an external container manager does not interrupt the short swap window. Public `/health` remains available during candidate preparation and unavailable only while the API is intentionally stopped for swap or rollback.
 
@@ -94,3 +135,13 @@ An S3-enabled run is successful only when the upload and retention operations su
 7. Retain the PG16 dump and directory until the second restore and application smoke tests pass.
 
 Redis is handled separately. Snapshot the Redis 7 directory before starting Redis 8. If Redis 8 cannot read it, replace only the Redis directory and document that sessions and provider connections must be recreated.
+
+## Restore authentication reset
+
+Candidate sanitation runs after migrations even when an old or crafted dump
+contains tables which a normal backup redacts. Re-enter provider and OIDC
+settings, sign in with local password recovery, regenerate API keys and
+invitations, and reconnect vehicles after restore. Installation environment
+overrides remain operator authority and are not imported from the archive.
+Backup prefixes must be portable relative components: no parent/dot segments,
+absolute paths, backslashes, control characters or hidden control directories.

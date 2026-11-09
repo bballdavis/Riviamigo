@@ -8,7 +8,26 @@ slug: /using-riviamigo/external-connections/
 
 Open **Settings > External Connections** to see every service Riviamigo may contact. All signed-in users can read the inventory and its data disclosures. Administrators and super users control the installation-wide policy.
 
-Riviamigo does not send product analytics. These connections exist only to provide a feature you request. Each card shows the destination, data sent, last sanitized result, daily request count, and what stops if the connection is disabled. **Disable optional** stops weather, geocoding, basemaps, and remote icon catalog access without deleting stored results.
+Riviamigo does not send product analytics. These connections exist only to provide a feature you request. External-provider cards show the destination, data sent, last sanitized result, daily request count, and what stops if the connection is disabled. **Disable optional** stops weather, geocoding, basemaps, and remote icon catalog access without deleting stored results.
+
+## GitHub Releases
+
+The Settings heading shows the running build version and links to the [Riviamigo
+releases page](https://github.com/bballdavis/Riviamigo/releases). GitHub
+Releases is listed alongside the other external connections and controls the
+optional checks. The sidebar download icon appears only when a newer release
+exists, opens the release page, and does not install or apply an update.
+
+Optional release checks are disabled by default. An administrator or super user
+can enable them for the installation and choose hourly, daily, weekly, or
+monthly checks (every 30 days). While enabled, each browser checks on its first
+open and then at the selected interval while Riviamigo is open. The browser
+requests GitHub's [latest release endpoint](https://docs.github.com/en/rest/releases/releases#get-the-latest-release)
+directly; GitHub's endpoint selects the latest published stable release and
+excludes drafts and prereleases. The request adds no user, vehicle, or usage
+data. GitHub receives the ordinary network metadata needed to serve a browser
+request, while Riviamigo receives no check counts or results. The last attempt
+and release result stay in that browser.
 
 ## Weather and outside temperature
 
@@ -78,3 +97,18 @@ addresses, search text, query strings, credentials, VINs, and vehicle names.
 Use **Test with synthetic data** before relying on a provider. The result is separate from runtime health, so testing an unsaved endpoint never overwrites the installed provider's last-success record. Each result shows named checks and safe messages; it uses a generic location, map tile, or icon name rather than a real drive.
 
 For a release or a new self-hosted endpoint, verify every enabled connection, then inspect a signed-in browser's network panel. Browser requests should target only Riviamigo's same-origin basemap and Iconify proxy paths. A configuration or tile failure switches the map to a neutral recovery state with the matching retry action; it must not leave a blank interactive map. See [Frontend error observability](../architecture/frontend-error-observability.md) for the safe diagnostic fields and expected quiet failures.
+
+## Destination checks and bounded caches
+
+Provider DNS is checked for every new outbound request and approved addresses
+are pinned for the connection. Mixed public/private answers, metadata and
+link-local destinations, and redirects fail closed. Private weather/geocoder
+CIDRs must match the saved connection policy; OIDC/S3 private CIDRs are operator
+environment settings. Response bodies are bounded by actual bytes, including
+chunked transfers.
+
+Basemap resources share a 128 MiB cache budget and expire after seven days by
+default. Least-recently-used basemap entries can expire earlier under pressure;
+operational Redis keys do not participate. Legacy permanent tile entries are
+invalidated in bounded scans during upgrade, so some map requests become cold
+cache misses. Manual purge remains available.

@@ -438,7 +438,7 @@ fn unique_weather_cells(targets: &[TargetSample]) -> Vec<WeatherCell> {
 }
 
 async fn fetch_weather_chunk(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     settings: &ConnectionSettingsRow,
     cells: &[WeatherCell],
     started_at: DateTime<Utc>,
@@ -463,6 +463,9 @@ async fn fetch_weather_chunk(
         .join(",");
     let start_date = started_at.date_naive().format("%Y-%m-%d").to_string();
     let end_date = ended_at.date_naive().format("%Y-%m-%d").to_string();
+    let endpoint = url::Url::parse(endpoint)?;
+    let allowlist = crate::services::outbound::configured_private_network_allowlist(settings)?;
+    let client = crate::services::outbound::outbound_client_for_url(&endpoint, &allowlist).await?;
     let mut request = client.get(endpoint).query(&[
         ("latitude", latitudes),
         ("longitude", longitudes),
@@ -488,10 +491,12 @@ async fn fetch_weather_chunk(
         }
         .into());
     }
-    let body: Value = response
-        .json()
-        .await
-        .context("weather JSON decode failed")?;
+    let body: Value = crate::services::outbound::read_json(
+        response,
+        crate::services::outbound::operator_security()?.weather_max_response_bytes,
+        "Weather provider",
+    )
+    .await?;
     if let Some(array) = body.as_array() {
         if array.len() != cells.len() {
             anyhow::bail!("weather provider returned an unexpected batch size");

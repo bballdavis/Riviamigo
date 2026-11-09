@@ -5,8 +5,8 @@
     "apps/web/src/components/layout/AppLayout.tsx": { "maxLines": 485, "maxBytes": 18642 },
     "apps/web/src/components/dashboard/DashboardPageShell.tsx": { "maxLines": 485, "maxBytes": 18178 },
     "apps/api/src/routes/vehicles.rs": { "maxLines": 5676, "maxBytes": 201797 },
-    "apps/api/src/routes/charging.rs": { "maxLines": 2258, "maxBytes": 85053 },
-    "apps/api/src/routes/trips.rs": { "maxLines": 1833, "maxBytes": 65504 },
+    "apps/api/src/routes/charging.rs": { "maxLines": 2260, "maxBytes": 85127 },
+    "apps/api/src/routes/trips.rs": { "maxLines": 1835, "maxBytes": 65589 },
     "apps/api/src/services/backups.rs": { "maxLines": 2675, "maxBytes": 98964 },
     "apps/api/src/services/charge_sessions.rs": { "maxLines": 1949, "maxBytes": 73563 },
     "packages/hooks/src/api/transport.ts": { "maxLines": 2419, "maxBytes": 83235 }

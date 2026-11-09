@@ -144,6 +144,30 @@ Owners and managers can record an ingestion capture for a vehicle. `GET /v1/vehi
 All historical endpoints accept a bounded timeframe where applicable. Use UTC
 RFC 3339 timestamps and URL-encode query parameters.
 
+## Running application version
+
+Signed-in browser sessions can read `GET /v1/app/version`, which returns the
+running build's version:
+
+- Release images report the exact release, for example `2026.10.1`.
+- `riviamigo:dev` candidate images report the latest release plus the commits
+  since it, for example `2026.10.1+dev.7`.
+- The local `pnpm run dev:stack` reports the latest release tag with `+dev`.
+
+The value comes from image build metadata. When a build has no version
+metadata, the endpoint returns `{"version":"unknown"}`; it does not report the
+package version as if that were the running image.
+Integration API keys cannot access this session-only endpoint.
+
+## Installation-wide GitHub release-check settings
+
+Signed-in browser sessions read `GET /v1/settings/update-check`, which returns
+`{"enabled":false,"frequency":"daily"}` on a fresh or upgraded installation.
+`PUT /v1/settings/update-check` accepts the same fields; only administrators and
+super users can change them. Supported frequencies are `hourly`, `daily`,
+`weekly`, and `monthly` (30 days). These session-only routes are unavailable to
+integration API keys.
+
 Raw Rivian WebSocket event payloads, vehicle membership lists, invitations, and
 all configuration routes remain session-only. They are diagnostic or account
 management surfaces rather than a stable integration contract.

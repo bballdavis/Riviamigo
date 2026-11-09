@@ -101,6 +101,7 @@ impl TestApp {
                 restore_agent_key_file: "/backups/.restore-agent-key".into(),
                 recovery: riviamigo_api::config::RecoveryConfig::default(),
                 origin_bind: riviamigo_api::config::OriginBindConfig::default(),
+                security: Default::default(),
                 rivian_ws_reconnect_initial_seconds: 10,
                 rivian_ws_reconnect_max_seconds: 900,
                 rivian_raw_event_retention_days: 7,
@@ -117,6 +118,7 @@ impl TestApp {
             },
             nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             supervisor: SupervisorHandle::noop(),
+            resources: Default::default(),
         };
 
         Self {

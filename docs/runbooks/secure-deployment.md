@@ -9,8 +9,8 @@ changes the requirements in this runbook.
 
 Riviamigo is not approved for direct Internet exposure. The standard production
 Compose stack publishes its web origin on port `8080` using normal Docker host
-publication; set `RIVIAMIGO_HOST_BIND_ADDRESS` to limit the host interface and
-runs the app as UID/GID `1001`, with a read-only root filesystem, all Linux
+publication bound to `127.0.0.1` by default; `RIVIAMIGO_HOST_BIND_ADDRESS`
+requires an explicit override for network sharing. It runs the app as UID/GID `1001`, with a read-only root filesystem, all Linux
 capabilities dropped, `no-new-privileges`, and a bounded `/tmp` tmpfs. Database
 initialization and migrations run inside that same unprivileged app container;
 the production stack has no root init service. Do not weaken these defaults to
@@ -57,6 +57,7 @@ HTTPS cannot be provided on an isolated trusted LAN, set all of these in the
 Compose environment file:
 
 ```dotenv
+RIVIAMIGO_HOST_BIND_ADDRESS=192.168.1.20
 RIVIAMIGO_BIND_ADDRESS=0.0.0.0
 ALLOW_PUBLIC_ORIGIN_BIND=true
 ALLOWED_ORIGINS=http://192.168.1.20:8080
@@ -86,6 +87,38 @@ users, and restore HTTPS as soon as possible.
   trusted-client-IP policy. The internal Riviamigo origin intentionally does
   not trust arbitrary forwarded client IP headers.
 - Restrict direct host access to port 8080 with host firewall rules.
+
+## Trusted gateway client addresses
+
+By default nginx replaces forwarded-IP headers with the socket peer address.
+If the gateway supplies sanitized client addresses, mount an operator-owned
+configuration under `/etc/nginx/trusted-proxy/`. Trust only the gateway's exact
+CIDRs, never every network:
+
+```nginx
+set_real_ip_from 192.168.1.10/32;
+real_ip_header X-Forwarded-For;
+real_ip_recursive on;
+```
+
+Mount that file read-only into the unified app container, for example at
+`/etc/nginx/trusted-proxy/gateway.conf`. Verify spoofed forwarded chains cannot
+change the address nginx passes to the loopback API. The API accepts one IP
+from this trusted local nginx, never an arbitrary comma-separated chain.
+Gateway-on-Docker-network deployments should remove the app host `ports`
+publication and retain Traefik's service port 8080 on its private network.
+
+## Non-root Nginx diagnostics
+
+Nginx writes errors to stderr from its initial startup through normal service
+operation. The supervisor uses `-e stderr` before configuration is loaded, and
+the main-context `error_log stderr warn;` retains that destination afterward.
+This works with the read-only filesystem and UID1001 container policy without
+requiring write access to Nginx's package-default log directory.
+
+Use `nginx -e stderr -t` when checking configuration under the same constraints.
+See the [Nginx command-line options](https://nginx.org/en/docs/switches.html) and
+[error_log directive](https://nginx.org/en/docs/ngx_core_module.html#error_log).
 
 ## Verification
 

@@ -3,14 +3,17 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use aws_sdk_s3::{
-    config::{Credentials, Region, RequestChecksumCalculation, ResponseChecksumValidation},
+    config::{
+        timeout::TimeoutConfig, Credentials, Region, RequestChecksumCalculation,
+        ResponseChecksumValidation,
+    },
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart},
     Client,
 };
 use chrono::{DateTime, Utc};
 use tokio::fs::{self, File};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
 const MULTIPART_THRESHOLD: u64 = 64 * 1024 * 1024;
@@ -25,6 +28,7 @@ pub struct S3Settings {
     pub prefix: String,
     pub access_key: String,
     pub secret_key: String,
+    pub policy: crate::services::s3_transport::S3Policy,
 }
 
 #[derive(Clone, Debug)]
@@ -37,18 +41,18 @@ pub struct RemoteObject {
     pub metadata: HashMap<String, String>,
 }
 
-pub fn normalize_prefix(value: &str) -> String {
-    value.trim().trim_matches('/').to_string()
+pub fn normalize_prefix(value: &str) -> Result<String> {
+    Ok(crate::services::artifact_files::validate_prefix(value)?)
 }
 
-pub fn object_key(prefix: &str, created_at: DateTime<Utc>, run_id: Uuid) -> String {
+pub fn object_key(prefix: &str, created_at: DateTime<Utc>, run_id: Uuid) -> Result<String> {
     let name = format!(
         "backup-{}-{}.rma.tar.gz",
         created_at.format("%Y%m%dT%H%M%SZ"),
         run_id.simple()
     );
-    let prefix = normalize_prefix(prefix);
-    if prefix.is_empty() {
+    let prefix = normalize_prefix(prefix)?;
+    Ok(if prefix.is_empty() {
         name
     } else {
         format!(
@@ -56,7 +60,7 @@ pub fn object_key(prefix: &str, created_at: DateTime<Utc>, run_id: Uuid) -> Stri
             created_at.format("%Y"),
             created_at.format("%m")
         )
-    }
+    })
 }
 
 pub fn locator(bucket: &str, key: &str) -> String {
@@ -68,11 +72,16 @@ pub fn key_from_locator<'a>(bucket: &str, value: &'a str) -> Option<&'a str> {
 }
 
 pub fn key_belongs_to_prefix(prefix: &str, key: &str) -> bool {
-    let prefix = normalize_prefix(prefix);
-    prefix.is_empty() || key.starts_with(&format!("{prefix}/"))
+    let Ok(prefix) = normalize_prefix(prefix) else {
+        return false;
+    };
+    crate::services::artifact_files::validate_prefix(key).is_ok()
+        && key.ends_with(".rma.tar.gz")
+        && (prefix.is_empty() || key.starts_with(&format!("{prefix}/")))
 }
 
 fn client(settings: &S3Settings) -> Result<Client> {
+    normalize_prefix(&settings.prefix)?;
     let credentials = Credentials::new(
         settings.access_key.clone(),
         settings.secret_key.clone(),
@@ -84,6 +93,16 @@ fn client(settings: &S3Settings) -> Result<Client> {
         .behavior_version_latest()
         .region(Region::new(settings.region.clone()))
         .credentials_provider(credentials)
+        .timeout_config(
+            TimeoutConfig::builder()
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .read_timeout(std::time::Duration::from_secs(30))
+                .operation_timeout(std::time::Duration::from_secs(300))
+                .build(),
+        )
+        .http_client(crate::services::s3_transport::S3HttpClient(
+            settings.policy.clone(),
+        ))
         // Newer AWS SDK releases default to optional checksum trailers. Some
         // S3-compatible servers (including Garage) close those aws-chunked
         // requests, so only use protocol checksums when an operation requires one.
@@ -101,7 +120,7 @@ pub async fn test_connection(settings: &S3Settings) -> Result<()> {
     let client = client(settings)?;
     let key = format!(
         "{}/.riviamigo-connection-test-{}",
-        normalize_prefix(&settings.prefix),
+        normalize_prefix(&settings.prefix)?,
         Uuid::new_v4()
     )
     .trim_start_matches('/')
@@ -130,19 +149,28 @@ pub async fn test_connection(settings: &S3Settings) -> Result<()> {
                 .any(|object| object.key() == Some(key.as_str())),
             "S3 list probe did not return the written object"
         );
-        let downloaded = client
+        let mut stream = client
             .get_object()
             .bucket(&settings.bucket)
             .key(&key)
             .send()
             .await
             .context("S3 read probe failed")?
-            .body
-            .collect()
+            .body;
+        let mut downloaded = Vec::with_capacity(payload.len());
+        while let Some(bytes) = stream
+            .try_next()
             .await
-            .context("S3 read probe body failed")?;
+            .context("S3 read probe body failed")?
+        {
+            anyhow::ensure!(
+                downloaded.len().saturating_add(bytes.len()) <= payload.len(),
+                "S3 read probe returned an oversized body"
+            );
+            downloaded.extend_from_slice(&bytes);
+        }
         anyhow::ensure!(
-            downloaded.into_bytes().as_ref() == payload.as_bytes(),
+            downloaded == payload.as_bytes(),
             "S3 read probe returned different bytes"
         );
         Ok::<(), anyhow::Error>(())
@@ -276,34 +304,47 @@ async fn multipart_upload(
     result
 }
 
-pub async fn download(settings: &S3Settings, key: &str, destination: &Path) -> Result<()> {
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).await?;
-    }
-    let temporary = destination.with_extension("downloading");
-    let result = async {
-        let output = client(settings)?
-            .get_object()
-            .bucket(&settings.bucket)
-            .key(key)
-            .send()
-            .await
-            .context("S3 download failed")?;
-        let mut body = output.body;
-        let mut file = File::create(&temporary).await?;
-        while let Some(bytes) = body.try_next().await.context("S3 download stream failed")? {
-            file.write_all(&bytes).await?;
-        }
-        file.flush().await?;
-        drop(file);
-        fs::rename(&temporary, destination).await?;
-        Ok::<(), anyhow::Error>(())
-    }
-    .await;
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary).await;
-    }
-    result
+pub async fn download(
+    settings: &S3Settings,
+    key: &str,
+    root: &Path,
+    id: Uuid,
+    limits: &crate::config::RecoveryConfig,
+) -> Result<std::path::PathBuf> {
+    anyhow::ensure!(
+        key_belongs_to_prefix(&settings.prefix, key),
+        "S3 object is outside the configured package prefix"
+    );
+    tokio::time::timeout(
+        std::time::Duration::from_secs(limits.restore_deadline_seconds),
+        async {
+            let output = client(settings)?
+                .get_object()
+                .bucket(&settings.bucket)
+                .key(key)
+                .send()
+                .await
+                .context("S3 download failed")?;
+            if let Some(length) = output.content_length() {
+                anyhow::ensure!(
+                    length >= 0 && length as u64 <= limits.max_upload_bytes,
+                    "S3 package exceeds the compressed byte limit"
+                );
+                anyhow::ensure!(
+                    fs2::available_space(root)?
+                        >= limits.min_free_bytes.saturating_add(length as u64),
+                    "insufficient free space for S3 package"
+                );
+            }
+            let mut reader = output.body.into_async_read();
+            Ok::<_, anyhow::Error>(
+                crate::services::artifact_files::stage_reader(root, id, &mut reader, limits)
+                    .await?,
+            )
+        },
+    )
+    .await
+    .context("S3 download deadline exceeded")?
 }
 
 pub async fn download_stream(settings: &S3Settings, key: &str) -> Result<ByteStream> {
@@ -330,7 +371,7 @@ pub async fn delete(settings: &S3Settings, key: &str) -> Result<()> {
 
 pub async fn list(settings: &S3Settings) -> Result<Vec<RemoteObject>> {
     let client = client(settings)?;
-    let prefix = normalize_prefix(&settings.prefix);
+    let prefix = normalize_prefix(&settings.prefix)?;
     let mut continuation = None;
     let mut rows = Vec::new();
     loop {
@@ -390,69 +431,4 @@ pub async fn list(settings: &S3Settings) -> Result<Vec<RemoteObject>> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::io::AsyncReadExt;
-
-    #[test]
-    fn normalizes_keys_and_locators() {
-        let now = DateTime::parse_from_rfc3339("2026-07-22T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let id = Uuid::nil();
-        let key = object_key("/riviamigo/prod/", now, id);
-        assert_eq!(key, "riviamigo/prod/2026/07/backup-20260722T120000Z-00000000000000000000000000000000.rma.tar.gz");
-        let value = locator("backups", &key);
-        assert_eq!(key_from_locator("backups", &value), Some(key.as_str()));
-        assert_eq!(key_from_locator("other", &value), None);
-        assert!(key_belongs_to_prefix("riviamigo/prod", &key));
-        assert!(!key_belongs_to_prefix("riviamigo/other", &key));
-    }
-
-    #[tokio::test]
-    #[ignore = "requires a disposable Garage instance"]
-    async fn garage_upload_list_download_delete_round_trip() {
-        let settings = S3Settings {
-            endpoint: std::env::var("RIVIAMIGO_TEST_S3_ENDPOINT").expect("test endpoint"),
-            region: std::env::var("RIVIAMIGO_TEST_S3_REGION").unwrap_or_else(|_| "garage".into()),
-            bucket: std::env::var("RIVIAMIGO_TEST_S3_BUCKET").expect("test bucket"),
-            prefix: format!("integration/{}", Uuid::new_v4()),
-            access_key: std::env::var("RIVIAMIGO_TEST_S3_ACCESS_KEY").expect("test access key"),
-            secret_key: std::env::var("RIVIAMIGO_TEST_S3_SECRET_KEY").expect("test secret key"),
-        };
-        test_connection(&settings).await.expect("connection probe");
-        let directory = std::env::temp_dir().join(format!("riviamigo-s3-test-{}", Uuid::new_v4()));
-        fs::create_dir_all(&directory)
-            .await
-            .expect("test directory");
-        let source = directory.join("source.rma.tar.gz");
-        fs::write(&source, b"garage integration sentinel")
-            .await
-            .expect("source file");
-        let run_id = Uuid::new_v4();
-        let key = object_key(&settings.prefix, Utc::now(), run_id);
-        upload(&settings, &key, &source, "test-sha256", run_id, Utc::now())
-            .await
-            .expect("upload");
-        let rows = list(&settings).await.expect("list");
-        assert!(rows
-            .iter()
-            .any(|row| row.key == key && row.checksum_sha256.as_deref() == Some("test-sha256")));
-        let mut bytes = Vec::new();
-        download_stream(&settings, &key)
-            .await
-            .expect("download")
-            .into_async_read()
-            .read_to_end(&mut bytes)
-            .await
-            .expect("download body");
-        assert_eq!(bytes, b"garage integration sentinel");
-        delete(&settings, &key).await.expect("delete");
-        assert!(!list(&settings)
-            .await
-            .expect("list after delete")
-            .iter()
-            .any(|row| row.key == key));
-        let _ = fs::remove_dir_all(directory).await;
-    }
-}
+mod tests;

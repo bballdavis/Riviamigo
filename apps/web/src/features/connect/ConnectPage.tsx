@@ -117,7 +117,11 @@ export function ConnectContent() {
       ]);
       setSuccessVehicleId(added.vehicle_id);
       setSuccessVehicleName(formatVehicleName(vehicle));
-      setSuccessWaitingMessage(null);
+      setSuccessWaitingMessage(
+        added.telemetry_status === 'unchanged'
+          ? 'Your vehicle access is ready. Existing telemetry settings are unchanged.'
+          : null
+      );
       setVehicles([]);
     } finally {
       // Always clear the loading flag — even on error the button must re-enable.

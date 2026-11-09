@@ -31,6 +31,7 @@ jobs:
       source_sha: ${{ steps.source.outputs.source_sha }}
       source_ref: ${{ steps.source.outputs.source_ref }}
       platform: ${{ steps.source.outputs.platform }}
+      build_version: ${{ steps.source.outputs.build_version }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -45,6 +46,8 @@ jobs:
           echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "source_ref=$REQUESTED_SOURCE_REF" >> "$GITHUB_OUTPUT"
           echo "platform=$REQUESTED_PLATFORM" >> "$GITHUB_OUTPUT"
+          build_version=$(node scripts/resolve-build-version.mjs --candidate)
+          echo "build_version=$build_version" >> "$GITHUB_OUTPUT"
 
   build-amd64:
     name: Build candidate (amd64)
@@ -100,6 +103,7 @@ jobs:
           file: ./compose/Dockerfile
           platforms: linux/amd64
           push: true
+          build-args: RIVIAMIGO_BUILD_VERSION=${{ needs.resolve.outputs.build_version }}
           tags: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:candidate-${{ needs.resolve.outputs.source_sha }}-amd64
           provenance: false
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:buildcache-amd64-v2
@@ -107,7 +111,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/bballdavis/Riviamigo
             org.opencontainers.image.revision=${{ needs.resolve.outputs.source_sha }}
-            org.opencontainers.image.version=candidate-${{ needs.resolve.outputs.source_sha }}
+            org.opencontainers.image.version=${{ needs.resolve.outputs.build_version }}
       - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo
@@ -180,6 +184,7 @@ jobs:
           file: ./compose/Dockerfile
           platforms: linux/arm64
           push: true
+          build-args: RIVIAMIGO_BUILD_VERSION=${{ needs.resolve.outputs.build_version }}
           tags: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:candidate-${{ needs.resolve.outputs.source_sha }}-arm64
           provenance: false
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:buildcache-arm64-v2
@@ -187,7 +192,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/bballdavis/Riviamigo
             org.opencontainers.image.revision=${{ needs.resolve.outputs.source_sha }}
-            org.opencontainers.image.version=candidate-${{ needs.resolve.outputs.source_sha }}
+            org.opencontainers.image.version=${{ needs.resolve.outputs.build_version }}
       - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo
