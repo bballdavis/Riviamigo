@@ -81,6 +81,35 @@ history. Availability still depends on what that vehicle and Rivian send. A
 missing or unrecognized value does not become an inferred state, and Parallax
 readings do not start or end charging sessions.
 
+Tire readings carry the vehicle's validity flag. An invalid sensor shows as
+**Invalid Sensor** without its stale pressure. Tire status keeps its kind:
+OK, hard warning, soft warning, or puncture, and a puncture shows as a danger
+state. The R2 liftgate's rear drop glass is reported as the **Rear window**:
+it counts toward the Windows status and open-closure list when the vehicle
+reports it. The outside temperature in the cabin-temperature frame is recorded
+when the vehicle sends it, and trip outside temperatures prefer it over the
+weather estimate. Preconditioning status and type use the same values as the
+canonical connection, including **Unavailable**, which the vehicle reports
+while driving.
+
+While the vehicle is navigating, its navigation progress carries a live
+position, speed, and heading about every five seconds. Riviamigo uses only
+that position fix, which makes trip paths much denser; the destination,
+route, and arrival times in the same message are never decoded or stored. A
+position more than five minutes older than the message is ignored, because
+the vehicle keeps re-sending its last progress after navigation ends.
+
+Parallax charging status decides whether charging power is flowing. Live
+charging power (about every five seconds), the energy-breakdown power, and the
+charging-curve power update the active session only while that status says
+the vehicle is connecting or charging, because the vehicle does not send a
+final zero reading when charging stops; when it stops, the session's live
+power is set to zero. Predicted charging-curve segments are not stored as
+observations, and only a valid charging time estimate is used. Charge
+sessions still start and end from the canonical connection, so there is one
+charge lifecycle. The R2's charge-port door is manual, so its door state is
+shown only as open or closed and never as plugged in.
+
 Parallax also reports when a door, gate, frunk, or window is moving. The
 vehicle status page then shows **Opening…** or **Closing…** for that closure
 until it settles. When Rivian only reports that a closure is ajar, the
@@ -169,7 +198,7 @@ A capture file contains:
   was reached;
 - `parallax_envelope`: every Parallax frame with its topic, source timestamp
   and age, decode outcome, whether it reached the canonical worker, the decoded
-  values, and the raw payload bytes (except GNSS and network frames). Body
+  values, and the raw payload bytes (except GNSS, navigation, and network frames). Body
   frames also list each closure or lock position with the field it maps to, or
   `null` when Riviamigo does not know the position;
 - `parallax_connection` and `legacy_connection`: subscribe, close, and

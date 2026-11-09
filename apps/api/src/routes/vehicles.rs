@@ -438,6 +438,7 @@ struct LatestVehicleTelemetry {
     window_fr_closed: Option<bool>,
     window_rl_closed: Option<bool>,
     window_rr_closed: Option<bool>,
+    window_rear_closed: Option<bool>,
     gear_guard_locked: Option<bool>,
     gear_guard_video_status: Option<String>,
     wiper_fluid_low: Option<bool>,
@@ -544,6 +545,7 @@ struct VehicleStatusFieldSeenRow {
     window_fr_closed_at: Option<chrono::DateTime<chrono::Utc>>,
     window_rl_closed_at: Option<chrono::DateTime<chrono::Utc>>,
     window_rr_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    window_rear_closed_at: Option<chrono::DateTime<chrono::Utc>>,
     gear_guard_locked_at: Option<chrono::DateTime<chrono::Utc>>,
     gear_guard_video_status_at: Option<chrono::DateTime<chrono::Utc>>,
     wiper_fluid_low_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -698,6 +700,7 @@ struct VehicleStatusResponse {
     window_fr_closed: Option<bool>,
     window_rl_closed: Option<bool>,
     window_rr_closed: Option<bool>,
+    window_rear_closed: Option<bool>,
     gear_guard_locked: Option<bool>,
     gear_guard_video_status: Option<String>,
     wiper_fluid_low: Option<bool>,
@@ -2638,6 +2641,7 @@ async fn vehicle_status(
           tonneau_locked, tonneau_closed, side_bin_left_locked, side_bin_right_locked,
           side_bin_left_closed, side_bin_right_closed,
           window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
+          window_rear_closed,
           gear_guard_locked, gear_guard_video_status, wiper_fluid_low, brake_fluid_low,
           alarm_active, service_mode
         FROM riviamigo.vehicle_latest_status
@@ -2734,6 +2738,7 @@ async fn vehicle_status(
         window_fr_closed: None,
         window_rl_closed: None,
         window_rr_closed: None,
+        window_rear_closed: None,
         gear_guard_locked: None,
         gear_guard_video_status: None,
         wiper_fluid_low: None,
@@ -2787,6 +2792,7 @@ async fn vehicle_status(
           max(ts) FILTER (WHERE window_fr_closed IS NOT NULL) AS window_fr_closed_at,
           max(ts) FILTER (WHERE window_rl_closed IS NOT NULL) AS window_rl_closed_at,
           max(ts) FILTER (WHERE window_rr_closed IS NOT NULL) AS window_rr_closed_at,
+          max(ts) FILTER (WHERE window_rear_closed IS NOT NULL) AS window_rear_closed_at,
           max(ts) FILTER (WHERE gear_guard_locked IS NOT NULL) AS gear_guard_locked_at,
           max(ts) FILTER (WHERE gear_guard_video_status IS NOT NULL) AS gear_guard_video_status_at,
           max(ts) FILTER (WHERE wiper_fluid_low IS NOT NULL) AS wiper_fluid_low_at,
@@ -2880,6 +2886,7 @@ async fn vehicle_status(
         ("Front right window", latest.window_fr_closed),
         ("Rear left window", latest.window_rl_closed),
         ("Rear right window", latest.window_rr_closed),
+        ("Rear window", latest.window_rear_closed),
     ]);
     let software_update_status: Option<String> = latest
         .ota_status
@@ -3108,6 +3115,13 @@ async fn vehicle_status(
         "window_rr_closed",
         latest_event_at,
         seen.window_rr_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "window_rear_closed",
+        latest_event_at,
+        seen.window_rear_closed_at,
         None,
     );
     insert_field_availability(
@@ -3440,6 +3454,7 @@ async fn vehicle_status(
         window_fr_closed: latest.window_fr_closed,
         window_rl_closed: latest.window_rl_closed,
         window_rr_closed: latest.window_rr_closed,
+        window_rear_closed: latest.window_rear_closed,
         gear_guard_locked: latest.gear_guard_locked,
         gear_guard_video_status: latest.gear_guard_video_status,
         wiper_fluid_low: latest.wiper_fluid_low,

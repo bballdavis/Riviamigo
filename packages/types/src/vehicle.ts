@@ -190,6 +190,8 @@ export interface VehicleStatus {
   window_fr_closed?: boolean | null;
   window_rl_closed?: boolean | null;
   window_rr_closed?: boolean | null;
+  /** R2 liftgate drop glass. Null on vehicles without one. */
+  window_rear_closed?: boolean | null;
   ota_current_version?: string | null;
   ota_available_version?: string | null;
   ota_status?: string | null;

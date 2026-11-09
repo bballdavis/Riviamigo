@@ -115,6 +115,8 @@ pub struct TelemetryEvent {
     pub window_fr_closed: Option<bool>,
     pub window_rl_closed: Option<bool>,
     pub window_rr_closed: Option<bool>,
+    /// The R2 liftgate's drop glass (Parallax closure position 16).
+    pub window_rear_closed: Option<bool>,
     pub gear_guard_locked: Option<bool>,
     pub gear_guard_video_status: Option<String>,
     pub wiper_fluid_low: Option<bool>,
@@ -231,6 +233,7 @@ impl TelemetryEvent {
             window_fr_closed: None,
             window_rl_closed: None,
             window_rr_closed: None,
+            window_rear_closed: None,
             gear_guard_locked: None,
             gear_guard_video_status: None,
             wiper_fluid_low: None,

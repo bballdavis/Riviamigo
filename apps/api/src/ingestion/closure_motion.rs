@@ -95,7 +95,7 @@ impl ClosureMotionTracker {
 }
 
 /// Every closure field that can be in motion, keyed as Parallax reports it.
-fn closure_values(event: &TelemetryEvent) -> [(&'static str, Option<bool>); 14] {
+fn closure_values(event: &TelemetryEvent) -> [(&'static str, Option<bool>); 15] {
     [
         ("door_front_left_closed", event.door_front_left_closed),
         ("door_front_right_closed", event.door_front_right_closed),
@@ -111,6 +111,7 @@ fn closure_values(event: &TelemetryEvent) -> [(&'static str, Option<bool>); 14] 
         ("window_fr_closed", event.window_fr_closed),
         ("window_rl_closed", event.window_rl_closed),
         ("window_rr_closed", event.window_rr_closed),
+        ("window_rear_closed", event.window_rear_closed),
     ]
 }
 

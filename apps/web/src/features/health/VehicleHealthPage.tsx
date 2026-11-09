@@ -1281,7 +1281,7 @@ function getTireState(
       variant: 'success',
       lastUpdatedLabel: formatAvailabilityLastUpdated(availability ?? nullSummary()),
     };
-  if (/critical|fault/i.test(status)) return { label: titleCase(status), variant: 'danger' };
+  if (/critical|fault|puncture/i.test(status)) return { label: titleCase(status), variant: 'danger' };
   return {
     label: titleCase(status),
     variant: 'warning',
