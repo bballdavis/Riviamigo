@@ -427,6 +427,39 @@ struct GnssState {
     longitude: Option<f64>,
     #[prost(double, optional, tag = "3")]
     altitude_m: Option<f64>,
+    /// Ground speed in m/s. Proto3 leaves zero off the wire, so a stationary
+    /// fix carries none; absence is treated as "not reported", never as 0.
+    #[prost(float, optional, tag = "4")]
+    speed_mps: Option<f32>,
+    /// Course over ground, degrees.
+    #[prost(float, optional, tag = "5")]
+    bearing_deg: Option<f32>,
+    // Tags 6-9 are the fix's error estimates; not modelled.
+    /// Time of the fix in epoch ms: Unix time, or GPS time on some vehicles.
+    #[prost(int64, optional, tag = "10")]
+    fix_time_ms: Option<i64>,
+}
+
+/// GPS time starts on 1980-01-06 and has no leap seconds. Some vehicles send
+/// the fix time on that scale; any time before 2020 is taken as GPS time.
+const GPS_EPOCH_OFFSET_MS: i64 = 315_964_800_000;
+const GPS_LEAP_SECONDS_MS: i64 = 18_000;
+const GPS_TIME_CUTOFF_MS: i64 = 1_577_836_800_000;
+/// A fix time this far from the envelope's timestamp is not trusted.
+const FIX_TIME_MAX_LAG_SECONDS: i64 = 10 * 60;
+const FIX_TIME_MAX_LEAD_SECONDS: i64 = 30;
+const MPS_TO_MPH: f64 = 2.236_936_292;
+/// Faster than any vehicle drives; a larger GNSS speed is a bad reading.
+const MAX_GNSS_SPEED_MPS: f64 = 70.0;
+
+/// The fix time as Unix time, corrected from GPS time when needed.
+fn gnss_fix_time(raw_ms: i64) -> Option<DateTime<Utc>> {
+    let unix_ms = if (1..GPS_TIME_CUTOFF_MS).contains(&raw_ms) {
+        raw_ms + GPS_EPOCH_OFFSET_MS - GPS_LEAP_SECONDS_MS
+    } else {
+        raw_ms
+    };
+    Utc.timestamp_millis_opt(unix_ms).single()
 }
 
 #[derive(Clone, PartialEq, ProstMessage)]
@@ -542,74 +575,145 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
     let mut meaningful = false;
     match topic {
         "vehicle.power.state" => {
+            // A frame whose state has no canonical meaning is skipped with a
+            // note, not rejected: rejecting would count a valid frame as a
+            // decode error.
             let value = PowerStateMessage::decode(payload)?;
-            let state = match value.state.context("missing power state")? {
-                1 => PowerState::Sleep,
-                2 => PowerState::Unknown, // Rivian's standby has no canonical field.
-                3 => PowerState::Ready,
-                4 => PowerState::Go,
-                state => anyhow::bail!("unknown Parallax power state {state}"),
+            let state = match value.state {
+                Some(1) => Some(PowerState::Sleep),
+                Some(2) => Some(PowerState::Unknown), // Rivian's standby has no canonical field.
+                Some(3) => Some(PowerState::Ready),
+                Some(4) => Some(PowerState::Go),
+                // 5 vehicle reset, 6 OTA update, 7 shutdown: transitional
+                // states with no canonical field. They neither wake nor sleep
+                // the vehicle for trip detection.
+                Some(state @ 5..=7) => {
+                    notes.push(format!("skipped transitional power state {state}"));
+                    None
+                }
+                None | Some(0) => {
+                    notes.push("skipped unspecified power state".into());
+                    None
+                }
+                Some(state) => {
+                    notes.push(format!("skipped unknown power state {state}"));
+                    None
+                }
             };
-            event.power_state = Some(state);
-            event.power_state_ts = Some(source_at);
-            meaningful = true;
+            if let Some(state) = state {
+                event.power_state = Some(state);
+                event.power_state_ts = Some(source_at);
+                meaningful = true;
+            }
         }
         "dynamics.vehicle.gnss" => {
             let value = GnssState::decode(payload)?;
-            let latitude = value.latitude.context("missing GNSS latitude")?;
-            let longitude = value.longitude.context("missing GNSS longitude")?;
-            if !latitude.is_finite()
-                || !(-90.0..=90.0).contains(&latitude)
-                || !longitude.is_finite()
-                || !(-180.0..=180.0).contains(&longitude)
-            {
-                anyhow::bail!("invalid GNSS coordinates");
-            }
-            event.latitude = Some(latitude);
-            event.longitude = Some(longitude);
-            event.location_ts = Some(source_at);
-            if let Some(altitude) = value.altitude_m {
-                if !altitude.is_finite() || !(-1_000.0..=20_000.0).contains(&altitude) {
-                    anyhow::bail!("invalid GNSS altitude");
+            // The fix's own time is when the position and speed were true.
+            // Fall back to the envelope time when it is absent or implausible.
+            let fix_at = match value.fix_time_ms.filter(|ms| *ms > 0) {
+                Some(raw) => match gnss_fix_time(raw).filter(|at| {
+                    *at <= source_at + chrono::Duration::seconds(FIX_TIME_MAX_LEAD_SECONDS)
+                        && *at >= source_at - chrono::Duration::seconds(FIX_TIME_MAX_LAG_SECONDS)
+                }) {
+                    Some(at) => at,
+                    None => {
+                        notes.push("ignored implausible GNSS fix time".into());
+                        source_at
+                    }
+                },
+                None => source_at,
+            };
+            match (value.latitude, value.longitude) {
+                (Some(latitude), Some(longitude))
+                    if latitude.is_finite()
+                        && (-90.0..=90.0).contains(&latitude)
+                        && longitude.is_finite()
+                        && (-180.0..=180.0).contains(&longitude) =>
+                {
+                    event.latitude = Some(latitude);
+                    event.longitude = Some(longitude);
+                    event.location_ts = Some(fix_at);
+                    meaningful = true;
+                    match value.altitude_m {
+                        Some(altitude)
+                            if altitude.is_finite()
+                                && (-1_000.0..=20_000.0).contains(&altitude) =>
+                        {
+                            event.altitude_m = Some(altitude);
+                        }
+                        Some(_) => notes.push("skipped invalid GNSS altitude".into()),
+                        None => {}
+                    }
                 }
-                event.altitude_m = Some(altitude);
+                (None, None) => {}
+                _ => notes.push("skipped invalid or incomplete GNSS position".into()),
             }
-            meaningful = true;
+            if let Some(speed) = value.speed_mps.map(f64::from) {
+                if speed.is_finite() && (0.0..=MAX_GNSS_SPEED_MPS).contains(&speed) {
+                    event.speed_mph = Some(speed * MPS_TO_MPH);
+                    event.speed_mph_ts = Some(fix_at);
+                    meaningful = true;
+                } else {
+                    notes.push("skipped invalid GNSS speed".into());
+                }
+            }
+            if let Some(bearing) = value.bearing_deg.map(f64::from) {
+                if bearing.is_finite() && (0.0..=360.0).contains(&bearing) {
+                    event.heading_deg = Some(bearing % 360.0);
+                    meaningful = true;
+                } else {
+                    notes.push("skipped invalid GNSS bearing".into());
+                }
+            }
+            if !meaningful && notes.is_empty() {
+                notes.push("skipped empty GNSS frame".into());
+            }
         }
         "dynamics.vehicle.odometer" => {
             let value = OdometerState::decode(payload)?;
-            let kilometers = value.kilometers.context("missing odometer")?;
-            if kilometers > 2_000_000 {
-                anyhow::bail!("invalid odometer");
+            match value.kilometers {
+                Some(kilometers) if kilometers <= 2_000_000 => {
+                    event.odometer_miles = Some(kilometers as f64 * 0.621_371_192);
+                    event.odometer_miles_ts = Some(source_at);
+                    meaningful = true;
+                }
+                Some(kilometers) => notes.push(format!("skipped invalid odometer {kilometers} km")),
+                None => notes.push("skipped odometer frame with no distance".into()),
             }
-            event.odometer_miles = Some(kilometers as f64 * 0.621_371_192);
-            event.odometer_miles_ts = Some(source_at);
-            meaningful = true;
         }
         "dynamics.vehicle.gear" => {
-            // Gear enum as observed on an R1S by apohor/rivolt: 1 P, 2 R,
-            // 4 D; 3 N is inferred from the ordering. Values match the legacy
-            // gearStatus strings.
+            // Gear enum as observed on an R1S by apohor/rivolt and the app:
+            // 1 P, 2 R, 3 N, 4 D. Values match the legacy gearStatus strings.
+            // 0 is "not defined"; proto3 leaves it off the wire, so it arrives
+            // as an empty frame and is skipped rather than rejected.
             let value = GearState::decode(payload)?;
-            let gear = match value.gear.context("missing gear")? {
-                1 => Some("park"),
-                2 => Some("reverse"),
-                3 => Some("neutral"),
-                4 => Some("drive"),
-                other => {
+            let gear = match value.gear {
+                Some(1) => Some("park"),
+                Some(2) => Some("reverse"),
+                Some(3) => Some("neutral"),
+                Some(4) => Some("drive"),
+                None | Some(0) => {
+                    notes.push("skipped undefined gear".into());
+                    None
+                }
+                Some(other) => {
                     notes.push(format!("skipped unknown gear {other}"));
                     None
                 }
             };
             if let Some(gear) = gear {
                 event.gear_status = Some(gear.into());
+                event.gear_status_ts = Some(source_at);
                 meaningful = true;
             }
         }
         "body.closures.states" => {
             let value = ClosureStates::decode(payload)?;
             for state in value.states {
-                let position = state.position.context("missing closure position")?;
+                let Some(position) = state.position else {
+                    notes.push("skipped closure entry with no position".into());
+                    continue;
+                };
                 // Every frame ends with this marker: stateless on the R2,
                 // mirroring the window state on the R1.
                 if position == CLOSURE_SENTINEL_POSITION {
@@ -674,7 +778,10 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
         "body.locks.states" => {
             let value = LockStates::decode(payload)?;
             for state in value.states {
-                let position = state.position.context("missing lock position")?;
+                let Some(position) = state.position else {
+                    notes.push("skipped lock entry with no position".into());
+                    continue;
+                };
                 // R1 vehicles also report positions with no canonical field
                 // (14, 15). Skip those entries rather than losing the other
                 // locks in the same frame.
@@ -700,28 +807,46 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
         }
         "dynamics.tires.state" => {
             let value = TireStates::decode(payload)?;
+            // Each tire stands alone: one tire's warning or bad reading must
+            // not hide the other pressures in the frame.
             for state in value.states {
-                let position = state.position.context("missing tire position")?;
-                let status = state.status.context("missing tire status")?;
-                if !matches!(status, 1 | 2) {
-                    anyhow::bail!("unknown tire status {status}");
-                }
-                let pressure_bar = state.pressure_bar.context("missing tire pressure")?;
-                if !pressure_bar.is_finite() || !(0.0..=10.0).contains(&pressure_bar) {
-                    anyhow::bail!("invalid tire pressure");
-                }
-                meaningful |= set_tire(&mut event, position, pressure_bar, status == 1)?;
+                let Some(position) = state.position.filter(|p| (1..=4).contains(p)) else {
+                    notes.push(format!("skipped tire with position {:?}", state.position));
+                    continue;
+                };
+                let Some(pressure_bar) = state
+                    .pressure_bar
+                    .filter(|bar| bar.is_finite() && (0.0..=10.0).contains(bar))
+                else {
+                    notes.push(format!("skipped tire {position} with no valid pressure"));
+                    continue;
+                };
+                // 1 normal; 2 hard warning, 3 soft warning, 4 puncture.
+                let ok = match state.status {
+                    Some(1) => true,
+                    Some(2..=4) => false,
+                    other => {
+                        notes.push(format!("skipped tire {position} with status {other:?}"));
+                        continue;
+                    }
+                };
+                meaningful |= set_tire(&mut event, position, pressure_bar, ok)?;
             }
         }
         "comfort.cabin.cabin_temperatures" => {
             let value = CabinTemperatures::decode(payload)?;
-            if let Some(cabin) = value.cabin_c {
-                event.cabin_temp_c = Some(valid_temperature(cabin as f64)?);
-                meaningful = true;
-            }
-            if let Some(driver) = value.driver_c {
-                event.driver_temp_c = Some(valid_temperature(driver as f64)?);
-                meaningful = true;
+            for (name, reading, field) in [
+                ("cabin", value.cabin_c, &mut event.cabin_temp_c),
+                ("driver", value.driver_c, &mut event.driver_temp_c),
+            ] {
+                let Some(reading) = reading else { continue };
+                match valid_temperature(f64::from(reading)) {
+                    Some(celsius) => {
+                        *field = Some(celsius);
+                        meaningful = true;
+                    }
+                    None => notes.push(format!("skipped invalid {name} temperature")),
+                }
             }
         }
         "comfort.cabin.cabin_preconditioning_status" => {
@@ -747,10 +872,16 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
         }
         "comfort.cabin.defrost_defog_status" => {
             let value = DefrostState::decode(payload)?;
-            let status = match value.status.context("missing defrost status")? {
+            let status = match value.status.unwrap_or(0) {
+                // 0 is "unspecified"; proto3 leaves it off the wire, so it
+                // arrives as an empty frame. Skipped, not rejected.
+                0 => {
+                    notes.push("skipped unspecified defrost status".into());
+                    None
+                }
                 // The R1S reports 4 whenever legacy reports "Off"; as in
                 // rivian-python-client, only 2 means defrosting.
-                0 | 1 | 4 => Some(false),
+                1 | 4 => Some(false),
                 2 => Some(true),
                 other => {
                     notes.push(format!("skipped unknown defrost status {other}"));
@@ -767,12 +898,8 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
     Ok(meaningful.then_some(event))
 }
 
-fn valid_temperature(value: f64) -> Result<f64> {
-    if value.is_finite() && (-80.0..=100.0).contains(&value) {
-        Ok(value)
-    } else {
-        anyhow::bail!("invalid cabin temperature")
-    }
+fn valid_temperature(value: f64) -> Option<f64> {
+    (value.is_finite() && (-80.0..=100.0).contains(&value)).then_some(value)
 }
 
 /// Canonical field for a closure position, or `None` when the position has no
@@ -2453,6 +2580,7 @@ mod tests {
                     latitude: Some(30.0),
                     longitude: Some(longitude),
                     altitude_m: None,
+                    ..Default::default()
                 }
                 .encode_to_vec(),
                 ts,
@@ -2661,6 +2789,212 @@ mod tests {
         assert_eq!(event.closure_frunk_closed, Some(false));
     }
 
+    fn decode_with_notes(
+        topic: &str,
+        payload: &[u8],
+        at: DateTime<Utc>,
+    ) -> (Option<TelemetryEvent>, Vec<String>) {
+        let mut notes = Vec::new();
+        let event =
+            decode_vehicle_telemetry_with_notes(topic, payload, at, Uuid::nil(), &mut notes)
+                .unwrap();
+        (event, notes)
+    }
+
+    #[test]
+    fn gnss_speed_heading_and_fix_time_are_decoded() {
+        let source_at = Utc::now();
+        let fix_at = source_at - chrono::Duration::seconds(2);
+        let (event, notes) = decode_with_notes(
+            "dynamics.vehicle.gnss",
+            &GnssState {
+                latitude: Some(40.0),
+                longitude: Some(-105.0),
+                speed_mps: Some(13.4112),
+                bearing_deg: Some(271.5),
+                fix_time_ms: Some(fix_at.timestamp_millis()),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+            source_at,
+        );
+        let event = event.unwrap();
+        assert!(notes.is_empty());
+        assert!((event.speed_mph.unwrap() - 30.0).abs() < 0.01);
+        assert_eq!(event.heading_deg, Some(271.5));
+        assert_eq!(
+            event.location_ts.unwrap().timestamp_millis(),
+            fix_at.timestamp_millis()
+        );
+        assert_eq!(event.speed_mph_ts, event.location_ts);
+        assert_eq!(
+            event.ts, source_at,
+            "the envelope time stays the event time"
+        );
+    }
+
+    #[test]
+    fn gnss_fix_time_on_the_gps_scale_is_corrected() {
+        let source_at = Utc::now();
+        let unix_ms = (source_at - chrono::Duration::seconds(1)).timestamp_millis();
+        let gps_ms = unix_ms - GPS_EPOCH_OFFSET_MS + GPS_LEAP_SECONDS_MS;
+        assert_eq!(gnss_fix_time(gps_ms).unwrap().timestamp_millis(), unix_ms);
+        assert_eq!(gnss_fix_time(unix_ms).unwrap().timestamp_millis(), unix_ms);
+
+        let (event, notes) = decode_with_notes(
+            "dynamics.vehicle.gnss",
+            &GnssState {
+                latitude: Some(40.0),
+                longitude: Some(-105.0),
+                fix_time_ms: Some(gps_ms),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+            source_at,
+        );
+        assert!(notes.is_empty());
+        assert_eq!(
+            event.unwrap().location_ts.unwrap().timestamp_millis(),
+            unix_ms
+        );
+
+        // A fix time far from the envelope falls back to the envelope time.
+        let (event, notes) = decode_with_notes(
+            "dynamics.vehicle.gnss",
+            &GnssState {
+                latitude: Some(40.0),
+                longitude: Some(-105.0),
+                fix_time_ms: Some((source_at - chrono::Duration::hours(3)).timestamp_millis()),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+            source_at,
+        );
+        assert_eq!(notes, vec!["ignored implausible GNSS fix time"]);
+        assert_eq!(event.unwrap().location_ts, Some(source_at));
+    }
+
+    #[test]
+    fn a_stationary_fix_reports_no_speed_rather_than_zero() {
+        let (event, _) = decode_with_notes(
+            "dynamics.vehicle.gnss",
+            &GnssState {
+                latitude: Some(40.0),
+                longitude: Some(-105.0),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+            Utc::now(),
+        );
+        assert_eq!(event.unwrap().speed_mph, None);
+    }
+
+    #[test]
+    fn frames_without_a_canonical_value_are_skipped_not_rejected() {
+        let at = Utc::now();
+        for (topic, payload, note) in [
+            ("dynamics.vehicle.gnss", vec![], "skipped empty GNSS frame"),
+            ("dynamics.vehicle.gear", vec![], "skipped undefined gear"),
+            (
+                "comfort.cabin.defrost_defog_status",
+                vec![],
+                "skipped unspecified defrost status",
+            ),
+            (
+                "vehicle.power.state",
+                vec![],
+                "skipped unspecified power state",
+            ),
+            (
+                "vehicle.power.state",
+                PowerStateMessage { state: Some(5) }.encode_to_vec(),
+                "skipped transitional power state 5",
+            ),
+            (
+                "vehicle.power.state",
+                PowerStateMessage { state: Some(6) }.encode_to_vec(),
+                "skipped transitional power state 6",
+            ),
+            (
+                "vehicle.power.state",
+                PowerStateMessage { state: Some(7) }.encode_to_vec(),
+                "skipped transitional power state 7",
+            ),
+        ] {
+            let (event, notes) = decode_with_notes(topic, &payload, at);
+            assert!(event.is_none(), "{topic}");
+            assert_eq!(notes, vec![note], "{topic}");
+        }
+    }
+
+    #[test]
+    fn a_puncture_on_one_tire_keeps_every_pressure() {
+        let tire = |position, status| TireState {
+            position: Some(position),
+            status: Some(status),
+            pressure_bar: Some(2.8),
+        };
+        let payload = TireStates {
+            states: vec![tire(1, 1), tire(2, 4), tire(3, 3), tire(4, 9)],
+        }
+        .encode_to_vec();
+        let (event, notes) = decode_with_notes("dynamics.tires.state", &payload, Utc::now());
+        let event = event.unwrap();
+        assert!(event.tire_fl_psi.is_some());
+        assert!(
+            event.tire_fr_psi.is_some(),
+            "puncture warning keeps the pressure"
+        );
+        assert!(
+            event.tire_rl_psi.is_some(),
+            "soft warning keeps the pressure"
+        );
+        assert!(
+            event.tire_rr_psi.is_none(),
+            "only the unknown status is skipped"
+        );
+        assert_eq!(notes, vec!["skipped tire 4 with status Some(9)"]);
+    }
+
+    #[test]
+    fn r2_gnss_speed_starts_a_trip_on_the_first_moving_fix() {
+        let vehicle_id = Uuid::new_v4();
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::new(true);
+        let mut detector = TripDetectorState::new(vehicle_id);
+        let power = decode_vehicle_telemetry(
+            "vehicle.power.state",
+            &PowerStateMessage { state: Some(4) }.encode_to_vec(),
+            at,
+            vehicle_id,
+        )
+        .unwrap()
+        .unwrap();
+        detector.process(&fusion.fuse(&power));
+        let ts = at + chrono::Duration::seconds(10);
+        let fix = decode_vehicle_telemetry(
+            "dynamics.vehicle.gnss",
+            &GnssState {
+                latitude: Some(30.0),
+                longitude: Some(-97.0),
+                speed_mps: Some(8.0),
+                fix_time_ms: Some(ts.timestamp_millis()),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+            ts,
+            vehicle_id,
+        )
+        .unwrap()
+        .unwrap();
+        // Derived GNSS speed needs two moving segments (about a minute on an
+        // R2); the vehicle's own speed starts the trip at once.
+        assert!(matches!(
+            detector.process(&fusion.fuse(&fix)),
+            TripEvent::TripStarted { .. }
+        ));
+    }
+
     #[test]
     fn parked_energy_wire_contract_decodes_units() {
         let window = ParkedEnergyWindow {
@@ -2838,6 +3172,7 @@ mod tests {
                 latitude: Some(40.0),
                 longitude: Some(-105.0),
                 altitude_m: Some(1_600.0),
+                ..Default::default()
             }
             .encode_to_vec(),
             source_at,
@@ -3370,25 +3705,39 @@ mod tests {
     fn r2_decoder_rejects_bad_values_and_ignores_unknown_topics() {
         let vehicle_id = Uuid::new_v4();
         let source_at = Utc::now();
-        assert!(decode_vehicle_telemetry(
+        // A bad value skips that part of the frame, never the whole frame.
+        let mut notes = Vec::new();
+        assert!(decode_vehicle_telemetry_with_notes(
             "dynamics.vehicle.gnss",
             &GnssState {
                 latitude: Some(91.0),
                 longitude: Some(0.0),
-                altitude_m: None
+                ..Default::default()
             }
             .encode_to_vec(),
             source_at,
             vehicle_id,
+            &mut notes,
         )
-        .is_err());
-        assert!(decode_vehicle_telemetry(
+        .unwrap()
+        .is_none());
+        assert_eq!(notes, vec!["skipped invalid or incomplete GNSS position"]);
+        let mut notes = Vec::new();
+        assert!(decode_vehicle_telemetry_with_notes(
             "vehicle.power.state",
             &PowerStateMessage { state: Some(99) }.encode_to_vec(),
             source_at,
             vehicle_id,
+            &mut notes,
         )
-        .is_err());
+        .unwrap()
+        .is_none());
+        assert_eq!(notes, vec!["skipped unknown power state 99"]);
+        assert!(
+            decode_vehicle_telemetry("vehicle.power.state", &[0x0a, 0xff], source_at, vehicle_id)
+                .is_err(),
+            "only an undecodable payload is rejected"
+        );
         assert!(
             decode_vehicle_telemetry("unlisted.topic", &[], source_at, vehicle_id)
                 .unwrap()

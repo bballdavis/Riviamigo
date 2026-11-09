@@ -103,6 +103,28 @@ accepted sample by source timestamp controls the cached state and its freshness
 rule follows that sample's source. Unrecognized power values remain unknown and
 do not become sleep or drive decisions.
 
+Parallax GNSS frames carry the vehicle's own ground speed and heading, which
+Riviamigo records as speed and heading. Position and speed take the time of
+the fix itself; some vehicles send it in GPS time, which is converted, and a
+fix time more than ten minutes from the frame's timestamp is ignored. A fix
+that leaves speed off (proto3 omits zero, as when parked) reports no speed
+rather than zero, so it never hides an estimate.
+
+A Parallax frame that holds an unknown or transitional value is never
+rejected as a whole: only that value is skipped and described in the capture
+notes. Power states such as OTA update, vehicle reset, and shutdown, an empty
+GNSS frame, an undefined gear or defrost value, and a tire's warning or bad
+reading no longer drop the frame, so a puncture warning on one tire keeps all
+four pressures.
+
+Gear also marks a trip in progress. A drive or reverse gear that is at least
+as recent as the power state wakes the vehicle for trip start, even when power
+is missing or still says sleep, and a sleep state older than that gear does
+not end the trip. The shift into gear (or into Go) anchors the backdated start
+at the time the vehicle reported it, so late power frames no longer move the
+start. Gear keeps the same freshness rule as power: change-only Parallax gear
+holds until the next change, periodic legacy gear is fresh for two minutes.
+
 Trip processing uses the vehicle's direct numeric speed when one is present.
 Only when direct speed is absent can shared telemetry fusion estimate speed:
 it uses successive plausible GNSS fixes after enough movement is observed, or

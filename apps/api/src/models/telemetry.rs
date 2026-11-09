@@ -36,6 +36,10 @@ pub struct TelemetryEvent {
     pub time_to_end_of_charge_min_ts: Option<DateTime<Utc>>,
     pub drive_mode: Option<DriveMode>,
     pub gear_status: Option<String>,
+    /// When the vehicle reported `gear_status`. Kept in memory for trip
+    /// fusion ordering; not stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gear_status_ts: Option<DateTime<Utc>>,
 
     pub cabin_temp_c: Option<f64>,
     pub driver_temp_c: Option<f64>,
@@ -160,6 +164,7 @@ impl TelemetryEvent {
             time_to_end_of_charge_min_ts: None,
             drive_mode: None,
             gear_status: None,
+            gear_status_ts: None,
             cabin_temp_c: None,
             driver_temp_c: None,
             outside_temp_c: None,

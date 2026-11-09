@@ -101,6 +101,7 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
         time_to_end_of_charge_min_ts: extract_timestamp(state, "/timeToEndOfCharge/timeStamp"),
         drive_mode: extract_str(state, "/driveMode/value").and_then(|s| s.parse().ok()),
         gear_status: extract_str(state, "/gearStatus/value").map(String::from),
+        gear_status_ts: extract_timestamp(state, "/gearStatus/timeStamp"),
 
         cabin_temp_c: extract_f64(state, "/cabinClimateInteriorTemperature/value"),
         driver_temp_c: extract_f64(state, "/cabinClimateDriverTemperature/value"),

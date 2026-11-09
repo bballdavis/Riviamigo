@@ -1363,6 +1363,7 @@ fn patch_event(target: &mut TelemetryEvent, source: &TelemetryEvent) {
     patch_opt!(target, source, time_to_end_of_charge_min_ts);
     patch_opt!(target, source, drive_mode);
     patch_opt!(target, source, gear_status);
+    patch_opt!(target, source, gear_status_ts);
     patch_opt!(target, source, cabin_temp_c);
     patch_opt!(target, source, driver_temp_c);
     patch_opt!(target, source, outside_temp_c);
@@ -4207,6 +4208,9 @@ fn trip_diagnostics_fields(
         "power_outcome": fusion.power_outcome,
         "reported_power_outcome": fusion.reported_power_outcome,
         "power_age_seconds": field_age(trip_sample, trip_sample.power_state.is_some(), trip_sample.power_state_ts),
+        "effective_gear": trip_sample.gear_status,
+        "gear_origin": fusion.gear_origin,
+        "gear_age_seconds": field_age(trip_sample, trip_sample.gear_status.is_some(), trip_sample.gear_status_ts),
         "speed_mph": trip_sample.speed_mph,
         "speed_origin": fusion.speed_origin,
         "reported_speed_outcome": fusion.reported_speed_outcome,

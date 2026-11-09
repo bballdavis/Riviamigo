@@ -90,6 +90,12 @@ field timestamps for the same change.
   live-session polling while a charge session is open.
 - `ingestion` `persistence` is `suppressed_duplicate`: the sample matched the
   stored state, so it left no new telemetry row.
+- `trip` rows also show `effective_gear`, `gear_origin`, and
+  `gear_age_seconds`. A drive or reverse gear at least as recent as the power
+  state makes the start decision eligible even when power reads sleep.
+- `parallax_envelope` `notes` such as `skipped transitional power state 6`
+  or `skipped tire 2 with status Some(9)`: only that value was skipped; the
+  rest of the frame was used.
 - `trip` rows: check the effective power source and freshness. Change-only
   Parallax power remains latched until a newer state arrives; periodic legacy
   `vehicleState` power is fresh for at most two minutes. Check that direct
