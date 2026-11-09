@@ -58,3 +58,5 @@ export type { ResponsiveDialogProps } from './ResponsiveDialog';
 
 export { ColorPicker } from './ColorPicker';
 export type { ColorPickerProps, ColorPickerSwatch } from './ColorPicker';
+
+export { FrunkIcon, LiftgateIcon } from './ClosureIcons';

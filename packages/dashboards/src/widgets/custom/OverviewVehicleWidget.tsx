@@ -5,7 +5,7 @@ import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrent
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import { formatAltitude, formatMiles, formatMph, formatTemp } from '@riviamigo/ui/lib/utils';
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI, formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
-import { Tooltip } from '@riviamigo/ui/primitives';
+import { FrunkIcon, LiftgateIcon, Tooltip } from '@riviamigo/ui/primitives';
 import { isVehicleCharging } from '@riviamigo/types';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
@@ -218,8 +218,12 @@ export function CurrentVehicleStatePanel({
                 <LockLabel className={anchors.doorLocks.fl} locked={status?.door_front_left_locked} title="Front left door lock" />
                 <LockLabel className={anchors.doorLocks.rr} locked={status?.door_rear_right_locked} title="Rear right door lock" />
                 <LockLabel className={anchors.doorLocks.fr} locked={status?.door_front_right_locked} title="Front right door lock" />
-                <LockLabel className={anchors.rearGateLock} locked={rearGateLock} title={rearGateLockTitle} />
-                <LockLabel className={anchors.frunkLock} locked={status?.closure_frunk_locked} title="Frunk lock" />
+                {vehicleModel === 'R1T' ? (
+                  <LockLabel className={anchors.rearGateLock} locked={rearGateLock} title={rearGateLockTitle} />
+                ) : (
+                  <ClosureLabel className={anchors.rearGateLock} closed={status?.closure_liftgate_closed} locked={status?.closure_liftgate_locked} title="Liftgate" icon={LiftgateIcon} description="The rear hatch that opens upward for cargo access." />
+                )}
+                <ClosureLabel className={anchors.frunkLock} closed={status?.closure_frunk_closed} locked={status?.closure_frunk_locked} title="Frunk" icon={FrunkIcon} description="The front trunk under the hood." />
                 {vehicleModel === 'R1T' && anchors.sideBinLeftCover && (
                   <ClosureLabel className={anchors.sideBinLeftCover} closed={status?.side_bin_left_closed} title="Left side bin cover" />
                 )}
@@ -322,18 +326,75 @@ function LockLabel({ className, locked, title }: { className: string; locked: bo
   );
 }
 
-function ClosureLabel({ className, closed, title }: { className: string; closed: boolean | null | undefined; title: string }) {
+function ClosureLabel({ className, closed, locked, title, icon, description }: {
+  className: string;
+  closed: boolean | null | undefined;
+  locked?: boolean | null | undefined;
+  title: string;
+  icon?: React.ComponentType<{ className?: string }> | undefined;
+  description?: string | undefined;
+}) {
   const known = closed !== null && closed !== undefined;
   const open = known && closed === false;
-  const Icon = open ? PackageOpen : Package;
+  const Icon = icon ?? (open ? PackageOpen : Package);
   const stateLabel = known ? (open ? 'open' : 'closed') : 'unavailable';
-  return (
+  // Custom closure glyphs carry more detail than the stock icons, so they get a larger badge.
+  const size = icon ? 'h-9 w-9' : 'h-6 w-6';
+  const tone = open
+    ? icon ? 'border-status-danger bg-status-danger text-white' : 'border-accent/60 bg-bg-elevated/90 text-accent'
+    : known ? 'border-status-positive/60 bg-bg-elevated/90 text-status-positive' : 'border-border bg-bg-elevated/60 text-fg-tertiary';
+  const badge = (
     <span
-      title={`${title}: ${stateLabel}`}
-      className={`absolute z-30 inline-flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border shadow-sm backdrop-blur ${open ? 'border-accent/60 bg-bg-elevated/90 text-accent' : known ? 'border-status-positive/60 bg-bg-elevated/90 text-status-positive' : 'border-border bg-bg-elevated/60 text-fg-tertiary'} ${className}`}
+      role="img"
+      aria-label={`${title}: ${stateLabel}`}
+      tabIndex={icon ? 0 : undefined}
+      className={`inline-flex ${size} items-center justify-center rounded-full border shadow-sm backdrop-blur focus:outline-none focus-visible:ring-1 focus-visible:ring-accent ${tone}`}
     >
-      <Icon className="h-3.5 w-3.5" />
+      <Icon className={icon ? 'h-6 w-6' : 'h-3.5 w-3.5'} />
     </span>
+  );
+  const positioned = `absolute z-30 -translate-x-1/2 -translate-y-1/2 ${className}`;
+  if (!icon) {
+    return (
+      <span
+        title={`${title}: ${stateLabel}`}
+        className={`${positioned} inline-flex ${size} items-center justify-center rounded-full border shadow-sm backdrop-blur ${tone}`}
+      >
+        <Icon className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
+  const meaning = !known
+    ? 'No report from the vehicle yet.'
+    : open
+      ? `Open. Close it before driving.`
+      : 'Closed and secure.';
+  const lockKnown = locked !== null && locked !== undefined;
+  return (
+    <Tooltip
+      className={positioned}
+      contentClassName="w-60 rounded-xl border-border/80 bg-bg-elevated/95 px-3 py-3 text-xs shadow-2xl backdrop-blur"
+      content={(
+        <div className="space-y-1.5" data-testid="closure-tooltip">
+          <div className="flex items-center gap-2 font-medium text-fg">
+            <span
+              className={`inline-block h-2 w-2 rounded-full ${open ? 'bg-status-danger' : known ? 'bg-status-positive' : 'bg-fg-tertiary'}`}
+              aria-hidden="true"
+            />
+            {title} {stateLabel}
+          </div>
+          <p className="text-fg-secondary">{description} {meaning}</p>
+          {lockKnown ? (
+            <p className="flex items-center gap-1.5 text-fg-tertiary">
+              {locked ? <Lock className="h-3 w-3" aria-hidden="true" /> : <Unlock className="h-3 w-3" aria-hidden="true" />}
+              {locked ? 'Locked' : 'Unlocked'}
+            </p>
+          ) : null}
+        </div>
+      )}
+    >
+      {badge}
+    </Tooltip>
   );
 }
 

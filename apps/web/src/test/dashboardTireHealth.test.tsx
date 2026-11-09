@@ -118,9 +118,9 @@ describe('dashboard tire health', () => {
       longitude: null,
       is_online: true,
       last_updated: '2026-06-03T12:00:00Z',
-      closure_liftgate_locked: true,
+      closure_liftgate_closed: true,
     };
-    const rearGate = () => screen.getByTitle('Rear gate lock').closest('[class*="left-["]');
+    const rearGate = () => screen.getByLabelText('Liftgate: closed').closest('[class*="left-["]');
 
     const r2 = renderPanel(<CurrentVehicleStatePanel images={images} vehicleModel="R2" status={status} />);
     expect(rearGate()?.className).toContain('left-[8.8%]');
