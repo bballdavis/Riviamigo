@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::{
     db::migrations::{self, LedgerValidationKind, MigrationIdentity, MIGRATION_CHAIN_ID, MIGRATOR},
     errors::AppError,
+    services::charge_payload_identity,
 };
 
 pub const RECOVERY_FORMAT_V1: &str = "riviamigo-recovery-v1";
@@ -160,7 +161,24 @@ pub async fn runtime_database_profile(pool: &PgPool) -> Result<DatabaseProfile, 
 /// Produce a canonical, data-free database contract. The contract intentionally
 /// excludes SQLx bookkeeping, ownership, statistics, sequence positions, and
 /// application rows.
+/// Indexes that a background worker creates while it runs and drops when it
+/// finishes. They are not part of the migration-defined schema, so a package
+/// captured mid-backfill must still match a freshly migrated target.
+const TRANSIENT_INDEXES: &[&str] = &[charge_payload_identity::PENDING_INDEX_NAME];
+
 pub async fn schema_contract_description(pool: &PgPool) -> Result<Value, AppError> {
+    schema_contract_description_with(pool, true).await
+}
+
+async fn schema_contract_description_with(
+    pool: &PgPool,
+    exclude_transient: bool,
+) -> Result<Value, AppError> {
+    let excluded_indexes: Vec<&str> = if exclude_transient {
+        TRANSIENT_INDEXES.to_vec()
+    } else {
+        Vec::new()
+    };
     let mut transaction = pool.begin().await?;
     sqlx::query("SET LOCAL search_path = pg_catalog")
         .execute(&mut *transaction)
@@ -225,6 +243,7 @@ pub async fn schema_contract_description(pool: &PgPool) -> Result<Value, AppErro
             JOIN pg_catalog.pg_class index_relation ON index_relation.oid = index_record.indexrelid
             JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
             WHERE namespace.nspname IN ('riviamigo', 'timeseries')
+              AND index_relation.relname <> ALL($1::text[])
 
             UNION ALL
             SELECT 'view',
@@ -333,6 +352,7 @@ pub async fn schema_contract_description(pool: &PgPool) -> Result<Value, AppErro
         ) contract_items
         "#,
     )
+    .bind(&excluded_indexes)
     .fetch_one(&mut *transaction)
     .await?;
     transaction.rollback().await?;
@@ -340,9 +360,23 @@ pub async fn schema_contract_description(pool: &PgPool) -> Result<Value, AppErro
 }
 
 pub async fn schema_fingerprint(pool: &PgPool) -> Result<String, AppError> {
+    schema_fingerprint_with(pool, true).await
+}
+
+/// Fingerprint as computed before transient indexes were exempted. Packages
+/// created by earlier builds declare this form, so candidate validation accepts
+/// it alongside the current one.
+async fn legacy_schema_fingerprint(pool: &PgPool) -> Result<String, AppError> {
+    schema_fingerprint_with(pool, false).await
+}
+
+async fn schema_fingerprint_with(
+    pool: &PgPool,
+    exclude_transient: bool,
+) -> Result<String, AppError> {
     let canonical = serde_json::to_vec(&serde_json::json!({
         "version": SCHEMA_CONTRACT_VERSION,
-        "items": schema_contract_description(pool).await?,
+        "items": schema_contract_description_with(pool, exclude_transient).await?,
     }))
     .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
     Ok(hex::encode(Sha256::digest(canonical)))
@@ -431,7 +465,9 @@ pub async fn prepare_candidate_schema(
     if source.schema_contract_version.as_deref() != Some(SCHEMA_CONTRACT_VERSION) {
         anyhow::bail!("recovery package uses an unsupported schema contract version");
     }
-    if expected_fingerprint != source_schema.schema_fingerprint {
+    if expected_fingerprint != source_schema.schema_fingerprint
+        && expected_fingerprint != legacy_schema_fingerprint(pool).await?
+    {
         anyhow::bail!(
             "recovery package schema contract mismatch: declared {expected_fingerprint}, restored {}",
             source_schema.schema_fingerprint
@@ -942,6 +978,55 @@ mod tests {
 
         validate_source_schema_metadata(&profile).expect("schema metadata remains valid");
         assert!(validate_source_identity(&profile).is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a migrated PostgreSQL database"]
+    async fn transient_backfill_index_does_not_change_the_schema_fingerprint() {
+        let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .expect("database connection");
+        let name = charge_payload_identity::PENDING_INDEX_NAME;
+        let existed: bool = sqlx::query_scalar(
+            "SELECT to_regclass('riviamigo.rivian_charge_payloads_identity_pending_idx') IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("probe index");
+
+        sqlx::query(AssertSqlSafe(format!(
+            "DROP INDEX IF EXISTS riviamigo.{name}"
+        )))
+        .execute(&pool)
+        .await
+        .expect("drop index");
+        let without_current = schema_fingerprint(&pool).await.expect("fingerprint");
+        let without_legacy = legacy_schema_fingerprint(&pool).await.expect("legacy");
+
+        sqlx::query(AssertSqlSafe(format!(
+            "CREATE INDEX {name} ON riviamigo.rivian_charge_payloads (captured_at, id) WHERE payload_fingerprint IS NULL"
+        )))
+        .execute(&pool)
+        .await
+        .expect("create index");
+        let with_current = schema_fingerprint(&pool).await.expect("fingerprint");
+        let with_legacy = legacy_schema_fingerprint(&pool).await.expect("legacy");
+
+        if !existed {
+            sqlx::query(AssertSqlSafe(format!(
+                "DROP INDEX IF EXISTS riviamigo.{name}"
+            )))
+            .execute(&pool)
+            .await
+            .expect("restore original state");
+        }
+
+        assert_eq!(without_current, with_current);
+        assert_eq!(without_legacy, without_current);
+        assert_ne!(with_legacy, with_current);
     }
 
     #[tokio::test]
