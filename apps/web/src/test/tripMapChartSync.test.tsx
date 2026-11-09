@@ -1,7 +1,12 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { TripMapChart, type TripMapRoute } from '../../../../packages/ui/src/charts/TripMapChart';
+import {
+  MAP_TILE_LOAD_TIMEOUT_MS,
+  MAP_TILE_LOADING_INDICATOR_DELAY_MS,
+  TripMapChart,
+  type TripMapRoute,
+} from '../../../../packages/ui/src/charts/TripMapChart';
 
 type MapHandler = (event?: unknown) => void;
 
@@ -29,6 +34,7 @@ class MockMap {
   setPaintProperty = vi.fn();
   getCanvas = vi.fn(() => ({ style: {} as CSSStyleDeclaration }));
   setStyle = vi.fn();
+  triggerRepaint = vi.fn();
   setPitch = vi.fn();
   setBearing = vi.fn();
   dragRotate = { enable: vi.fn(), disable: vi.fn() };
@@ -67,7 +73,81 @@ function buildRoutes(count: number): TripMapRoute[] {
 }
 
 describe('TripMapChart', () => {
-  it('logs MapLibre failures and retries the active style', async () => {
+  it('shows a loading indicator instead of tile errors while the first tiles load', async () => {
+    const mockMap = new MockMap();
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    render(
+      <TripMapChart
+        routes={buildRoutes(1)}
+        track={[]}
+        basemapConfig={{ enabled: true, resolved_provider: 'openfreemap', revision: 'vector-1' }}
+        mapLoader={mapLoader as never}
+      />,
+    );
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Loading map…');
+    await act(async () => {
+      mockMap.emit('error', { error: new Error('tile timed out'), status: 504, sourceId: 'planet', resourceType: 'Tile' });
+      mockMap.emit('load');
+    });
+
+    // A slow or failed tile during the initial load is logged but is not an outage.
+    expect(consoleError).toHaveBeenCalled();
+    expect(screen.queryByText('Map tiles unavailable')).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading map…');
+
+    await act(async () => mockMap.emit('idle'));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText('Map tiles unavailable')).not.toBeInTheDocument();
+    consoleError.mockRestore();
+  });
+
+  it('reports tiles unavailable only after the load timeout passes without an idle map', async () => {
+    vi.useFakeTimers();
+    try {
+      const mockMap = new MockMap();
+      const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      render(
+        <TripMapChart
+          routes={buildRoutes(1)}
+          track={[]}
+          basemapConfig={{ enabled: true, resolved_provider: 'openfreemap', revision: 'vector-1' }}
+          mapLoader={mapLoader as never}
+        />,
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(MAP_TILE_LOAD_TIMEOUT_MS - 1);
+        mockMap.emit('error', { error: new Error('style request failed'), status: 503 });
+      });
+      expect(screen.getByRole('status')).toHaveTextContent('Loading map…');
+      expect(screen.queryByText('Map tiles unavailable')).not.toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(screen.getByText('Map tiles unavailable')).toBeInTheDocument();
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+      // Retry restarts the loading state rather than leaving the error up.
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      expect(screen.queryByText('Map tiles unavailable')).not.toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(MAP_TILE_LOADING_INDICATOR_DELAY_MS);
+      });
+      expect(screen.getByRole('status')).toHaveTextContent('Loading map…');
+      expect(mockMap.triggerRepaint).toHaveBeenCalled();
+      consoleError.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('logs MapLibre failures after loading and retries the active style', async () => {
     const mockMap = new MockMap();
     const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -98,6 +178,8 @@ describe('TripMapChart', () => {
 
     await waitFor(() => expect(mapLoader).toHaveBeenCalledTimes(1));
     await act(async () => {
+      mockMap.emit('load');
+      mockMap.emit('idle');
       mockMap.emit('error', {
         error: new Error('style request failed'),
         status: 503,
@@ -473,7 +555,7 @@ describe('TripMapChart', () => {
     );
 
     await waitFor(() => expect(mapLoader).toHaveBeenCalledTimes(1));
-    expect(queryByRole('status')).not.toBeInTheDocument();
+    expect(queryByRole('status', { name: /CARTO/i })).not.toBeInTheDocument();
     expect(queryByText(/CARTO Basemap key required/)).not.toBeInTheDocument();
     await act(async () => {
       mockMap.emit('load');
@@ -503,7 +585,7 @@ describe('TripMapChart', () => {
     );
 
     await waitFor(() => expect(mapLoader).toHaveBeenCalledTimes(1));
-    expect(queryByRole('status')).not.toBeInTheDocument();
+    expect(queryByRole('status', { name: /CARTO/i })).not.toBeInTheDocument();
 
     rerender(
       <TripMapChart
@@ -522,7 +604,7 @@ describe('TripMapChart', () => {
       />,
     );
 
-    expect(queryByRole('status')).not.toBeInTheDocument();
+    expect(queryByRole('status', { name: /CARTO/i })).not.toBeInTheDocument();
   });
 
   it('replaces MapLibre tile URLs when the non-secret basemap revision changes', async () => {

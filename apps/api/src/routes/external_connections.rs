@@ -1466,7 +1466,8 @@ fn openfreemap_sprite_version(version: &str) -> bool {
 }
 
 fn openfreemap_sprite_asset(asset: &str) -> bool {
-    matches!(asset, "ofm.json" | "ofm.png" | "ofm@2x.png")
+    // MapLibre requests the @2x sprite index and atlas on high-DPI screens.
+    matches!(asset, "ofm.json" | "ofm.png" | "ofm@2x.json" | "ofm@2x.png")
 }
 
 fn is_ascii_decimal(value: &str) -> bool {
@@ -2015,6 +2016,12 @@ mod tests {
         assert!(openfreemap_resource_is_allowed("sprites/ofm_f384/ofm.json"));
         assert!(openfreemap_resource_is_allowed(
             "sprites/ofm_f384/ofm@2x.png"
+        ));
+        assert!(openfreemap_resource_is_allowed(
+            "sprites/ofm_f384/ofm@2x.json"
+        ));
+        assert!(!openfreemap_resource_is_allowed(
+            "sprites/ofm_f384/ofm@3x.json"
         ));
         assert!(openfreemap_resource_is_allowed(
             "fonts/Noto%20Sans%20Regular/0-255.pbf"

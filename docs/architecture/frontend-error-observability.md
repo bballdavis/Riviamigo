@@ -35,10 +35,15 @@ for user-facing recovery guidance.
 ## Map failure interpretation
 
 `Map configuration unavailable` means the authenticated basemap configuration
-request failed. `Map tiles unavailable` means MapLibre received a non-aborted
-style or resource error after configuration was available. Expected request
-aborts while MapLibre replaces a style do not create an error state. The two paths have separate
-retry behavior and separate diagnostic events.
+request failed. While a map is created, retried, or swaps styles, it shows a
+`Loading map…` status until MapLibre reports `idle` (style, sources, and visible
+tiles rendered). Resource errors raised during that window are still reported
+to the console but do not replace the loading state; `Map tiles unavailable`
+appears only when the load does not finish within 20 seconds, MapLibre fails to
+initialize, or a non-aborted resource error arrives after the map finished
+loading. Expected request aborts while MapLibre replaces a style do not create
+an error state. The two paths have separate retry behavior and separate
+diagnostic events.
 
 Server-side OpenFreeMap logs use the propagated request ID and record the
 provider failure class, upstream status, resource class, cache state, and

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Loader2 } from 'lucide-react';
 import type { BasemapStyleDescriptor, MapStylePreference } from '@riviamigo/types';
 import { CHART_COLORS } from './ChartProvider';
 import { useDocumentPalette } from '../hooks/useDocumentPalette';
@@ -76,6 +77,7 @@ interface MapApi {
   setPaintProperty(layerId: string, name: string, value: unknown): void;
   getCanvas(): { style: CSSStyleDeclaration };
   setStyle(style: unknown): void;
+  triggerRepaint?(): void;
   setPitch?(pitch: number): void;
   setBearing?(bearing: number): void;
   dragRotate?: { enable(): void; disable(): void };
@@ -96,6 +98,15 @@ const ROUTE_SOURCE_ID = 'trip-routes';
 const ROUTE_LAYER_ID = 'trip-routes-line';
 const ROUTE_HIT_LAYER_ID = 'trip-routes-hit';
 const BASEMAP_PROXY_PLACEHOLDER_ORIGIN = 'https://riviamigo.invalid';
+const MAP_TILES_UNAVAILABLE = 'Map tiles unavailable';
+/**
+ * Slow upstream tiles can legitimately take several seconds. Resource errors
+ * raised while a style is still loading are only surfaced once this deadline
+ * passes without MapLibre reaching `idle`.
+ */
+export const MAP_TILE_LOAD_TIMEOUT_MS = 20_000;
+/** Avoid flashing the loading indicator for fast loads and cached style swaps. */
+export const MAP_TILE_LOADING_INDICATOR_DELAY_MS = 250;
 
 export const NEUTRAL_BASEMAP_CONFIG: BasemapConfig = {
   enabled: false,
@@ -193,6 +204,12 @@ export function TripMapChart({
   const appliedBasemapSignatureRef = React.useRef('');
   const [mapError, setMapError] = React.useState<string | null>(null);
   const [mapRetryVersion, setMapRetryVersion] = React.useState(0);
+  // Tiles are "loading" from map creation (and every style swap or retry)
+  // until MapLibre reports `idle`: style, sources, and visible tiles rendered.
+  const tilesLoadingRef = React.useRef(true);
+  const tileLoadTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [tilesLoading, setTilesLoading] = React.useState(true);
+  const [showTilesLoading, setShowTilesLoading] = React.useState(false);
   const palette = useDocumentPalette();
   const isDark = useDocumentTheme();
   const themeRevision = useThemeRevision();
@@ -249,6 +266,55 @@ export function TripMapChart({
     return () => observer.disconnect();
   }, []);
 
+  const clearTileLoadTimeout = React.useCallback(() => {
+    if (tileLoadTimeoutRef.current !== null) {
+      clearTimeout(tileLoadTimeoutRef.current);
+      tileLoadTimeoutRef.current = null;
+    }
+  }, []);
+
+  const beginTileLoad = React.useCallback(() => {
+    clearTileLoadTimeout();
+    tilesLoadingRef.current = true;
+    setTilesLoading(true);
+    setMapError(null);
+    tileLoadTimeoutRef.current = setTimeout(() => {
+      tileLoadTimeoutRef.current = null;
+      if (!tilesLoadingRef.current) return;
+      tilesLoadingRef.current = false;
+      setTilesLoading(false);
+      setMapError(MAP_TILES_UNAVAILABLE);
+    }, MAP_TILE_LOAD_TIMEOUT_MS);
+  }, [clearTileLoadTimeout]);
+
+  const finishTileLoad = React.useCallback(() => {
+    if (!tilesLoadingRef.current) return;
+    clearTileLoadTimeout();
+    tilesLoadingRef.current = false;
+    setTilesLoading(false);
+    // Transient resource errors during the load were deferred; the map
+    // reached a complete render, so none of them should block it now.
+    setMapError(null);
+  }, [clearTileLoadTimeout]);
+
+  const failTileLoad = React.useCallback(() => {
+    clearTileLoadTimeout();
+    tilesLoadingRef.current = false;
+    setTilesLoading(false);
+    setMapError(MAP_TILES_UNAVAILABLE);
+  }, [clearTileLoadTimeout]);
+
+  React.useEffect(() => clearTileLoadTimeout, [clearTileLoadTimeout]);
+
+  React.useEffect(() => {
+    if (!tilesLoading) {
+      setShowTilesLoading(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowTilesLoading(true), MAP_TILE_LOADING_INDICATOR_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [tilesLoading]);
+
   // ── Map creation — runs once when the first routes become available ─────────
   // The map instance is kept alive for the lifetime of the component.  Style
   // changes (dark↔light) are applied via setStyle() on the existing instance
@@ -258,6 +324,7 @@ export function TripMapChart({
     if (!containerRef.current || routeList.length === 0 || mapRef.current) return;
 
     let cancelled = false;
+    beginTileLoad();
 
     (async () => {
       try {
@@ -320,13 +387,20 @@ export function TripMapChart({
             url: details.url,
             severity: 'error',
           });
-          if (basemapRef.current.enabled) setMapError('Map tiles unavailable');
+          // While the style and its first tiles are still loading, a single
+          // slow or failed resource is not an outage. Keep the loading state;
+          // the load timeout decides if the map never becomes usable.
+          if (tilesLoadingRef.current) return;
+          if (basemapRef.current.enabled) setMapError(MAP_TILES_UNAVAILABLE);
+        });
+
+        map.on('idle', () => {
+          finishTileLoad();
         });
 
         map.on('load', () => {
           if (!mapRef.current) return;
 
-          setMapError(null);
           isLoadedRef.current = true;
           lastRouteSignatureRef.current = '';
           syncRoutes(
@@ -350,7 +424,6 @@ export function TripMapChart({
             appliedBasemapSignatureRef.current = currentSignature;
             const restoreAfterInitialSwap = () => {
               map.off('style.load', restoreAfterInitialSwap);
-              setMapError(null);
               lastRouteSignatureRef.current = '';
               syncRoutes(
                 map,
@@ -364,11 +437,13 @@ export function TripMapChart({
               applyPerspective(map, basemapRef.current, mapStylePreferenceRef.current);
             };
             map.on('style.load', restoreAfterInitialSwap);
+            beginTileLoad();
             map.setStyle(buildMapLibreStyle(
               mapStyleRef.current,
               basemapRef.current,
               mapStylePreferenceRef.current,
             ));
+            map.triggerRepaint?.();
           }
           requestAnimationFrame(() => {
             mapRef.current?.resize();
@@ -384,12 +459,13 @@ export function TripMapChart({
           style: mapStylePreferenceRef.current,
           severity: 'error',
         });
-        setMapError('Map tiles unavailable');
+        failTileLoad();
       }
     })();
 
     return () => {
       cancelled = true;
+      clearTileLoadTimeout();
       isLoadedRef.current = false;
       lastRouteSignatureRef.current = '';
       if (mapRef.current) {
@@ -412,7 +488,6 @@ export function TripMapChart({
     const map = mapRef.current;
 
     function onStyleLoad() {
-      setMapError(null);
       isLoadedRef.current = true;
       lastRouteSignatureRef.current = '';
       syncRoutes(
@@ -429,27 +504,33 @@ export function TripMapChart({
 
     map.on('style.load', onStyleLoad);
     appliedBasemapSignatureRef.current = basemapSignature(basemap, mapStyle, mapStylePreference);
+    beginTileLoad();
     map.setStyle(buildMapLibreStyle(mapStyle, basemap, mapStylePreference));
+    // An unchanged style diff may not schedule a frame; force one so `idle`
+    // always follows and the loading state cannot wait for the timeout.
+    map.triggerRepaint?.();
 
     return () => {
       map.off('style.load', onStyleLoad);
     };
-  }, [basemap, mapStyle, mapStylePreference]);
+  }, [basemap, beginTileLoad, mapStyle, mapStylePreference]);
 
   const retryMap = React.useCallback(() => {
-    setMapError(null);
     const map = mapRef.current;
     if (!map) {
+      setMapError(null);
       setMapRetryVersion((version) => version + 1);
       return;
     }
     appliedBasemapSignatureRef.current = '';
+    beginTileLoad();
     map.setStyle(buildMapLibreStyle(
       mapStyleRef.current,
       basemapRef.current,
       mapStylePreferenceRef.current,
     ));
-  }, []);
+    map.triggerRepaint?.();
+  }, [beginTileLoad]);
 
   // Sync routes whenever routes or selection changes
   React.useEffect(() => {
@@ -585,6 +666,18 @@ export function TripMapChart({
           <div className="absolute bottom-1 right-1 max-w-[calc(100%-0.5rem)] rounded bg-bg/80 px-1.5 py-0.5 text-right text-[10px] text-fg-tertiary">
             {basemap.attributions?.map((item, index) => <React.Fragment key={`${item.label}-${index}`}>{index > 0 ? ' · ' : ''}{item.url ? <a href={item.url} target="_blank" rel="noopener noreferrer" className="hover:text-fg">{item.label}</a> : item.label}</React.Fragment>)}
             {!basemap.attributions?.length && (basemap.attribution_url ? <a href={basemap.attribution_url} target="_blank" rel="noopener noreferrer" className="hover:text-fg">{basemap.attribution}</a> : basemap.attribution)}
+          </div>
+        ) : null}
+        {showTilesLoading && !mapError && !basemapError ? (
+          <div
+            role="status"
+            aria-live="polite"
+            className="pointer-events-none absolute inset-0 flex items-center justify-center bg-bg/40 p-4"
+          >
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-bg-elevated px-3 py-2 text-xs text-fg-secondary shadow-lg">
+              <Loader2 aria-hidden="true" className="h-4 w-4 text-accent motion-safe:animate-spin" />
+              <span>Loading map…</span>
+            </div>
           </div>
         ) : null}
         {mapError || basemapError ? (

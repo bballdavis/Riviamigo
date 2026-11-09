@@ -219,6 +219,7 @@ Common usage:
 - Use `<EmptyState>` and `<Skeleton>` from shared primitives when they fit.
 - Error states should use the established inline treatment rather than plain text.
 - Loading and empty states must match the surrounding page tone and spacing.
+- Maps keep the route canvas mounted and overlay a small `Loading map…` status card (accent `Loader2`, `motion-safe:animate-spin`) after a 250 ms delay, using the same card treatment as the map error state. Transient resource errors while loading do not replace it; only a real load timeout does.
 - Shared status sensors should not drift between `Needs data`, raw `undefined`, and placeholder dashes. Use the blue `Unavailable` chip for never-seen data, and prefer last-known values plus a small `Last updated ...` line when historical data exists.
 
 ### Page composition
