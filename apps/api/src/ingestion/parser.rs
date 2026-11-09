@@ -188,6 +188,8 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
         window_fr_closed: extract_closed(state, "/windowFrontRightClosed/value"),
         window_rl_closed: extract_closed(state, "/windowRearLeftClosed/value"),
         window_rr_closed: extract_closed(state, "/windowRearRightClosed/value"),
+        // Not in the legacy vehicleState subscription; Parallax reports it.
+        window_rear_closed: None,
         gear_guard_locked: extract_bool(state, "/gearGuardLocked/value"),
         gear_guard_video_status: extract_str(state, "/gearGuardVideoStatus/value")
             .map(String::from),

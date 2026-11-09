@@ -49,7 +49,7 @@ const DEFINITION_FIELDS: Record<string, string[]> = {
   wiper_fluid_warning: ['wiper_fluid_low'],
   alarm_status: ['alarm_active'],
   service_mode: ['service_mode'],
-  window_status: ['window_fl_closed', 'window_fr_closed', 'window_rl_closed', 'window_rr_closed'],
+  window_status: ['window_fl_closed', 'window_fr_closed', 'window_rl_closed', 'window_rr_closed', 'window_rear_closed'],
 };
 
 export function getStatusDefinitionFields(definitionId: string): string[] {
@@ -187,11 +187,14 @@ export function presentVehicleStatusDefinition(
     case 'cabin_precon': {
       const value = status?.cabin_precon_status;
       if (!value) return unavailableBase;
-      const inactive = /off|none|inactive/i.test(value);
+      // Rivian's statuses: "undefined" (idle), "unavailable" (cannot run,
+      // e.g. while driving), and timeouts mean preconditioning is not running.
+      const inactive = /off|none|inactive|undefined|unavailable|timeout/i.test(value);
+      const failed = /error/i.test(value);
       return {
         ...presentResolvedStatus(
-          inactive ? titleCase(value) : titleCase(value),
-          inactive ? 'success' : 'info',
+          titleCase(value),
+          failed ? 'warning' : inactive ? 'success' : 'info',
           availability,
           tooltip
         ),
@@ -289,14 +292,18 @@ export function presentVehicleStatusDefinition(
         status?.window_rr_closed,
       ];
       const known = values.filter((value): value is boolean => typeof value === 'boolean');
+      // The R2's rear drop glass counts only when the vehicle reports it, so
+      // a four-window vehicle still reads "Closed".
+      if (typeof status?.window_rear_closed === 'boolean') known.push(status.window_rear_closed);
+      const expected = typeof status?.window_rear_closed === 'boolean' ? 5 : 4;
       const open = known.filter((value) => value === false).length;
       if (known.length === 0) return unavailableBase;
       if (open > 0) {
         return presentResolvedStatus(`${open} open`, 'warning', availability, tooltip);
       }
       return presentResolvedStatus(
-        known.length === 4 ? 'Closed' : `${known.length}/4 closed`,
-        known.length === 4 ? 'success' : 'info',
+        known.length === expected ? 'Closed' : `${known.length}/${expected} closed`,
+        known.length === expected ? 'success' : 'info',
         availability,
         tooltip
       );

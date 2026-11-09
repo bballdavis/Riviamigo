@@ -81,6 +81,17 @@ history. Availability still depends on what that vehicle and Rivian send. A
 missing or unrecognized value does not become an inferred state, and Parallax
 readings do not start or end charging sessions.
 
+Tire readings carry the vehicle's validity flag. An invalid sensor shows as
+**Invalid Sensor** without its stale pressure. Tire status keeps its kind:
+OK, hard warning, soft warning, or puncture, and a puncture shows as a danger
+state. The R2 liftgate's rear drop glass is reported as the **Rear window**:
+it counts toward the Windows status and open-closure list when the vehicle
+reports it. The outside temperature in the cabin-temperature frame is recorded
+when the vehicle sends it, and trip outside temperatures prefer it over the
+weather estimate. Preconditioning status and type use the same values as the
+canonical connection, including **Unavailable**, which the vehicle reports
+while driving.
+
 Parallax also reports when a door, gate, frunk, or window is moving. The
 vehicle status page then shows **Opening…** or **Closing…** for that closure
 until it settles. When Rivian only reports that a closure is ajar, the

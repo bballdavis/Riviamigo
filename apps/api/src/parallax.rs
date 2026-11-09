@@ -525,12 +525,22 @@ struct TireState {
     status: Option<i32>,
     #[prost(double, optional, tag = "3")]
     pressure_bar: Option<f64>,
+    /// The app's validity enum: 0 valid, 1 invalid. Proto3 leaves 0 off the
+    /// wire, so an absent value means valid.
+    #[prost(int32, optional, tag = "4")]
+    validity: Option<i32>,
 }
 
 #[derive(Clone, PartialEq, ProstMessage)]
 struct CabinTemperatures {
+    // Tag 1 (per-seat zone temperatures) is not modelled.
+    /// Outside air temperature; not sent by every vehicle.
+    #[prost(float, optional, tag = "2")]
+    outside_c: Option<f32>,
     #[prost(float, optional, tag = "3")]
     cabin_c: Option<f32>,
+    /// The driver's set point, the same value legacy reports as
+    /// cabinClimateDriverTemperature.
     #[prost(float, optional, tag = "4")]
     driver_c: Option<f32>,
 }
@@ -539,6 +549,8 @@ struct CabinTemperatures {
 struct PreconditioningState {
     #[prost(int32, optional, tag = "1")]
     status: Option<i32>,
+    #[prost(int32, optional, tag = "2")]
+    kind: Option<i32>,
 }
 
 #[derive(Clone, PartialEq, ProstMessage)]
@@ -547,8 +559,6 @@ struct DefrostState {
     status: Option<i32>,
 }
 
-/// R2 closure position with no canonical field (the rear drop glass).
-const CLOSURE_REAR_GLASS_POSITION: i32 = 16;
 /// The charge port door. Matched against legacy chargePortState on an R1S:
 /// opening, open, closing, and closed changed at the same moments.
 const CLOSURE_CHARGE_PORT_POSITION: i32 = 10;
@@ -748,7 +758,7 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
                     continue;
                 }
                 let field = closure_field(&mut event, position);
-                if field.is_none() && position != CLOSURE_REAR_GLASS_POSITION {
+                if field.is_none() {
                     notes.push(format!(
                         "skipped unmapped closure position {position} with state {status}"
                     ));
@@ -823,23 +833,39 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
                     notes.push(format!("skipped tire with position {:?}", state.position));
                     continue;
                 };
-                let Some(pressure_bar) = state
-                    .pressure_bar
-                    .filter(|bar| bar.is_finite() && (0.0..=10.0).contains(bar))
-                else {
-                    notes.push(format!("skipped tire {position} with no valid pressure"));
-                    continue;
-                };
-                // 1 normal; 2 hard warning, 3 soft warning, 4 puncture.
-                let ok = match state.status {
-                    Some(1) => true,
-                    Some(2..=4) => false,
-                    other => {
-                        notes.push(format!("skipped tire {position} with status {other:?}"));
+                // An invalid reading's pressure and status are stale: record
+                // only that the sensor is invalid.
+                match state.validity.unwrap_or(0) {
+                    0 => {}
+                    1 => {
+                        meaningful |= set_tire(&mut event, position, None, None, false)?;
                         continue;
                     }
+                    other => {
+                        notes.push(format!("skipped tire {position} with validity {other}"));
+                        continue;
+                    }
+                }
+                let pressure_bar = state
+                    .pressure_bar
+                    .filter(|bar| bar.is_finite() && (0.0..=10.0).contains(bar));
+                if pressure_bar.is_none() && state.pressure_bar.is_some() {
+                    notes.push(format!("skipped tire {position} invalid pressure"));
+                }
+                let status = match state.status {
+                    None => None,
+                    Some(status) => {
+                        let label = tire_status_label(status);
+                        if label.is_none() {
+                            notes.push(format!("skipped tire {position} status {status}"));
+                        }
+                        label
+                    }
                 };
-                meaningful |= set_tire(&mut event, position, pressure_bar, ok)?;
+                if pressure_bar.is_none() && status.is_none() {
+                    continue;
+                }
+                meaningful |= set_tire(&mut event, position, pressure_bar, status, true)?;
             }
         }
         "comfort.cabin.cabin_temperatures" => {
@@ -847,6 +873,7 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
             for (name, reading, field) in [
                 ("cabin", value.cabin_c, &mut event.cabin_temp_c),
                 ("driver", value.driver_c, &mut event.driver_temp_c),
+                ("outside", value.outside_c, &mut event.outside_temp_c),
             ] {
                 let Some(reading) = reading else { continue };
                 match valid_temperature(f64::from(reading)) {
@@ -860,22 +887,43 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
         }
         "comfort.cabin.cabin_preconditioning_status" => {
             let value = PreconditioningState::decode(payload)?;
-            let status = match value.status {
-                Some(1 | 2) => Some("initiate"),
-                Some(4) => Some("active"),
-                Some(0 | 3) => Some("off"),
-                None if payload.is_empty() => Some("off"),
-                Some(other) => {
+            // The app's enum, as the same strings legacy cabinPreconditioning
+            // Status reports, so both sources agree. Proto3 leaves 0 off the
+            // wire: an absent status is "undefined" (no preconditioning).
+            let status = match value.status.unwrap_or(0) {
+                0 => Some("undefined"),
+                1 => Some("initiate"),
+                2 => Some("active"),
+                3 => Some("active_warning"),
+                4 => Some("complete_maintain"),
+                5 => Some("timeout_temp_not_achieved"),
+                6 => Some("error_soc_low"),
+                7 => Some("error_system_fault"),
+                // Shown while driving: preconditioning cannot run (#65).
+                8 => Some("unavailable"),
+                9 => Some("timeout_complete"),
+                other => {
                     notes.push(format!("skipped unknown preconditioning status {other}"));
-                    None
-                }
-                None => {
-                    notes.push("skipped preconditioning frame with missing status".into());
                     None
                 }
             };
             if let Some(status) = status {
                 event.cabin_precon_status = Some(status.into());
+                meaningful = true;
+            }
+            let kind = match value.kind {
+                None | Some(0) => None,
+                Some(1) => Some("user_selected"),
+                Some(2) => Some("screen_protection"),
+                Some(3) => Some("scheduled"),
+                Some(4) => Some("auto_cabin_ventilation"),
+                Some(other) => {
+                    notes.push(format!("skipped unknown preconditioning type {other}"));
+                    None
+                }
+            };
+            if let Some(kind) = kind {
+                event.cabin_precon_type = Some(kind.into());
                 meaningful = true;
             }
         }
@@ -912,7 +960,7 @@ fn valid_temperature(value: f64) -> Option<f64> {
 }
 
 /// Canonical field for a closure position, or `None` when the position has no
-/// canonical field (including 16, the R2 rear drop glass).
+/// canonical field.
 fn closure_field(event: &mut TelemetryEvent, position: i32) -> Option<&mut Option<bool>> {
     Some(match position {
         1 => &mut event.door_front_left_closed,
@@ -934,6 +982,8 @@ fn closure_field(event: &mut TelemetryEvent, position: i32) -> Option<&mut Optio
         13 => &mut event.window_fr_closed,
         14 => &mut event.window_rl_closed,
         15 => &mut event.window_rr_closed,
+        // The rear drop glass in the R2 liftgate.
+        16 => &mut event.window_rear_closed,
         _ => return None,
     })
 }
@@ -957,6 +1007,7 @@ fn closure_field_name(position: i32) -> Option<&'static str> {
         13 => "window_fr_closed",
         14 => "window_rl_closed",
         15 => "window_rr_closed",
+        16 => "window_rear_closed",
         _ => return None,
     })
 }
@@ -996,37 +1047,57 @@ fn set_lock(event: &mut TelemetryEvent, position: i32, locked: bool) -> Result<b
     Ok(true)
 }
 
+/// The tire pressure status enum as the vehicle status page shows it. Normal
+/// keeps legacy's "OK"; the warnings keep their kind.
+fn tire_status_label(status: i32) -> Option<&'static str> {
+    Some(match status {
+        1 => "OK",
+        2 => "warning_hard",
+        3 => "warning_soft",
+        4 => "warning_puncture",
+        _ => return None,
+    })
+}
+
 fn set_tire(
     event: &mut TelemetryEvent,
     position: i32,
-    pressure_bar: f64,
-    ok: bool,
+    pressure_bar: Option<f64>,
+    status: Option<&str>,
+    valid: bool,
 ) -> Result<bool> {
-    let pressure_psi = pressure_bar * 14.503_773_8;
-    let status = if ok { "OK" } else { "Warning" }.to_string();
-    match position {
-        1 => {
-            event.tire_fl_psi = Some(pressure_psi);
-            event.tire_fl_status = Some(status);
-            event.tire_fl_valid = Some(true);
-        }
-        2 => {
-            event.tire_fr_psi = Some(pressure_psi);
-            event.tire_fr_status = Some(status);
-            event.tire_fr_valid = Some(true);
-        }
-        3 => {
-            event.tire_rl_psi = Some(pressure_psi);
-            event.tire_rl_status = Some(status);
-            event.tire_rl_valid = Some(true);
-        }
-        4 => {
-            event.tire_rr_psi = Some(pressure_psi);
-            event.tire_rr_status = Some(status);
-            event.tire_rr_valid = Some(true);
-        }
+    let pressure_psi = pressure_bar.map(|bar| bar * 14.503_773_8);
+    let status = status.map(str::to_owned);
+    let (psi, label, validity) = match position {
+        1 => (
+            &mut event.tire_fl_psi,
+            &mut event.tire_fl_status,
+            &mut event.tire_fl_valid,
+        ),
+        2 => (
+            &mut event.tire_fr_psi,
+            &mut event.tire_fr_status,
+            &mut event.tire_fr_valid,
+        ),
+        3 => (
+            &mut event.tire_rl_psi,
+            &mut event.tire_rl_status,
+            &mut event.tire_rl_valid,
+        ),
+        4 => (
+            &mut event.tire_rr_psi,
+            &mut event.tire_rr_status,
+            &mut event.tire_rr_valid,
+        ),
         other => anyhow::bail!("unknown tire position {other}"),
+    };
+    if pressure_psi.is_some() {
+        *psi = pressure_psi;
     }
+    if status.is_some() {
+        *label = status;
+    }
+    *validity = Some(valid);
     Ok(true)
 }
 
@@ -2996,6 +3067,7 @@ mod tests {
             position: Some(position),
             status: Some(status),
             pressure_bar: Some(2.8),
+            ..Default::default()
         };
         let payload = TireStates {
             states: vec![tire(1, 1), tire(2, 4), tire(3, 3), tire(4, 9)],
@@ -3013,10 +3085,13 @@ mod tests {
             "soft warning keeps the pressure"
         );
         assert!(
-            event.tire_rr_psi.is_none(),
+            event.tire_rr_psi.is_some(),
             "only the unknown status is skipped"
         );
-        assert_eq!(notes, vec!["skipped tire 4 with status Some(9)"]);
+        assert_eq!(event.tire_rr_status, None);
+        assert_eq!(event.tire_fr_status.as_deref(), Some("warning_puncture"));
+        assert_eq!(event.tire_rl_status.as_deref(), Some("warning_soft"));
+        assert_eq!(notes, vec!["skipped tire 4 status 9"]);
     }
 
     #[test]
@@ -3056,6 +3131,62 @@ mod tests {
             detector.process(&fusion.fuse(&fix)),
             TripEvent::TripStarted { .. }
         ));
+    }
+
+    #[test]
+    fn an_invalid_tire_reading_records_only_the_invalid_sensor() {
+        let payload = TireStates {
+            states: vec![
+                TireState {
+                    position: Some(1),
+                    status: Some(1),
+                    pressure_bar: Some(2.8),
+                    validity: Some(1),
+                },
+                TireState {
+                    position: Some(2),
+                    status: Some(2),
+                    pressure_bar: Some(2.1),
+                    validity: None,
+                },
+            ],
+        }
+        .encode_to_vec();
+        let (event, notes) = decode_with_notes("dynamics.tires.state", &payload, Utc::now());
+        let event = event.unwrap();
+        assert!(notes.is_empty());
+        assert_eq!(event.tire_fl_valid, Some(false));
+        assert_eq!(event.tire_fl_psi, None, "a stale pressure is not reported");
+        assert_eq!(event.tire_fl_status, None);
+        assert_eq!(event.tire_fr_valid, Some(true));
+        assert_eq!(event.tire_fr_status.as_deref(), Some("warning_hard"));
+    }
+
+    #[test]
+    fn cabin_frame_carries_outside_temperature() {
+        let (event, notes) = decode_with_notes(
+            "comfort.cabin.cabin_temperatures",
+            &CabinTemperatures {
+                outside_c: Some(-4.5),
+                cabin_c: Some(19.0),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+            Utc::now(),
+        );
+        assert!(notes.is_empty());
+        let event = event.unwrap();
+        assert_eq!(event.outside_temp_c, Some(-4.5));
+        assert_eq!(event.cabin_temp_c, Some(19.0));
+    }
+
+    #[test]
+    fn r2_rear_drop_glass_maps_to_the_rear_window() {
+        let payload = closure_frame(&[(16, Some(1)), (CLOSURE_SENTINEL_POSITION, None)]);
+        let (event, notes) = decode_with_notes("body.closures.states", &payload, Utc::now());
+        assert!(notes.is_empty());
+        assert_eq!(event.unwrap().window_rear_closed, Some(false));
+        assert_eq!(closure_field_name(16), Some("window_rear_closed"));
     }
 
     #[test]
@@ -3290,6 +3421,7 @@ mod tests {
                     position: Some(1),
                     status: Some(1),
                     pressure_bar: Some(2.5),
+                    ..Default::default()
                 }],
             }
             .encode_to_vec(),
@@ -3307,6 +3439,7 @@ mod tests {
             &CabinTemperatures {
                 cabin_c: Some(21.5),
                 driver_c: Some(20.0),
+                ..Default::default()
             }
             .encode_to_vec(),
             source_at,
@@ -3330,19 +3463,27 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(empty.cabin_precon_status.as_deref(), Some("off"));
+        // Proto3 leaves 0 off the wire: an empty frame is "undefined".
+        assert_eq!(empty.cabin_precon_status.as_deref(), Some("undefined"));
 
+        // The app's enum, as the strings legacy reports.
         for (state, expected) in [
-            (0, "off"),
+            (0, "undefined"),
             (1, "initiate"),
-            (2, "initiate"),
-            (3, "off"),
-            (4, "active"),
+            (2, "active"),
+            (3, "active_warning"),
+            (4, "complete_maintain"),
+            (5, "timeout_temp_not_achieved"),
+            (6, "error_soc_low"),
+            (7, "error_system_fault"),
+            (8, "unavailable"),
+            (9, "timeout_complete"),
         ] {
             let event = decode_vehicle_telemetry(
                 "comfort.cabin.cabin_preconditioning_status",
                 &PreconditioningState {
                     status: Some(state),
+                    ..Default::default()
                 }
                 .encode_to_vec(),
                 source_at,
@@ -3361,29 +3502,36 @@ mod tests {
         let mut notes = Vec::new();
         assert!(decode_vehicle_telemetry_with_notes(
             "comfort.cabin.cabin_preconditioning_status",
-            &PreconditioningState { status: Some(8) }.encode_to_vec(),
+            &PreconditioningState {
+                status: Some(12),
+                ..Default::default()
+            }
+            .encode_to_vec(),
             source_at,
             vehicle_id,
             &mut notes,
         )
         .unwrap()
         .is_none());
-        assert_eq!(notes, vec!["skipped unknown preconditioning status 8"]);
+        assert_eq!(notes, vec!["skipped unknown preconditioning status 12"]);
 
+        // The type is kept even when the status is not.
         notes.clear();
-        assert!(decode_vehicle_telemetry_with_notes(
+        let event = decode_vehicle_telemetry_with_notes(
             "comfort.cabin.cabin_preconditioning_status",
-            &[0xa0, 0x06, 0x01],
+            &PreconditioningState {
+                status: Some(12),
+                kind: Some(3),
+            }
+            .encode_to_vec(),
             source_at,
             vehicle_id,
             &mut notes,
         )
         .unwrap()
-        .is_none());
-        assert_eq!(
-            notes,
-            vec!["skipped preconditioning frame with missing status"]
-        );
+        .unwrap();
+        assert_eq!(event.cabin_precon_status, None);
+        assert_eq!(event.cabin_precon_type.as_deref(), Some("scheduled"));
 
         assert!(decode_vehicle_telemetry(
             "comfort.cabin.cabin_preconditioning_status",
@@ -3599,8 +3747,8 @@ mod tests {
         let source_at = Utc::now();
 
         // Observed R2 frame while the liftgate closes and the front-left
-        // window is open: rear glass (16) and the stateless sentinel (10000)
-        // are expected skips and must not produce diagnostics notes.
+        // window is open: the rear glass (16) maps to the rear window, and
+        // the stateless sentinel (10000) is an expected, silent skip.
         let mut notes = Vec::new();
         let event = decode_vehicle_telemetry_with_notes(
             "body.closures.states",
@@ -3630,6 +3778,7 @@ mod tests {
         assert_eq!(event.closure_frunk_closed, Some(false));
         // AJAR while the powered liftgate closes is still "not closed".
         assert_eq!(event.closure_liftgate_closed, Some(false));
+        assert_eq!(event.window_rear_closed, Some(true));
         assert_eq!(event.window_fl_closed, Some(false));
         assert_eq!(event.window_rr_closed, Some(true));
 

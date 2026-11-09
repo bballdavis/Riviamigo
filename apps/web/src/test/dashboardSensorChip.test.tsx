@@ -967,4 +967,46 @@ describe('dashboard sensor chips', () => {
 
     expect(screen.getByText('1 open')).toBeInTheDocument();
   });
+
+  it('counts the R2 rear window only when the vehicle reports it', () => {
+    const current = {
+      ever_seen: true,
+      last_seen_at: '2026-05-07T00:00:00Z',
+      latest_event_at: '2026-05-07T00:00:00Z',
+      availability: 'current',
+      reason_code: null,
+    };
+    metricMocks.vehicleStatus = {
+      window_fl_closed: true,
+      window_fr_closed: true,
+      window_rl_closed: true,
+      window_rr_closed: true,
+      window_rear_closed: false,
+      field_availability: {
+        window_fl_closed: current,
+        window_fr_closed: current,
+        window_rl_closed: current,
+        window_rr_closed: current,
+        window_rear_closed: current,
+      },
+    };
+
+    const { unmount } = render(
+      <DashboardRenderer
+        config={config(false, false, {}, 'window_status', 'Windows')}
+        ctx={defaultCtx}
+      />
+    );
+    expect(screen.getByText('1 open')).toBeInTheDocument();
+    unmount();
+
+    metricMocks.vehicleStatus = { ...metricMocks.vehicleStatus, window_rear_closed: null };
+    render(
+      <DashboardRenderer
+        config={config(false, false, {}, 'window_status', 'Windows')}
+        ctx={defaultCtx}
+      />
+    );
+    expect(screen.getByText('Closed')).toBeInTheDocument();
+  });
 });
