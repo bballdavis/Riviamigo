@@ -101,6 +101,24 @@ pub(crate) fn start_hold(key: [u8; 16], reason: HoldReason) -> Duration {
     let now = Instant::now();
     with_holds(|holds| {
         let state = holds.entry(key).or_default();
+        // Both sockets see the same incident (Rivian closes each of them):
+        // while a hold is already running, a second report neither grows the
+        // next delay nor shortens this one. Only a credential rejection may
+        // lengthen it to its own minimum.
+        if let Some(current) = state.retry_at.filter(|at| *at > now) {
+            if reason == HoldReason::Unauthenticated
+                && state.reason != Some(HoldReason::Unauthenticated)
+            {
+                let retry_at = now + hold_delay(reason, state.attempt.saturating_sub(1));
+                if retry_at > current {
+                    state.retry_at = Some(retry_at);
+                    state.reason = Some(reason);
+                }
+            }
+            return state
+                .retry_at
+                .map_or(Duration::ZERO, |at| at.saturating_duration_since(now));
+        }
         let delay = hold_delay(reason, state.attempt);
         state.attempt = state.attempt.saturating_add(1);
         let retry_at = now + delay;
@@ -217,18 +235,23 @@ mod tests {
         assert_eq!(reason, HoldReason::RateLimited);
         assert!(remaining <= first);
 
-        // The other socket learns of a second limit: the delay doubles.
+        // The other socket reports the same incident: one hold, not two.
+        let same = start_hold(key, HoldReason::RateLimited);
+        assert_eq!(same, remaining);
+
+        // The next incident after the hold ends doubles the delay.
+        tokio::time::advance(first + Duration::from_secs(1)).await;
+        assert!(remaining_hold(key).is_none());
         let second = start_hold(key, HoldReason::RateLimited);
         assert!((60..=90).contains(&second.as_secs()));
 
         // Healthy data resets the growth but keeps the current hold.
         mark_healthy(key);
         assert!(remaining_hold(key).is_some());
-        let shorter = start_hold(key, HoldReason::NotAcknowledged);
-        assert!(shorter >= Duration::from_secs(55), "longer hold must win");
-
         tokio::time::advance(Duration::from_secs(HOLD_MAX_SECONDS + 1)).await;
         assert!(remaining_hold(key).is_none());
+        let reset = start_hold(key, HoldReason::NotAcknowledged);
+        assert!((30..=60).contains(&reset.as_secs()));
     }
 
     #[test]

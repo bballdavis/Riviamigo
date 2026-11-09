@@ -51,7 +51,9 @@ again on the open socket. While the canonical connection shows the vehicle
 moving, Parallax must also deliver a fresh value within two minutes; re-sent
 values do not count. If two re-sends go unanswered, the socket is replaced.
 A sleeping vehicle answers each re-send with its re-sent values, so its socket
-is kept rather than torn down.
+is kept rather than torn down, and the wait before the next re-send doubles
+each time, up to ten minutes. Fresh data or motion on the canonical connection
+returns it to one minute.
 
 Both Rivian sockets share one hold when Rivian closes a socket as
 **Rate limited** or **Unauthenticated**, or does not acknowledge it within 20

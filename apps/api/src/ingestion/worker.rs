@@ -490,8 +490,9 @@ pub async fn run_vehicle_worker(
     // Startup reconciliation above already covered the current tail.
     state_reconcile_interval.tick().await;
     loop {
-        // Set for Parallax state re-learned from a re-sent snapshot.
-        let mut is_snapshot = false;
+        // Set (with the vehicle's original timestamp) for Parallax state
+        // re-learned from a re-sent snapshot.
+        let mut snapshot_source_at: Option<DateTime<Utc>> = None;
         let inbound = tokio::select! {
             _ = worker_shutdown.recv() => {
                 break;
@@ -532,7 +533,7 @@ pub async fn run_vehicle_worker(
             },
             parallax_event = parallax_rx.recv(), if parallax_handle.is_some() && !parallax_rx.is_closed() => match parallax_event {
                 Some(forwarded) => {
-                    is_snapshot = forwarded.snapshot;
+                    snapshot_source_at = forwarded.snapshot.then_some(forwarded.source_at);
                     WsInboundEvent {
                         kind: WsInboundKind::Telemetry,
                         received_at: Utc::now(),
@@ -730,6 +731,7 @@ pub async fn run_vehicle_worker(
 
         // Update runtime state. A re-sent snapshot is state learned again,
         // not the vehicle reporting, so it must not refresh "last seen".
+        let is_snapshot = snapshot_source_at.is_some();
         if !is_snapshot {
             upsert_seen(
                 &pool,
@@ -742,11 +744,26 @@ pub async fn run_vehicle_worker(
             .await;
         }
 
-        if let Err(error) = upsert_latest_status(&pool, &event).await {
+        // A snapshot still updates the latest state, dated by the vehicle's
+        // original timestamp so the latest-event time does not jump to now.
+        let latest_status_result = match snapshot_source_at {
+            Some(source_at) => {
+                let mut dated = event.clone();
+                dated.ts = source_at;
+                upsert_latest_status(&pool, &dated).await
+            }
+            None => upsert_latest_status(&pool, &event).await,
+        };
+        if let Err(error) = latest_status_result {
             tracing::warn!(vehicle_id=%vehicle_id, err=%error, "latest-status upsert failed");
         }
 
-        let persistence_decision = if config.rivian_suppress_duplicate_telemetry {
+        // Re-learned state is a re-sent value, not a new reading: it adds no
+        // telemetry history row (counted as a duplicate) and no state-period
+        // transition dated now.
+        let persistence_decision = if is_snapshot {
+            PersistenceDecision::Suppress(SuppressionReason::Duplicate)
+        } else if config.rivian_suppress_duplicate_telemetry {
             persistence_gate.decide(&event)
         } else {
             PersistenceDecision::Persist
@@ -768,7 +785,7 @@ pub async fn run_vehicle_worker(
         // ── State period tracking ────────────────────────────────────────────
         let charge_active = charge_det.active_session_id().is_some();
         let lifecycle = lifecycle_updates(&event, is_parallax, charge_active);
-        if lifecycle.state_period {
+        if lifecycle.state_period && !is_snapshot {
             let current_state = infer_vehicle_state(&event);
             match transition_state_period(
                 &pool,

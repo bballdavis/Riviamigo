@@ -205,6 +205,9 @@ pub struct ForwardedTelemetry {
     /// Current state re-learned from a re-sent snapshot: the vehicle did not
     /// report it just now, so it must not count as the vehicle being seen.
     pub snapshot: bool,
+    /// The vehicle's own timestamp for the envelope. For a snapshot this is
+    /// older than `event.ts`, which is when the state was learned.
+    pub source_at: DateTime<Utc>,
 }
 
 /// Channels the canonical worker shares with the in-process companion.
@@ -1070,6 +1073,9 @@ struct ConnectionContext<'a> {
 /// How long the subscription may deliver nothing before it is re-sent on the
 /// open socket. Matches Rivian's own client.
 const SILENCE_RESUBSCRIBE_AFTER: Duration = Duration::from_secs(60);
+/// The longest a parked vehicle's quiet subscription waits before a re-send.
+/// Motion on the legacy socket cuts it back to one minute at once.
+const PARKED_SILENCE_MAX: Duration = Duration::from_secs(10 * 60);
 /// Re-sent subscriptions that may go unanswered before the socket is replaced.
 const MAX_UNANSWERED_RESUBSCRIBES: u32 = 2;
 /// While the legacy socket shows the vehicle moving, Parallax must deliver a
@@ -1096,6 +1102,10 @@ struct SilenceWatchdog {
     last_fresh_frame: tokio::time::Instant,
     last_recovery: Option<tokio::time::Instant>,
     unanswered: u32,
+    /// Silence tolerated before a re-send. Starts at one minute and doubles
+    /// while a parked vehicle answers each re-send with snapshots only, so a
+    /// sleeping vehicle is not re-subscribed every minute all night.
+    quiet_after: Duration,
 }
 
 impl SilenceWatchdog {
@@ -1105,6 +1115,7 @@ impl SilenceWatchdog {
             last_fresh_frame: now,
             last_recovery: None,
             unanswered: 0,
+            quiet_after: SILENCE_RESUBSCRIBE_AFTER,
         }
     }
 
@@ -1112,6 +1123,12 @@ impl SilenceWatchdog {
     /// while the vehicle is moving; otherwise a snapshot is enough.
     fn on_frame(&mut self, now: tokio::time::Instant, fresh: bool, moving: bool) {
         self.last_frame = now;
+        if fresh || moving {
+            self.quiet_after = SILENCE_RESUBSCRIBE_AFTER;
+        } else if self.unanswered > 0 {
+            // A re-send answered by snapshots only: the vehicle is parked.
+            self.quiet_after = (self.quiet_after * 2).min(PARKED_SILENCE_MAX);
+        }
         if fresh {
             self.last_fresh_frame = now;
         }
@@ -1121,7 +1138,12 @@ impl SilenceWatchdog {
     }
 
     fn check(&mut self, now: tokio::time::Instant, moving: bool) -> WatchdogAction {
-        let silent = now.duration_since(self.last_frame) >= SILENCE_RESUBSCRIBE_AFTER;
+        let quiet_after = if moving {
+            SILENCE_RESUBSCRIBE_AFTER
+        } else {
+            self.quiet_after
+        };
+        let silent = now.duration_since(self.last_frame) >= quiet_after;
         let stale_while_moving =
             moving && now.duration_since(self.last_fresh_frame) >= MOVING_FRESH_DATA_WINDOW;
         if !(silent || stale_while_moving) {
@@ -1225,10 +1247,21 @@ async fn collect_connection_with_context(
         ))
         .await?;
     // A database hiccup must not close a live socket; the heartbeat below
-    // retries the state on its next tick.
-    if let Err(error) = set_collector_state(pool, session.vehicle_id, "connected", None).await {
-        tracing::warn!(vehicle_id=%session.vehicle_id, err=%error, "Parallax collector state update failed");
-    }
+    // retries the state write on its next tick.
+    let mut connected_recorded = match set_collector_state(
+        pool,
+        session.vehicle_id,
+        "connected",
+        None,
+    )
+    .await
+    {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(vehicle_id=%session.vehicle_id, err=%error, "Parallax collector state update failed");
+            false
+        }
+    };
     ingestion_capture::record(
         session.vehicle_id,
         CaptureKind::ParallaxConnection,
@@ -1374,7 +1407,14 @@ async fn collect_connection_with_context(
                 }
             }
             _ = heartbeat.tick() => {
-                touch_collector_heartbeat(pool, session.vehicle_id).await?;
+                if connected_recorded {
+                    touch_collector_heartbeat(pool, session.vehicle_id).await?;
+                } else {
+                    // The earlier write failed: record "connected" now
+                    // instead of treating the missing state as a takeover.
+                    connected_recorded =
+                        set_collector_state(pool, session.vehicle_id, "connected", None).await.is_ok();
+                }
             }
         }
     }
@@ -1571,20 +1611,18 @@ pub(crate) struct EnvelopeDedupe {
 
 impl EnvelopeDedupe {
     /// Whether this exact payload with this exact vehicle timestamp was
-    /// already handled for the topic. Records it otherwise.
-    fn is_repeat(&mut self, topic: &str, source_at: DateTime<Utc>, hash: &[u8]) -> bool {
-        match self.last.get_mut(topic) {
-            Some((at, seen)) if *at == source_at && seen.as_slice() == hash => true,
-            Some(entry) => {
-                *entry = (source_at, hash.to_vec());
-                false
-            }
-            None => {
-                self.last
-                    .insert(topic.to_owned(), (source_at, hash.to_vec()));
-                false
-            }
-        }
+    /// already handled for the topic.
+    fn is_repeat(&self, topic: &str, source_at: DateTime<Utc>, hash: &[u8]) -> bool {
+        self.last
+            .get(topic)
+            .is_some_and(|(at, seen)| *at == source_at && seen.as_slice() == hash)
+    }
+
+    /// Record a handled envelope. Called only once it was fully handled, so a
+    /// failed write or a full worker channel is retried on the next re-send.
+    fn remember(&mut self, topic: &str, source_at: DateTime<Utc>, hash: &[u8]) {
+        self.last
+            .insert(topic.to_owned(), (source_at, hash.to_vec()));
     }
 
     /// Whether the newest vehicle timestamp advanced enough to be written.
@@ -1782,7 +1820,8 @@ async fn persist_envelope(
             return Err(error);
         }
     };
-    if seen.is_repeat(topic, source_at, &Sha256::digest(&payload)) {
+    let payload_hash = Sha256::digest(&payload).to_vec();
+    if seen.is_repeat(topic, source_at, &payload_hash) {
         // Already handled: Rivian re-sends the latest value of every topic on
         // each subscribe, with its original timestamp.
         if capturing {
@@ -1816,6 +1855,14 @@ async fn persist_envelope(
         capturing,
     )
     .await;
+    if result.is_ok()
+        && !matches!(
+            report.forward_outcome,
+            ForwardOutcome::Full | ForwardOutcome::Closed
+        )
+    {
+        seen.remember(topic, source_at, &payload_hash);
+    }
     if capturing {
         if let Err(error) = &result {
             report.notes.push(error.to_string());
@@ -1888,6 +1935,7 @@ async fn persist_allowlisted_envelope(
                         topic: topic.to_owned(),
                         event,
                         snapshot: report.snapshot,
+                        source_at,
                     }) {
                         Ok(()) => report.forward_outcome = ForwardOutcome::Enqueued,
                         Err(error) => {
@@ -2457,19 +2505,27 @@ mod tests {
         let mut watchdog = SilenceWatchdog::new(start);
         let at = |seconds| start + Duration::from_secs(seconds);
         let mut last_frame = 0;
+        let mut expected_wait = 60;
         for _ in 0..10 {
             assert_eq!(
-                watchdog.check(at(last_frame + 59), false),
+                watchdog.check(at(last_frame + expected_wait - 1), false),
                 WatchdogAction::None
             );
             assert_eq!(
-                watchdog.check(at(last_frame + 60), false),
+                watchdog.check(at(last_frame + expected_wait), false),
                 WatchdogAction::Resubscribe,
                 "a sleeping vehicle is re-sent, never torn down"
             );
-            last_frame += 61;
+            last_frame += expected_wait + 1;
             watchdog.on_frame(at(last_frame), false, false);
+            // Each snapshot-only answer doubles the wait, up to ten minutes.
+            expected_wait = (expected_wait * 2).min(600);
         }
+        // Motion on the legacy socket checks again after one minute.
+        assert_eq!(
+            watchdog.check(at(last_frame + 60), true),
+            WatchdogAction::Resubscribe
+        );
     }
 
     #[test]
@@ -2530,12 +2586,18 @@ mod tests {
         let mut seen = EnvelopeDedupe::default();
         let at = Utc::now();
         assert!(!seen.is_repeat("vehicle.power.state", at, b"a"));
+        assert!(
+            !seen.is_repeat("vehicle.power.state", at, b"a"),
+            "not yet handled (for example a failed write) is retried"
+        );
+        seen.remember("vehicle.power.state", at, b"a");
         assert!(seen.is_repeat("vehicle.power.state", at, b"a"));
         assert!(!seen.is_repeat("dynamics.vehicle.gear", at, b"a"));
         assert!(
             !seen.is_repeat("vehicle.power.state", at, b"b"),
             "new value"
         );
+        seen.remember("vehicle.power.state", at, b"b");
         assert!(
             !seen.is_repeat(
                 "vehicle.power.state",
