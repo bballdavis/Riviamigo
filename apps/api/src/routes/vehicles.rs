@@ -3717,6 +3717,7 @@ async fn cache_vehicle_images(
     config: &crate::config::Config,
     vehicle_id: Uuid,
     tokens: &crate::ingestion::session_store::RivianTokenBundle,
+    force_remirror: bool,
 ) {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -3743,7 +3744,16 @@ async fn cache_vehicle_images(
                         size = EXCLUDED.size,
                         resolution = EXCLUDED.resolution,
                         overlays = EXCLUDED.overlays,
-                        metadata = EXCLUDED.metadata,
+                        -- A manifest refresh must never discard a working local
+                        -- mirror. Keep the ready mirror identity and only take
+                        -- the descriptive manifest fields; the mirror pass below
+                        -- replaces the asset only after a successful download.
+                        metadata = CASE
+                          WHEN riviamigo.vehicle_images.metadata->>'mirror_status' = 'ready'
+                            THEN riviamigo.vehicle_images.metadata
+                              || (EXCLUDED.metadata - 'mirror_key' - 'mirror_status')
+                          ELSE EXCLUDED.metadata
+                        END,
                         updated_at = now()
                     "#,
                 )
@@ -3767,7 +3777,7 @@ async fn cache_vehicle_images(
                 .execute(pool)
                 .await;
             }
-            mirror_vehicle_images(pool, config, vehicle_id).await;
+            mirror_vehicle_images(pool, config, vehicle_id, force_remirror).await;
             refresh_vehicle_artwork_cache_state(pool, config, vehicle_id, None).await;
             crate::services::external_connections::record_success(
                 pool,
@@ -3813,7 +3823,7 @@ async fn ensure_vehicle_images_cached(
             .any(|row| vehicle_image_needs_local_mirror(config, row))
         {
             mark_vehicle_artwork_repair_attempt(pool, vehicle_id).await;
-            mirror_vehicle_images(pool, config, vehicle_id).await;
+            mirror_vehicle_images(pool, config, vehicle_id, false).await;
             refresh_vehicle_artwork_cache_state(pool, config, vehicle_id, None).await;
         }
         return;
@@ -3843,7 +3853,9 @@ async fn ensure_vehicle_images_cached(
     };
 
     match crate::ingestion::session_store::decrypt_tokens(&encrypted_tokens, &identity) {
-        Ok(tokens) => cache_vehicle_images(pool, config, vehicle_id, &tokens).await,
+        Ok(tokens) => {
+            cache_vehicle_images(pool, config, vehicle_id, &tokens, force_manifest_refresh).await
+        }
         Err(error) => {
             refresh_vehicle_artwork_cache_state(
                 pool,
@@ -4049,6 +4061,7 @@ async fn mirror_vehicle_images(
     pool: &sqlx::PgPool,
     config: &crate::config::Config,
     vehicle_id: Uuid,
+    force_remirror: bool,
 ) {
     let rows = match sqlx::query_as::<_, VehicleImageRow>(
         "SELECT placement, design, size, resolution, url, overlays, metadata
@@ -4072,7 +4085,9 @@ async fn mirror_vehicle_images(
         .unwrap_or_default();
 
     for row in rows {
-        if !vehicle_image_needs_local_mirror(config, &row) {
+        let needs_mirror = vehicle_image_needs_local_mirror(config, &row);
+        let is_remote = row.url.starts_with("http://") || row.url.starts_with("https://");
+        if !needs_mirror && !(force_remirror && is_remote) {
             continue;
         }
         let overlays = overlay_entries_from_value(&row.overlays);
@@ -4090,6 +4105,12 @@ async fn mirror_vehicle_images(
                 .bind(merged)
                 .execute(pool)
                 .await;
+            }
+            Err(error) if !needs_mirror => {
+                // An explicit refresh could not download a replacement. The
+                // existing mirror is still complete and valid, so keep serving
+                // it rather than downgrading the vehicle to packaged fallbacks.
+                warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.remirror_failed_kept_existing");
             }
             Err(error) => {
                 warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.mirror_failed");

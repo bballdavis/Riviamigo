@@ -257,12 +257,19 @@ describe('overview vehicle anchors', () => {
     expect(screen.getByTitle('Rear left door lock')).toHaveClass(anchors.locks.rl);
   });
 
-  it.each(['R1T', 'R2'] as const)('centers only the packaged %s demo fallback between the lock anchors', (model) => {
-    overviewMocks.isDemo = true;
+  it.each([
+    ['R1T', true],
+    ['R2', true],
+    ['R1T', false],
+    ['R2', false],
+  ] as const)('centers the packaged %s fallback between the lock anchors (demo=%s)', (model, isDemo) => {
+    overviewMocks.isDemo = isDemo;
     overviewMocks.hasApiArtwork = false;
     renderOverviewForModel(model);
 
-    for (const image of Array.from(document.querySelectorAll('img[data-artwork-fallback]'))) {
+    const fallbackImages = Array.from(document.querySelectorAll('img[data-artwork-fallback]'));
+    expect(fallbackImages).toHaveLength(2);
+    for (const image of fallbackImages) {
       expect(image).toHaveStyle({ left: '53%' });
     }
   });

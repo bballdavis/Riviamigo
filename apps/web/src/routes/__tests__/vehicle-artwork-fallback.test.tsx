@@ -132,6 +132,34 @@ describe('vehicle artwork fallback contract', () => {
     expect(image.getAttribute('data-artwork-fallback')).toBe('true');
   });
 
+  it('returns to API artwork when the failed primary URL is replaced', async () => {
+    const props = {
+      fallbackSource: '/vehicle-images/fallbacks/r1s/overview.webp',
+      alt: 'Recovering Rivian',
+    };
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <AuthenticatedVehicleArtwork {...props} source="/first-api-artwork.webp" />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.error(screen.getByRole('img', { name: 'Recovering Rivian' }));
+    expect(screen.getByRole('img', { name: 'Recovering Rivian' }).getAttribute('data-artwork-fallback')).toBe('true');
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <AuthenticatedVehicleArtwork {...props} source="/second-api-artwork.webp" />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      const image = screen.getByRole('img', { name: 'Recovering Rivian' });
+      expect(image.getAttribute('src')).toBe('/second-api-artwork.webp');
+      expect(image.hasAttribute('data-artwork-fallback')).toBe(false);
+    });
+  });
+
   it('keeps every manifest fallback in the web public directory', () => {
     const publicDirectory = resolve(process.cwd(), 'public');
     const manifest = JSON.parse(

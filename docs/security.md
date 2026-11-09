@@ -140,7 +140,10 @@ removed automatically; only a durable restore handoff retains its package.
 - `Referrer-Policy: no-referrer`
 - The app shell uses a restrictive `Content-Security-Policy`; its `connect-src`
   permits same-origin services, WebSockets, and `https://api.github.com` for the
-  optional browser-initiated stable release check.
+  optional browser-initiated stable release check. Its `img-src` permits
+  `blob:` because protected vehicle artwork is fetched with the session token
+  and rendered from in-memory object URLs; removing it silently replaces cached
+  Rivian artwork with the packaged fallbacks.
 
 ## Database
 

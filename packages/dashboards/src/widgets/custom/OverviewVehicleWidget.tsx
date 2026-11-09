@@ -133,9 +133,6 @@ export function CurrentVehicleStatePanel({
     ? status?.closure_tailgate_locked
     : status?.closure_liftgate_locked ?? status?.closure_tailgate_locked;
   const rearGateLockTitle = vehicleModel === 'R1T' ? 'Tailgate lock' : 'Rear gate lock';
-  const demoArtworkNudgeRight = isDemoVehicle
-    && (vehicleModel === 'R1S' || vehicleModel === 'R1T' || vehicleModel === 'R2' || vehicleModel === 'R2S');
-
   useEffect(() => {
     const element = imageStageRef.current;
     if (!element || typeof ResizeObserver === 'undefined') return;
@@ -208,8 +205,8 @@ export function CurrentVehicleStatePanel({
           <div className="absolute inset-1 z-10 flex items-center justify-center">
             {overheadArtworkAvailable ? (
               <VehicleArtFrame source={apiOverheadFallback} fallbackSource={localOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth}>
-                <VehicleOverheadLayers base={baseOverheadLight ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} isR1tFallback={vehicleModel === 'R1T'} artworkNudgeRight={demoArtworkNudgeRight} />
-                <VehicleOverheadLayers base={baseOverheadDark ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" isR1tFallback={vehicleModel === 'R1T'} artworkNudgeRight={demoArtworkNudgeRight} />
+                <VehicleOverheadLayers base={baseOverheadLight ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} isR1tFallback={vehicleModel === 'R1T'} />
+                <VehicleOverheadLayers base={baseOverheadDark ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" isR1tFallback={vehicleModel === 'R1T'} />
                 <VehicleLabel className={anchors.tire.rl} value={tires.rl.value} tone={tires.rl.tone} targetTirePressurePsi={targetTirePressurePsi} />
                 <VehicleLabel className={anchors.tire.fl} value={tires.fl.value} tone={tires.fl.tone} targetTirePressurePsi={targetTirePressurePsi} />
                 <VehicleLabel className={anchors.tire.rr} value={tires.rr.value} tone={tires.rr.tone} targetTirePressurePsi={targetTirePressurePsi} />
@@ -453,7 +450,6 @@ function VehicleOverheadLayers({
   darkClassName,
   vehicleName,
   isR1tFallback,
-  artworkNudgeRight,
 }: {
   base: string | null | undefined;
   fallbackBase?: string | null | undefined;
@@ -461,7 +457,6 @@ function VehicleOverheadLayers({
   darkClassName: string;
   vehicleName?: string | undefined;
   isR1tFallback: boolean;
-  artworkNudgeRight: boolean;
 }) {
   const imageStyle = {
     height: 'var(--vehicle-frame-width)',
@@ -472,10 +467,11 @@ function VehicleOverheadLayers({
   const fallbackProps = {
     style: {
       ...imageStyle,
-      // The shared rear/front lock anchors sit at 4% and 102%. Center only
-      // the packaged demo fallback at their midpoint, leaving Rivian artwork
-      // and all annotations on their established coordinates.
-      left: artworkNudgeRight ? '53%' : '50%',
+      // The shared rear/front lock anchors sit at 4% and 102%. Center the
+      // packaged fallback at their midpoint whenever it is displayed, for real
+      // and demo vehicles alike, leaving Rivian artwork and all annotations on
+      // their established coordinates.
+      left: '53%',
       transform: isR1tFallback
         ? `translate(-50%, -50%) rotate(90deg) scaleX(${R1T_OVERVIEW_FALLBACK_CROSS_AXIS_SCALE})`
         : imageStyle.transform,

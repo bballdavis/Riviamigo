@@ -84,9 +84,12 @@ export function AuthenticatedVehicleArtwork({
   const fallbackArtwork = useVehicleArtwork(fallbackSource);
   const [primaryFailed, setPrimaryFailed] = React.useState(false);
 
+  // A load failure applies to one concrete primary URL. Clear it whenever that
+  // URL changes (new source, refetched blob, or repaired cache) so a transient
+  // failure never pins the packaged fallback for the rest of the session.
   React.useEffect(() => {
     setPrimaryFailed(false);
-  }, [source]);
+  }, [source, primaryArtwork.src]);
 
   const primaryUnavailable =
     primaryArtwork.isError || !primaryArtwork.src;
