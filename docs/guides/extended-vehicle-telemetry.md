@@ -38,6 +38,29 @@ Error means its latest token, socket, subscription, or heartbeat attempt
 failed and will be retried. Error does not by itself indicate a vehicle fault
 or canonical telemetry failure; the Health info tooltip explains this alongside
 the latest frame and diagnostic counts.
+
+The tooltip also shows **Vehicle last reported**: the newest timestamp the
+vehicle itself put on a Parallax value. Each time the subscription is sent,
+Rivian re-sends the latest value of every topic with its original timestamp.
+Those re-sent values keep the socket busy without the vehicle saying anything
+new, so a recent frame next to an old "Vehicle last reported" time means the
+vehicle is asleep or not reaching Rivian, not that live data is flowing.
+
+When the subscription delivers nothing for 60 seconds, Riviamigo sends it
+again on the open socket. While the canonical connection shows the vehicle
+moving, Parallax must also deliver a fresh value within two minutes; re-sent
+values do not count. If two re-sends go unanswered, the socket is replaced.
+A sleeping vehicle answers each re-send with its re-sent values, so its socket
+is kept rather than torn down.
+
+Both Rivian sockets share one hold when Rivian closes a socket as
+**Rate limited** or **Unauthenticated**, or does not acknowledge it within 20
+seconds: neither reconnects until the hold ends. Holds start at 30 seconds plus
+random jitter, double with each consecutive hold up to 15 minutes, and reset
+once vehicle data arrives. An Unauthenticated close waits at least five
+minutes, because only a credential refresh or reauthorization fixes it.
+Ordinary reconnect delays also carry random jitter. A database error while the
+socket is open is logged and retried; it does not close the socket.
 Legacy charging-session and repair-journal details are not part of that compact
 summary. When Parallax acquisition is unavailable,
 canonical telemetry and Riviamigo's derived Phantom Drain history continue
@@ -65,7 +88,14 @@ stored in telemetry history; the stored value is simply "not closed".
 
 Power state keeps the freshness rule of its source. Parallax reports state when
 it changes, so the latest recognized Parallax state stays current until a newer
-state arrives. Legacy periodic `vehicleState` power samples are considered
+state arrives. The values Rivian re-sends on each subscribe are accepted for
+state that only reports changes (power, gear, closures, locks, preconditioning,
+and defrost), even when their timestamps are older than five minutes, because
+they are still the vehicle's current state. This lets Riviamigo learn that the
+vehicle is in Go or in gear after a restart mid-drive. They keep their original
+timestamp for ordering, do not refresh the vehicle's "last seen" time, and are
+handled once even when Rivian re-sends them again. Old positions, odometer
+readings, tire pressures, and temperatures are not accepted this way. Legacy periodic `vehicleState` power samples are considered
 fresh for at most two minutes. When both sources contribute, the newest
 accepted sample by source timestamp controls the cached state and its freshness
 rule follows that sample's source. Unrecognized power values remain unknown and

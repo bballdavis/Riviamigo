@@ -26,6 +26,7 @@ use tokio::{
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 use uuid::Uuid;
 
+use crate::ingestion::rivian_ws_backoff::{self, HoldReason, SessionHold};
 use crate::ingestion::session_store::{decrypt_tokens, RivianTokenBundle};
 use crate::models::telemetry::{ClosureTransition, PowerState, TelemetryEvent};
 use crate::services::ingestion_capture::{self, Kind as CaptureKind};
@@ -67,20 +68,22 @@ fn is_allowlisted_topic(topic: &str) -> bool {
 }
 
 /// Start the isolated Parallax companion for one vehicle.  The returned task
-/// owns its socket and reconnect loop; it never receives the canonical
-/// telemetry channel, so backpressure or schema failures cannot delay it.
-/// `active_sessions` is deliberately a watch channel: only the latest
-/// canonical lifecycle context is relevant to enrichment consumers.
-#[allow(clippy::too_many_arguments)] // The owner, credentials, and lifecycle channels are independent inputs.
+/// owns its socket and reconnect loop; a full or closed canonical channel can
+/// never delay it. `active_sessions` is deliberately a watch channel: only the
+/// latest canonical lifecycle context is relevant to enrichment consumers.
 pub fn spawn_in_process(
     pool: PgPool,
     vehicle_id: Uuid,
     rivian_vehicle_id: String,
     age_key: String,
-    telemetry_tx: mpsc::Sender<(String, TelemetryEvent)>,
-    mut active_sessions: watch::Receiver<crate::ingestion::worker::ActiveSessionContext>,
+    channels: InProcessChannels,
     mut shutdown: broadcast::Receiver<()>,
 ) -> JoinHandle<()> {
+    let InProcessChannels {
+        telemetry_tx,
+        mut active_sessions,
+        mut legacy_motion,
+    } = channels;
     tokio::spawn(async move {
         let owner_id = Uuid::new_v4();
         loop {
@@ -99,6 +102,9 @@ pub fn spawn_in_process(
             }
         }
         let mut backoff = 2u64;
+        // Survives reconnects: a snapshot re-sent on the next connection is
+        // recognised as one already handled.
+        let mut seen = EnvelopeDedupe::default();
         loop {
             let tokens = match crate::ingestion::rivian_poll::load_vehicle_tokens(
                 vehicle_id, &pool, &age_key,
@@ -111,43 +117,113 @@ pub fn spawn_in_process(
                         set_collector_state(&pool, vehicle_id, "error", Some(&error.to_string()))
                             .await;
                     tokio::select! {
-                        _ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
+                        _ = tokio::time::sleep(Duration::from_secs(rivian_ws_backoff::jittered_secs(backoff))) => {}
                         _ = shutdown.recv() => { break; }
                     }
                     backoff = (backoff * 2).min(120);
                     continue;
                 }
             };
+            let session_key = rivian_ws_backoff::session_key(&tokens.user_session_token);
+            if let Some((remaining, reason)) = rivian_ws_backoff::remaining_hold(session_key) {
+                let _ = set_collector_state(
+                    &pool,
+                    vehicle_id,
+                    "reconnecting",
+                    Some(&format!(
+                        "waiting {}s after Rivian session hold: {}",
+                        remaining.as_secs(),
+                        reason.as_str()
+                    )),
+                )
+                .await;
+                if !rivian_ws_backoff::wait_for_hold(session_key, &mut shutdown).await {
+                    break;
+                }
+            }
             let session = CollectorSession {
                 vehicle_id,
                 rivian_vehicle_id: rivian_vehicle_id.clone(),
                 tokens,
+            };
+            let mut context = ConnectionContext {
+                active_sessions: &mut active_sessions,
+                legacy_motion: &mut legacy_motion,
+                telemetry_tx: Some(&telemetry_tx),
+                seen: &mut seen,
             };
             let result = tokio::select! {
                 _ = shutdown.recv() => {
                     let _ = set_collector_state(&pool, vehicle_id, "disconnected", Some("shutdown")).await;
                     break;
                 }
-                result = collect_connection_with_context(&pool, &session, &mut active_sessions, Some(&telemetry_tx)) => result
+                result = collect_connection_with_context(&pool, &session, &mut context) => result
             };
-            if result.is_ok() {
-                backoff = 2;
-            } else if shutdown.try_recv().is_ok() {
-                break;
-            } else {
-                let _ = sqlx::query("UPDATE riviamigo.parallax_collector_state SET reconnect_count=reconnect_count+1 WHERE vehicle_id=$1")
-                    .bind(vehicle_id).execute(&pool).await;
-                let message = result.err().map(|e| e.to_string());
-                let _ = set_collector_state(&pool, vehicle_id, "error", message.as_deref()).await;
-                tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
-                    _ = shutdown.recv() => { break; }
+            match result {
+                Ok(ConnectionEnd::Renewed) => backoff = 2,
+                Ok(ConnectionEnd::Replaced) => {
+                    backoff = 2;
+                    record_reconnect(&pool, vehicle_id).await;
+                    // A short random pause keeps a silence replacement from
+                    // reconnecting in lockstep with the legacy socket.
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(rand::random::<u64>() % 2_000)) => {}
+                        _ = shutdown.recv() => { break; }
+                    }
                 }
-                backoff = (backoff * 2).min(120);
+                Err(_) if shutdown.try_recv().is_ok() => break,
+                Err(error) => {
+                    record_reconnect(&pool, vehicle_id).await;
+                    let message = error.to_string();
+                    let _ = set_collector_state(&pool, vehicle_id, "error", Some(&message)).await;
+                    if let Some(SessionHold(reason)) = error.downcast_ref::<SessionHold>().copied()
+                    {
+                        // Held for both sockets; waited out before reconnecting.
+                        let hold = rivian_ws_backoff::start_hold(session_key, reason);
+                        tracing::warn!(vehicle_id=%vehicle_id, reason=reason.as_str(), hold_seconds=hold.as_secs(), "Parallax socket held off; both subscription sockets wait before reconnecting");
+                        continue;
+                    }
+                    let delay = rivian_ws_backoff::jittered_secs(backoff);
+                    tracing::warn!(vehicle_id=%vehicle_id, err=%message, retry_seconds=delay, "Parallax collector disconnected");
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(delay)) => {}
+                        _ = shutdown.recv() => { break; }
+                    }
+                    backoff = (backoff * 2).min(120);
+                }
             }
         }
         let _ = release_in_process_lease(&pool, vehicle_id, owner_id).await;
     })
+}
+
+/// One validated partial event for the canonical worker.
+#[derive(Debug, Clone)]
+pub struct ForwardedTelemetry {
+    pub topic: String,
+    pub event: TelemetryEvent,
+    /// Current state re-learned from a re-sent snapshot: the vehicle did not
+    /// report it just now, so it must not count as the vehicle being seen.
+    pub snapshot: bool,
+}
+
+/// Channels the canonical worker shares with the in-process companion.
+pub struct InProcessChannels {
+    /// Validated partial vehicle state for the canonical worker to merge.
+    pub telemetry_tx: mpsc::Sender<ForwardedTelemetry>,
+    /// The latest canonical charge-session context.
+    pub active_sessions: watch::Receiver<crate::ingestion::worker::ActiveSessionContext>,
+    /// Source time of the latest legacy sample that showed the vehicle moving.
+    /// While it is recent, Parallax must deliver fresh data, not just snapshots.
+    pub legacy_motion: watch::Receiver<Option<DateTime<Utc>>>,
+}
+
+async fn record_reconnect(pool: &PgPool, vehicle_id: Uuid) {
+    if let Err(error) = sqlx::query("UPDATE riviamigo.parallax_collector_state SET reconnect_count=reconnect_count+1 WHERE vehicle_id=$1")
+        .bind(vehicle_id).execute(pool).await
+    {
+        tracing::debug!(vehicle_id=%vehicle_id, err=%error, "Parallax reconnect count update failed");
+    }
 }
 
 async fn acquire_in_process_lease(pool: &PgPool, vehicle_id: Uuid, owner_id: Uuid) -> Result<bool> {
@@ -928,37 +1004,168 @@ async fn load_sessions(pool: &PgPool) -> Result<Vec<CollectorSession>> {
 
 async fn run_vehicle(pool: PgPool, session: CollectorSession) -> Result<()> {
     let mut backoff = 2u64;
+    let (_sessions_tx, mut active_sessions) =
+        watch::channel(crate::ingestion::worker::ActiveSessionContext::default());
+    let (_motion_tx, mut legacy_motion) = watch::channel(None);
+    let mut seen = EnvelopeDedupe::default();
+    let session_key = rivian_ws_backoff::session_key(&session.tokens.user_session_token);
     loop {
-        match collect_connection(&pool, &session).await {
-            Ok(()) => backoff = 2,
+        while let Some((remaining, _)) = rivian_ws_backoff::remaining_hold(session_key) {
+            tokio::time::sleep(remaining).await;
+        }
+        let mut context = ConnectionContext {
+            active_sessions: &mut active_sessions,
+            legacy_motion: &mut legacy_motion,
+            telemetry_tx: None,
+            seen: &mut seen,
+        };
+        match collect_connection_with_context(&pool, &session, &mut context).await {
+            Ok(_) => backoff = 2,
             Err(error) => {
-                set_collector_state(&pool, session.vehicle_id, "error", Some(&error.to_string()))
-                    .await?;
+                if let Err(state_error) = set_collector_state(
+                    &pool,
+                    session.vehicle_id,
+                    "error",
+                    Some(&error.to_string()),
+                )
+                .await
+                {
+                    tracing::warn!(vehicle_id=%session.vehicle_id, err=%state_error, "Parallax collector state update failed");
+                }
+                if let Some(SessionHold(reason)) = error.downcast_ref::<SessionHold>().copied() {
+                    rivian_ws_backoff::start_hold(session_key, reason);
+                    continue;
+                }
+                let delay = rivian_ws_backoff::jittered_secs(backoff);
                 tracing::warn!(
                     vehicle_id = %session.vehicle_id,
                     error = %error,
-                    retry_seconds = backoff,
+                    retry_seconds = delay,
                     "Parallax collector disconnected"
                 );
-                tokio::time::sleep(Duration::from_secs(backoff)).await;
+                tokio::time::sleep(Duration::from_secs(delay)).await;
                 backoff = (backoff * 2).min(120);
             }
         }
     }
 }
 
-async fn collect_connection(pool: &PgPool, session: &CollectorSession) -> Result<()> {
-    let (_tx, mut context) =
-        watch::channel(crate::ingestion::worker::ActiveSessionContext::default());
-    collect_connection_with_context(pool, session, &mut context, None).await
+/// How a connection that did not fail ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionEnd {
+    /// Rivian closed the socket at the end of its connection TTL.
+    Renewed,
+    /// The silence watchdog gave up on this socket.
+    Replaced,
+}
+
+/// Per-collector state a connection borrows; it outlives one socket.
+struct ConnectionContext<'a> {
+    active_sessions: &'a mut watch::Receiver<crate::ingestion::worker::ActiveSessionContext>,
+    legacy_motion: &'a mut watch::Receiver<Option<DateTime<Utc>>>,
+    telemetry_tx: Option<&'a mpsc::Sender<ForwardedTelemetry>>,
+    seen: &'a mut EnvelopeDedupe,
+}
+
+/// How long the subscription may deliver nothing before it is re-sent on the
+/// open socket. Matches Rivian's own client.
+const SILENCE_RESUBSCRIBE_AFTER: Duration = Duration::from_secs(60);
+/// Re-sent subscriptions that may go unanswered before the socket is replaced.
+const MAX_UNANSWERED_RESUBSCRIBES: u32 = 2;
+/// While the legacy socket shows the vehicle moving, Parallax must deliver a
+/// frame with a fresh vehicle timestamp within this window. Re-sent snapshots
+/// prove the socket is open, not that the vehicle is still reporting (#75).
+const MOVING_FRESH_DATA_WINDOW: Duration = Duration::from_secs(120);
+/// A legacy motion sample this recent means the vehicle is moving.
+const LEGACY_MOTION_RECENT_SECONDS: i64 = 120;
+/// A frame whose vehicle timestamp is this recent is live data.
+const FRESH_FRAME_MAX_AGE_SECONDS: i64 = 120;
+const WATCHDOG_TICK: Duration = Duration::from_secs(15);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatchdogAction {
+    None,
+    Resubscribe,
+    Reconnect,
+}
+
+/// Decides when a quiet subscription is re-sent or its socket replaced.
+#[derive(Debug)]
+struct SilenceWatchdog {
+    last_frame: tokio::time::Instant,
+    last_fresh_frame: tokio::time::Instant,
+    last_recovery: Option<tokio::time::Instant>,
+    unanswered: u32,
+}
+
+impl SilenceWatchdog {
+    fn new(now: tokio::time::Instant) -> Self {
+        Self {
+            last_frame: now,
+            last_fresh_frame: now,
+            last_recovery: None,
+            unanswered: 0,
+        }
+    }
+
+    /// Any frame for the subscription. Only fresh data answers a recovery
+    /// while the vehicle is moving; otherwise a snapshot is enough.
+    fn on_frame(&mut self, now: tokio::time::Instant, fresh: bool, moving: bool) {
+        self.last_frame = now;
+        if fresh {
+            self.last_fresh_frame = now;
+        }
+        if fresh || !moving {
+            self.unanswered = 0;
+        }
+    }
+
+    fn check(&mut self, now: tokio::time::Instant, moving: bool) -> WatchdogAction {
+        let silent = now.duration_since(self.last_frame) >= SILENCE_RESUBSCRIBE_AFTER;
+        let stale_while_moving =
+            moving && now.duration_since(self.last_fresh_frame) >= MOVING_FRESH_DATA_WINDOW;
+        if !(silent || stale_while_moving) {
+            return WatchdogAction::None;
+        }
+        if self
+            .last_recovery
+            .is_some_and(|at| now.duration_since(at) < SILENCE_RESUBSCRIBE_AFTER)
+        {
+            return WatchdogAction::None;
+        }
+        self.last_recovery = Some(now);
+        if self.unanswered >= MAX_UNANSWERED_RESUBSCRIBES {
+            WatchdogAction::Reconnect
+        } else {
+            self.unanswered += 1;
+            WatchdogAction::Resubscribe
+        }
+    }
+}
+
+fn legacy_shows_motion(latest: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+    latest.is_some_and(|at| {
+        at <= now + chrono::Duration::seconds(30)
+            && now - at <= chrono::Duration::seconds(LEGACY_MOTION_RECENT_SECONDS)
+    })
+}
+
+/// The id of the `generation`-th subscription on one socket. The first keeps
+/// the historical id; re-sent subscriptions get a new one, because the
+/// protocol does not allow an id to be reused while it may still be active.
+fn subscription_id(generation: u32) -> String {
+    if generation == 0 {
+        SUBSCRIPTION_ID.to_owned()
+    } else {
+        format!("{SUBSCRIPTION_ID}-{generation}")
+    }
 }
 
 async fn collect_connection_with_context(
     pool: &PgPool,
     session: &CollectorSession,
-    active_sessions: &mut watch::Receiver<crate::ingestion::worker::ActiveSessionContext>,
-    telemetry_tx: Option<&mpsc::Sender<(String, TelemetryEvent)>>,
-) -> Result<()> {
+    context: &mut ConnectionContext<'_>,
+) -> Result<ConnectionEnd> {
     let mut request = WS_URL.into_client_request()?;
     request
         .headers_mut()
@@ -989,6 +1196,7 @@ async fn collect_connection_with_context(
                 .context("invalid Rivian CSRF header")?,
         );
     }
+    let session_key = rivian_ws_backoff::session_key(&session.tokens.user_session_token);
     let (mut websocket, _) = tokio_tungstenite::connect_async(request).await?;
     websocket
         .send(Message::Text(
@@ -1006,15 +1214,21 @@ async fn collect_connection_with_context(
         ))
         .await?;
 
-    wait_for_ack(&mut websocket).await?;
+    wait_for_ack(&mut websocket, session.vehicle_id).await?;
+    let mut generation = 0u32;
+    let mut current_id = subscription_id(generation);
     websocket
         .send(Message::Text(
-            subscription_message(&session.rivian_vehicle_id)
+            subscription_message(&current_id, &session.rivian_vehicle_id)
                 .to_string()
                 .into(),
         ))
         .await?;
-    set_collector_state(pool, session.vehicle_id, "connected", None).await?;
+    // A database hiccup must not close a live socket; the heartbeat below
+    // retries the state on its next tick.
+    if let Err(error) = set_collector_state(pool, session.vehicle_id, "connected", None).await {
+        tracing::warn!(vehicle_id=%session.vehicle_id, err=%error, "Parallax collector state update failed");
+    }
     ingestion_capture::record(
         session.vehicle_id,
         CaptureKind::ParallaxConnection,
@@ -1023,6 +1237,10 @@ async fn collect_connection_with_context(
 
     let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
     heartbeat.tick().await;
+    let mut watchdog_tick = tokio::time::interval(WATCHDOG_TICK);
+    watchdog_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    watchdog_tick.tick().await;
+    let mut watchdog = SilenceWatchdog::new(tokio::time::Instant::now());
     loop {
         tokio::select! {
             message = websocket.next() => {
@@ -1033,7 +1251,9 @@ async fn collect_connection_with_context(
                     Message::Ping(payload) => websocket.send(Message::Pong(payload)).await?,
                     Message::Text(text) => {
                         let value: Value = serde_json::from_str(&text).unwrap_or_default();
-                        if value.get("id").and_then(Value::as_str) != Some(SUBSCRIPTION_ID) {
+                        // Frames for an earlier subscription on this socket
+                        // (completed by a re-send) are ignored.
+                        if value.get("id").and_then(Value::as_str) != Some(current_id.as_str()) {
                             continue;
                         }
                         match value.get("type").and_then(Value::as_str) {
@@ -1043,8 +1263,14 @@ async fn collect_connection_with_context(
                                 else {
                                     continue;
                                 };
-                                let context = active_sessions.borrow_and_update().clone();
-                                if persist_envelope(pool, session.vehicle_id, envelope, &context, telemetry_tx).await.is_err() {
+                                rivian_ws_backoff::mark_healthy(session_key);
+                                let now = Utc::now();
+                                let fresh = parse_source_at(envelope.get("timestamp"))
+                                    .is_some_and(|at| now - at <= chrono::Duration::seconds(FRESH_FRAME_MAX_AGE_SECONDS));
+                                let moving = legacy_shows_motion(*context.legacy_motion.borrow(), now);
+                                watchdog.on_frame(tokio::time::Instant::now(), fresh, moving);
+                                let active = context.active_sessions.borrow_and_update().clone();
+                                if persist_envelope(pool, session.vehicle_id, envelope, &active, context.telemetry_tx, context.seen).await.is_err() {
                                     tracing::debug!(vehicle_id=%session.vehicle_id, "Parallax frame rejected by typed decoder");
                                     let _ = sqlx::query("UPDATE riviamigo.parallax_collector_state SET decode_error_count=decode_error_count+1,last_frame_at=now(),updated_at=now() WHERE vehicle_id=$1")
                                         .bind(session.vehicle_id).execute(pool).await;
@@ -1054,7 +1280,7 @@ async fn collect_connection_with_context(
                                 ingestion_capture::record(
                                     session.vehicle_id,
                                     CaptureKind::ParallaxConnection,
-                                    json!({ "event": "subscription_rejected" }),
+                                    json!({ "event": "subscription_rejected", "generation": generation }),
                                 );
                                 anyhow::bail!("Parallax subscription rejected")
                             }
@@ -1062,7 +1288,7 @@ async fn collect_connection_with_context(
                                 ingestion_capture::record(
                                     session.vehicle_id,
                                     CaptureKind::ParallaxConnection,
-                                    json!({ "event": "subscription_completed" }),
+                                    json!({ "event": "subscription_completed", "generation": generation }),
                                 );
                                 anyhow::bail!("Parallax subscription completed")
                             }
@@ -1077,23 +1303,74 @@ async fn collect_connection_with_context(
                         // sitting offline for up to two minutes.
                         let renewal =
                             crate::ingestion::ws_client::is_rivian_connection_ttl_expired(frame.as_ref());
+                        let hold = rivian_ws_backoff::hold_reason_for_close(frame.as_ref());
                         ingestion_capture::record(
                             session.vehicle_id,
                             CaptureKind::ParallaxConnection,
                             json!({
-                                "event": if renewal { "ttl_expired" } else { "closed" },
+                                "event": if renewal { "ttl_expired" } else if hold.is_some() { "session_hold" } else { "closed" },
+                                "hold_reason": hold.map(HoldReason::as_str),
                                 "close_code": frame.as_ref().map(|f| u16::from(f.code)),
                                 "close_reason": frame.as_ref().map(|f| f.reason.to_string()),
                             }),
                         );
-                        set_collector_state(pool, session.vehicle_id, "disconnected", None)
-                            .await?;
+                        if let Err(error) =
+                            set_collector_state(pool, session.vehicle_id, "disconnected", None).await
+                        {
+                            tracing::warn!(vehicle_id=%session.vehicle_id, err=%error, "Parallax collector state update failed");
+                        }
                         if renewal {
-                            return Ok(());
+                            return Ok(ConnectionEnd::Renewed);
+                        }
+                        if let Some(reason) = hold {
+                            return Err(SessionHold(reason).into());
                         }
                         anyhow::bail!("Parallax socket closed: {frame:?}");
                     }
                     _ => {}
+                }
+            }
+            _ = watchdog_tick.tick() => {
+                let moving = legacy_shows_motion(*context.legacy_motion.borrow(), Utc::now());
+                match watchdog.check(tokio::time::Instant::now(), moving) {
+                    WatchdogAction::None => {}
+                    WatchdogAction::Resubscribe => {
+                        let previous = std::mem::replace(&mut current_id, {
+                            generation += 1;
+                            subscription_id(generation)
+                        });
+                        tracing::info!(vehicle_id=%session.vehicle_id, generation, moving, "Parallax subscription quiet; re-sending it on the open socket");
+                        ingestion_capture::record(
+                            session.vehicle_id,
+                            CaptureKind::ParallaxConnection,
+                            json!({ "event": "resubscribed", "generation": generation, "legacy_moving": moving }),
+                        );
+                        websocket
+                            .send(Message::Text(json!({ "id": previous, "type": "complete" }).to_string().into()))
+                            .await?;
+                        websocket
+                            .send(Message::Text(
+                                subscription_message(&current_id, &session.rivian_vehicle_id)
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await?;
+                        if let Err(error) = sqlx::query("UPDATE riviamigo.parallax_collector_state SET resubscribe_count=resubscribe_count+1 WHERE vehicle_id=$1")
+                            .bind(session.vehicle_id).execute(pool).await
+                        {
+                            tracing::debug!(vehicle_id=%session.vehicle_id, err=%error, "Parallax resubscribe count update failed");
+                        }
+                    }
+                    WatchdogAction::Reconnect => {
+                        tracing::warn!(vehicle_id=%session.vehicle_id, moving, "Parallax subscription stayed quiet after re-sending; replacing the socket");
+                        ingestion_capture::record(
+                            session.vehicle_id,
+                            CaptureKind::ParallaxConnection,
+                            json!({ "event": "silence_reconnect", "generation": generation, "legacy_moving": moving }),
+                        );
+                        let _ = websocket.close(None).await;
+                        return Ok(ConnectionEnd::Replaced);
+                    }
                 }
             }
             _ = heartbeat.tick() => {
@@ -1103,22 +1380,32 @@ async fn collect_connection_with_context(
     }
 }
 
+/// Refresh the collector heartbeat. A database error is logged and retried on
+/// the next tick rather than closing a live socket; a row that is missing or
+/// no longer connected (another owner took over) still ends the connection.
 async fn touch_collector_heartbeat(pool: &PgPool, vehicle_id: Uuid) -> Result<()> {
-    let result = sqlx::query(
+    let result = match sqlx::query(
         r#"UPDATE riviamigo.parallax_collector_state
            SET updated_at = now()
            WHERE vehicle_id = $1 AND status = 'connected'"#,
     )
     .bind(vehicle_id)
     .execute(pool)
-    .await?;
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::warn!(vehicle_id=%vehicle_id, err=%error, "Parallax collector heartbeat failed; keeping the socket open");
+            return Ok(());
+        }
+    };
     if result.rows_affected() != 1 {
         anyhow::bail!("Parallax collector heartbeat state is missing or disconnected");
     }
     Ok(())
 }
 
-async fn wait_for_ack<S>(websocket: &mut S) -> Result<()>
+async fn wait_for_ack<S>(websocket: &mut S, vehicle_id: Uuid) -> Result<()>
 where
     S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
         + SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error>
@@ -1126,10 +1413,15 @@ where
 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
-        let message = tokio::time::timeout_at(deadline, websocket.next())
-            .await
-            .context("timed out waiting for Parallax acknowledgement")?
-            .context("socket ended before Parallax acknowledgement")??;
+        let Ok(next) = tokio::time::timeout_at(deadline, websocket.next()).await else {
+            ingestion_capture::record(
+                vehicle_id,
+                CaptureKind::ParallaxConnection,
+                json!({ "event": "not_acknowledged" }),
+            );
+            return Err(SessionHold(HoldReason::NotAcknowledged).into());
+        };
+        let message = next.context("socket ended before Parallax acknowledgement")??;
         match message {
             Message::Text(text)
                 if serde_json::from_str::<Value>(&text)?
@@ -1140,14 +1432,25 @@ where
                 return Ok(());
             }
             Message::Ping(payload) => websocket.send(Message::Pong(payload)).await?,
+            Message::Close(frame) => {
+                if let Some(reason) = rivian_ws_backoff::hold_reason_for_close(frame.as_ref()) {
+                    ingestion_capture::record(
+                        vehicle_id,
+                        CaptureKind::ParallaxConnection,
+                        json!({ "event": "session_hold", "hold_reason": reason.as_str() }),
+                    );
+                    return Err(SessionHold(reason).into());
+                }
+                anyhow::bail!("Parallax socket closed before acknowledgement: {frame:?}");
+            }
             _ => {}
         }
     }
 }
 
-fn subscription_message(vehicle_id: &str) -> Value {
+fn subscription_message(id: &str, vehicle_id: &str) -> Value {
     json!({
-        "id": SUBSCRIPTION_ID,
+        "id": id,
         "type": "subscribe",
         "payload": {
             "operationName": "ParallaxMessages",
@@ -1209,6 +1512,8 @@ struct EnvelopeReport {
     forward_outcome: ForwardOutcome,
     decoded: Option<Value>,
     notes: Vec<String>,
+    /// A re-sent value older than the live window, forwarded as current state.
+    snapshot: bool,
 }
 
 impl EnvelopeReport {
@@ -1217,7 +1522,106 @@ impl EnvelopeReport {
             forward_outcome: ForwardOutcome::NotApplicable,
             decoded: None,
             notes: Vec::new(),
+            snapshot: false,
         }
+    }
+}
+
+/// Source timestamps older than this are a snapshot Rivian re-sent (after a
+/// subscribe or reconnect), not live data.
+const SNAPSHOT_MIN_AGE_SECONDS: i64 = 5 * 60;
+/// Vehicle clocks may run slightly ahead of ours.
+const SOURCE_FUTURE_TOLERANCE_SECONDS: i64 = 30;
+/// Vehicle-reported time is written at most this often.
+const VEHICLE_REPORTED_WRITE_INTERVAL_SECONDS: i64 = 5;
+
+/// Topics whose re-sent snapshot is still the vehicle's current state: they
+/// report changes only, so the latest value holds until the next change. After
+/// a restart mid-drive the snapshot is the only way to learn the vehicle is in
+/// "go" or in gear. Measurements (position, odometer, pressures, temperatures)
+/// are deliberately absent: an old reading must not pass for a new one.
+fn is_state_snapshot_topic(topic: &str) -> bool {
+    matches!(
+        topic,
+        "vehicle.power.state"
+            | "dynamics.vehicle.gear"
+            | "body.closures.states"
+            | "body.locks.states"
+            | "comfort.cabin.cabin_preconditioning_status"
+            | "comfort.cabin.defrost_defog_status"
+    )
+}
+
+/// Re-date a snapshot as state learned now. The value's own timestamp (for
+/// example `power_state_ts`) keeps the time it last changed, which trip and
+/// state fusion order by; momentary closure motion is not current state.
+fn relearned_snapshot(mut event: TelemetryEvent, received_at: DateTime<Utc>) -> TelemetryEvent {
+    event.ts = received_at;
+    event.closure_transitions = None;
+    event
+}
+
+/// The last envelope handled per topic, so a snapshot Rivian re-sends after a
+/// re-subscribe or reconnect is processed once.
+#[derive(Debug, Default)]
+pub(crate) struct EnvelopeDedupe {
+    last: std::collections::HashMap<String, (DateTime<Utc>, Vec<u8>)>,
+    vehicle_reported_written: Option<DateTime<Utc>>,
+}
+
+impl EnvelopeDedupe {
+    /// Whether this exact payload with this exact vehicle timestamp was
+    /// already handled for the topic. Records it otherwise.
+    fn is_repeat(&mut self, topic: &str, source_at: DateTime<Utc>, hash: &[u8]) -> bool {
+        match self.last.get_mut(topic) {
+            Some((at, seen)) if *at == source_at && seen.as_slice() == hash => true,
+            Some(entry) => {
+                *entry = (source_at, hash.to_vec());
+                false
+            }
+            None => {
+                self.last
+                    .insert(topic.to_owned(), (source_at, hash.to_vec()));
+                false
+            }
+        }
+    }
+
+    /// Whether the newest vehicle timestamp advanced enough to be written.
+    fn vehicle_reported_advanced(&mut self, source_at: DateTime<Utc>) -> bool {
+        if self.vehicle_reported_written.is_some_and(|written| {
+            source_at < written + chrono::Duration::seconds(VEHICLE_REPORTED_WRITE_INTERVAL_SECONDS)
+        }) {
+            return false;
+        }
+        self.vehicle_reported_written = Some(source_at);
+        true
+    }
+}
+
+/// Record the newest time the vehicle itself reported, separate from when the
+/// socket last received anything: a re-sent snapshot keeps the socket busy
+/// without the vehicle reporting at all.
+async fn record_vehicle_reported(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    source_at: DateTime<Utc>,
+    seen: &mut EnvelopeDedupe,
+) {
+    if !seen.vehicle_reported_advanced(source_at) {
+        return;
+    }
+    if let Err(error) = sqlx::query(
+        r#"UPDATE riviamigo.parallax_collector_state
+           SET last_vehicle_reported_at = GREATEST(COALESCE(last_vehicle_reported_at, $2), $2)
+           WHERE vehicle_id = $1"#,
+    )
+    .bind(vehicle_id)
+    .bind(source_at)
+    .execute(pool)
+    .await
+    {
+        tracing::debug!(vehicle_id=%vehicle_id, err=%error, "Parallax vehicle-reported time update failed");
     }
 }
 
@@ -1281,6 +1685,9 @@ fn capture_envelope(
         "outcome": outcome,
         "forward_outcome": report.forward_outcome.as_str(),
     });
+    if report.snapshot {
+        fields["snapshot"] = Value::from(true);
+    }
     if let Some(payload) = payload {
         if capture_payload_allowed(topic) {
             let kept = &payload[..payload.len().min(CAPTURE_PAYLOAD_MAX_BYTES)];
@@ -1323,7 +1730,8 @@ async fn persist_envelope(
     vehicle_id: Uuid,
     envelope: &Value,
     active_session: &crate::ingestion::worker::ActiveSessionContext,
-    telemetry_tx: Option<&mpsc::Sender<(String, TelemetryEvent)>>,
+    telemetry_tx: Option<&mpsc::Sender<ForwardedTelemetry>>,
+    seen: &mut EnvelopeDedupe,
 ) -> Result<()> {
     let topic = envelope
         .get("rvm")
@@ -1331,7 +1739,8 @@ async fn persist_envelope(
         .context("missing RVM topic")?;
     let capturing = ingestion_capture::is_capturing(vehicle_id);
     let received_at = Utc::now();
-    let source_at = parse_source_at(envelope.get("timestamp")).unwrap_or(received_at);
+    let reported_at = parse_source_at(envelope.get("timestamp"));
+    let source_at = reported_at.unwrap_or(received_at);
     // The server can send unsolicited data. Only the exact subscription
     // allowlist may reach a decoder or persistence branch.
     if !is_allowlisted_topic(topic) {
@@ -1373,6 +1782,27 @@ async fn persist_envelope(
             return Err(error);
         }
     };
+    if seen.is_repeat(topic, source_at, &Sha256::digest(&payload)) {
+        // Already handled: Rivian re-sends the latest value of every topic on
+        // each subscribe, with its original timestamp.
+        if capturing {
+            capture_envelope(
+                vehicle_id,
+                topic,
+                Some(&payload),
+                received_at,
+                source_at,
+                "duplicate",
+                &report,
+            );
+        }
+        return Ok(());
+    }
+    if let Some(reported_at) = reported_at.filter(|at| {
+        *at <= received_at + chrono::Duration::seconds(SOURCE_FUTURE_TOLERANCE_SECONDS)
+    }) {
+        record_vehicle_reported(pool, vehicle_id, reported_at, seen).await;
+    }
     let result = persist_allowlisted_envelope(
         pool,
         vehicle_id,
@@ -1416,7 +1846,7 @@ async fn persist_allowlisted_envelope(
     received_at: DateTime<Utc>,
     source_at: DateTime<Utc>,
     active_session: &crate::ingestion::worker::ActiveSessionContext,
-    telemetry_tx: Option<&mpsc::Sender<(String, TelemetryEvent)>>,
+    telemetry_tx: Option<&mpsc::Sender<ForwardedTelemetry>>,
     report: &mut EnvelopeReport,
     capturing: bool,
 ) -> Result<EnvelopeOutcome> {
@@ -1441,12 +1871,24 @@ async fn persist_allowlisted_envelope(
                 if capturing {
                     report.decoded = Some(ingestion_capture::present_fields(&event));
                 }
-                if source_at < received_at - chrono::Duration::minutes(5)
-                    || source_at > received_at + chrono::Duration::seconds(30)
-                {
+                let future = source_at
+                    > received_at + chrono::Duration::seconds(SOURCE_FUTURE_TOLERANCE_SECONDS);
+                let old =
+                    source_at < received_at - chrono::Duration::seconds(SNAPSHOT_MIN_AGE_SECONDS);
+                let event = if old && is_state_snapshot_topic(topic) {
+                    report.snapshot = true;
+                    relearned_snapshot(event, received_at)
+                } else {
+                    event
+                };
+                if future || (old && !report.snapshot) {
                     report.forward_outcome = ForwardOutcome::Stale;
                 } else if let Some(telemetry_tx) = telemetry_tx {
-                    match telemetry_tx.try_send((topic.to_owned(), event)) {
+                    match telemetry_tx.try_send(ForwardedTelemetry {
+                        topic: topic.to_owned(),
+                        event,
+                        snapshot: report.snapshot,
+                    }) {
                         Ok(()) => report.forward_outcome = ForwardOutcome::Enqueued,
                         Err(error) => {
                             let (reason, outcome) = match &error {
@@ -1997,6 +2439,167 @@ mod tests {
     }
 
     #[test]
+    fn watchdog_resubscribes_after_silence_then_replaces_the_socket() {
+        let start = tokio::time::Instant::now();
+        let mut watchdog = SilenceWatchdog::new(start);
+        let at = |seconds| start + Duration::from_secs(seconds);
+        assert_eq!(watchdog.check(at(45), false), WatchdogAction::None);
+        assert_eq!(watchdog.check(at(60), false), WatchdogAction::Resubscribe);
+        // Not again until the re-send has had a full window to answer.
+        assert_eq!(watchdog.check(at(90), false), WatchdogAction::None);
+        assert_eq!(watchdog.check(at(120), false), WatchdogAction::Resubscribe);
+        assert_eq!(watchdog.check(at(180), false), WatchdogAction::Reconnect);
+    }
+
+    #[test]
+    fn a_parked_vehicle_snapshot_answers_the_resubscribe() {
+        let start = tokio::time::Instant::now();
+        let mut watchdog = SilenceWatchdog::new(start);
+        let at = |seconds| start + Duration::from_secs(seconds);
+        let mut last_frame = 0;
+        for _ in 0..10 {
+            assert_eq!(
+                watchdog.check(at(last_frame + 59), false),
+                WatchdogAction::None
+            );
+            assert_eq!(
+                watchdog.check(at(last_frame + 60), false),
+                WatchdogAction::Resubscribe,
+                "a sleeping vehicle is re-sent, never torn down"
+            );
+            last_frame += 61;
+            watchdog.on_frame(at(last_frame), false, false);
+        }
+    }
+
+    #[test]
+    fn snapshots_do_not_satisfy_the_watchdog_while_legacy_shows_motion() {
+        let start = tokio::time::Instant::now();
+        let mut watchdog = SilenceWatchdog::new(start);
+        let at = |seconds| start + Duration::from_secs(seconds);
+        // Re-sent snapshots keep arriving, but nothing fresh (#75).
+        for second in (10..=110).step_by(10) {
+            watchdog.on_frame(at(second), false, true);
+            assert_eq!(watchdog.check(at(second), true), WatchdogAction::None);
+        }
+        watchdog.on_frame(at(120), false, true);
+        assert_eq!(watchdog.check(at(120), true), WatchdogAction::Resubscribe);
+        watchdog.on_frame(at(150), false, true);
+        assert_eq!(watchdog.check(at(180), true), WatchdogAction::Resubscribe);
+        watchdog.on_frame(at(200), false, true);
+        assert_eq!(watchdog.check(at(240), true), WatchdogAction::Reconnect);
+
+        // Fresh data clears the escalation.
+        let mut watchdog = SilenceWatchdog::new(start);
+        assert_eq!(watchdog.check(at(120), true), WatchdogAction::Resubscribe);
+        watchdog.on_frame(at(125), true, true);
+        assert_eq!(watchdog.check(at(130), true), WatchdogAction::None);
+        assert_eq!(watchdog.unanswered, 0);
+    }
+
+    #[test]
+    fn legacy_motion_must_be_recent() {
+        let now = Utc::now();
+        assert!(legacy_shows_motion(
+            Some(now - chrono::Duration::seconds(30)),
+            now
+        ));
+        assert!(!legacy_shows_motion(
+            Some(now - chrono::Duration::minutes(5)),
+            now
+        ));
+        assert!(!legacy_shows_motion(
+            Some(now + chrono::Duration::minutes(5)),
+            now
+        ));
+        assert!(!legacy_shows_motion(None, now));
+    }
+
+    #[test]
+    fn resubscribes_use_a_new_id_on_the_same_socket() {
+        assert_eq!(subscription_id(0), SUBSCRIPTION_ID);
+        assert_ne!(subscription_id(1), subscription_id(0));
+        assert_eq!(
+            subscription_message(&subscription_id(2), "v")["id"],
+            "riviamigo-parallax-collector-2"
+        );
+    }
+
+    #[test]
+    fn dedupe_drops_only_an_identical_resent_envelope() {
+        let mut seen = EnvelopeDedupe::default();
+        let at = Utc::now();
+        assert!(!seen.is_repeat("vehicle.power.state", at, b"a"));
+        assert!(seen.is_repeat("vehicle.power.state", at, b"a"));
+        assert!(!seen.is_repeat("dynamics.vehicle.gear", at, b"a"));
+        assert!(
+            !seen.is_repeat("vehicle.power.state", at, b"b"),
+            "new value"
+        );
+        assert!(
+            !seen.is_repeat(
+                "vehicle.power.state",
+                at + chrono::Duration::seconds(1),
+                b"b"
+            ),
+            "same value reported again by the vehicle"
+        );
+        assert!(seen.vehicle_reported_advanced(at));
+        assert!(!seen.vehicle_reported_advanced(at + chrono::Duration::seconds(1)));
+        assert!(seen.vehicle_reported_advanced(at + chrono::Duration::seconds(6)));
+    }
+
+    #[test]
+    fn restart_mid_drive_relearns_go_from_the_snapshot() {
+        let vehicle_id = Uuid::new_v4();
+        let now = Utc::now();
+        let changed_at = now - chrono::Duration::minutes(25);
+        assert!(is_state_snapshot_topic("vehicle.power.state"));
+        assert!(is_state_snapshot_topic("dynamics.vehicle.gear"));
+        assert!(!is_state_snapshot_topic("dynamics.vehicle.gnss"));
+        assert!(!is_state_snapshot_topic("dynamics.vehicle.odometer"));
+        let decoded = decode_vehicle_telemetry(
+            "vehicle.power.state",
+            &PowerStateMessage { state: Some(4) }.encode_to_vec(),
+            changed_at,
+            vehicle_id,
+        )
+        .unwrap()
+        .unwrap();
+        let mut event = relearned_snapshot(decoded, now);
+        assert_eq!(event.ts, now);
+        assert_eq!(
+            event.power_state_ts,
+            Some(changed_at),
+            "keeps when it changed"
+        );
+
+        // A fresh fusion (worker restart) accepts it and carries it forward.
+        let mut fusion = TripSignalFusion::default();
+        let (joined, diag) = fusion.fuse_from(&event, true);
+        assert_eq!(joined.power_state, Some(PowerState::Go));
+        assert_eq!(diag.reported_power_outcome, "accepted");
+        event = TelemetryEvent::empty(vehicle_id, now + chrono::Duration::seconds(30));
+        assert_eq!(fusion.fuse(&event).power_state, Some(PowerState::Go));
+    }
+
+    #[test]
+    fn snapshot_drops_momentary_closure_motion() {
+        let mut event = TelemetryEvent::empty(Uuid::nil(), Utc::now() - chrono::Duration::hours(2));
+        event.closure_transitions = Some(
+            [(
+                "closure_frunk_closed".to_owned(),
+                ClosureTransition::Opening,
+            )]
+            .into(),
+        );
+        event.closure_frunk_closed = Some(false);
+        let event = relearned_snapshot(event, Utc::now());
+        assert!(event.closure_transitions.is_none());
+        assert_eq!(event.closure_frunk_closed, Some(false));
+    }
+
+    #[test]
     fn parked_energy_wire_contract_decodes_units() {
         let window = ParkedEnergyWindow {
             total_kwh: Some(1.25),
@@ -2052,7 +2655,7 @@ mod tests {
             .map(|topic| Value::String((*topic).into()))
             .collect::<Vec<_>>();
         for vehicle_id in ["vehicle-a", "vehicle-b", "vehicle-c"] {
-            let message = subscription_message(vehicle_id);
+            let message = subscription_message(SUBSCRIPTION_ID, vehicle_id);
             let topics = message["payload"]["variables"]["rvms"].as_array().unwrap();
             assert_eq!(topics, &expected);
         }

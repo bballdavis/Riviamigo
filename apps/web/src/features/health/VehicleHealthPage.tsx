@@ -742,11 +742,16 @@ function formatAcquisitionTooltip(extended: VehicleHealth['extended_telemetry'] 
   const frame = parallax?.last_meaningful_frame_at
     ? formatAppDateTime(parallax.last_meaningful_frame_at)
     : parallax?.last_error ?? 'No meaningful frame observed';
-  const diagnostics = `${parallax?.reconnect_count ?? 0} reconnects · ${parallax?.decode_error_count ?? 0} decode · ${parallax?.empty_frame_count ?? 0} empty · ${parallax?.ambiguity_count ?? 0} ambiguous`;
+  const reported = parallax?.last_vehicle_reported_at
+    ? formatAppDateTime(parallax.last_vehicle_reported_at)
+    : 'Not reported yet';
+  const diagnostics = `${parallax?.reconnect_count ?? 0} reconnects · ${parallax?.resubscribe_count ?? 0} resubscribes · ${parallax?.decode_error_count ?? 0} decode · ${parallax?.empty_frame_count ?? 0} empty · ${parallax?.ambiguity_count ?? 0} ambiguous`;
   return (
     <div className="grid gap-1">
       <span className="font-medium text-fg">Meaningful frame</span>
       <span>{frame}</span>
+      <span className="font-medium text-fg">Vehicle last reported</span>
+      <span>{reported}</span>
       <span>{diagnostics}</span>
     </div>
   );

@@ -744,7 +744,10 @@ export interface VehicleHealth {
       status: string;
       last_frame_at: string | null;
       last_meaningful_frame_at: string | null;
+      /** Newest timestamp the vehicle itself reported (re-sent snapshots do not advance it). */
+      last_vehicle_reported_at: string | null;
       reconnect_count: number;
+      resubscribe_count: number;
       decode_error_count: number;
       empty_frame_count: number;
       ambiguity_count: number;

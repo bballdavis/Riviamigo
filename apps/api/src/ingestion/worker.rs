@@ -41,6 +41,8 @@ use state_decisions::{is_synthetic_control, runtime_health_update_for_ws_control
 const MIN_TRIP_DISTANCE_MILES: f64 = 0.1;
 const ADVISORY_LOCK_NAMESPACE: i64 = 0x52_49_56_57; // "RIVW"
 const WS_WATCHDOG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+/// Legacy fused speed above this means the vehicle is moving (Parallax watchdog).
+const LEGACY_MOTION_MPH: f64 = 5.0;
 const CHARGE_DETECTOR_REHYDRATE_LOOKBACK_HOURS: i32 = 12;
 const CHARGE_DETECTOR_REHYDRATE_STALENESS_MINUTES: i32 = 120;
 const STATE_PERIOD_RECONCILE_LOOKBACK_HOURS: i64 = 24;
@@ -248,7 +250,7 @@ pub async fn run_vehicle_worker(
 
     let (ev_tx, mut ev_rx) = mpsc::channel::<WsInboundEvent>(256);
     // Keep Parallax delivery bounded and independent from the legacy socket.
-    let (parallax_tx, mut parallax_rx) = mpsc::channel::<(String, TelemetryEvent)>(256);
+    let (parallax_tx, mut parallax_rx) = mpsc::channel::<crate::parallax::ForwardedTelemetry>(256);
 
     // Get rivian_vehicle_id
     let riv_id: Option<String> =
@@ -327,6 +329,9 @@ pub async fn run_vehicle_worker(
     let (charging_tx, charging_rx) = watch::channel(false);
     let (active_session_tx, active_session_rx) =
         watch::channel::<ActiveSessionContext>(ActiveSessionContext::default());
+    // Source time of the latest legacy sample showing motion. The Parallax
+    // watchdog uses it to tell a quiet parked vehicle from a dead subscription.
+    let (legacy_motion_tx, legacy_motion_rx) = watch::channel::<Option<DateTime<Utc>>>(None);
 
     // Repair only the bounded active tail before detector rehydration.  The
     // service is transactional and journal-idempotent; broad historical
@@ -422,8 +427,11 @@ pub async fn run_vehicle_worker(
             vehicle_id,
             rivian_vehicle_id.clone(),
             age_key.clone(),
-            parallax_tx,
-            active_session_rx,
+            crate::parallax::InProcessChannels {
+                telemetry_tx: parallax_tx,
+                active_sessions: active_session_rx,
+                legacy_motion: legacy_motion_rx,
+            },
             shutdown.resubscribe(),
         ))
     } else {
@@ -482,6 +490,8 @@ pub async fn run_vehicle_worker(
     // Startup reconciliation above already covered the current tail.
     state_reconcile_interval.tick().await;
     loop {
+        // Set for Parallax state re-learned from a re-sent snapshot.
+        let mut is_snapshot = false;
         let inbound = tokio::select! {
             _ = worker_shutdown.recv() => {
                 break;
@@ -521,15 +531,18 @@ pub async fn run_vehicle_worker(
                 None => break,
             },
             parallax_event = parallax_rx.recv(), if parallax_handle.is_some() && !parallax_rx.is_closed() => match parallax_event {
-                Some((topic, event)) => WsInboundEvent {
-                    kind: WsInboundKind::Telemetry,
-                    received_at: Utc::now(),
-                    raw: String::new(),
-                    message_type: Some(format!("parallax:{topic}")),
-                    telemetry: Some(event),
-                    charging_session: None,
-                    battery_cell_type: None,
-                },
+                Some(forwarded) => {
+                    is_snapshot = forwarded.snapshot;
+                    WsInboundEvent {
+                        kind: WsInboundKind::Telemetry,
+                        received_at: Utc::now(),
+                        raw: String::new(),
+                        message_type: Some(format!("parallax:{}", forwarded.topic)),
+                        telemetry: Some(forwarded.event),
+                        charging_session: None,
+                        battery_cell_type: None,
+                    }
+                }
                 None => continue,
             },
             // Monitor the WS task; log if it exits unexpectedly.
@@ -715,16 +728,19 @@ pub async fn run_vehicle_worker(
             tracing::debug!(vehicle_id=%vehicle_id, err=%e, "redis publish failed");
         }
 
-        // Update runtime state
-        upsert_seen(
-            &pool,
-            vehicle_id,
-            event.is_online.unwrap_or(true),
-            event.ts,
-            inbound.received_at,
-            SeenKind::Payload,
-        )
-        .await;
+        // Update runtime state. A re-sent snapshot is state learned again,
+        // not the vehicle reporting, so it must not refresh "last seen".
+        if !is_snapshot {
+            upsert_seen(
+                &pool,
+                vehicle_id,
+                event.is_online.unwrap_or(true),
+                event.ts,
+                inbound.received_at,
+                SeenKind::Payload,
+            )
+            .await;
+        }
 
         if let Err(error) = upsert_latest_status(&pool, &event).await {
             tracing::warn!(vehicle_id=%vehicle_id, err=%error, "latest-status upsert failed");
@@ -824,6 +840,13 @@ pub async fn run_vehicle_worker(
 
         // ── Trip detection ───────────────────────────────────────────────────
         let (trip_sample, fusion) = trip_signals.fuse_from(&event, is_parallax);
+        if !is_parallax
+            && trip_sample
+                .speed_mph
+                .is_some_and(|speed| speed > LEGACY_MOTION_MPH)
+        {
+            let _ = legacy_motion_tx.send(Some(trip_sample.speed_mph_ts.unwrap_or(event.ts)));
+        }
         let start_decision = trip_det.start_decision(&trip_sample);
         let trip_event = trip_det.process(&trip_sample);
         if capturing {

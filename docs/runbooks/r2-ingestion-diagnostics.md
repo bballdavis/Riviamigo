@@ -65,7 +65,20 @@ field timestamps for the same change.
   lock position the decoder does not map. Note the position and what was
   physically operated at that time.
 - `forward_outcome` is `stale`: compare `source_age_ms` with the freshness
-  window (five minutes old, thirty seconds ahead).
+  window (five minutes old, thirty seconds ahead). Older values of change-only
+  state topics (power, gear, closures, locks, preconditioning, defrost) are
+  not stale: they carry `"snapshot": true` and are forwarded as current state.
+- Envelope `outcome` is `duplicate`: Rivian re-sent a value already handled,
+  with the same timestamp, typically right after a subscribe.
+- `parallax_connection` rows with `resubscribed` or `silence_reconnect`: the
+  silence watchdog re-sent the subscription or replaced the socket.
+  `legacy_moving: true` means the canonical connection showed motion while
+  Parallax sent no fresh value. `session_hold` and `not_acknowledged` rows
+  name a hold that both sockets wait out (also `legacy_connection`
+  `session_hold`).
+- Acquisition shows a recent frame but an old **Vehicle last reported** time:
+  the socket is receiving re-sent values only. The vehicle is asleep or not
+  reaching Rivian.
 - `forward_outcome` is `full` or `closed`: inspect worker health and
   backpressure. Parallax collection keeps its independent persistence path.
 - No `parallax_envelope` rows at all: check the `parallax_connection` rows and
