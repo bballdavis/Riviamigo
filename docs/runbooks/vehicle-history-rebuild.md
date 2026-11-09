@@ -56,6 +56,28 @@ rerun cleanup to resolve this condition. Investigate only if a recent session
 reports `payload_audit_failures`; normal expiration is reported as an
 aggregated `payloads_evidence_expired` poll count.
 
+### Charge-history duplicate-key failures
+
+`duplicate key value violates unique constraint "uq_charge_sessions_rivian_session"`
+means a charge-session write tried to use a Rivian session ID already owned by
+another row. The completed-session API returns account-wide history, so live
+sync and backfill must filter summaries by the target Rivian vehicle ID before
+storing or matching them. Stored-payload replay also skips summaries with a
+different or missing upstream vehicle ID, logging a warning rather than
+guessing their vehicle.
+
+Canonicalization merges same-vehicle duplicates before promoting their preferred
+external alias. Promotion leaves the current ID unchanged if another row still
+owns the preferred ID, including a row belonging to another vehicle. The unique
+index must remain enabled.
+
+After deploying the fix, retry charge-history backfill and run
+`diagnose_charge_sessions -- --vehicle <uuid>` for each affected vehicle. Existing
+incorrectly attributed sessions or aliases are not automatically deleted or
+reassigned: inspect them against the retained payload's `vehicleId` before
+planning a targeted repair with a verified backup. A successful retry alone does
+not prove historical attribution is correct.
+
 ## Diagnostics First
 
 Before changing live history, capture the current enrichment gap report for the affected vehicle:

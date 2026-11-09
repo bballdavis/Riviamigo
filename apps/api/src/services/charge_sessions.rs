@@ -33,6 +33,12 @@ pub struct ChargeSessionSummaryPayload {
     pub meta: Option<ChargeSessionSummaryMeta>,
 }
 
+impl ChargeSessionSummaryPayload {
+    pub fn belongs_to_vehicle(&self, rivian_vehicle_id: &str) -> bool {
+        self.vehicle_id.as_deref() == Some(rivian_vehicle_id)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ChargeSessionSummaryMeta {
@@ -1026,6 +1032,7 @@ pub struct ChargeSessionDiagnostics {
 struct PayloadReplayRow {
     id: Uuid,
     vehicle_id: Uuid,
+    rivian_vehicle_id: String,
     captured_at: DateTime<Utc>,
     payload: serde_json::Value,
 }
@@ -1161,11 +1168,12 @@ pub async fn replay_charge_payload_summaries(
 ) -> Result<u64> {
     let payloads = sqlx::query_as::<_, PayloadReplayRow>(
         r#"
-        SELECT id, vehicle_id, captured_at, payload
-        FROM riviamigo.rivian_charge_payloads
-        WHERE operation = 'getCompletedSessionSummaries'
-          AND ($1::uuid IS NULL OR vehicle_id = $1)
-        ORDER BY captured_at ASC, id ASC
+        SELECT p.id, p.vehicle_id, v.rivian_vehicle_id, p.captured_at, p.payload
+        FROM riviamigo.rivian_charge_payloads p
+        JOIN riviamigo.vehicles v ON v.id = p.vehicle_id
+        WHERE p.operation = 'getCompletedSessionSummaries'
+          AND ($1::uuid IS NULL OR p.vehicle_id = $1)
+        ORDER BY p.captured_at ASC, p.id ASC
         "#,
     )
     .bind(vehicle_id)
@@ -1179,6 +1187,15 @@ pub async fn replay_charge_payload_summaries(
         else {
             continue;
         };
+
+        if !summary.belongs_to_vehicle(&payload.rivian_vehicle_id) {
+            tracing::warn!(
+                vehicle_id = %payload.vehicle_id,
+                payload_id = %payload.id,
+                "skipping charge history payload with mismatched or missing upstream vehicle identity"
+            );
+            continue;
+        }
 
         let payload_ref = ChargeSessionPayloadRef {
             payload_id: payload.id,
@@ -1567,16 +1584,6 @@ pub async fn canonicalize_charge_sessions(
             } else {
                 CHARGE_SESSION_SOURCE_RIVIAN_API
             };
-            let preferred_external_id = cluster_sessions
-                .iter()
-                .flat_map(|session| aliases_by_session.get(&session.id).into_iter().flatten())
-                .min_by(|left, right| {
-                    alias_rank_from_str(&left.alias_kind)
-                        .cmp(&alias_rank_from_str(&right.alias_kind))
-                        .then_with(|| left.external_id.cmp(&right.external_id))
-                })
-                .map(|alias| alias.external_id.clone());
-
             for duplicate in cluster_sessions
                 .iter()
                 .filter(|session| session.id != canonical.id)
@@ -1852,8 +1859,7 @@ pub async fn canonicalize_charge_sessions(
                         WHEN $3::timestamptz IS NOT NULL
                         THEN EXTRACT(EPOCH FROM ($3::timestamptz - $2::timestamptz))::int / 60
                         ELSE duration_minutes
-                    END,
-                    rivian_session_id = COALESCE($8, rivian_session_id)
+                    END
                 WHERE id = $1
                 "#,
             )
@@ -1864,7 +1870,6 @@ pub async fn canonicalize_charge_sessions(
             .bind(api_ended_at)
             .bind(source)
             .bind(confidence_for_source(source))
-            .bind(preferred_external_id.as_deref())
             .execute(pool)
             .await?;
             finalize_charge_session_aliases(pool, canonical.id).await?;
@@ -1879,6 +1884,19 @@ pub async fn canonicalize_charge_sessions(
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn charge_summary_requires_matching_upstream_vehicle_identity() {
+        for (vehicle_id, expected) in [
+            (serde_json::json!("vehicle-a"), true),
+            (serde_json::json!("vehicle-b"), false),
+            (serde_json::Value::Null, false),
+        ] {
+            let summary: ChargeSessionSummaryPayload =
+                serde_json::from_value(serde_json::json!({ "vehicleId": vehicle_id })).unwrap();
+            assert_eq!(summary.belongs_to_vehicle("vehicle-a"), expected);
+        }
+    }
 
     #[test]
     fn normalizes_grouping_keys_stably() {
