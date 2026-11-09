@@ -58,6 +58,11 @@ const VEHICLE_STATE_TOPICS: &[&str] = &[
     "comfort.cabin.cabin_temperatures",
     "comfort.cabin.cabin_preconditioning_status",
     "comfort.cabin.defrost_defog_status",
+    // Live charging power, about every five seconds while charging.
+    "charging.session.power",
+    // Only the live position fix is decoded; destination, route, and ETA
+    // fields are never modelled, so they are dropped on decode.
+    "navigation.navigation_service.trip_progress",
 ];
 
 /// The subscription allowlist is also the decoder/persistence boundary.
@@ -104,7 +109,7 @@ pub fn spawn_in_process(
         let mut backoff = 2u64;
         // Survives reconnects: a snapshot re-sent on the next connection is
         // recognised as one already handled.
-        let mut seen = EnvelopeDedupe::default();
+        let mut seen = CollectorMemory::default();
         loop {
             let tokens = match crate::ingestion::rivian_poll::load_vehicle_tokens(
                 vehicle_id, &pool, &age_key,
@@ -388,11 +393,17 @@ struct ParkedEnergyWindow {
 struct ChargeBreakdown {
     #[prost(float, optional, tag = "1")]
     total_kwh: Option<f32>,
-    // Tag 11 (cost display text) is intentionally omitted.
+    #[prost(float, optional, tag = "2")]
+    pack_kwh: Option<f32>,
+    #[prost(float, optional, tag = "3")]
+    thermal_kwh: Option<f32>,
+    /// Minutes of active charging; pauses while stopped.
+    #[prost(int32, optional, tag = "6")]
+    active_charging_minutes: Option<i32>,
     #[prost(float, optional, tag = "9")]
     current_power_kw: Option<f32>,
-    #[prost(int32, optional, tag = "10")]
-    fallback_power_kw: Option<i32>,
+    // Tag 10 is the range-added rate (km/h), not a power reading; tag 11
+    // (session cost) is intentionally omitted.
     #[prost(int32, optional, tag = "13")]
     charging_state: Option<i32>,
 }
@@ -725,6 +736,64 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
                 event.gear_status_ts = Some(source_at);
                 meaningful = true;
             }
+        }
+        "navigation.navigation_service.trip_progress" => {
+            let value = NavigationTripProgress::decode(payload)?;
+            let Some(fix) = value.location_fix else {
+                return Ok(None);
+            };
+            let Some(fix_at) = fix
+                .fix_time_ms
+                .filter(|ms| *ms > 0)
+                .and_then(|ms| gnss_fix_time(ms, source_at))
+            else {
+                notes.push("skipped navigation position without a fix time".into());
+                return Ok(None);
+            };
+            if fix_at < source_at - chrono::Duration::seconds(NAVIGATION_FIX_MAX_AGE_SECONDS)
+                || fix_at > source_at + chrono::Duration::seconds(FIX_TIME_MAX_LEAD_SECONDS)
+            {
+                notes.push("skipped stale navigation position".into());
+                return Ok(None);
+            }
+            let position = fix
+                .location
+                .and_then(|location| Some((location.latitude?, location.longitude?)))
+                .filter(|(latitude, longitude)| {
+                    latitude.is_finite()
+                        && (-90.0..=90.0).contains(latitude)
+                        && longitude.is_finite()
+                        && (-180.0..=180.0).contains(longitude)
+                });
+            let Some((latitude, longitude)) = position else {
+                notes.push("skipped navigation fix with no valid position".into());
+                return Ok(None);
+            };
+            event.latitude = Some(latitude);
+            event.longitude = Some(longitude);
+            event.location_ts = Some(fix_at);
+            if let Some(altitude) = fix
+                .altitude_m
+                .filter(|altitude| altitude.is_finite() && (-1_000.0..=20_000.0).contains(altitude))
+            {
+                event.altitude_m = Some(altitude);
+            }
+            if let Some(speed) = fix
+                .speed_mps
+                .map(f64::from)
+                .filter(|speed| speed.is_finite() && (0.0..=MAX_GNSS_SPEED_MPS).contains(speed))
+            {
+                event.speed_mph = Some(speed * MPS_TO_MPH);
+                event.speed_mph_ts = Some(fix_at);
+            }
+            if let Some(bearing) = fix
+                .bearing_deg
+                .map(f64::from)
+                .filter(|bearing| bearing.is_finite() && (0.0..=360.0).contains(bearing))
+            {
+                event.heading_deg = Some(bearing % 360.0);
+            }
+            meaningful = true;
         }
         "body.closures.states" => {
             let value = ClosureStates::decode(payload)?;
@@ -1119,13 +1188,69 @@ struct ChargingGraphSegment {
     end_unix_ms: Option<i64>,
     #[prost(int32, optional, tag = "6")]
     state: Option<i32>,
+    /// 0 historical, 1 predictive (a forecast, not an observation), 2 not
+    /// charging, 3 paused.
+    #[prost(int32, optional, tag = "7")]
+    bar_context: Option<i32>,
 }
+
+const GRAPH_BAR_PREDICTIVE: i32 = 1;
 
 #[derive(Clone, PartialEq, ProstMessage)]
 struct ChargingTimeEstimation {
+    /// 0 none, 1 valid, 2 invalid, 3 pack discharging.
     #[prost(int32, optional, tag = "1")]
-    remaining_seconds: Option<i32>,
+    validity: Option<i32>,
+    #[prost(int32, optional, tag = "2")]
+    remaining_minutes: Option<i32>,
 }
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct ChargingSessionPower {
+    /// kW. Proto3 leaves 0 off the wire.
+    #[prost(float, optional, tag = "1")]
+    power_kw: Option<f32>,
+}
+
+/// The charging state enum shared by charging.session.status and the
+/// breakdown: 2 connecting and 3 active mean power is flowing.
+fn charging_state_is_active(state: i32) -> bool {
+    matches!(state, 2 | 3)
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct NavigationTripProgress {
+    // Tags 1-5 (ETAs, stop index, distance and duration remaining) are
+    // deliberately not modelled: only the vehicle's own position is used.
+    #[prost(message, optional, tag = "6")]
+    location_fix: Option<NavigationGpsFix>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct NavigationGpsFix {
+    #[prost(message, optional, tag = "1")]
+    location: Option<NavigationCoordinate>,
+    #[prost(float, optional, tag = "2")]
+    speed_mps: Option<f32>,
+    #[prost(float, optional, tag = "3")]
+    bearing_deg: Option<f32>,
+    #[prost(int64, optional, tag = "5")]
+    fix_time_ms: Option<i64>,
+    #[prost(double, optional, tag = "6")]
+    altitude_m: Option<f64>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct NavigationCoordinate {
+    #[prost(double, optional, tag = "1")]
+    latitude: Option<f64>,
+    #[prost(double, optional, tag = "2")]
+    longitude: Option<f64>,
+}
+
+/// After navigation ends the vehicle keeps re-sending its last progress, so a
+/// fix older than this is not the vehicle's position now.
+const NAVIGATION_FIX_MAX_AGE_SECONDS: i64 = 5 * 60;
 
 #[derive(Clone, PartialEq, ProstMessage)]
 struct ChargingStatus {
@@ -1217,7 +1342,7 @@ async fn run_vehicle(pool: PgPool, session: CollectorSession) -> Result<()> {
     let (_sessions_tx, mut active_sessions) =
         watch::channel(crate::ingestion::worker::ActiveSessionContext::default());
     let (_motion_tx, mut legacy_motion) = watch::channel(None);
-    let mut seen = EnvelopeDedupe::default();
+    let mut seen = CollectorMemory::default();
     let session_key = rivian_ws_backoff::session_key(&session.tokens.user_session_token);
     loop {
         while let Some((remaining, _)) = rivian_ws_backoff::remaining_hold(session_key) {
@@ -1274,7 +1399,7 @@ struct ConnectionContext<'a> {
     active_sessions: &'a mut watch::Receiver<crate::ingestion::worker::ActiveSessionContext>,
     legacy_motion: &'a mut watch::Receiver<Option<DateTime<Utc>>>,
     telemetry_tx: Option<&'a mpsc::Sender<ForwardedTelemetry>>,
-    seen: &'a mut EnvelopeDedupe,
+    seen: &'a mut CollectorMemory,
 }
 
 /// How long the subscription may deliver nothing before it is re-sent on the
@@ -1811,14 +1936,44 @@ fn relearned_snapshot(mut event: TelemetryEvent, received_at: DateTime<Utc>) -> 
 /// The last envelope handled per topic, so a snapshot Rivian re-sends after a
 /// re-subscribe or reconnect is processed once.
 #[derive(Debug, Default)]
-pub(crate) struct EnvelopeDedupe {
+pub(crate) struct CollectorMemory {
     last: std::collections::HashMap<String, (DateTime<Utc>, Vec<u8>)>,
     vehicle_reported_written: Option<DateTime<Utc>>,
     /// This vehicle's GNSS frames have carried a speed at least once.
     gnss_reports_speed: bool,
+    charging: ChargingGate,
 }
 
-impl EnvelopeDedupe {
+/// Whether charging power is flowing, from charging.session.status. Power
+/// readings are gated on it because they are not reset when charging stops.
+#[derive(Debug, Default)]
+pub(crate) struct ChargingGate {
+    active: Option<bool>,
+    observed_at: Option<DateTime<Utc>>,
+}
+
+impl ChargingGate {
+    /// Whether a status frame with this timestamp is at least as new as the
+    /// current state.
+    fn accepts(&self, observed_at: DateTime<Utc>) -> bool {
+        self.observed_at
+            .is_none_or(|current| observed_at >= current)
+    }
+
+    /// Apply a status frame; frames older than the current one are ignored.
+    /// Returns the previous state when it was replaced.
+    fn observe(&mut self, active: bool, observed_at: DateTime<Utc>) -> Option<bool> {
+        if !self.accepts(observed_at) {
+            return None;
+        }
+        let previous = self.active;
+        self.active = Some(active);
+        self.observed_at = Some(observed_at);
+        previous
+    }
+}
+
+impl CollectorMemory {
     /// Whether this exact payload with this exact vehicle timestamp was
     /// already handled for the topic.
     fn is_repeat(&self, topic: &str, source_at: DateTime<Utc>, hash: &[u8]) -> bool {
@@ -1868,7 +2023,7 @@ async fn record_vehicle_reported(
     pool: &PgPool,
     vehicle_id: Uuid,
     source_at: DateTime<Utc>,
-    seen: &mut EnvelopeDedupe,
+    seen: &mut CollectorMemory,
 ) {
     if !seen.vehicle_reported_advanced(source_at) {
         return;
@@ -1893,7 +2048,12 @@ const CAPTURE_PAYLOAD_MAX_BYTES: usize = 4096;
 /// Raw payloads are captured only for topics that cannot carry location or
 /// network identity, so a capture stays shareable.
 fn capture_payload_allowed(topic: &str) -> bool {
-    !matches!(topic, "dynamics.vehicle.gnss" | "vehicle.network.state")
+    !matches!(
+        topic,
+        "dynamics.vehicle.gnss"
+            | "vehicle.network.state"
+            | "navigation.navigation_service.trip_progress"
+    )
 }
 
 /// Every entry of a body frame with the canonical field it maps to (or
@@ -1984,6 +2144,7 @@ fn is_canonical_telemetry_topic(topic: &str) -> bool {
             | "comfort.cabin.cabin_temperatures"
             | "comfort.cabin.cabin_preconditioning_status"
             | "comfort.cabin.defrost_defog_status"
+            | "navigation.navigation_service.trip_progress"
     )
 }
 
@@ -1993,7 +2154,7 @@ async fn persist_envelope(
     envelope: &Value,
     active_session: &crate::ingestion::worker::ActiveSessionContext,
     telemetry_tx: Option<&mpsc::Sender<ForwardedTelemetry>>,
-    seen: &mut EnvelopeDedupe,
+    seen: &mut CollectorMemory,
 ) -> Result<()> {
     let topic = envelope
         .get("rvm")
@@ -2121,7 +2282,7 @@ async fn persist_allowlisted_envelope(
     telemetry_tx: Option<&mpsc::Sender<ForwardedTelemetry>>,
     report: &mut EnvelopeReport,
     capturing: bool,
-    memory: &mut EnvelopeDedupe,
+    memory: &mut CollectorMemory,
 ) -> Result<EnvelopeOutcome> {
     let hash = Sha256::digest(payload).to_vec();
     let associated_session = matching_active_session(active_session, source_at);
@@ -2314,11 +2475,21 @@ async fn persist_allowlisted_envelope(
         "energy_edge_compute.graphs.charge_session_breakdown" => {
             let value = ChargeBreakdown::decode(payload)?;
             let total_kwh = f64_opt(value.total_kwh).filter(|v| v.is_finite() && *v >= 0.0);
+            let pack_kwh = f64_opt(value.pack_kwh).filter(|v| *v >= 0.0);
+            let thermal_kwh = f64_opt(value.thermal_kwh).filter(|v| *v >= 0.0);
+            let duration_minutes = value.active_charging_minutes.filter(|v| *v >= 0);
+            // The last breakdown before charging stops keeps its power, so it
+            // counts only while charging.session.status says power flows.
+            // Before any status arrives, the frame's own state decides.
+            let flowing = memory
+                .charging
+                .active
+                .unwrap_or_else(|| value.charging_state.is_some_and(charging_state_is_active));
             let current_power_kw = value
                 .current_power_kw
                 .map(f64::from)
-                .or_else(|| value.fallback_power_kw.map(f64::from))
-                .filter(|v| v.is_finite() && (0.0..=500.0).contains(v));
+                .filter(|v| v.is_finite() && (0.0..=500.0).contains(v))
+                .filter(|_| flowing);
             if total_kwh.is_none() && current_power_kw.is_none() && value.charging_state.is_none() {
                 record_empty_frame(pool, vehicle_id).await?;
                 return Ok(EnvelopeOutcome::Empty);
@@ -2335,9 +2506,9 @@ async fn persist_allowlisted_envelope(
             .bind(hash)
             .bind(associated_session)
             .bind(total_kwh)
-            .bind(None::<f64>)
-            .bind(None::<f64>)
-            .bind(None::<i32>)
+            .bind(pack_kwh)
+            .bind(thermal_kwh)
+            .bind(duration_minutes)
             .bind(value.charging_state)
             .bind(None::<i32>)
             .bind(SCHEMA_VERSION)
@@ -2386,6 +2557,11 @@ async fn persist_allowlisted_envelope(
             let mut persisted = 0usize;
             let mut latest_power: Option<(DateTime<Utc>, f64)> = None;
             for (index, segment) in value.segments.into_iter().enumerate() {
+                // A predictive bar is the vehicle's forecast, not an
+                // observed point on the charging curve.
+                if segment.bar_context == Some(GRAPH_BAR_PREDICTIVE) {
+                    continue;
+                }
                 let Some(ms) = segment.start_unix_ms else {
                     continue;
                 };
@@ -2416,7 +2592,9 @@ async fn persist_allowlisted_envelope(
                 record_empty_frame(pool, vehicle_id).await?;
                 return Ok(EnvelopeOutcome::Empty);
             }
-            if let Some((observed_at, power)) = latest_power {
+            if let Some((observed_at, power)) =
+                latest_power.filter(|_| memory.charging.active != Some(false))
+            {
                 if let Some(session_id) = matching_active_session(active_session, observed_at) {
                     update_parallax_power(pool, vehicle_id, session_id, power, observed_at).await?;
                 }
@@ -2430,14 +2608,16 @@ async fn persist_allowlisted_envelope(
                     return Ok(EnvelopeOutcome::Rejected);
                 }
             };
-            let Some(seconds) = value
-                .remaining_seconds
-                .filter(|v| (0..=172_800).contains(v))
+            // Only a valid estimate is used; invalid and pack-discharging
+            // estimates carry no meaningful time.
+            let Some(minutes) = value
+                .remaining_minutes
+                .filter(|v| (0..=2_880).contains(v))
+                .filter(|_| value.validity == Some(1))
             else {
                 record_empty_frame(pool, vehicle_id).await?;
                 return Ok(EnvelopeOutcome::Empty);
             };
-            let minutes = (seconds + 59) / 60;
             if let Some(session_id) = associated_session {
                 sqlx::query("UPDATE riviamigo.charge_sessions SET parallax_time_remaining_minutes=$1,parallax_time_observed_at=$4 WHERE id=$2 AND vehicle_id=$3 AND ended_at IS NULL AND (parallax_time_observed_at IS NULL OR $4>=parallax_time_observed_at)")
                     .bind(minutes).bind(session_id).bind(vehicle_id).bind(source_at).execute(pool).await?;
@@ -2458,6 +2638,20 @@ async fn persist_allowlisted_envelope(
                 record_empty_frame(pool, vehicle_id).await?;
                 return Ok(EnvelopeOutcome::Empty);
             }
+            // The reliable source for whether power is flowing: a stopped
+            // charge does not send a final zero power reading.
+            let unplugged = value.plug_connection_status == Some(1);
+            let flowing = !unplugged && value.display_status.is_some_and(charging_state_is_active);
+            if memory.charging.accepts(source_at) {
+                // Zero the live power first: if that write fails, the gate
+                // stays open so the re-sent status retries it.
+                if memory.charging.active == Some(true) && !flowing {
+                    if let Some(session_id) = associated_session {
+                        update_parallax_power(pool, vehicle_id, session_id, 0.0, source_at).await?;
+                    }
+                }
+                memory.charging.observe(flowing, source_at);
+            }
             if let Some(session_id) = associated_session {
                 let state = format!(
                     "plug={};display={};evse={}",
@@ -2473,6 +2667,24 @@ async fn persist_allowlisted_envelope(
                 );
                 sqlx::query("UPDATE riviamigo.charge_sessions SET parallax_charger_status=$1,parallax_status_observed_at=$4 WHERE id=$2 AND vehicle_id=$3 AND ended_at IS NULL AND (parallax_status_observed_at IS NULL OR $4>=parallax_status_observed_at)")
                     .bind(state).bind(session_id).bind(vehicle_id).bind(source_at).execute(pool).await?;
+            }
+        }
+        "charging.session.power" => {
+            let value = ChargingSessionPower::decode(payload)?;
+            // Only while charging.session.status says power is flowing; the
+            // last reading is not reset to zero when charging stops.
+            if memory.charging.active != Some(true) {
+                record_empty_frame(pool, vehicle_id).await?;
+                return Ok(EnvelopeOutcome::Ignored);
+            }
+            let Some(power_kw) = Some(f64::from(value.power_kw.unwrap_or(0.0)))
+                .filter(|v| v.is_finite() && (0.0..=500.0).contains(v))
+            else {
+                record_decode_error(pool, vehicle_id).await?;
+                return Ok(EnvelopeOutcome::Rejected);
+            };
+            if let Some(session_id) = associated_session {
+                update_parallax_power(pool, vehicle_id, session_id, power_kw, source_at).await?;
             }
         }
         "energy_edge_compute.graphs.cold_weather_soc" => {
@@ -2815,7 +3027,7 @@ mod tests {
 
     #[test]
     fn dedupe_drops_only_an_identical_resent_envelope() {
-        let mut seen = EnvelopeDedupe::default();
+        let mut seen = CollectorMemory::default();
         let at = Utc::now();
         assert!(!seen.is_repeat("vehicle.power.state", at, b"a"));
         assert!(
@@ -2993,7 +3205,7 @@ mod tests {
 
     #[test]
     fn a_vehicle_known_to_report_speed_reads_a_missing_speed_as_stopped() {
-        let mut memory = EnvelopeDedupe::default();
+        let mut memory = CollectorMemory::default();
         let at = Utc::now();
         let mut fix = TelemetryEvent::empty(Uuid::nil(), at);
         fix.latitude = Some(30.0);
@@ -3189,6 +3401,145 @@ mod tests {
         assert_eq!(closure_field_name(16), Some("window_rear_closed"));
     }
 
+    fn navigation_progress(fix_at: Option<DateTime<Utc>>, speed_mps: Option<f32>) -> Vec<u8> {
+        NavigationTripProgress {
+            location_fix: Some(NavigationGpsFix {
+                location: Some(NavigationCoordinate {
+                    latitude: Some(30.25),
+                    longitude: Some(-97.75),
+                }),
+                speed_mps,
+                bearing_deg: Some(90.0),
+                fix_time_ms: fix_at.map(|at| at.timestamp_millis()),
+                altitude_m: Some(150.0),
+            }),
+        }
+        .encode_to_vec()
+    }
+
+    #[test]
+    fn navigation_progress_contributes_only_the_vehicle_position() {
+        let source_at = Utc::now();
+        let fix_at = source_at - chrono::Duration::seconds(3);
+        let (event, notes) = decode_with_notes(
+            "navigation.navigation_service.trip_progress",
+            &navigation_progress(Some(fix_at), Some(20.0)),
+            source_at,
+        );
+        assert!(notes.is_empty());
+        let event = event.unwrap();
+        assert_eq!(event.latitude, Some(30.25));
+        assert_eq!(
+            event.location_ts.unwrap().timestamp_millis(),
+            fix_at.timestamp_millis()
+        );
+        assert!((event.speed_mph.unwrap() - 44.74).abs() < 0.01);
+        assert_eq!(event.heading_deg, Some(90.0));
+        assert!(is_canonical_telemetry_topic(
+            "navigation.navigation_service.trip_progress"
+        ));
+        assert!(is_allowlisted_topic(
+            "navigation.navigation_service.trip_progress"
+        ));
+        assert!(
+            !capture_payload_allowed("navigation.navigation_service.trip_progress"),
+            "raw progress carries location and destination timing"
+        );
+        assert!(!is_state_snapshot_topic(
+            "navigation.navigation_service.trip_progress"
+        ));
+    }
+
+    #[test]
+    fn navigation_progress_ignores_destination_fields_and_stale_fixes() {
+        let source_at = Utc::now();
+        // Destination ETA (tag 1) and distance remaining (tag 4) are on the
+        // wire but never modelled; with no live fix there is nothing to use.
+        let destination_only = [
+            0x0a, 0x02, 0x08, 0x01, 0x21, 0, 0, 0, 0, 0, 0x88, 0xc3, 0x40,
+        ];
+        let (event, notes) = decode_with_notes(
+            "navigation.navigation_service.trip_progress",
+            &destination_only,
+            source_at,
+        );
+        assert!(event.is_none());
+        assert!(notes.is_empty());
+
+        // After navigation ends the last progress keeps being re-sent.
+        let (event, notes) = decode_with_notes(
+            "navigation.navigation_service.trip_progress",
+            &navigation_progress(Some(source_at - chrono::Duration::minutes(6)), Some(20.0)),
+            source_at,
+        );
+        assert!(event.is_none());
+        assert_eq!(notes, vec!["skipped stale navigation position"]);
+
+        let (event, notes) = decode_with_notes(
+            "navigation.navigation_service.trip_progress",
+            &navigation_progress(None, Some(20.0)),
+            source_at,
+        );
+        assert!(event.is_none());
+        assert_eq!(
+            notes,
+            vec!["skipped navigation position without a fix time"]
+        );
+    }
+
+    #[test]
+    fn charging_gate_follows_the_newest_status() {
+        let at = Utc::now();
+        let mut gate = ChargingGate::default();
+        assert_eq!(gate.observe(true, at), None);
+        assert_eq!(gate.active, Some(true));
+        // An older (re-sent) status cannot override a newer one.
+        assert_eq!(gate.observe(false, at - chrono::Duration::minutes(1)), None);
+        assert_eq!(gate.active, Some(true));
+        assert_eq!(
+            gate.observe(false, at + chrono::Duration::seconds(5)),
+            Some(true)
+        );
+        assert_eq!(gate.active, Some(false));
+        assert!(charging_state_is_active(2) && charging_state_is_active(3));
+        assert!(!charging_state_is_active(4) && !charging_state_is_active(8));
+    }
+
+    #[test]
+    fn breakdown_and_graph_decode_the_reference_layout() {
+        // Captured breakdown: total, pack, system energy, 171 active minutes,
+        // free session, charging state 1.
+        let charge = ChargeBreakdown::decode(
+            BASE64
+                .decode("DWdmtkEVZ2auQS0AAIA/MKsBWgBgAWgB")
+                .unwrap()
+                .as_slice(),
+        )
+        .unwrap();
+        assert!((charge.pack_kwh.unwrap() - 21.8).abs() < 0.01);
+        assert_eq!(charge.active_charging_minutes, Some(171));
+        assert_eq!(charge.charging_state, Some(1));
+
+        let predictive = ChargingGraphSegment {
+            soc: Some(80),
+            power_kw: Some(7.0),
+            start_unix_ms: Some(1_000),
+            bar_context: Some(GRAPH_BAR_PREDICTIVE),
+            ..Default::default()
+        };
+        let decoded = ChargingGraphGlobal::decode(
+            ChargingGraphGlobal {
+                segments: vec![predictive],
+            }
+            .encode_to_vec()
+            .as_slice(),
+        )
+        .unwrap();
+        assert_eq!(decoded.segments[0].bar_context, Some(GRAPH_BAR_PREDICTIVE));
+        let power = ChargingSessionPower::decode([0x0d, 0, 0, 0x30, 0x41].as_slice()).unwrap();
+        assert_eq!(power.power_kw, Some(11.0));
+    }
+
     #[test]
     fn parked_energy_wire_contract_decodes_units() {
         let window = ParkedEnergyWindow {
@@ -3320,8 +3671,10 @@ mod tests {
         .unwrap();
         assert_eq!(battery.charge_state.unwrap().pack_energy_kwh, Some(25.0));
 
-        let time = ChargingTimeEstimation::decode([0x08, 0xd8, 0x13].as_slice()).unwrap();
-        assert_eq!(time.remaining_seconds, Some(2520));
+        // Tag 1 is the validity enum, tag 2 the minutes remaining.
+        let time = ChargingTimeEstimation::decode([0x08, 0x01, 0x10, 0x2a].as_slice()).unwrap();
+        assert_eq!(time.validity, Some(1));
+        assert_eq!(time.remaining_minutes, Some(42));
 
         let status =
             ChargingStatus::decode([0x08, 0x01, 0x10, 0x02, 0x18, 0x03].as_slice()).unwrap();
@@ -3973,7 +4326,7 @@ mod tests {
         assert_eq!(
             ChargingTimeEstimation::decode(unknown.as_slice())
                 .unwrap()
-                .remaining_seconds,
+                .remaining_minutes,
             None
         );
         let status = ChargingStatus::decode(unknown.as_slice()).unwrap();
