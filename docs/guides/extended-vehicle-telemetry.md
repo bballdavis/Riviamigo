@@ -105,10 +105,12 @@ do not become sleep or drive decisions.
 
 Parallax GNSS frames carry the vehicle's own ground speed and heading, which
 Riviamigo records as speed and heading. Position and speed take the time of
-the fix itself; some vehicles send it in GPS time, which is converted, and a
-fix time more than ten minutes from the frame's timestamp is ignored. A fix
-that leaves speed off (proto3 omits zero, as when parked) reports no speed
-rather than zero, so it never hides an estimate.
+the fix itself. Some vehicles send it in GPS time, which is recognised by its
+distance from the frame's timestamp and converted, and a fix time more than
+ten minutes from the frame's timestamp is ignored. A fix that leaves speed off
+(proto3 omits zero, as when parked) reports no speed rather than zero until
+the vehicle's GNSS frames have carried a speed at least once; after that it
+means stopped. A vehicle that never sends speed keeps its derived estimate.
 
 A Parallax frame that holds an unknown or transitional value is never
 rejected as a whole: only that value is skipped and described in the capture

@@ -441,10 +441,9 @@ struct GnssState {
 }
 
 /// GPS time starts on 1980-01-06 and has no leap seconds. Some vehicles send
-/// the fix time on that scale; any time before 2020 is taken as GPS time.
+/// the fix time on that scale instead of Unix time.
 const GPS_EPOCH_OFFSET_MS: i64 = 315_964_800_000;
 const GPS_LEAP_SECONDS_MS: i64 = 18_000;
-const GPS_TIME_CUTOFF_MS: i64 = 1_577_836_800_000;
 /// A fix time this far from the envelope's timestamp is not trusted.
 const FIX_TIME_MAX_LAG_SECONDS: i64 = 10 * 60;
 const FIX_TIME_MAX_LEAD_SECONDS: i64 = 30;
@@ -452,14 +451,24 @@ const MPS_TO_MPH: f64 = 2.236_936_292;
 /// Faster than any vehicle drives; a larger GNSS speed is a bad reading.
 const MAX_GNSS_SPEED_MPS: f64 = 70.0;
 
-/// The fix time as Unix time, corrected from GPS time when needed.
-fn gnss_fix_time(raw_ms: i64) -> Option<DateTime<Utc>> {
-    let unix_ms = if (1..GPS_TIME_CUTOFF_MS).contains(&raw_ms) {
-        raw_ms + GPS_EPOCH_OFFSET_MS - GPS_LEAP_SECONDS_MS
-    } else {
-        raw_ms
-    };
-    Utc.timestamp_millis_opt(unix_ms).single()
+/// The fix time as Unix time. Read both as Unix and as GPS time and keep the
+/// reading nearer the envelope's own timestamp: the two scales differ by
+/// about ten years, so the right one is never ambiguous, and unlike a fixed
+/// cutoff date this keeps working as GPS time passes any given Unix date.
+fn gnss_fix_time(raw_ms: i64, reference: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let as_unix = Utc.timestamp_millis_opt(raw_ms).single();
+    let as_gps = raw_ms
+        .checked_add(GPS_EPOCH_OFFSET_MS - GPS_LEAP_SECONDS_MS)
+        .and_then(|ms| Utc.timestamp_millis_opt(ms).single());
+    let distance = |at: DateTime<Utc>| (at - reference).num_milliseconds().unsigned_abs();
+    match (as_unix, as_gps) {
+        (Some(unix), Some(gps)) => Some(if distance(gps) < distance(unix) {
+            gps
+        } else {
+            unix
+        }),
+        (unix, gps) => unix.or(gps),
+    }
 }
 
 #[derive(Clone, PartialEq, ProstMessage)]
@@ -611,7 +620,7 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
             // The fix's own time is when the position and speed were true.
             // Fall back to the envelope time when it is absent or implausible.
             let fix_at = match value.fix_time_ms.filter(|ms| *ms > 0) {
-                Some(raw) => match gnss_fix_time(raw).filter(|at| {
+                Some(raw) => match gnss_fix_time(raw, source_at).filter(|at| {
                     *at <= source_at + chrono::Duration::seconds(FIX_TIME_MAX_LEAD_SECONDS)
                         && *at >= source_at - chrono::Duration::seconds(FIX_TIME_MAX_LAG_SECONDS)
                 }) {
@@ -1734,6 +1743,8 @@ fn relearned_snapshot(mut event: TelemetryEvent, received_at: DateTime<Utc>) -> 
 pub(crate) struct EnvelopeDedupe {
     last: std::collections::HashMap<String, (DateTime<Utc>, Vec<u8>)>,
     vehicle_reported_written: Option<DateTime<Utc>>,
+    /// This vehicle's GNSS frames have carried a speed at least once.
+    gnss_reports_speed: bool,
 }
 
 impl EnvelopeDedupe {
@@ -1750,6 +1761,21 @@ impl EnvelopeDedupe {
     fn remember(&mut self, topic: &str, source_at: DateTime<Utc>, hash: &[u8]) {
         self.last
             .insert(topic.to_owned(), (source_at, hash.to_vec()));
+    }
+
+    /// Proto3 leaves a zero speed off the wire. Once this vehicle has shown
+    /// that its GNSS frames carry speed, a positioned fix without one means
+    /// stopped (0), so the latest speed does not stay at the last moving
+    /// value. Before that, absence stays "not reported", so a vehicle that
+    /// never sends speed keeps its derived estimate.
+    fn complete_gnss_speed(&mut self, mut event: TelemetryEvent) -> TelemetryEvent {
+        if event.speed_mph.is_some() {
+            self.gnss_reports_speed = true;
+        } else if self.gnss_reports_speed && event.location_ts.is_some() {
+            event.speed_mph = Some(0.0);
+            event.speed_mph_ts = event.location_ts;
+        }
+        event
     }
 
     /// Whether the newest vehicle timestamp advanced enough to be written.
@@ -1980,6 +2006,7 @@ async fn persist_envelope(
         telemetry_tx,
         &mut report,
         capturing,
+        seen,
     )
     .await;
     if result.is_ok()
@@ -2023,6 +2050,7 @@ async fn persist_allowlisted_envelope(
     telemetry_tx: Option<&mpsc::Sender<ForwardedTelemetry>>,
     report: &mut EnvelopeReport,
     capturing: bool,
+    memory: &mut EnvelopeDedupe,
 ) -> Result<EnvelopeOutcome> {
     let hash = Sha256::digest(payload).to_vec();
     let associated_session = matching_active_session(active_session, source_at);
@@ -2041,6 +2069,11 @@ async fn persist_allowlisted_envelope(
         );
         match decoded {
             Ok(Some(event)) => {
+                let event = if topic == "dynamics.vehicle.gnss" {
+                    memory.complete_gnss_speed(event)
+                } else {
+                    event
+                };
                 canonical_outcome = Some(EnvelopeOutcome::Decoded);
                 if capturing {
                     report.decoded = Some(ingestion_capture::present_fields(&event));
@@ -2838,8 +2871,21 @@ mod tests {
         let source_at = Utc::now();
         let unix_ms = (source_at - chrono::Duration::seconds(1)).timestamp_millis();
         let gps_ms = unix_ms - GPS_EPOCH_OFFSET_MS + GPS_LEAP_SECONDS_MS;
-        assert_eq!(gnss_fix_time(gps_ms).unwrap().timestamp_millis(), unix_ms);
-        assert_eq!(gnss_fix_time(unix_ms).unwrap().timestamp_millis(), unix_ms);
+        assert_eq!(
+            gnss_fix_time(gps_ms, source_at).unwrap().timestamp_millis(),
+            unix_ms
+        );
+        assert_eq!(
+            gnss_fix_time(unix_ms, source_at)
+                .unwrap()
+                .timestamp_millis(),
+            unix_ms
+        );
+        // Still right once GPS milliseconds pass 2020 in Unix terms (2030+).
+        let later = Utc.with_ymd_and_hms(2031, 6, 1, 12, 0, 0).unwrap();
+        let later_gps = later.timestamp_millis() - GPS_EPOCH_OFFSET_MS + GPS_LEAP_SECONDS_MS;
+        assert_eq!(gnss_fix_time(later_gps, later), Some(later));
+        assert_eq!(gnss_fix_time(later.timestamp_millis(), later), Some(later));
 
         let (event, notes) = decode_with_notes(
             "dynamics.vehicle.gnss",
@@ -2872,6 +2918,23 @@ mod tests {
         );
         assert_eq!(notes, vec!["ignored implausible GNSS fix time"]);
         assert_eq!(event.unwrap().location_ts, Some(source_at));
+    }
+
+    #[test]
+    fn a_vehicle_known_to_report_speed_reads_a_missing_speed_as_stopped() {
+        let mut memory = EnvelopeDedupe::default();
+        let at = Utc::now();
+        let mut fix = TelemetryEvent::empty(Uuid::nil(), at);
+        fix.latitude = Some(30.0);
+        fix.longitude = Some(-97.0);
+        fix.location_ts = Some(at);
+        assert_eq!(memory.complete_gnss_speed(fix.clone()).speed_mph, None);
+        let mut moving = fix.clone();
+        moving.speed_mph = Some(12.0);
+        memory.complete_gnss_speed(moving);
+        let stopped = memory.complete_gnss_speed(fix);
+        assert_eq!(stopped.speed_mph, Some(0.0));
+        assert_eq!(stopped.speed_mph_ts, Some(at));
     }
 
     #[test]
