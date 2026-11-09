@@ -63,6 +63,8 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         closure_tailgate_locked: true,
         closure_liftgate_locked: true,
         closure_frunk_locked: true,
+        closure_frunk_closed: false,
+        closure_liftgate_closed: true,
         tonneau_locked: true,
         side_bin_left_locked: false,
         side_bin_right_locked: true,
@@ -194,9 +196,9 @@ describe('overview vehicle anchors', () => {
     expect(screen.getByTitle('Front left door lock')).toHaveClass(anchors.locks.fl);
     expect(screen.getByTitle('Rear right door lock')).toHaveClass(anchors.locks.rr);
     expect(screen.getByTitle('Front right door lock')).toHaveClass(anchors.locks.fr);
-    const rearGateTitle = model === 'R1T' ? 'Tailgate lock' : 'Rear gate lock';
-    expect(screen.getByTitle(rearGateTitle)).toHaveClass(anchors.locks.rearGate);
-    expect(screen.getByTitle('Frunk lock')).toHaveClass(anchors.locks.frunk);
+    const rearGateTitle = model === 'R1T' ? 'Tailgate lock' : 'Liftgate: closed';
+    expect((model === 'R1T' ? screen.getByTitle(rearGateTitle) : screen.getByLabelText(rearGateTitle).closest('[class*="left-["]'))).toHaveClass(anchors.locks.rearGate);
+    expect(screen.getByLabelText('Frunk: open').closest('[class*="left-["]')).toHaveClass(anchors.locks.frunk);
     expect(screen.queryByTitle('Tonneau lock')).not.toBeInTheDocument();
     expect(screen.getByTitle('Rear left door lock')).toHaveClass('text-status-positive');
     expect(screen.getByTitle('Front left door lock')).toHaveClass('text-status-positive');

@@ -227,3 +227,11 @@ export const Switch = ({ checked, onChange, ...props }: { checked: boolean; onCh
 export const Skeleton = ({ className }: { className?: string }) => <div className={className} />;
 export const ChartSkeleton = ({ className }: { className?: string }) => <div className={className} />;
 
+
+export const FrunkIcon = ({ className }: { className?: string }) => (
+  <svg className={className} data-testid="frunk-icon" />
+);
+
+export const LiftgateIcon = ({ className }: { className?: string }) => (
+  <svg className={className} data-testid="liftgate-icon" />
+);

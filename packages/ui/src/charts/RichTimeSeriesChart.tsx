@@ -695,7 +695,7 @@ export function RichTimeSeriesChart({
 }: RichTimeSeriesChartProps) {
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const chartRef = React.useRef<uPlot | null>(null);
-  const [tooltip, setTooltip] = React.useState<{ left: number; top: number; text: string } | null>(null);
+  const [tooltip, setTooltip] = React.useState<{ left: number; top: number; headers: string[]; rows: Array<{ text: string; color: string }> } | null>(null);
   const [intervalHover, setIntervalHover] = React.useState<string | null>(null);
   const [overlay, setOverlay] = React.useState<{
     bars: Array<PackedRichTimeInterval & { left: number; top: number; width: number; height: number; hitTop: number; hitHeight: number }>;
@@ -1041,7 +1041,8 @@ export function RichTimeSeriesChart({
                 if (hiddenKeys.has(item.key)) return null;
                 const value = tooltipValuesRef.current[seriesIndex]?.[idx] ?? null;
                 const detail = tooltipDetailsRef.current[seriesIndex]?.[idx];
-                const withDetail = (text: string) => detail ? `${text} (${detail})` : text;
+                const swatch = item.color ?? (seriesIndex === 0 ? CHART_COLORS.accent : CHART_COLORS.emerald);
+                const withDetail = (text: string) => ({ text: detail ? `${text} (${detail})` : text, color: swatch });
                 if (item.tooltipFormatter) {
                   return withDetail(`${item.label}: ${item.tooltipFormatter(value)}`);
                 }
@@ -1053,7 +1054,7 @@ export function RichTimeSeriesChart({
                 }
                 return withDetail(`${item.label}: ${formatChartNumber(value, unit, precision)}`);
               })
-              .filter((row): row is string => Boolean(row));
+              .filter((row): row is { text: string; color: string } => Boolean(row));
 
             let tooltipHeader = '';
             let tooltipSubHeader = '';
@@ -1077,7 +1078,8 @@ export function RichTimeSeriesChart({
             setTooltip({
               left: Math.min(Math.max((u.cursor.left ?? 0) + 16, 12), Math.max(12, u.width - 180)),
               top: Math.max(12, Math.min((u.cursor.top ?? 0) + 12, u.height - tooltipLineCount * 18 - 16)),
-              text: [tooltipHeader, tooltipSubHeader, ...rows].filter(Boolean).join('\n'),
+              headers: [tooltipHeader, tooltipSubHeader].filter(Boolean),
+              rows,
             });
           },
         ],
@@ -1280,7 +1282,20 @@ export function RichTimeSeriesChart({
           className="pointer-events-none absolute z-30 whitespace-pre rounded-md border border-border-strong bg-bg-surface px-2.5 py-1.5 text-[11px] leading-[1.5] text-fg shadow-xl"
           style={{ left: tooltip.left, top: tooltip.top }}
         >
-          {tooltip.text}
+          {tooltip.headers.map((header, headerIndex) => (
+            <div key={`h${headerIndex}`}>{header}</div>
+          ))}
+          {tooltip.rows.map((row, rowIndex) => (
+            <div key={`r${rowIndex}`} className="flex items-center gap-1.5" data-testid="chart-tooltip-row">
+              <span
+                className="inline-block h-2.5 w-2.5 shrink-0 rounded-[3px]"
+                style={{ backgroundColor: row.color }}
+                data-testid="chart-tooltip-swatch"
+                aria-hidden="true"
+              />
+              <span>{row.text}</span>
+            </div>
+          ))}
         </div>
       ) : null}
       {legendVisible ? (
