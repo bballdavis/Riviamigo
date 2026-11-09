@@ -70,7 +70,7 @@ trap 'shutdown; exit 0' TERM INT
 prepare_storage
 /app/riviamigo-restore-agent 2> >(normalize_child_errors restore-agent) &
 agent_pid=$!
-nginx -g 'daemon off;' 2> >(normalize_child_errors nginx) &
+nginx -e stderr -g 'daemon off;' 2> >(normalize_child_errors nginx) &
 nginx_pid=$!
 start_api
 

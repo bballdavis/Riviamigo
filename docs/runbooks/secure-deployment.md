@@ -108,6 +108,18 @@ from this trusted local nginx, never an arbitrary comma-separated chain.
 Gateway-on-Docker-network deployments should remove the app host `ports`
 publication and retain Traefik's service port 8080 on its private network.
 
+## Non-root Nginx diagnostics
+
+Nginx writes errors to stderr from its initial startup through normal service
+operation. The supervisor uses `-e stderr` before configuration is loaded, and
+the main-context `error_log stderr warn;` retains that destination afterward.
+This works with the read-only filesystem and UID1001 container policy without
+requiring write access to Nginx's package-default log directory.
+
+Use `nginx -e stderr -t` when checking configuration under the same constraints.
+See the [Nginx command-line options](https://nginx.org/en/docs/switches.html) and
+[error_log directive](https://nginx.org/en/docs/ngx_core_module.html#error_log).
+
 ## Verification
 
 1. Run `docker compose --env-file .env -f compose/docker-compose.yml config`
