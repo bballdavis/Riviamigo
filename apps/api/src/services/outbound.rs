@@ -283,13 +283,12 @@ mod tests {
         let allowlist = vec!["192.168.1.0/24".parse().unwrap()];
         let private = "192.168.1.10:443".parse().unwrap();
         let public = "8.8.8.8:443".parse().unwrap();
-        assert_eq!(validate_addresses(&[private], &allowlist).unwrap(), true);
+        assert!(validate_addresses(&[private], &allowlist).unwrap());
         assert!(validate_addresses(&[private], &[]).is_err());
         assert!(validate_addresses(&[private, public], &allowlist).is_err());
-        assert_eq!(
+        assert!(
             validate_addresses(&["[::ffff:192.168.1.10]:443".parse().unwrap()], &allowlist)
-                .unwrap(),
-            true
+                .unwrap()
         );
         for address in [
             "127.0.0.1:443",
