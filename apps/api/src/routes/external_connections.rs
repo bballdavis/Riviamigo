@@ -1906,10 +1906,6 @@ fn normalize(value: Option<String>) -> Option<String> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
-/// Resolve and pin the target for one outbound request.  Resolving at request
-/// time closes the save-time DNS rebinding gap; passing the approved addresses
-/// to reqwest keeps the URL hostname for Host and TLS SNI while preventing a
-/// second resolver result from changing the TCP destination.
 
 fn encrypt_secret(age_key: &str, secret: Option<&str>) -> Result<Option<Vec<u8>>, AppError> {
     let Some(secret) = secret.map(str::trim).filter(|value| !value.is_empty()) else {

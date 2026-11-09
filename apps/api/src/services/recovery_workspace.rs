@@ -84,8 +84,10 @@ mod tests {
     #[test]
     fn uses_backup_volume_preserves_reserve_and_removes_only_its_workspace() {
         let root = tempfile::tempdir().unwrap();
-        let mut limits = RecoveryConfig::default();
-        limits.min_free_bytes = fs2::available_space(root.path()).unwrap() + 1;
+        let mut limits = RecoveryConfig {
+            min_free_bytes: fs2::available_space(root.path()).unwrap() + 1,
+            ..RecoveryConfig::default()
+        };
         assert!(matches!(
             RecoveryWorkspace::new(root.path(), &limits),
             Err(AppError::RecoveryInsufficientStorage(_))
