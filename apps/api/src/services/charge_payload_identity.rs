@@ -10,7 +10,7 @@ use std::time::Duration;
 
 const JOB_KEY: &str = "charge_payload_identity";
 const ADVISORY_LOCK_KEY: &str = "riviamigo-charge-payload-identity-backfill";
-const PENDING_INDEX_NAME: &str = "rivian_charge_payloads_identity_pending_idx";
+pub const PENDING_INDEX_NAME: &str = "rivian_charge_payloads_identity_pending_idx";
 const DEFAULT_BATCH_SIZE: i64 = 1_000;
 const DEFAULT_PAUSE_MS: u64 = 100;
 const MIN_BATCH_SIZE: i64 = 100;
