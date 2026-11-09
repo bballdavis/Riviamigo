@@ -46,6 +46,18 @@ A widget should usually:
 - read a dashboard data selector or call one hook or a small related set of hooks when the data is intentionally widget-specific
 - map data into one visual or table
 - avoid knowing about route params beyond the provided widget context
+- choose its internal layout from its own width with container queries
+  (`@container/<name>` plus `@min-[…]/<name>:` variants), not viewport
+  breakpoints
+
+From 640px up, `DashboardGrid` places widgets in fixed-height cells
+(`layout.h` rows of `DASHBOARD_ROW_HEIGHT`); only below 640px do cells grow with
+their content. A widget whose regions stack on viewport breakpoints therefore
+gets clipped at in-between widths, and the sidebar or a user-resized layout
+changes the available width without changing the viewport. Reserve stacked
+layouts for the narrowest container tier, give every wider tier a layout that
+fits the cell height, and let content scroll rather than clip when a custom
+layout is narrower still. `OverviewVehicleWidget` is the reference example.
 
 Do not use one widget to coordinate the rest of a page.
 
