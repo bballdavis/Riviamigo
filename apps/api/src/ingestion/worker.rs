@@ -1363,6 +1363,7 @@ fn patch_event(target: &mut TelemetryEvent, source: &TelemetryEvent) {
     patch_opt!(target, source, time_to_end_of_charge_min_ts);
     patch_opt!(target, source, drive_mode);
     patch_opt!(target, source, gear_status);
+    patch_opt!(target, source, gear_status_ts);
     patch_opt!(target, source, cabin_temp_c);
     patch_opt!(target, source, driver_temp_c);
     patch_opt!(target, source, outside_temp_c);
@@ -1430,6 +1431,7 @@ fn patch_event(target: &mut TelemetryEvent, source: &TelemetryEvent) {
     patch_opt!(target, source, window_fr_closed);
     patch_opt!(target, source, window_rl_closed);
     patch_opt!(target, source, window_rr_closed);
+    patch_opt!(target, source, window_rear_closed);
     patch_opt!(target, source, gear_guard_locked);
     patch_opt!(target, source, gear_guard_video_status);
     patch_opt!(target, source, wiper_fluid_low);
@@ -1524,6 +1526,7 @@ fn event_is_duplicate_patch(event: &TelemetryEvent, state: &TelemetryEvent) -> b
         && duplicate_field!(event, state, window_fr_closed)
         && duplicate_field!(event, state, window_rl_closed)
         && duplicate_field!(event, state, window_rr_closed)
+        && duplicate_field!(event, state, window_rear_closed)
         && duplicate_field!(event, state, gear_guard_locked)
         && duplicate_field!(event, state, gear_guard_video_status)
         && duplicate_field!(event, state, wiper_fluid_low)
@@ -1587,6 +1590,7 @@ fn closure_or_lock_change(event: &TelemetryEvent, prev: &TelemetryEvent) -> bool
         || changed_bool(event.window_fr_closed, prev.window_fr_closed)
         || changed_bool(event.window_rl_closed, prev.window_rl_closed)
         || changed_bool(event.window_rr_closed, prev.window_rr_closed)
+        || changed_bool(event.window_rear_closed, prev.window_rear_closed)
         || changed_bool(event.gear_guard_locked, prev.gear_guard_locked)
         || changed_bool(event.charge_port_open, prev.charge_port_open)
         || changed_bool(event.charger_derate_active, prev.charger_derate_active)
@@ -2106,12 +2110,13 @@ async fn write_telemetry(
             side_bin_left_closed, side_bin_right_closed,
             window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
             gear_guard_locked, gear_guard_video_status,
-            wiper_fluid_low, brake_fluid_low, alarm_active, service_mode)
+            wiper_fluid_low, brake_fluid_low, alarm_active, service_mode,
+            window_rear_closed)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
                     $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,
                     $41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58,$59,$60,
                     $61,$62,$63,$64,$65,$66,$67,$68,$69,$70,$71,$72,$73,$74,$75,$76,$77,$78,$79,$80,
-                    $81,$82,$83,$84,$85,$86,$87,$88,$89)
+                    $81,$82,$83,$84,$85,$86,$87,$88,$89,$90)
             ON CONFLICT (vehicle_id, ts) DO UPDATE
             SET
               latitude                  = COALESCE(EXCLUDED.latitude, timeseries.telemetry.latitude),
@@ -2197,6 +2202,7 @@ async fn write_telemetry(
               window_fr_closed            = COALESCE(EXCLUDED.window_fr_closed, timeseries.telemetry.window_fr_closed),
               window_rl_closed            = COALESCE(EXCLUDED.window_rl_closed, timeseries.telemetry.window_rl_closed),
               window_rr_closed            = COALESCE(EXCLUDED.window_rr_closed, timeseries.telemetry.window_rr_closed),
+              window_rear_closed          = COALESCE(EXCLUDED.window_rear_closed, timeseries.telemetry.window_rear_closed),
               gear_guard_locked           = COALESCE(EXCLUDED.gear_guard_locked, timeseries.telemetry.gear_guard_locked),
               gear_guard_video_status     = COALESCE(EXCLUDED.gear_guard_video_status, timeseries.telemetry.gear_guard_video_status),
               wiper_fluid_low             = COALESCE(EXCLUDED.wiper_fluid_low, timeseries.telemetry.wiper_fluid_low),
@@ -2295,6 +2301,7 @@ async fn write_telemetry(
         .bind(e.brake_fluid_low)
         .bind(e.alarm_active)
         .bind(e.service_mode)
+        .bind(e.window_rear_closed)
     .execute(pool)
     .await?;
     Ok(())
@@ -2327,7 +2334,7 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
              side_bin_left_closed, side_bin_right_closed,
              window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
              gear_guard_locked, gear_guard_video_status, wiper_fluid_low, brake_fluid_low,
-             alarm_active, service_mode, updated_at
+             alarm_active, service_mode, window_rear_closed, updated_at
             ) VALUES (
               $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
               $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
@@ -2338,7 +2345,7 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
               $61,$62,$63,$64,$65,$66,$67,$68,$69,$70,
               $71,$72,$73,$74,$75,$76,$77,$78,$79,$80,
               $81,$82,$83,$84,$85,$86,$87,$88,$89,$90,
-              $91,$92,$93,now()
+              $91,$92,$93,$94,now()
             )
            ON CONFLICT (vehicle_id) DO UPDATE SET
              ts = GREATEST(EXCLUDED.ts, riviamigo.vehicle_latest_status.ts),
@@ -2532,6 +2539,7 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
              window_fr_closed = COALESCE(EXCLUDED.window_fr_closed, riviamigo.vehicle_latest_status.window_fr_closed),
              window_rl_closed = COALESCE(EXCLUDED.window_rl_closed, riviamigo.vehicle_latest_status.window_rl_closed),
              window_rr_closed = COALESCE(EXCLUDED.window_rr_closed, riviamigo.vehicle_latest_status.window_rr_closed),
+             window_rear_closed = COALESCE(EXCLUDED.window_rear_closed, riviamigo.vehicle_latest_status.window_rear_closed),
              gear_guard_locked = COALESCE(EXCLUDED.gear_guard_locked, riviamigo.vehicle_latest_status.gear_guard_locked),
              gear_guard_video_status = COALESCE(EXCLUDED.gear_guard_video_status, riviamigo.vehicle_latest_status.gear_guard_video_status),
              wiper_fluid_low = COALESCE(EXCLUDED.wiper_fluid_low, riviamigo.vehicle_latest_status.wiper_fluid_low),
@@ -2633,6 +2641,7 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
     .bind(e.brake_fluid_low)
     .bind(e.alarm_active)
     .bind(e.service_mode)
+    .bind(e.window_rear_closed)
     .execute(pool)
     .await?;
 
@@ -2774,6 +2783,7 @@ fn build_snapshot(e: &TelemetryEvent, motion: Option<&ClosureMotionMap>) -> Stri
     set_opt!("window_fr_closed", e.window_fr_closed);
     set_opt!("window_rl_closed", e.window_rl_closed);
     set_opt!("window_rr_closed", e.window_rr_closed);
+    set_opt!("window_rear_closed", e.window_rear_closed);
     set_opt!("gear_guard_locked", e.gear_guard_locked);
     set_opt!(
         "gear_guard_video_status",
@@ -4207,6 +4217,9 @@ fn trip_diagnostics_fields(
         "power_outcome": fusion.power_outcome,
         "reported_power_outcome": fusion.reported_power_outcome,
         "power_age_seconds": field_age(trip_sample, trip_sample.power_state.is_some(), trip_sample.power_state_ts),
+        "effective_gear": trip_sample.gear_status,
+        "gear_origin": fusion.gear_origin,
+        "gear_age_seconds": field_age(trip_sample, trip_sample.gear_status.is_some(), trip_sample.gear_status_ts),
         "speed_mph": trip_sample.speed_mph,
         "speed_origin": fusion.speed_origin,
         "reported_speed_outcome": fusion.reported_speed_outcome,

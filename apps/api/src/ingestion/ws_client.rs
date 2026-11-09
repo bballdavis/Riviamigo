@@ -1192,6 +1192,7 @@ fn event_has_meaningful_payload(event: &TelemetryEvent) -> bool {
         || event.window_fr_closed.is_some()
         || event.window_rl_closed.is_some()
         || event.window_rr_closed.is_some()
+        || event.window_rear_closed.is_some()
         || event.gear_guard_locked.is_some()
         || event.gear_guard_video_status.is_some()
         || event.wiper_fluid_low.is_some()

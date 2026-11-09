@@ -19,6 +19,7 @@ pub struct FusionDiagnostics {
     pub power_policy: &'static str,
     pub power_outcome: &'static str,
     pub reported_power_outcome: &'static str,
+    pub gear_origin: &'static str,
     pub speed_origin: &'static str,
     pub reported_speed_outcome: &'static str,
     pub gnss_outcome: &'static str,
@@ -37,6 +38,7 @@ impl Default for FusionDiagnostics {
             power_policy: "periodic",
             power_outcome: "missing",
             reported_power_outcome: "missing",
+            gear_origin: "absent",
             speed_origin: "absent",
             reported_speed_outcome: "missing",
             gnss_outcome: "missing",
@@ -53,6 +55,9 @@ impl Default for FusionDiagnostics {
 #[derive(Default)]
 pub struct TripSignalFusion {
     power: Option<(PowerState, DateTime<Utc>, bool)>,
+    /// Gear follows the same source policy as power: Parallax reports it on
+    /// change, legacy samples it periodically.
+    gear: Option<(String, DateTime<Utc>, bool)>,
     last_fix: Option<(f64, f64, DateTime<Utc>)>,
     last_odometer: Option<(f64, DateTime<Utc>)>,
     moving_segments: u8,
@@ -117,6 +122,35 @@ impl TripSignalFusion {
         }
         if self.power.as_ref().is_some_and(|(_, _, latched)| *latched) {
             diag.power_policy = "change_only";
+        }
+        if let Some(gear) = sample.gear_status.as_deref() {
+            let observed_at = sample.gear_status_ts.unwrap_or(sample.ts);
+            if observed_at <= sample.ts + Duration::seconds(5)
+                && (change_only_power || sample.ts - observed_at <= POWER_MAX_AGE)
+                && self
+                    .gear
+                    .as_ref()
+                    .is_none_or(|(_, prior, _)| observed_at >= *prior)
+            {
+                self.gear = Some((gear.to_ascii_lowercase(), observed_at, change_only_power));
+                joined.gear_status_ts = Some(observed_at);
+                diag.gear_origin = "reported";
+            } else {
+                joined.gear_status = None;
+                joined.gear_status_ts = None;
+                diag.gear_origin = "stale_future_or_out_of_order";
+            }
+        }
+        if joined.gear_status.is_none() {
+            if let Some((gear, observed_at, latched)) = self.gear.as_ref() {
+                if sample.ts >= *observed_at
+                    && (*latched || sample.ts - *observed_at <= POWER_MAX_AGE)
+                {
+                    joined.gear_status = Some(gear.clone());
+                    joined.gear_status_ts = Some(*observed_at);
+                    diag.gear_origin = "carried_forward";
+                }
+            }
         }
         if let Some(speed) = sample.speed_mph {
             let speed_at = sample.speed_mph_ts.unwrap_or(sample.ts);
@@ -270,6 +304,36 @@ mod tests {
         assert_eq!(joined.power_state, None);
         assert_eq!(diag.power_policy, "periodic");
         assert_eq!(diag.power_outcome, "stale_or_future");
+    }
+
+    #[test]
+    fn gear_follows_the_power_source_policy() {
+        let at = Utc::now();
+        // Parallax: change-only, so drive holds until the next gear frame.
+        let mut fusion = TripSignalFusion::default();
+        let mut gear = TelemetryEvent::empty(Uuid::nil(), at);
+        gear.gear_status = Some("drive".into());
+        gear.gear_status_ts = Some(at);
+        fusion.fuse_from(&gear, true);
+        let later = TelemetryEvent::empty(Uuid::nil(), at + Duration::minutes(20));
+        let (joined, diag) = fusion.fuse_from(&later, false);
+        assert_eq!(joined.gear_status.as_deref(), Some("drive"));
+        assert_eq!(joined.gear_status_ts, Some(at));
+        assert_eq!(diag.gear_origin, "carried_forward");
+
+        // Legacy: periodic, so a gear sample ages out after two minutes, and
+        // an older reading cannot replace a newer one.
+        let mut fusion = TripSignalFusion::default();
+        fusion.fuse_from(&gear, false);
+        let (joined, _) = fusion.fuse_from(&later, false);
+        assert_eq!(joined.gear_status, None);
+        let mut old = gear.clone();
+        old.ts = at + Duration::seconds(1);
+        old.gear_status = Some("park".into());
+        old.gear_status_ts = Some(at - Duration::seconds(30));
+        let (joined, diag) = fusion.fuse_from(&old, false);
+        assert_eq!(joined.gear_status.as_deref(), Some("drive"));
+        assert_eq!(diag.gear_origin, "carried_forward");
     }
 
     #[test]
