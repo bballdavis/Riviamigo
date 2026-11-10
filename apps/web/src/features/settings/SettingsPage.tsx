@@ -1040,7 +1040,8 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
   }
 
   async function copyCreatedKey() {
-    if (createdKey) await navigator.clipboard.writeText(createdKey);
+    // navigator.clipboard is undefined on plain-HTTP LAN origins.
+    if (createdKey) await navigator.clipboard?.writeText(createdKey);
   }
 
   function handleUnitModeChange(nextMode: UnitMode) {
