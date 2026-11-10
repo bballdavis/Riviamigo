@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveBuildVersionFromGit } from './resolve-build-version.mjs';
 
@@ -64,6 +64,8 @@ const urls = {
 };
 
 const runOnce = process.argv.includes('--once');
+const stopOnly = process.argv.includes('--stop');
+const launcherScript = fileURLToPath(import.meta.url);
 const children = new Set();
 let shuttingDown = false;
 
@@ -179,7 +181,47 @@ function powerShellLiteral(value) {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-async function listRepoOwnedProcesses() {
+/**
+ * Matches this checkout's host-run dev processes in `ps -axo pid=,command=`
+ * output. Other repositories' Vite servers never match: a Vite process counts
+ * only when its command line contains this checkout's web directory.
+ */
+export function matchRepoOwnedProcesses(
+  psOutput,
+  { apiBin, restoreAgentBin, webDir: web, launcher = null, selfPid = process.pid },
+) {
+  return psOutput.split(/\r?\n/).flatMap((line) => {
+    const match = line.trim().match(/^(\d+)\s+(.+)$/);
+    if (!match) return [];
+    const [, rawPid, command] = match;
+    const pid = Number.parseInt(rawPid, 10);
+    if (pid === selfPid) return [];
+    if (command.includes(apiBin)) return [{ pid, name: 'riviamigo-api', kind: 'api' }];
+    if (command.includes(restoreAgentBin)) return [{ pid, name: 'riviamigo-restore-agent', kind: 'restore-agent' }];
+    if (command.includes(web) && /\bvite(?:\.js)?\b/i.test(command)) {
+      return [{ pid, name: 'vite', kind: 'vite' }];
+    }
+    // pnpm starts the launcher as `node ./scripts/dev.mjs`, so the path may be
+    // relative; the caller confirms the working directory before stopping it.
+    if (launcher && /(?:^|[\s/\\])scripts[/\\]dev\.mjs(?:\s|$)/.test(command) && !/\s--stop(?:\s|$)/.test(command)) {
+      return [{ pid, name: 'dev-stack launcher', kind: 'launcher', command }];
+    }
+    return [];
+  });
+}
+
+/** Resolves the script path a launcher candidate runs, from its working directory. */
+async function launcherScriptPath(candidate) {
+  const script = candidate.command.match(/(\S*scripts[/\\]dev\.mjs)/)?.[1];
+  if (!script) return null;
+  if (isAbsolute(script)) return resolve(script);
+  const { code, stdout } = await capture('lsof', ['-a', '-p', String(candidate.pid), '-d', 'cwd', '-Fn'], { shell: false });
+  if (code !== 0) return null;
+  const cwd = stdout.split(/\r?\n/).find((line) => line.startsWith('n'))?.slice(1);
+  return cwd ? resolve(cwd, script) : null;
+}
+
+async function listRepoOwnedProcesses({ includeLaunchers = false } = {}) {
   const apiBin = resolve(apiDir, 'target/debug', isWindows ? 'riviamigo-api.exe' : 'riviamigo-api');
   const restoreAgentBin = resolve(apiDir, 'target/debug', isWindows ? 'riviamigo-restore-agent.exe' : 'riviamigo-restore-agent');
 
@@ -231,38 +273,66 @@ async function listRepoOwnedProcesses() {
     return [];
   }
 
-  return stdout.split(/\r?\n/).flatMap((line) => {
-    const match = line.trim().match(/^(\d+)\s+(.+)$/);
-    if (!match) return [];
-    const [, rawPid, command] = match;
-    if (command.includes(apiBin)) return [{ pid: Number.parseInt(rawPid, 10), name: 'riviamigo-api', kind: 'api' }];
-    if (command.includes(restoreAgentBin)) return [{ pid: Number.parseInt(rawPid, 10), name: 'riviamigo-restore-agent', kind: 'restore-agent' }];
-    if (command.includes(webDir) && /\bvite(?:\.js)?\b/i.test(command)) {
-      return [{ pid: Number.parseInt(rawPid, 10), name: 'vite', kind: 'vite' }];
-    }
-    return [];
+  const matched = matchRepoOwnedProcesses(stdout, {
+    apiBin,
+    restoreAgentBin,
+    webDir,
+    launcher: includeLaunchers ? launcherScript : null,
   });
+  const owned = [];
+  for (const candidate of matched) {
+    if (candidate.kind !== 'launcher') {
+      owned.push(candidate);
+    } else if ((await launcherScriptPath(candidate)) === launcherScript) {
+      owned.push({ pid: candidate.pid, name: candidate.name, kind: candidate.kind });
+    }
+  }
+  return owned;
 }
 
-async function clearRepoOwnedDevProcesses() {
-  const processes = await listRepoOwnedProcesses();
-  if (processes.length === 0) return;
+// Launchers first so none can restart the API, then Vite (a launcher exits
+// when its web child exits), then the API and restore agent.
+const STOP_ORDER = { launcher: 0, vite: 1, api: 2, 'restore-agent': 3 };
 
-  // Stop Vite before the API: a dev-stack launcher exits when its web child
-  // exits, preventing it from restarting the API while cleanup is in flight.
-  processes.sort((left, right) => (left.kind === 'vite' ? -1 : 1) - (right.kind === 'vite' ? -1 : 1));
+async function clearRepoOwnedDevProcesses({ includeLaunchers = false } = {}) {
+  const processes = await listRepoOwnedProcesses({ includeLaunchers });
+  if (processes.length === 0) return 0;
+
+  processes.sort((left, right) => STOP_ORDER[left.kind] - STOP_ORDER[right.kind]);
   log(`[dev] Clearing ${processes.length} stale Riviamigo dev process(es): ${processes.map((process) => `${process.name} (${process.pid})`).join(', ')}`);
 
   for (const process of processes) {
     const result = isWindows
       ? await capture('taskkill', ['/PID', String(process.pid), '/T', '/F'])
       : await capture('kill', ['-TERM', String(process.pid)]);
-    if (result.code !== 0) {
+    // Stopping a launcher also ends its children, so they may already be gone.
+    if (result.code !== 0 && !/no such process|not found/i.test(result.stderr)) {
       log(`[dev] Could not stop stale ${process.name} (${process.pid}): ${stripAnsi(result.stderr).trim()}`);
     }
   }
 
   await sleep(500);
+  return processes.length;
+}
+
+/** `pnpm stop`: end this checkout's host-run dev servers. Docker services keep running. */
+async function stopRepoOwnedDevProcesses() {
+  const stopped = await clearRepoOwnedDevProcesses({ includeLaunchers: true });
+  if (stopped === 0) {
+    log('[dev] No Riviamigo dev servers from this checkout are running.');
+    return;
+  }
+  await sleep(1500);
+  const survivors = await listRepoOwnedProcesses({ includeLaunchers: true });
+  for (const survivor of survivors) {
+    log(`[dev] ${survivor.name} (${survivor.pid}) did not exit; forcing it to stop.`);
+    if (isWindows) {
+      await capture('taskkill', ['/PID', String(survivor.pid), '/T', '/F']);
+    } else {
+      await capture('kill', ['-KILL', String(survivor.pid)]);
+    }
+  }
+  log('[dev] Stopped. Docker services (database, Redis, Garage) are still running.');
 }
 
 async function findAvailablePort(start, label, maxTries = 50, reservedPorts = new Set()) {
@@ -914,7 +984,12 @@ function onceExit(child, label) {
 
 const isDirectExecution = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
-if (isDirectExecution) {
+if (isDirectExecution && stopOnly) {
+  stopRepoOwnedDevProcesses().catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
+} else if (isDirectExecution) {
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => {
       shutdown(signal === 'SIGINT' ? 130 : 143);

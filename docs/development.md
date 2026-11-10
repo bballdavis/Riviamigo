@@ -22,6 +22,7 @@ The usual local entrypoints are:
 
 ```bash
 pnpm run dev:stack
+pnpm stop
 pnpm typecheck
 pnpm lint
 pnpm test
@@ -48,6 +49,15 @@ created from this repository's `compose/docker-compose.dev.yml`. Missing,
 mixed, or production Compose identity metadata fails closed; set
 `DEV_COMPOSE_PROJECT_NAME` to a unique isolated name to avoid a same-named
 production project.
+
+`pnpm stop` ends this checkout's host-run dev servers: any `dev:stack`
+launcher, the Vite web server, the API, and the restore agent. It matches
+processes by this checkout's paths, so Vite servers from other repositories
+or other worktrees are left alone. Docker services keep running and keep their
+data. `pnpm dev:stack` runs the same cleanup (without the launcher step) before
+it allocates ports. If two stacks run at once, the second one moves to fallback
+ports, and signing in to the wrong one fails because each Compose project has
+its own users.
 
 `pnpm dev:stack` also starts the local restore supervisor alongside the
 host-run API. Its capability key is generated under the ignored `data/`

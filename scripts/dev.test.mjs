@@ -4,6 +4,7 @@ import {
   allocateDistinctRuntimePorts,
   deriveDevComposeProjectName,
   developmentAuthEnv,
+  matchRepoOwnedProcesses,
   parseComposeIdentityMetadata,
   parseComposePortMetadata,
 } from './dev.mjs';
@@ -156,4 +157,35 @@ test('blanks every other OIDC variable so inherited values cannot break startup'
   }
   const oidcKeys = Object.keys(env).filter((key) => key.startsWith('RIVIAMIGO_OIDC_'));
   assert.ok(oidcKeys.length >= 14, 'covers the full OIDC variable set');
+});
+
+test('stop matches only this checkout\'s dev processes', () => {
+  const root = '/work/Riviamigo';
+  const ps = [
+    `101 ${root}/apps/api/target/debug/riviamigo-api`,
+    `102 ${root}/apps/api/target/debug/riviamigo-restore-agent`,
+    `103 node ${root}/apps/web/node_modules/.bin/../vite/bin/vite.js --host`,
+    '104 node /work/OtherApp/apps/web/node_modules/.bin/vite --port 43560',
+    '105 node ./scripts/dev.mjs',
+    '106 node ./scripts/dev.mjs --stop',
+    '107 node /work/Riviamigo/scripts/dev.mjs --once',
+    '108 node ./scripts/dev-harness.mjs',
+  ].join('\n');
+  const options = {
+    apiBin: `${root}/apps/api/target/debug/riviamigo-api`,
+    restoreAgentBin: `${root}/apps/api/target/debug/riviamigo-restore-agent`,
+    webDir: `${root}/apps/web`,
+    selfPid: 999,
+  };
+
+  assert.deepEqual(
+    matchRepoOwnedProcesses(ps, options).map((entry) => [entry.pid, entry.kind]),
+    [[101, 'api'], [102, 'restore-agent'], [103, 'vite']],
+  );
+  assert.deepEqual(
+    matchRepoOwnedProcesses(ps, { ...options, launcher: `${root}/scripts/dev.mjs` })
+      .map((entry) => [entry.pid, entry.kind]),
+    [[101, 'api'], [102, 'restore-agent'], [103, 'vite'], [105, 'launcher'], [107, 'launcher']],
+  );
+  assert.deepEqual(matchRepoOwnedProcesses(ps, { ...options, selfPid: 101 }).map((entry) => entry.pid), [102, 103]);
 });
