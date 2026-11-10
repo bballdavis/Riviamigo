@@ -19,6 +19,15 @@ Riviamigo is a private dashboard for the Rivian data you already have access to.
 
 The exact information Rivian exposes can change, and a sleeping vehicle may not update immediately. Riviamigo presents what it receives rather than inventing missing values.
 
+## Vehicle images
+
+Settings, Overview, Charging, and Vehicle Health use artwork associated with the
+specific vehicle in your Rivian account, including its paint color when Rivian
+provides it. Images for another vehicle or an unassigned preorder are not used.
+While artwork is loading, unavailable, or being repaired, supported models show
+a packaged model-specific image. These fallback images have a fixed paint color,
+so they may not match your vehicle's actual color.
+
 ## Exploring demo vehicles
 
 Open **Settings > Vehicles**, choose **Demo Vehicle**, and select a model. Creating a model that already exists returns the same vehicle without changing its name, sharing, preferences, or dashboards. Demo vehicles are marked **Demo data** and use the same dashboards as connected vehicles, but remote commands, schedules, Rivian login repair, and remote artwork repair are not simulated.

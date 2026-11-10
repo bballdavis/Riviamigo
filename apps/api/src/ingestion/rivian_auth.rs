@@ -452,6 +452,7 @@ pub async fn rivian_user_vehicles(
 pub async fn rivian_vehicle_images(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
+    rivian_vehicle_id: &str,
 ) -> Result<Vec<RivianVehicleImage>, RivianAuthError> {
     let query = r#"
       query getVehicleImages($extension: String, $resolution: String, $versionForVehicle: String, $versionForPreOrder: String) {
@@ -553,6 +554,9 @@ pub async fn rivian_vehicle_images(
             let vehicle = data.get_vehicle_mobile_images.unwrap_or_default();
             for (source, entries) in [("order", order), ("vehicle", vehicle)] {
                 for image in entries {
+                    if image.vehicle_id.as_deref() != Some(rivian_vehicle_id) {
+                        continue;
+                    }
                     if !seen.insert(image.url.clone()) {
                         continue;
                     }
@@ -817,35 +821,63 @@ mod tests {
         assert_eq!(refreshed.refresh_token, tokens.refresh_token);
         assert_eq!(refreshed.user_session_token, tokens.user_session_token);
 
-        let requests = recorded.lock().unwrap();
-        assert_eq!(requests.len(), 5);
-        assert_eq!(requests[0].operation_name, "CreateCSRFToken");
-        assert!(requests[0].headers.get("csrf-token").is_none());
-        assert!(requests[0].headers.get("a-sess").is_none());
+        {
+            let requests = recorded.lock().unwrap();
+            assert_eq!(requests.len(), 5);
+            assert_eq!(requests[0].operation_name, "CreateCSRFToken");
+            assert!(requests[0].headers.get("csrf-token").is_none());
+            assert!(requests[0].headers.get("a-sess").is_none());
 
-        assert_eq!(requests[1].operation_name, "Login");
-        assert_eq!(requests[1].headers["csrf-token"], "csrf-token");
-        assert_eq!(requests[1].headers["a-sess"], "app-session-token");
-        assert_eq!(
-            requests[1].headers["apollographql-client-name"],
-            APOLLO_CLIENT_NAME
-        );
-        assert_eq!(requests[1].body["variables"]["email"], "driver@example.com");
-        assert_eq!(requests[1].body["variables"]["password"], "secret");
+            assert_eq!(requests[1].operation_name, "Login");
+            assert_eq!(requests[1].headers["csrf-token"], "csrf-token");
+            assert_eq!(requests[1].headers["a-sess"], "app-session-token");
+            assert_eq!(
+                requests[1].headers["apollographql-client-name"],
+                APOLLO_CLIENT_NAME
+            );
+            assert_eq!(requests[1].body["variables"]["email"], "driver@example.com");
+            assert_eq!(requests[1].body["variables"]["password"], "secret");
 
-        assert_eq!(requests[2].operation_name, "LoginWithOTP");
-        assert_eq!(requests[2].headers["csrf-token"], "csrf-token");
-        assert_eq!(requests[2].headers["a-sess"], "app-session-token");
-        assert_eq!(requests[2].body["variables"]["email"], "driver@example.com");
-        assert_eq!(requests[2].body["variables"]["otpCode"], "123456");
-        assert_eq!(requests[2].body["variables"]["otpToken"], "otp-token");
+            assert_eq!(requests[2].operation_name, "LoginWithOTP");
+            assert_eq!(requests[2].headers["csrf-token"], "csrf-token");
+            assert_eq!(requests[2].headers["a-sess"], "app-session-token");
+            assert_eq!(requests[2].body["variables"]["email"], "driver@example.com");
+            assert_eq!(requests[2].body["variables"]["otpCode"], "123456");
+            assert_eq!(requests[2].body["variables"]["otpToken"], "otp-token");
 
-        assert_eq!(requests[3].operation_name, "getUserInfo");
-        assert_eq!(requests[3].headers["csrf-token"], "csrf-token");
-        assert_eq!(requests[3].headers["a-sess"], "app-session-token");
-        assert_eq!(requests[3].headers["u-sess"], "user-session-token");
-        assert_eq!(requests[3].headers["authorization"], "Bearer access-token");
-        assert_eq!(requests[4].operation_name, "CreateCSRFToken");
+            assert_eq!(requests[3].operation_name, "getUserInfo");
+            assert_eq!(requests[3].headers["csrf-token"], "csrf-token");
+            assert_eq!(requests[3].headers["a-sess"], "app-session-token");
+            assert_eq!(requests[3].headers["u-sess"], "user-session-token");
+            assert_eq!(requests[3].headers["authorization"], "Bearer access-token");
+            assert_eq!(requests[4].operation_name, "CreateCSRFToken");
+        }
+
+        for (vehicle_id, paint) in [
+            ("vehicle-123", "compass-yellow"),
+            ("vehicle-456", "forest-green"),
+            ("vehicle-789", "glacier-white"),
+        ] {
+            let images = rivian_vehicle_images(&client, &tokens, vehicle_id)
+                .await
+                .unwrap();
+            assert_eq!(images.len(), 6);
+            assert!(images.iter().all(|image| {
+                image.vehicle_id.as_deref() == Some(vehicle_id) && image.url.contains(paint)
+            }));
+            for placement in ["side", "overhead", "three-quarter"] {
+                for version in ["2", "3"] {
+                    assert!(images.iter().any(|image| {
+                        image.placement.as_deref() == Some(placement)
+                            && image.vehicle_version == version
+                    }));
+                }
+            }
+        }
+        assert!(rivian_vehicle_images(&client, &tokens, "vehicle-missing")
+            .await
+            .unwrap()
+            .is_empty());
 
         std::env::remove_var("RIVIAN_GRAPHQL_GATEWAY_URL");
     }
@@ -856,6 +888,10 @@ mod tests {
         Json(body): Json<Value>,
     ) -> (StatusCode, Json<Value>) {
         let operation_name = body["operationName"].as_str().unwrap_or("").to_string();
+        let image_version = body["variables"]["versionForVehicle"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
         recorded.lock().unwrap().push(RecordedRequest {
             operation_name: operation_name.clone(),
             headers,
@@ -905,6 +941,41 @@ mod tests {
                     }
                 }
             }),
+            "getVehicleImages" => {
+                let mut images = Vec::new();
+                for (vehicle_id, paint) in [
+                    ("vehicle-123", "compass-yellow"),
+                    ("vehicle-456", "forest-green"),
+                    ("vehicle-789", "glacier-white"),
+                ] {
+                    for placement in ["side", "overhead", "three-quarter"] {
+                        images.push(json!({
+                            "vehicleId": vehicle_id,
+                            "url": format!("https://rivian.com/{paint}/{placement}-{image_version}.webp"),
+                            "placement": placement,
+                            "design": "light",
+                            "size": "large"
+                        }));
+                    }
+                }
+                json!({
+                    "data": {
+                        "getVehicleOrderMobileImages": [
+                            {
+                                "orderId": "unassigned-order",
+                                "url": format!("https://rivian.com/compass-yellow/side-{image_version}.webp"),
+                                "placement": "side"
+                            },
+                            {
+                                "vehicleId": "vehicle-123-other",
+                                "url": "https://rivian.com/other-vehicle.webp",
+                                "placement": "side"
+                            }
+                        ],
+                        "getVehicleMobileImages": images
+                    }
+                })
+            }
             _ => json!({
                 "errors": [{
                     "message": "unexpected operation",

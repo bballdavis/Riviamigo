@@ -3719,22 +3719,46 @@ async fn cache_vehicle_images(
     tokens: &crate::ingestion::session_store::RivianTokenBundle,
     force_remirror: bool,
 ) {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .unwrap_or_default();
     mark_vehicle_artwork_repair_attempt(pool, vehicle_id).await;
     crate::services::external_connections::record_attempt(
         pool,
         crate::services::external_connections::RIVIAN_ACCOUNT,
     )
     .await;
-    match crate::ingestion::rivian_auth::rivian_vehicle_images(&client, tokens).await {
-        Ok(images) => {
-            let image_count = images.len();
-            for image in images {
-                let _ = sqlx::query(
-                    r#"
+    let result = async {
+        let rivian_vehicle_id = sqlx::query_scalar::<_, String>(
+            "SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id = $1",
+        )
+        .bind(vehicle_id)
+        .fetch_one(pool)
+        .await?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()?;
+        let images = crate::ingestion::rivian_auth::rivian_vehicle_images(
+            &client,
+            tokens,
+            &rivian_vehicle_id,
+        )
+        .await?;
+        anyhow::ensure!(
+            !images.is_empty(),
+            "Rivian returned no artwork for the requested vehicle"
+        );
+        let image_count = images.len();
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            "DELETE FROM riviamigo.vehicle_images
+                 WHERE vehicle_id = $1
+                   AND metadata->>'rivian_vehicle_id' IS DISTINCT FROM $2",
+        )
+        .bind(vehicle_id)
+        .bind(&rivian_vehicle_id)
+        .execute(&mut *tx)
+        .await?;
+        for image in images {
+            sqlx::query(
+                r#"
                     INSERT INTO riviamigo.vehicle_images
                       (vehicle_id, placement, design, size, resolution, url, overlays, metadata)
                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -3756,27 +3780,33 @@ async fn cache_vehicle_images(
                         END,
                         updated_at = now()
                     "#,
-                )
-                .bind(vehicle_id)
-                .bind(image.placement.as_deref().unwrap_or("unknown"))
-                .bind(image.design)
-                .bind(image.size)
-                .bind(image.resolution)
-                .bind(&image.url)
-                .bind(image.overlays)
-                .bind(build_cached_vehicle_image_metadata(
-                    &image.url,
-                    serde_json::json!({
-                    "source": image.source,
-                    "vehicle_version": image.vehicle_version,
-                    "rivian_vehicle_id": image.vehicle_id,
-                    "rivian_order_id": image.order_id,
-                    "extension": image.extension
-                    }),
-                ))
-                .execute(pool)
-                .await;
-            }
+            )
+            .bind(vehicle_id)
+            .bind(image.placement.as_deref().unwrap_or("unknown"))
+            .bind(image.design)
+            .bind(image.size)
+            .bind(image.resolution)
+            .bind(&image.url)
+            .bind(image.overlays)
+            .bind(build_cached_vehicle_image_metadata(
+                &image.url,
+                serde_json::json!({
+                "source": image.source,
+                "vehicle_version": image.vehicle_version,
+                "rivian_vehicle_id": image.vehicle_id,
+                "rivian_order_id": image.order_id,
+                "extension": image.extension
+                }),
+            ))
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok::<_, anyhow::Error>(image_count)
+    }
+    .await;
+    match result {
+        Ok(image_count) => {
             mirror_vehicle_images(pool, config, vehicle_id, force_remirror).await;
             refresh_vehicle_artwork_cache_state(pool, config, vehicle_id, None).await;
             crate::services::external_connections::record_success(
@@ -3807,15 +3837,13 @@ async fn ensure_vehicle_images_cached(
     age_key: &str,
     force_manifest_refresh: bool,
 ) {
-    let rows = sqlx::query_as::<_, VehicleImageRow>(
-        "SELECT placement, design, size, resolution, url, overlays, metadata
-         FROM riviamigo.vehicle_images
-         WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let rows = match fetch_vehicle_image_rows(pool, vehicle_id).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_rows_failed");
+            return;
+        }
+    };
 
     if !rows.is_empty() && !force_manifest_refresh {
         if rows
@@ -4063,15 +4091,7 @@ async fn mirror_vehicle_images(
     vehicle_id: Uuid,
     force_remirror: bool,
 ) {
-    let rows = match sqlx::query_as::<_, VehicleImageRow>(
-        "SELECT placement, design, size, resolution, url, overlays, metadata
-         FROM riviamigo.vehicle_images
-         WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await
-    {
+    let rows = match fetch_vehicle_image_rows(pool, vehicle_id).await {
         Ok(rows) => rows,
         Err(error) => {
             warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.mirror_rows_failed");
@@ -4193,14 +4213,13 @@ async fn refresh_vehicle_artwork_cache_state(
     vehicle_id: Uuid,
     error: Option<&str>,
 ) {
-    let rows = sqlx::query_as::<_, VehicleImageRow>(
-        "SELECT placement, design, size, resolution, url, overlays, metadata
-         FROM riviamigo.vehicle_images WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let rows = match fetch_vehicle_image_rows(pool, vehicle_id).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.cache_state_rows_failed");
+            return;
+        }
+    };
     let (asset_count, ready_asset_count) = artwork_asset_counts(config, &rows);
     let ready = asset_count > 0 && asset_count == ready_asset_count;
     let status = if ready {
@@ -4311,14 +4330,10 @@ async fn find_mirrored_asset(
     vehicle_id: Uuid,
     image_key: &str,
 ) -> Result<Option<serde_json::Value>, AppError> {
-    let metadatas = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT metadata FROM riviamigo.vehicle_images WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await?;
+    let rows = fetch_vehicle_image_rows(pool, vehicle_id).await?;
 
-    for metadata in metadatas {
+    for row in rows {
+        let metadata = row.metadata;
         if metadata.get("mirror_key").and_then(|value| value.as_str()) == Some(image_key) {
             return Ok(Some(metadata));
         }
@@ -4338,26 +4353,37 @@ async fn find_mirrored_asset(
     Ok(None)
 }
 
+async fn fetch_vehicle_image_rows<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    vehicle_id: Uuid,
+) -> Result<Vec<VehicleImageRow>, sqlx::Error> {
+    // Older caches contain account-wide manifests. Enforce provider identity
+    // on every read, including overlays, cache completeness, and repair.
+    sqlx::query_as::<_, VehicleImageRow>(
+        r#"
+        SELECT i.placement, i.design, i.size, i.resolution, i.url, i.overlays, i.metadata
+        FROM riviamigo.vehicle_images i
+        JOIN riviamigo.vehicles v ON v.id = i.vehicle_id
+        WHERE i.vehicle_id = $1
+          AND i.metadata->>'rivian_vehicle_id' = v.rivian_vehicle_id
+        ORDER BY
+          CASE WHEN i.size = 'large' THEN 0 ELSE 1 END,
+          i.placement,
+          i.design NULLS LAST,
+          i.created_at
+        "#,
+    )
+    .bind(vehicle_id)
+    .fetch_all(executor)
+    .await
+}
+
 async fn fetch_vehicle_images_json(
     pool: &sqlx::PgPool,
     config: &crate::config::Config,
     vehicle_id: Uuid,
 ) -> Result<serde_json::Value, AppError> {
-    let rows = sqlx::query_as::<_, VehicleImageRow>(
-        r#"
-        SELECT placement, design, size, resolution, url, overlays, metadata
-        FROM riviamigo.vehicle_images
-        WHERE vehicle_id = $1
-        ORDER BY
-          CASE WHEN size = 'large' THEN 0 ELSE 1 END,
-          placement,
-          design NULLS LAST,
-                    created_at
-                "#,
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await?;
+    let rows = fetch_vehicle_image_rows(pool, vehicle_id).await?;
 
     let all: Vec<_> = rows
         .iter()
@@ -4421,9 +4447,9 @@ async fn vehicle_image_cache_asset(
         return Err(AppError::NotFound);
     }
     require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
-    let Some(metadata) = find_mirrored_asset(&state.pool, vehicle_id, &image_key).await? else {
-        return Ok(vehicle_artwork_placeholder_response());
-    };
+    let metadata = find_mirrored_asset(&state.pool, vehicle_id, &image_key)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     let Some(relpath) = metadata
         .get("mirror_relpath")
@@ -4529,14 +4555,13 @@ async fn vehicle_artwork_cache_complete(
     config: &crate::config::Config,
     vehicle_id: Uuid,
 ) -> bool {
-    let rows = sqlx::query_as::<_, VehicleImageRow>(
-        "SELECT placement, design, size, resolution, url, overlays, metadata
-         FROM riviamigo.vehicle_images WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let rows = match fetch_vehicle_image_rows(pool, vehicle_id).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.cache_complete_rows_failed");
+            return false;
+        }
+    };
     let (total, ready) = artwork_asset_counts(config, &rows);
     total > 0 && total == ready
 }
@@ -4642,9 +4667,11 @@ pub fn start_vehicle_artwork_repair_worker(
         .unwrap_or_default();
 
         for vehicle_id in vehicle_ids {
-            if vehicle_artwork_cache_complete(&pool, &config, vehicle_id).await
-                || !claim_vehicle_artwork_repair(&pool, vehicle_id).await
-            {
+            if vehicle_artwork_cache_complete(&pool, &config, vehicle_id).await {
+                refresh_vehicle_artwork_cache_state(&pool, &config, vehicle_id, None).await;
+                continue;
+            }
+            if !claim_vehicle_artwork_repair(&pool, vehicle_id).await {
                 continue;
             }
 
@@ -5639,6 +5666,97 @@ mod tests {
         assert!(super::is_demo_vehicle_key("demo-r2-local"));
         assert!(super::is_demo_vehicle_key("demo-r2s-local"));
         assert!(!super::is_demo_vehicle_key("rivian-1234"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn vehicle_images_ignore_foreign_and_unidentified_legacy_cache_entries() {
+        let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+            .await
+            .expect("test database");
+        let mut tx = pool.begin().await.expect("test transaction");
+        let user_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO riviamigo.users (id, email, password_hash) VALUES ($1, $2, 'unused')",
+        )
+        .bind(user_id)
+        .bind(format!("artwork-{user_id}@example.com"))
+        .execute(&mut *tx)
+        .await
+        .expect("test user");
+
+        for (model, paint) in [
+            ("R1T", "compass-yellow"),
+            ("R1T", "rivian-blue"),
+            ("R1S", "forest-green"),
+            ("R2", "glacier-white"),
+            ("R1S", "missing-artwork"),
+        ] {
+            let vehicle_id = Uuid::new_v4();
+            let provider_id = format!("provider-{vehicle_id}");
+            sqlx::query(
+                "INSERT INTO riviamigo.vehicles (id, user_id, rivian_vehicle_id, model, color)
+                 VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind(vehicle_id)
+            .bind(user_id)
+            .bind(&provider_id)
+            .bind(model)
+            .bind(paint)
+            .execute(&mut *tx)
+            .await
+            .expect("test vehicle");
+
+            for placement in ["side", "overhead", "three-quarter"] {
+                let mut entries = vec![
+                    (
+                        "foreign",
+                        serde_json::json!({ "rivian_vehicle_id": "another-vehicle" }),
+                    ),
+                    (
+                        "order",
+                        serde_json::json!({ "rivian_order_id": "unassigned-order" }),
+                    ),
+                    ("null", serde_json::json!({ "rivian_vehicle_id": null })),
+                ];
+                if paint != "missing-artwork" {
+                    entries.push((
+                        paint,
+                        serde_json::json!({ "rivian_vehicle_id": provider_id }),
+                    ));
+                }
+                for (image_paint, metadata) in entries {
+                    sqlx::query(
+                        "INSERT INTO riviamigo.vehicle_images
+                         (vehicle_id, placement, design, size, url, metadata, overlays)
+                         VALUES ($1, $2, 'light', 'large', $3, $4, $5)",
+                    )
+                    .bind(vehicle_id)
+                    .bind(placement)
+                    .bind(format!("https://rivian.com/{image_paint}/{placement}.webp"))
+                    .bind(metadata)
+                    .bind(serde_json::json!([{ "url": format!("https://rivian.com/{image_paint}/overlay.webp") }]))
+                    .execute(&mut *tx)
+                    .await
+                    .expect("legacy cache entry");
+                }
+            }
+
+            let rows = super::fetch_vehicle_image_rows(&mut *tx, vehicle_id)
+                .await
+                .expect("scoped cache rows");
+            if paint == "missing-artwork" {
+                assert!(rows.is_empty(), "foreign artwork must not prevent repair");
+            } else {
+                assert_eq!(rows.len(), 3);
+                for row in rows {
+                    assert!(row.url.contains(paint));
+                    assert_eq!(row.metadata["rivian_vehicle_id"], provider_id);
+                    assert!(row.overlays[0]["url"].as_str().unwrap().contains(paint));
+                }
+            }
+        }
+        tx.rollback().await.expect("rollback test fixtures");
     }
 
     #[test]
