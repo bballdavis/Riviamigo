@@ -12,7 +12,16 @@ use crate::{
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
     models::cost_profile::{validate_tou_periods, CostProfile, TouPeriod},
+    services::cost::recompute_charge_session_cost,
 };
+
+/// Sessions whose automatic cost can resolve to a profile: pinned to it, or
+/// linked to a place that uses it. Free/Manual overrides keep precedence.
+const SESSIONS_USING_PROFILE_SQL: &str = "SELECT cs.id
+       FROM riviamigo.charge_sessions cs
+       LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id
+      WHERE cs.cost_override_mode = 'automatic'
+        AND (cs.cost_profile_id = $1 OR g.cost_profile_id = $1)";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -211,6 +220,15 @@ async fn update_profile(
     .await
     .map_err(AppError::from)?
     .ok_or(AppError::NotFound)?;
+
+    // A rate change applies to charging history, not only to new sessions.
+    let sessions = sqlx::query_scalar::<_, Uuid>(SESSIONS_USING_PROFILE_SQL)
+        .bind(id)
+        .fetch_all(&state.pool)
+        .await?;
+    for session_id in sessions {
+        recompute_charge_session_cost(&state.pool, session_id).await?;
+    }
 
     Ok(Json(row))
 }
