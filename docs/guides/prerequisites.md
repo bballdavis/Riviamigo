@@ -35,7 +35,7 @@ directly.
 
 ## Building from source
 
-Contributors need Node.js 24.18.x, pnpm 11.15.1, Rust 1.97.1, Docker
+Contributors need Node.js 26.13.x, pnpm 11.15.1, Rust 1.97.1, Docker
 Engine with Docker Compose v2, and `curl`. The repository pins the Node,
 pnpm, and Rust versions in `package.json`, `rust-toolchain.toml`, and
 `config/dependency-baselines.json`; use those files rather than a separately

@@ -1,92 +1,106 @@
 /// <reference types="node" />
-import { defineConfig } from 'vitest/config';
+import { defineConfig, mergeConfig } from 'vitest/config';
+import { sharedVitestConfig } from '@riviamigo/config/vitest';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 
-export default defineConfig({
-  envDir: path.resolve(__dirname, '../..'),
-  test: {
-    globals: true,
-    environment: 'jsdom',
-    setupFiles: ['./src/test/setup.ts'],
-    alias: {
-      // Resolve Iconify to a synchronous test double before Vitest evaluates
-      // the dashboard package. A setup-file mock can be bypassed by a
-      // pre-bundled workspace dependency, leaving Iconify timers alive after
-      // jsdom teardown on CI.
-      '@iconify/react': path.resolve(__dirname, './src/test/mocks/iconify-react.ts'),
-    },
-    css: false,
-    exclude: ['tests/e2e/**', 'node_modules/**', 'dist/**'],
-    coverage: {
-      provider: 'v8',
-      reporter: ['text', 'html', 'lcov'],
-      reportsDirectory: './coverage',
-      include: ['src/routes/**/*.tsx', 'src/components/**/*.tsx'],
-      thresholds: {
-        // Keep the gate just below the current route/component aggregate. The
-        // suite intentionally includes browser-only route shells and settings
-        // branches that are covered by E2E rather than jsdom unit tests.
-        statements: 69,
-        branches: 55,
-        functions: 50,
-        lines: 69,
+export default mergeConfig(
+  sharedVitestConfig,
+  defineConfig({
+    envDir: path.resolve(__dirname, '../..'),
+    test: {
+      globals: true,
+      environment: 'jsdom',
+      setupFiles: ['./src/test/setup.ts'],
+      alias: {
+        // Resolve Iconify to a synchronous test double before Vitest evaluates
+        // the dashboard package. A setup-file mock can be bypassed by a
+        // pre-bundled workspace dependency, leaving Iconify timers alive after
+        // jsdom teardown on CI.
+        '@iconify/react': path.resolve(__dirname, './src/test/mocks/iconify-react.ts'),
       },
-    },
-  },
-  plugins: [react()],
-  // MapLibre v6 resolves its worker relative to the package module. Vite's
-  // dependency optimizer moves the entry without the sibling worker, so keep
-  // this package on the normal module path in development.
-  optimizeDeps: {
-    exclude: ['maplibre-gl'],
-  },
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-      '@riviamigo/dashboards': path.resolve(__dirname, '../../packages/dashboards/src/index.ts'),
-      '@riviamigo/hooks': path.resolve(__dirname, '../../packages/hooks/src/index.ts'),
-      '@riviamigo/config/typescript/react.json': path.resolve(__dirname, '../../packages/config/typescript/react.json'),
-    },
-  },
-  server: {
-    host: '0.0.0.0',
-    port: 5173,
-    proxy: {
-      '/v1/restore-runtime': {
-        target: process.env.VITE_RESTORE_AGENT_URL ?? 'http://127.0.0.1:3002',
-        changeOrigin: true,
-      },
-      '/v1': {
-        target: process.env.VITE_API_URL ?? process.env.VITE_RIVIAMIGO_API_BASE_URL ?? 'http://localhost:3001',
-        changeOrigin: true,
-        ws: true,
-        configure: (proxy) => {
-          proxy.on('error', (error) => {
-            const code = (error as NodeJS.ErrnoException).code;
-            // During refresh/reconnect churn, backend-closed sockets can
-            // produce noisy ECONNRESET events that are expected in dev.
-            if (code === 'ECONNRESET') return;
-            console.error('[vite] ws proxy error:', error);
-          });
-        },
-      },
-      '/v2': {
-        target: process.env.VITE_API_URL ?? process.env.VITE_RIVIAMIGO_API_BASE_URL ?? 'http://localhost:3001',
-        changeOrigin: true,
-      },
-    },
-  },
-  build: {
-    sourcemap: true,
-    rollupOptions: {
-      output: {
-        manualChunks: (id) => {
-          if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) return 'react-vendor';
-          if (id.includes('node_modules/@tanstack/react-router/')) return 'router';
-          if (id.includes('node_modules/@tanstack/react-query/')) return 'query';
+      css: false,
+      exclude: ['tests/e2e/**', 'node_modules/**', 'dist/**'],
+      coverage: {
+        provider: 'v8',
+        reporter: ['text', 'html', 'lcov'],
+        reportsDirectory: './coverage',
+        include: ['src/routes/**/*.tsx', 'src/components/**/*.tsx'],
+        thresholds: {
+          // Keep the gate just below the current route/component aggregate. The
+          // suite intentionally includes browser-only route shells and settings
+          // branches that are covered by E2E rather than jsdom unit tests.
+          statements: 69,
+          branches: 55,
+          functions: 50,
+          lines: 69,
         },
       },
     },
-  },
-});
+    plugins: [react()],
+    // MapLibre v6 resolves its worker relative to the package module. Vite's
+    // dependency optimizer moves the entry without the sibling worker, so keep
+    // this package on the normal module path in development.
+    optimizeDeps: {
+      exclude: ['maplibre-gl'],
+    },
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, './src'),
+        '@riviamigo/dashboards': path.resolve(__dirname, '../../packages/dashboards/src/index.ts'),
+        '@riviamigo/hooks': path.resolve(__dirname, '../../packages/hooks/src/index.ts'),
+        '@riviamigo/config/typescript/react.json': path.resolve(
+          __dirname,
+          '../../packages/config/typescript/react.json'
+        ),
+      },
+    },
+    server: {
+      host: '0.0.0.0',
+      port: 5173,
+      proxy: {
+        '/v1/restore-runtime': {
+          target: process.env.VITE_RESTORE_AGENT_URL ?? 'http://127.0.0.1:3002',
+          changeOrigin: true,
+        },
+        '/v1': {
+          target:
+            process.env.VITE_API_URL ??
+            process.env.VITE_RIVIAMIGO_API_BASE_URL ??
+            'http://localhost:3001',
+          changeOrigin: true,
+          ws: true,
+          configure: (proxy) => {
+            proxy.on('error', (error) => {
+              const code = (error as NodeJS.ErrnoException).code;
+              // During refresh/reconnect churn, backend-closed sockets can
+              // produce noisy ECONNRESET events that are expected in dev.
+              if (code === 'ECONNRESET') return;
+              console.error('[vite] ws proxy error:', error);
+            });
+          },
+        },
+        '/v2': {
+          target:
+            process.env.VITE_API_URL ??
+            process.env.VITE_RIVIAMIGO_API_BASE_URL ??
+            'http://localhost:3001',
+          changeOrigin: true,
+        },
+      },
+    },
+    build: {
+      sourcemap: true,
+      rollupOptions: {
+        output: {
+          manualChunks: (id) => {
+            if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/'))
+              return 'react-vendor';
+            if (id.includes('node_modules/@tanstack/react-router/')) return 'router';
+            if (id.includes('node_modules/@tanstack/react-query/')) return 'query';
+          },
+        },
+      },
+    },
+  })
+);

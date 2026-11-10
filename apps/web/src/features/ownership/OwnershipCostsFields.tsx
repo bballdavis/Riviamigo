@@ -41,6 +41,7 @@ export function formToSettings(
   form: OwnershipCostsForm,
   base: OwnershipSettings,
   now: Date = new Date(),
+  options: { requirePrice?: boolean } = {},
 ): { settings: OwnershipSettings | null; errors: OwnershipCostsErrors } {
   const errors: OwnershipCostsErrors = {};
   const amount = (
@@ -82,6 +83,16 @@ export function formToSettings(
     tire_set_cost_usd: amount('tireSetCost', 100_000),
     gas_price_usd_per_gallon: amount('gasPrice', 100, { positive: true }),
   };
+  // The dashboard has nothing to start from without a purchase price, so it
+  // is required whenever anything else is entered. Clearing every field is allowed.
+  const anyEntered = Object.values(form).some((value) => value.trim() !== '');
+  if (
+    settings.purchase_price_usd == null &&
+    !errors.purchasePrice &&
+    (options.requirePrice || anyEntered)
+  ) {
+    errors.purchasePrice = 'Enter what you paid.';
+  }
   return { settings: Object.keys(errors).length ? null : settings, errors };
 }
 
@@ -105,7 +116,7 @@ export function OwnershipCostsFields({ form, errors, onChange, idPrefix, disable
   const money = { inputMode: 'decimal' as const, autoComplete: 'off' };
   return (
     <div className="grid gap-4 sm:grid-cols-2">
-      <Input label="Purchase price ($)" placeholder="e.g. 84000" {...money} {...field('purchasePrice')} />
+      <Input label="Purchase price ($)" placeholder="e.g. 84000" required {...money} {...field('purchasePrice')} />
       <Input label="Purchase date" type="date" max={todayIso(new Date())} {...field('purchaseDate')} />
       <Input
         label="Resale value today ($)"

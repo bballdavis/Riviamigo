@@ -307,6 +307,15 @@ describe('ownership cost form', () => {
     expect(result.settings).toMatchObject({ purchase_price_usd: 84_500, resale_value_usd: null, comparisons: base.comparisons });
   });
 
+  it('requires a purchase price when anything else is entered, or always when asked', () => {
+    const blank = settingsToForm({ ...base, purchase_price_usd: null, purchase_date: null });
+    const dateOnly = formToSettings({ ...blank, purchaseDate: '2025-08-25' }, base, now);
+    expect(dateOnly.settings).toBeNull();
+    expect(dateOnly.errors).toEqual({ purchasePrice: 'Enter what you paid.' });
+    expect(formToSettings(blank, base, now).settings).toMatchObject({ purchase_price_usd: null });
+    expect(formToSettings(blank, base, now, { requirePrice: true }).errors).toHaveProperty('purchasePrice');
+  });
+
   it('rejects bad amounts and future dates', () => {
     const form = { ...settingsToForm(base), purchasePrice: 'abc', gasPrice: '0', purchaseDate: '2026-01-01' };
     const result = formToSettings(form, base, now);

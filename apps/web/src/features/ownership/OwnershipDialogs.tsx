@@ -48,7 +48,7 @@ export function EditCostsDialog({ settings, saving, saveFailed, onSave, onClose 
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    const result = formToSettings(form, settings);
+    const result = formToSettings(form, settings, new Date(), { requirePrice: true });
     setErrors(result.errors);
     if (result.settings) onSave(result.settings);
   };

@@ -626,8 +626,43 @@ async function ensureDevRestoreAgentKey() {
   });
 }
 
+// SSO cannot work against a development stack (it needs a public HTTPS callback
+// URL and a reachable provider), and a restored backup or inherited shell
+// variable can leave SSO enabled with password login hidden, locking the
+// developer out. Environment values win over the database per field, so pin
+// password login on and SSO off for the host-run API. Every other OIDC variable
+// is blanked (the API treats empty as unset) so a stale client secret or secret
+// file in the parent shell cannot fail startup. The saved database settings are
+// left untouched; this only overrides them while the dev stack runs.
+const DEV_OIDC_ENV_KEYS = [
+  'RIVIAMIGO_OIDC_ALLOWED_EMAIL_DOMAINS',
+  'RIVIAMIGO_OIDC_AUTO_LINK_VERIFIED_EMAIL',
+  'RIVIAMIGO_OIDC_AUTO_SIGNUP',
+  'RIVIAMIGO_OIDC_BUTTON_LABEL',
+  'RIVIAMIGO_OIDC_CLIENT_ID',
+  'RIVIAMIGO_OIDC_CLIENT_SECRET',
+  'RIVIAMIGO_OIDC_CLIENT_SECRET_FILE',
+  'RIVIAMIGO_OIDC_CLIENT_SECRET_SOURCE',
+  'RIVIAMIGO_OIDC_ISSUER_URL',
+  'RIVIAMIGO_OIDC_PUBLIC_BASE_URL',
+  'RIVIAMIGO_OIDC_REQUIRED_CLAIM_NAME',
+  'RIVIAMIGO_OIDC_REQUIRED_CLAIM_VALUE',
+  'RIVIAMIGO_OIDC_SCOPES',
+  'RIVIAMIGO_OIDC_TOKEN_AUTH_METHOD',
+];
+
+export function developmentAuthEnv() {
+  return {
+    ...Object.fromEntries(DEV_OIDC_ENV_KEYS.map((key) => [key, ''])),
+    RIVIAMIGO_OIDC_ENABLED: 'false',
+    RIVIAMIGO_OIDC_AUTO_LOGIN: 'false',
+    RIVIAMIGO_PASSWORD_LOGIN_ENABLED: 'true',
+  };
+}
+
 function apiEnv() {
   return {
+    ...developmentAuthEnv(),
     // The checked-in SQLx metadata lets a brand-new development database build
     // before the API process applies its embedded migrations on first start.
     SQLX_OFFLINE: 'true',

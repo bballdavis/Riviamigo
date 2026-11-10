@@ -57,6 +57,17 @@ credentials or restore data in Git.
 Vite proxies restore-runtime status requests directly to that supervisor so
 the status poll can survive the API process restart.
 
+`pnpm dev:stack` always starts the host-run API with password login enabled and
+SSO disabled (`RIVIAMIGO_PASSWORD_LOGIN_ENABLED=true`,
+`RIVIAMIGO_OIDC_ENABLED=false`, `RIVIAMIGO_OIDC_AUTO_LOGIN=false`), and blanks
+every other `RIVIAMIGO_OIDC_*` variable inherited from the shell. SSO needs a
+public HTTPS callback and a reachable provider, so it cannot work on a
+development stack, and a restored production backup that had SSO enabled would
+otherwise leave you unable to sign in. Environment values win over the database
+per field, so the saved SSO settings are left untouched and the Authentication
+settings page shows these fields as environment-managed while the stack runs.
+Sign in with the account's local password.
+
 Before allocating ports, the launcher reads the selected Compose project's
 existing service metadata. Sharing a project still makes migration and
 data/schema compatibility the caller's responsibility.

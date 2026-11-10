@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   allocateDistinctRuntimePorts,
   deriveDevComposeProjectName,
+  developmentAuthEnv,
   parseComposeIdentityMetadata,
   parseComposePortMetadata,
 } from './dev.mjs';
@@ -134,4 +135,25 @@ test('reuses running shared infrastructure ports and reserves them from host por
     api: 15433, postgres: 15432, redis: 16379, garageApi: 13900, garageAdmin: 13903,
   });
   assert.deepEqual(probes, [{ start: 15432, label: 'API', reserved: [15432, 16379, 13900, 13903] }]);
+});
+
+test('pins the development API to password login with SSO off', () => {
+  const env = developmentAuthEnv();
+  assert.equal(env.RIVIAMIGO_PASSWORD_LOGIN_ENABLED, 'true');
+  assert.equal(env.RIVIAMIGO_OIDC_ENABLED, 'false');
+  assert.equal(env.RIVIAMIGO_OIDC_AUTO_LOGIN, 'false');
+});
+
+test('blanks every other OIDC variable so inherited values cannot break startup', () => {
+  const env = developmentAuthEnv();
+  for (const key of [
+    'RIVIAMIGO_OIDC_CLIENT_SECRET',
+    'RIVIAMIGO_OIDC_CLIENT_SECRET_FILE',
+    'RIVIAMIGO_OIDC_ISSUER_URL',
+    'RIVIAMIGO_OIDC_CLIENT_ID',
+  ]) {
+    assert.equal(env[key], '', `${key} should be blanked`);
+  }
+  const oidcKeys = Object.keys(env).filter((key) => key.startsWith('RIVIAMIGO_OIDC_'));
+  assert.ok(oidcKeys.length >= 14, 'covers the full OIDC variable set');
 });
