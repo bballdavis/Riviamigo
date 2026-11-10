@@ -32,6 +32,8 @@ export const vehicleClient = client(
   'setDefaultVehicle', 'listVehicleMembers', 'addVehicleMember', 'updateVehicleMember',
   'removeVehicleMember', 'listVehicleInvites', 'createVehicleInvite', 'revokeVehicleInvite',
   'acceptVehicleInvite', 'previewVehicleInvite', 'getVehicleHealth',
+  'getOwnership', 'getOwnershipSettings', 'updateOwnershipSettings',
+  'lookupOwnershipVehicleMenu', 'lookupOwnershipVehicle',
 );
 
 export const tripClient = client(

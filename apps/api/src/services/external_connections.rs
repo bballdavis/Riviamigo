@@ -10,8 +10,20 @@ pub const NOMINATIM: &str = "nominatim";
 pub const BASEMAP: &str = "basemap";
 pub const ICONIFY: &str = "iconify";
 pub const S3_BACKUP: &str = "s3_backup";
+pub const FUEL_PRICES: &str = "fuel_prices";
+pub const VEHICLE_LOOKUP: &str = "vehicle_lookup";
 
-pub const OPTIONAL_CONNECTIONS: &[&str] = &[OPEN_METEO, NOMINATIM, BASEMAP, ICONIFY];
+pub const FUEL_PRICES_BASE_URL: &str = "https://api.eia.gov/v2";
+pub const VEHICLE_LOOKUP_BASE_URL: &str = "https://www.fueleconomy.gov/ws/rest";
+
+pub const OPTIONAL_CONNECTIONS: &[&str] = &[
+    OPEN_METEO,
+    NOMINATIM,
+    BASEMAP,
+    ICONIFY,
+    FUEL_PRICES,
+    VEHICLE_LOOKUP,
+];
 
 /// Advisory policy based on observed Rivian ecosystem behavior, not an
 /// authoritative provider contract.
@@ -115,6 +127,8 @@ pub async fn ensure_defaults(pool: &PgPool) -> Result<(), AppError> {
              ('nominatim', TRUE, 'remote', NULL, NULL, NULL, 'https://nominatim.openstreetmap.org', NULL, NULL, 'OpenStreetMap contributors', 'https://www.openstreetmap.org/copyright', FALSE, FALSE, 'auto'),
              ('basemap', TRUE, 'remote', NULL, NULL, NULL, NULL, 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', 'OpenStreetMap contributors and CARTO', 'https://carto.com/attributions', FALSE, FALSE, 'auto'),
              ('iconify', TRUE, 'remote', NULL, NULL, NULL, 'https://api.iconify.design', NULL, NULL, 'Iconify', 'https://iconify.design/', FALSE, FALSE, 'auto'),
+             ('fuel_prices', TRUE, 'remote', NULL, NULL, NULL, 'https://api.eia.gov/v2', NULL, NULL, 'U.S. Energy Information Administration', 'https://www.eia.gov/petroleum/gasdiesel/', FALSE, FALSE, 'auto'),
+             ('vehicle_lookup', TRUE, 'remote', NULL, NULL, NULL, 'https://www.fueleconomy.gov/ws/rest', NULL, NULL, 'U.S. EPA and DOE, fueleconomy.gov', 'https://www.fueleconomy.gov/', FALSE, FALSE, 'auto'),
              ('s3_backup', FALSE, 'disabled', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, FALSE, FALSE, 'auto')
            ON CONFLICT (id) DO NOTHING"#,
     )
@@ -236,7 +250,8 @@ pub async fn list(
            ORDER BY CASE s.id
              WHEN 'rivian_account' THEN 1 WHEN 'open_meteo' THEN 2
              WHEN 'nominatim' THEN 3 WHEN 'basemap' THEN 4
-             WHEN 'iconify' THEN 5 ELSE 6 END"#,
+             WHEN 'iconify' THEN 5 WHEN 'fuel_prices' THEN 6
+             WHEN 'vehicle_lookup' THEN 7 ELSE 8 END"#,
     )
     .fetch_all(pool)
     .await?;

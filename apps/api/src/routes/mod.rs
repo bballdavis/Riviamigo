@@ -45,6 +45,7 @@ pub mod live;
 pub mod locations;
 pub mod metrics;
 pub mod overview;
+pub mod ownership;
 pub mod parked_energy;
 pub mod places;
 pub mod range_normalization;
@@ -272,6 +273,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(rivian_stewardship::router())
         .merge(schedules::router())
         .merge(overview::router())
+        .merge(ownership::router())
         .merge(parked_energy::router())
         .merge(state_timeline::router())
         .merge(health::router())

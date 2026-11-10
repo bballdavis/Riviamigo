@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { dashboardSearchSchema } from '../dashboardSearch';
 
 vi.mock('@riviamigo/ui/primitives', async () => {
   const m = await import('../../test/mockPrimitives');
@@ -85,7 +86,32 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   return { ...actual, useNavigate: () => mockNavigate };
 });
 
+// One stable object, as React Query returns: the editor reseeds its form whenever `data` changes.
+const ownershipMocks = vi.hoisted(() => ({
+  update: vi.fn(),
+  data: {
+    vehicle_id: 'v1',
+    can_edit: true,
+    settings: {
+      purchase_price_usd: 82000,
+      purchase_date: '2024-03-15',
+      resale_value_usd: null,
+      insurance_monthly_usd: null,
+      tire_set_cost_usd: null,
+      gas_price_usd_per_gallon: null,
+      enabled_reference_ids: null,
+      custom_vehicles: [],
+    },
+  },
+}));
+
 vi.mock('@riviamigo/hooks', () => ({
+  useOwnershipSettings: () => ({
+    data: ownershipMocks.data,
+    isLoading: false,
+    isError: false,
+  }),
+  useUpdateOwnershipSettings: () => ({ mutate: ownershipMocks.update, isPending: false, isError: false }),
   queryKeys: {
     auth: {
       identities: ['auth-identities'],
@@ -1107,6 +1133,95 @@ describe('Settings page', () => {
         target_tire_pressure_psi: 46,
       });
     });
+  });
+
+  it('edits ownership costs from the vehicle edit area', async () => {
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+
+    const price = screen.getByLabelText('Purchase price ($)');
+    expect(price).toHaveValue('82000');
+    fireEvent.change(price, { target: { value: '79,500' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save ownership costs' }));
+
+    await waitFor(() => {
+      expect(ownershipMocks.update).toHaveBeenCalledWith(
+        expect.objectContaining({ purchase_price_usd: 79500, purchase_date: '2024-03-15' }),
+        expect.anything(),
+      );
+    });
+  });
+
+  it('opens and edits every dashboard via links the /d/$slug route accepts', () => {
+    // Real default dashboards (real ids), not hand-written fixtures: the route's own
+    // search validation must accept whatever the Open/Edit buttons navigate with.
+    // Read the bundled JSON directly: importing the dashboards package here would pull in
+    // every widget and trip over this file's lucide-react mock.
+    const bundled = import.meta.glob<{ default: { id: string; slug: string; name: string; widgets: unknown[] } }>(
+      '../../../../../packages/dashboards/src/defaults/*.json',
+      { eager: true },
+    );
+    const DEFAULT_DASHBOARDS = Object.values(bundled).map(({ default: json }) => ({
+      ...json,
+      description: null,
+      isDefault: true,
+      isLocked: false,
+      ownerId: null,
+    }));
+    expect(DEFAULT_DASHBOARDS.length).toBeGreaterThanOrEqual(5);
+    const owned = {
+      id: crypto.randomUUID(),
+      slug: 'my-charging',
+      name: 'My Charging',
+      description: null,
+      isDefault: false,
+      isLocked: false,
+      ownerId: 'u1',
+      widgets: [],
+    };
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'admin@example.com',
+      role: 'admin',
+      default_vehicle_id: 'v1',
+    };
+    dashboardMocks.dashboards = [...DEFAULT_DASHBOARDS, owned] as never;
+
+    renderSettings();
+    clickSettingsSection('Dashboards');
+    mockNavigate.mockReset(); // drop the section-switch navigation
+
+    const expectNavigatesToValidDashboardRoute = (slug: string, dashboardId: string, edit: boolean) => {
+      expect(mockNavigate).toHaveBeenCalledTimes(1);
+      const call = mockNavigate.mock.calls[0]![0] as {
+        to: string;
+        params: { slug: string };
+        search: unknown;
+      };
+      expect(call.to).toBe('/d/$slug');
+      expect(call.params).toEqual({ slug });
+      const parsed = dashboardSearchSchema.safeParse(call.search);
+      expect(parsed.success).toBe(true);
+      expect(parsed.data).toEqual({ dashboardId, ...(edit ? { edit: 1 } : {}) });
+      mockNavigate.mockReset();
+    };
+
+    const openDefaults = screen.getAllByRole('button', { name: 'Open default' });
+    const editDefaults = screen.getAllByRole('button', { name: 'Edit default' });
+    expect(openDefaults).toHaveLength(DEFAULT_DASHBOARDS.length);
+    expect(editDefaults).toHaveLength(DEFAULT_DASHBOARDS.length);
+
+    DEFAULT_DASHBOARDS.forEach((dashboard, index) => {
+      fireEvent.click(openDefaults[index]!);
+      expectNavigatesToValidDashboardRoute(dashboard.slug, dashboard.id, false);
+      fireEvent.click(editDefaults[index]!);
+      expectNavigatesToValidDashboardRoute(dashboard.slug, dashboard.id, true);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    expectNavigatesToValidDashboardRoute(owned.slug, owned.id, false);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expectNavigatesToValidDashboardRoute(owned.slug, owned.id, true);
   });
 
   it('renders the Appearance section', () => {

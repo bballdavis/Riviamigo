@@ -93,3 +93,6 @@ export { TripTirePressureChart } from './TripTirePressureChart';
 export type { TripTirePressureChartProps, TripTirePressurePoint } from './TripTirePressureChart';
 export { TirePressureTripsChart } from './TirePressureTripsChart';
 export type { TirePressureTripsChartProps } from './TirePressureTripsChart';
+
+export { CostTimelineChart, costTimelineTicks } from './CostTimelineChart';
+export type { CostTimelineChartProps, CostTimelineRegion, CostTimelineRow, CostTimelineSeries } from './CostTimelineChart';

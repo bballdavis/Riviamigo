@@ -40,6 +40,7 @@ import { AccountIdentitySection } from '../../components/settings/AccountIdentit
 import { AuthenticationSection } from '../../components/settings/AuthenticationSection';
 import { BackupSection } from '../../components/settings/BackupSection';
 import { ExternalConnectionsSection } from '../../components/settings/ExternalConnectionsSection';
+import { OwnershipCostsSettings } from '../ownership/OwnershipCostsFields';
 import { JobsSection } from '../../components/settings/JobsSection';
 import { PlacesSection } from '../../components/settings/PlacesSection';
 import { ChargingSection } from '../../components/settings/ChargingSection';
@@ -1604,6 +1605,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                                   This value is used as the baseline for battery health % and degradation charts.
                                   Defaults can be overridden if your vehicle came with a different pack. Target tire pressure is the recommended cold PSI; confirm it against the driver-door placard.
                                 </p>
+                                <OwnershipCostsSettings vehicleId={v.id} />
                               </div>
                             </div>
                           )}

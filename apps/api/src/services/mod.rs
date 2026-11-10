@@ -20,6 +20,7 @@ pub mod ingestion_capture;
 pub mod nominatim;
 pub mod oidc;
 pub mod outbound;
+pub mod ownership;
 pub mod recovery_extract;
 pub(crate) mod recovery_workspace;
 pub mod redis_health;

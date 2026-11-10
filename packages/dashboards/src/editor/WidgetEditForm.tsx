@@ -34,6 +34,10 @@ import {
   type SensorDataSource,
   type SensorValueColor,
 } from '../widgets/sensor/sensorDefinitions';
+import {
+  OVERVIEW_STAT_DEFINITIONS,
+  resolveOverviewStatIds,
+} from '../widgets/custom/overviewStats';
 import { IconPicker } from './IconPicker';
 import { resolveIconId } from './iconMigration';
 
@@ -61,6 +65,8 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
   const sensorDefinition = sensorMode ? getSensorDefinition(widget.definitionId) : undefined;
 
   const options = (widget.options ?? {}) as Record<string, unknown>;
+  const overviewVehicleMode = customMode && widget.definitionId === 'overview.vehicle';
+  const overviewStatIds = resolveOverviewStatIds(options.stats);
   const title = widget.title ?? '';
   const connectionVisibility = getWidgetVisibilityRules(widget)
     .find((rule) => rule.type === 'vehicle-connection')?.value ?? 'always';
@@ -619,6 +625,38 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                 ))}
               </div>
             </div>
+          </Section>
+        ) : null}
+
+        {overviewVehicleMode ? (
+          <Section title="Stat rows">
+            <p className="text-[11px] text-fg-tertiary">
+              Choose the five sensors shown beside the vehicle. A sensor can only appear once.
+            </p>
+            {overviewStatIds.map((statId, slot) => (
+              <Field key={slot} label={`Row ${slot + 1}`}>
+                <SelectPicker
+                  className="w-full"
+                  value={statId}
+                  onChange={(next) => {
+                    const nextIds = [...overviewStatIds];
+                    nextIds[slot] = next;
+                    patch({ stats: nextIds });
+                  }}
+                  aria-label={`Stat row ${slot + 1}`}
+                  options={OVERVIEW_STAT_DEFINITIONS
+                    .filter((definition) => definition.id === statId || !overviewStatIds.includes(definition.id))
+                    .map((definition) => ({ value: definition.id, label: definition.description }))}
+                />
+              </Field>
+            ))}
+            <button
+              type="button"
+              onClick={() => clearOption('stats')}
+              className="self-start text-[11px] font-medium text-fg-tertiary underline-offset-2 hover:text-fg hover:underline"
+            >
+              Reset to defaults
+            </button>
           </Section>
         ) : null}
 
