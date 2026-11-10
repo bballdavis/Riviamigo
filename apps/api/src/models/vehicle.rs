@@ -9,6 +9,7 @@ pub struct Vehicle {
     pub rivian_vehicle_id: String,
     pub vin: Option<String>,
     pub model: String,
+    pub model_year: Option<i32>,
     pub trim: Option<String>,
     pub color: Option<String>,
     pub battery_config: Option<String>,

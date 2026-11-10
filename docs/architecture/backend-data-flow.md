@@ -25,6 +25,16 @@ feed unhealthy. Older battery, range, or charging timestamps are reported as
 field freshness diagnostics instead; parked vehicles are not expected to emit
 continuous trip or charging telemetry.
 
+Vehicle enrollment persists Rivian's `vehicle.modelYear` in
+`riviamigo.vehicles.model_year`; `GET /v1/vehicles` exposes it as `year`.
+Credential renewal and startup vehicle enrichment refresh this nullable metadata for existing
+vehicles without clearing a known year when Rivian omits it. The forward-only
+model-year migration adds storage only; it does not infer a year from a VIN or
+rewrite saved battery capacity. Settings uses the year before battery-capacity
+presets when selecting R1 generation (2025 onward is Gen 2), preserving an
+incompatible saved capacity as a custom value rather than silently changing the
+battery-health baseline.
+
 Telemetry is written to the `timeseries.telemetry` hypertable. The
 `telemetry_1min` continuous aggregate incrementally materializes the prior
 seven days once an hour, ending five minutes before the present. It remains a

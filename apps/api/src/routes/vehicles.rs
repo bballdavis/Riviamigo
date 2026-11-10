@@ -452,6 +452,7 @@ struct VehicleListRow {
     id: Uuid,
     rivian_vehicle_id: String,
     model: String,
+    model_year: Option<i32>,
     trim: Option<String>,
     vin: Option<String>,
     color: Option<String>,
@@ -1429,6 +1430,16 @@ async fn add_vehicle(
     let is_new = existing_vehicle_id.is_none();
 
     let vehicle_id = if let Some(existing_vehicle_id) = existing_vehicle_id {
+        sqlx::query(
+            "UPDATE riviamigo.vehicles
+             SET model_year = COALESCE($2, model_year)
+             WHERE id = $1",
+        )
+        .bind(existing_vehicle_id)
+        .bind(verified.model_year)
+        .execute(&mut *tx)
+        .await?;
+
         let already_member = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(
                 SELECT 1
@@ -1470,8 +1481,8 @@ async fn add_vehicle(
     } else {
         let vehicle_id: Uuid = sqlx::query_scalar(
             r#"INSERT INTO riviamigo.vehicles
-               (user_id, rivian_vehicle_id, model, trim, vin, name, home_latitude, home_longitude)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id"#,
+               (user_id, rivian_vehicle_id, model, trim, vin, name, home_latitude, home_longitude, model_year)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id"#,
         )
         .bind(auth.user_id)
         .bind(&rivian_vehicle_id)
@@ -1483,6 +1494,7 @@ async fn add_vehicle(
         .bind(body.name.as_deref().map(canonical_vehicle_name))
         .bind(body.home_lat)
         .bind(body.home_lng)
+        .bind(verified.model_year)
         .fetch_one(&mut *tx)
         .await?;
 
@@ -1659,13 +1671,23 @@ async fn refresh_vehicle_credentials(
     .await?
     .ok_or(AppError::RivianConnectSessionExpired)?;
 
-    verify_account_vehicle(&tokens, &rivian_vehicle_id).await?;
+    let verified = verify_account_vehicle(&tokens, &rivian_vehicle_id).await?;
 
     let identity = age_identity(&state)?;
     let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
         .map_err(AppError::Internal)?;
 
     let mut tx = state.pool.begin().await?;
+
+    sqlx::query(
+        "UPDATE riviamigo.vehicles
+         SET model_year = COALESCE($2, model_year)
+         WHERE id = $1",
+    )
+    .bind(vid)
+    .bind(verified.model_year)
+    .execute(&mut *tx)
+    .await?;
 
     sqlx::query(
         "INSERT INTO riviamigo.vehicle_credentials (vehicle_id, encrypted_tokens, token_created_at, last_refreshed_at)
@@ -2334,7 +2356,7 @@ async fn list_vehicles(
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let rows = sqlx::query_as::<_, VehicleListRow>(
-        "SELECT v.id, v.rivian_vehicle_id, v.model, v.trim, v.vin, v.color, \
+        "SELECT v.id, v.rivian_vehicle_id, v.model, v.model_year, v.trim, v.vin, v.color, \
                 COALESCE(vus.display_name, v.name) AS name, v.battery_capacity_wh, v.target_tire_pressure_psi, \
                 v.battery_config, v.created_at, v.interior_color, v.wheel_option, v.max_vehicle_power_kw, \
                 v.charge_port_type, v.battery_cell_type, v.supported_features, \
@@ -2382,7 +2404,7 @@ async fn list_vehicles(
             "is_demo":                  is_demo,
             "vin":                      r.vin,
             "model":                    canonical_vehicle_model(&r.model),
-            "year":                     serde_json::Value::Null,
+            "year":                     r.model_year,
             "trim":                     r.trim,
             "color":                    r.color,
             "interior_color":           r.interior_color,
@@ -5597,6 +5619,85 @@ mod tests {
             get_status(app, "/v1/vehicles").await,
             StatusCode::UNAUTHORIZED
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn vehicle_model_year_is_exposed_by_vehicle_list() {
+        let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+            .await
+            .expect("test database");
+        crate::db::migrations::run_current_migrations(&pool)
+            .await
+            .expect("migrate test database");
+        let user_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO riviamigo.users (id, email, password_hash) VALUES ($1, $2, 'unused')",
+        )
+        .bind(user_id)
+        .bind(format!("model-year-{user_id}@example.test"))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for year in [Some(2024), Some(2025), None] {
+            let vehicle_id = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO riviamigo.vehicles
+                 (id, user_id, rivian_vehicle_id, model, model_year)
+                 VALUES ($1, $2, $3, 'R1S', $4)",
+            )
+            .bind(vehicle_id)
+            .bind(user_id)
+            .bind(format!("demo-model-year-{vehicle_id}"))
+            .bind(year)
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role)
+                 VALUES ($1, $2, 'owner')",
+            )
+            .bind(vehicle_id)
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let mut state = make_helper_state("redis://127.0.0.1/".into());
+        state.pool = pool.clone();
+        let Json(body) = super::list_vehicles(
+            State(state),
+            crate::middleware::auth::AuthUser {
+                user_id,
+                default_vehicle_id: None,
+                api_access_level: None,
+                api_vehicle_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let vehicles = body["vehicles"].as_array().expect("vehicle list");
+        let years: Vec<_> = vehicles
+            .iter()
+            .map(|vehicle| vehicle["year"].clone())
+            .collect();
+        assert_eq!(years.len(), 3);
+        for year in [
+            serde_json::json!(2024),
+            serde_json::json!(2025),
+            serde_json::Value::Null,
+        ] {
+            assert!(years.contains(&year));
+        }
+
+        sqlx::query("DELETE FROM riviamigo.users WHERE id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
     }
 
     #[tokio::test]

@@ -967,9 +967,16 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
     setEditNameValue(vehicle?.display_name ?? '');
     setEditTargetTirePressure(String(vehicle?.target_tire_pressure_psi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI));
 
+    const modelLower = vehicle?.model?.toLowerCase() ?? '';
+    const detectedGen: BatteryGen | null = vehicle?.year != null
+      ? (vehicle.year >= 2025 ? 'gen2' : 'gen1')
+      : (modelLower.includes('gen 2') || modelLower.includes('2nd') ? 'gen2' : null);
+    setBatteryGen(detectedGen ?? 'gen1');
+
     if (currentKwh != null) {
-      // Search all gens so a Gen 2 pack saved while gen was auto-detected as Gen 1 still resolves correctly
-      for (const g of ['gen1', 'gen2'] as BatteryGen[]) {
+      // Model year wins over an older saved preset, without changing its capacity.
+      const generations: BatteryGen[] = detectedGen ? [detectedGen] : ['gen1', 'gen2'];
+      for (const g of generations) {
         const match = RIVIAN_BATTERY_PRESETS[g].find((p) => p.kwh === currentKwh && p.key !== 'custom');
         if (match) {
           setBatteryGen(g);
@@ -986,10 +993,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
       setBatteryPreset('custom');
       setCustomKwh(String(currentKwh));
     } else {
-      const modelLower = vehicle?.model?.toLowerCase() ?? '';
-      const isGen2 = modelLower.includes('gen 2') || modelLower.includes('2nd') || (vehicle?.year && vehicle.year >= 2025);
-      const gen: BatteryGen = isGen2 ? 'gen2' : 'gen1';
-      setBatteryGen(gen);
+      const gen = detectedGen ?? 'gen1';
       setBatteryPreset(gen === 'gen2' ? 'r1_large_g2' : 'r1_large_g1');
       setCustomKwh('');
     }

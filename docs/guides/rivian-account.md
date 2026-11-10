@@ -23,6 +23,25 @@ saving a vehicle does not require a container restart. Riviamigo uses Rivian's
 unofficial API and WebSocket behavior, so upstream changes can occasionally
 require a project update.
 
+## Vehicle generation and battery capacity
+
+In **Settings > Vehicles**, the R1 battery generation uses Rivian's model year:
+2025 and newer are Gen 2; earlier model years are Gen 1. Riviamigo saves the year
+when adding a vehicle and refreshes it during collector startup, including for
+vehicles added before model-year storage was introduced. After upgrading, let
+the collector connect successfully, then reload Settings to see the corrected
+generation. Removing and re-adding the vehicle is not necessary.
+
+If the model year is unavailable, Riviamigo uses a generation hint in the model
+name or a matching saved battery-capacity preset, falling back to Gen 1 when
+neither is available.
+
+A corrected generation does not overwrite your saved factory battery capacity.
+If that capacity matches only the other generation's presets, it appears as
+**Custom** under the corrected generation. Select the appropriate pack and save
+to correct a previously saved default. Model year identifies the generation,
+not whether the vehicle has a Standard, Large, or Max pack.
+
 ## Estimated connection renewal
 
 Riviamigo records the time of each complete Rivian sign-in and shows an

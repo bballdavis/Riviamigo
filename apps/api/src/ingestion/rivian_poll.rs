@@ -357,6 +357,7 @@ struct VehicleEnrichmentItem {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VehicleEnrichmentDetails {
+    model_year: Option<i32>,
     mobile_configuration: Option<MobileConfiguration>,
     vehicle_state: Option<VehicleStateEnrichment>,
 }
@@ -394,7 +395,7 @@ struct SupportedFeature {
     status: Option<String>,
 }
 
-/// Fetch trim/interior/wheel/charger-port static fields and upsert into `vehicles`.
+/// Fetch model year and static configuration fields and upsert into `vehicles`.
 pub async fn fetch_vehicle_enrichment(
     rivian_vehicle_id: &str,
     vehicle_id: Uuid,
@@ -408,6 +409,7 @@ pub async fn fetch_vehicle_enrichment(
             vehicles {
               id
               vehicle {
+                modelYear
                 mobileConfiguration {
                   trimOption          { optionId optionName }
                   exteriorColorOption { optionId optionName }
@@ -448,7 +450,19 @@ pub async fn fetch_vehicle_enrichment(
         ));
     };
 
-    let details = item.vehicle;
+    save_vehicle_enrichment(pool, vehicle_id, item.vehicle).await?;
+
+    increment_poll_counter(pool, vehicle_id).await;
+    tracing::debug!(vehicle_id=%vehicle_id, "vehicle enrichment upserted");
+    Ok(())
+}
+
+async fn save_vehicle_enrichment(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    details: Option<VehicleEnrichmentDetails>,
+) -> Result<()> {
+    let model_year = details.as_ref().and_then(|d| d.model_year);
     let mobile_config = details
         .as_ref()
         .and_then(|d| d.mobile_configuration.as_ref());
@@ -477,6 +491,7 @@ pub async fn fetch_vehicle_enrichment(
          SET interior_color     = COALESCE($2, interior_color),
              trim               = COALESCE($3, trim),
              supported_features = COALESCE($4, supported_features),
+             model_year         = COALESCE($5, model_year),
              updated_at         = now()
          WHERE id = $1",
     )
@@ -484,11 +499,10 @@ pub async fn fetch_vehicle_enrichment(
     .bind(interior_color)
     .bind(trim)
     .bind(features_json)
+    .bind(model_year)
     .execute(pool)
     .await?;
 
-    increment_poll_counter(pool, vehicle_id).await;
-    tracing::debug!(vehicle_id=%vehicle_id, "vehicle enrichment upserted");
     Ok(())
 }
 
@@ -2835,6 +2849,68 @@ mod tests {
         .fetch_one(pool)
         .await
         .expect("seed test vehicle")
+    }
+
+    #[test]
+    fn vehicle_model_year_is_read_from_enrichment() {
+        for year in [Some(2024), Some(2025), Some(2026), None] {
+            let data: super::UserInfoEnrichmentData = serde_json::from_value(json!({
+                "currentUser": { "vehicles": [{
+                    "id": "test-vehicle",
+                    "vehicle": { "modelYear": year }
+                }] }
+            }))
+            .unwrap();
+            let item = data.current_user.unwrap().vehicles.unwrap().remove(0);
+            assert_eq!(item.vehicle.unwrap().model_year, year);
+        }
+
+        let details: super::VehicleEnrichmentDetails = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(details.model_year, None);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn vehicle_model_year_enrichment_backfills_without_overwriting_capacity() {
+        let db = DisposableDatabase::new().await;
+        let vehicle_id = seed_vehicle(&db.pool).await;
+        sqlx::query(
+            "UPDATE riviamigo.vehicles
+             SET battery_capacity_wh = 135000, battery_config = 'R1T / R1S Large (Gen 1)'
+             WHERE id = $1",
+        )
+        .bind(vehicle_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        for details in [Some(json!({ "modelYear": 2025 })), Some(json!({})), None] {
+            super::save_vehicle_enrichment(
+                &db.pool,
+                vehicle_id,
+                details.map(|value| serde_json::from_value(value).unwrap()),
+            )
+            .await
+            .unwrap();
+
+            let saved: (Option<i32>, Option<f64>, Option<String>) = sqlx::query_as(
+                "SELECT model_year, battery_capacity_wh, battery_config
+                 FROM riviamigo.vehicles WHERE id = $1",
+            )
+            .bind(vehicle_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                saved,
+                (
+                    Some(2025),
+                    Some(135000.0),
+                    Some("R1T / R1S Large (Gen 1)".into())
+                )
+            );
+        }
+        db.cleanup().await;
     }
 
     async fn payload_count(pool: &PgPool, vehicle_id: uuid::Uuid) -> i64 {
