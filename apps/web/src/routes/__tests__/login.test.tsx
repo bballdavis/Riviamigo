@@ -10,6 +10,7 @@ let mockSearch = {} as { redirect?: string; password_changed?: '1'; error?: 'oid
 let setupRequired = false;
 let setupProofRequired = false;
 let setupProofAvailable = false;
+let secureSessionCookies: boolean | undefined;
 let authConfig: { oidc_enabled: boolean; oidc_ready: boolean; password_login_enabled: boolean; oidc_auto_login?: boolean; button_label: string } | undefined;
 let isAuthenticated = false;
 let isBootstrapping = false;
@@ -22,7 +23,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@tanstack/react-query')>()),
   useQuery: ({ queryKey }: { queryKey: string[] }) => queryKey[0] === 'auth-config'
     ? { data: authConfig }
-    : { data: { setup_required: setupRequired, setup_proof_required: setupProofRequired, setup_proof_available: setupProofAvailable }, isSuccess: true },
+    : { data: { setup_required: setupRequired, setup_proof_required: setupProofRequired, setup_proof_available: setupProofAvailable, secure_session_cookies: secureSessionCookies }, isSuccess: true },
 }));
 
 const mockLogin = vi.fn();
@@ -49,12 +50,32 @@ beforeEach(() => {
   mockNavigate.mockClear(); mockLogin.mockClear(); mockRegister.mockClear(); mockResumeSession.mockReset(); mockStartOidc.mockReset();
   mockConsumeExplicitLogoutIntent.mockReset();
   mockConsumeExplicitLogoutIntent.mockReturnValue(false);
-  mockSearch = {}; setupRequired = false; setupProofRequired = false; setupProofAvailable = false;
+  mockSearch = {}; setupRequired = false; setupProofRequired = false; setupProofAvailable = false; secureSessionCookies = undefined;
+  Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
   authConfig = { oidc_enabled: false, oidc_ready: false, password_login_enabled: true, oidc_auto_login: false, button_label: 'Sign in with SSO' };
   isAuthenticated = false; isBootstrapping = false;
 });
 
 describe('LoginPage', () => {
+  it('explains short sessions when Secure refresh cookies meet a plain-HTTP origin', () => {
+    secureSessionCookies = true;
+    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: false });
+    render(<LoginPage />);
+    expect(screen.getByText(/open over plain HTTP/i)).toBeInTheDocument();
+    expect(screen.getByText(/ALLOW_INSECURE_LAN_HTTP_AUTH/)).toBeInTheDocument();
+  });
+
+  it('hides the plain-HTTP warning on secure origins or when insecure LAN cookies are enabled', () => {
+    secureSessionCookies = true;
+    const { unmount } = render(<LoginPage />);
+    expect(screen.queryByText(/open over plain HTTP/i)).not.toBeInTheDocument();
+    unmount();
+    secureSessionCookies = false;
+    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: false });
+    render(<LoginPage />);
+    expect(screen.queryByText(/open over plain HTTP/i)).not.toBeInTheDocument();
+  });
+
   it('renders the normal sign-in state after initial setup', () => {
     render(<LoginPage />);
     expect(screen.getByAltText('Riviamigo')).toBeInTheDocument();

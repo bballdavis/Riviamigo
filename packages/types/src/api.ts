@@ -1274,6 +1274,8 @@ export interface AuthSetupResponse {
   setup_required: boolean;
   setup_proof_required: boolean;
   setup_proof_available: boolean;
+  /** True when refresh cookies are Secure-only; absent on older servers. */
+  secure_session_cookies?: boolean;
 }
 
 export interface ChangePasswordBody {

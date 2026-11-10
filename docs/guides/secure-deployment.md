@@ -40,6 +40,11 @@ applies after the gateway.
 
 ### LAN-only HTTP exception
 
+Browsers discard `Secure` cookies on plain-HTTP origins (loopback such as
+`http://localhost` excepted). Without HTTPS or this exception, the refresh
+cookie never sticks, so every session ends when its 15-minute access token
+expires. The sign-in page detects that combination and shows a warning.
+
 HTTPS behind the authenticated gateway remains the supported production shape.
 For a trusted private network that cannot provide HTTPS, the Compose default
 includes `ALLOW_INSECURE_LAN_HTTP_AUTH=false`. Change it to `true` only with

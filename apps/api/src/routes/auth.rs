@@ -124,6 +124,10 @@ struct SetupResponse {
     setup_required: bool,
     setup_proof_required: bool,
     setup_proof_available: bool,
+    /// True when refresh cookies carry `Secure`. Browsers drop those cookies
+    /// on plain-HTTP origins, so the login page uses this to explain why a
+    /// session would end when its 15-minute access token expires.
+    secure_session_cookies: bool,
 }
 
 async fn setup(State(state): State<AppState>) -> Result<Json<SetupResponse>, AppError> {
@@ -135,6 +139,7 @@ async fn setup(State(state): State<AppState>) -> Result<Json<SetupResponse>, App
         setup_required,
         setup_proof_required: setup_required && state.config.is_production(),
         setup_proof_available: state.config.setup_proof_available(),
+        secure_session_cookies: !state.config.allows_insecure_refresh_cookies(),
     }))
 }
 
@@ -2173,11 +2178,13 @@ mod tests {
             setup_required: true,
             setup_proof_required: true,
             setup_proof_available: false,
+            secure_session_cookies: true,
         })
         .expect("setup response serializes");
         assert_eq!(value["setup_required"], true);
         assert_eq!(value["setup_proof_required"], true);
         assert_eq!(value["setup_proof_available"], false);
+        assert_eq!(value["secure_session_cookies"], true);
     }
 
     #[test]

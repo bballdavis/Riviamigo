@@ -54,6 +54,11 @@ export function LoginPage() {
   const setupRequired = setup.data?.setup_required === true;
   const setupProofRequired = setup.data?.setup_proof_required === true;
   const setupProofAvailable = setup.data?.setup_proof_available === true;
+  // Browsers drop Secure cookies on plain-HTTP origins (localhost excepted), so
+  // the refresh cookie never sticks and the session ends with the 15-minute
+  // access token. Say so instead of letting it look like random logouts.
+  const sessionCookieBlocked =
+    setup.data?.secure_session_cookies === true && typeof window !== 'undefined' && window.isSecureContext === false;
   const authConfig = useQuery({
     queryKey: ['auth-config'],
     queryFn: () => api.getAuthConfig(),
@@ -230,6 +235,11 @@ export function LoginPage() {
           {search.password_changed === '1' && (
             <p role="status" className="mb-4 rounded-lg border border-status-positive/30 bg-status-positive/10 px-3 py-2 text-xs text-status-positive">
               Password changed. Sign in with your new password.
+            </p>
+          )}
+          {sessionCookieBlocked && (
+            <p role="alert" className="mb-4 rounded-lg border border-status-warning/30 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
+              This page is open over plain HTTP, so your browser can't keep you signed in and you'll be asked to sign in again about every 15 minutes. Open Riviamigo over HTTPS, or, on a trusted home network, ask the administrator to enable ALLOW_INSECURE_LAN_HTTP_AUTH.
             </p>
           )}
           {search.error && (
