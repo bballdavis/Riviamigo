@@ -31,7 +31,7 @@ export function ExternalConnectionsLink({ children }: { children: React.ReactNod
 }
 
 // ---------------------------------------------------------------------------
-// Edit costs
+// Edit settings
 // ---------------------------------------------------------------------------
 
 interface EditCostsDialogProps {
@@ -58,22 +58,22 @@ export function EditCostsDialog({ settings, saving, saveFailed, onSave, onClose 
       <form className="flex min-h-0 flex-1 flex-col" onSubmit={submit} noValidate>
         <header className={HEADER_CLASS}>
           <div>
-            <h2 id="ownership-costs-title" className="text-base font-semibold text-fg">Ownership costs</h2>
+            <h2 id="ownership-costs-title" className="text-base font-semibold text-fg">Ownership settings</h2>
             <p className="mt-1 text-sm text-fg-tertiary">Also available in Settings, under Vehicles.</p>
           </div>
-          <button type="button" aria-label="Close ownership costs" className={CLOSE_BUTTON_CLASS} onClick={onClose}>
+          <button type="button" aria-label="Close ownership settings" className={CLOSE_BUTTON_CLASS} onClick={onClose}>
             <X className="h-4 w-4" />
           </button>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:px-5">
           <OwnershipCostsFields form={form} errors={errors} onChange={setForm} idPrefix="ownership-dialog" />
           {saveFailed ? (
-            <p className="mt-4 text-sm text-status-danger" role="alert">The costs could not be saved. Try again.</p>
+            <p className="mt-4 text-sm text-status-danger" role="alert">The settings could not be saved. Try again.</p>
           ) : null}
         </div>
         <footer className={FOOTER_CLASS}>
           <Button type="button" variant="secondary" size="md" onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="primary" size="md" loading={saving}>Save costs</Button>
+          <Button type="submit" variant="primary" size="md" loading={saving}>Save settings</Button>
         </footer>
       </form>
     </ResponsiveDialog>

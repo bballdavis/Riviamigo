@@ -175,21 +175,23 @@ pub fn reference_vehicles() -> Vec<ReferenceVehicle> {
             costs: EV_DEFAULTS,
         },
         ReferenceVehicle {
-            id: "kia_telluride",
-            label: "Kia Telluride",
+            id: "chevrolet_tahoe",
+            label: "Chevrolet Tahoe",
             powertrain: Powertrain::Gas,
-            price_usd: 45_000.0,
-            mpg: Some(21.0),
+            price_usd: 62_000.0,
+            mpg: Some(18.0),
             kwh_per_mi: None,
             premium_fuel: false,
             default_enabled: true,
             costs: CostAssumptions {
                 annual_retention: 0.88,
-                oil_cost_usd: Some(110.0),
-                brake_cost_usd: 850.0,
-                tire_cost_usd: 1_100.0,
-                annual_service_usd: 380.0,
-                insurance_monthly_usd: 165.0,
+                oil_cost_usd: Some(130.0),
+                brake_interval_mi: 40_000.0,
+                brake_cost_usd: 1_000.0,
+                tire_interval_mi: 40_000.0,
+                tire_cost_usd: 1_500.0,
+                annual_service_usd: 450.0,
+                insurance_monthly_usd: 185.0,
                 ..GAS_DEFAULTS
             },
         },
@@ -233,6 +235,27 @@ pub fn reference_vehicles() -> Vec<ReferenceVehicle> {
                 tire_cost_usd: 2_100.0,
                 annual_service_usd: 800.0,
                 insurance_monthly_usd: 260.0,
+            },
+        },
+        ReferenceVehicle {
+            id: "porsche_cayenne",
+            label: "Porsche Cayenne",
+            powertrain: Powertrain::Gas,
+            price_usd: 90_000.0,
+            mpg: Some(19.0),
+            kwh_per_mi: None,
+            premium_fuel: true,
+            default_enabled: true,
+            costs: CostAssumptions {
+                annual_retention: 0.85,
+                oil_interval_mi: Some(10_000.0),
+                oil_cost_usd: Some(350.0),
+                brake_interval_mi: 35_000.0,
+                brake_cost_usd: 1_800.0,
+                tire_interval_mi: 25_000.0,
+                tire_cost_usd: 2_000.0,
+                annual_service_usd: 900.0,
+                insurance_monthly_usd: 250.0,
             },
         },
         ReferenceVehicle {
@@ -303,6 +326,9 @@ pub struct OwnershipSettings {
     pub insurance_monthly_usd: Option<f64>,
     pub tire_set_cost_usd: Option<f64>,
     pub gas_price_usd_per_gallon: Option<f64>,
+    /// Years of ownership the Projected view covers; `None` means the default.
+    #[serde(default)]
+    pub projection_years: Option<i16>,
     #[serde(default)]
     pub comparisons: Comparisons,
 }
@@ -325,6 +351,8 @@ fn valid_id(value: &str) -> bool {
 }
 
 /// Validate and normalize user-supplied settings before they are stored.
+const MAX_PROJECTION_YEARS: i16 = 20;
+
 pub fn validate_settings(
     mut settings: OwnershipSettings,
     today: NaiveDate,
@@ -359,6 +387,13 @@ pub fn validate_settings(
         0.01,
         100.0,
     )?;
+    if let Some(years) = settings.projection_years {
+        if !(1..=MAX_PROJECTION_YEARS).contains(&years) {
+            return Err(AppError::Validation(format!(
+                "projection_years must be between 1 and {MAX_PROJECTION_YEARS}"
+            )));
+        }
+    }
     if let Some(date) = settings.purchase_date {
         if date.year() < 2000 || date > today {
             return Err(AppError::Validation(
@@ -439,13 +474,14 @@ struct SettingsRow {
     insurance_monthly_usd: Option<f64>,
     tire_set_cost_usd: Option<f64>,
     gas_price_usd_per_gallon: Option<f64>,
+    projection_years: Option<i16>,
     comparisons: serde_json::Value,
 }
 
 pub async fn load_settings(pool: &PgPool, vehicle_id: Uuid) -> Result<OwnershipSettings, AppError> {
     let row = sqlx::query_as::<_, SettingsRow>(
         "SELECT purchase_price_usd, purchase_date, resale_value_usd, insurance_monthly_usd,
-                tire_set_cost_usd, gas_price_usd_per_gallon, comparisons
+                tire_set_cost_usd, gas_price_usd_per_gallon, projection_years, comparisons
          FROM riviamigo.vehicle_ownership_settings
          WHERE vehicle_id = $1",
     )
@@ -461,6 +497,7 @@ pub async fn load_settings(pool: &PgPool, vehicle_id: Uuid) -> Result<OwnershipS
             insurance_monthly_usd: row.insurance_monthly_usd,
             tire_set_cost_usd: row.tire_set_cost_usd,
             gas_price_usd_per_gallon: row.gas_price_usd_per_gallon,
+            projection_years: row.projection_years,
             // A shape this build cannot read falls back to the defaults
             // rather than making the whole page fail.
             comparisons: serde_json::from_value(row.comparisons).unwrap_or_default(),
@@ -480,8 +517,8 @@ pub async fn save_settings(
         "INSERT INTO riviamigo.vehicle_ownership_settings
            (vehicle_id, purchase_price_usd, purchase_date, resale_value_usd,
             insurance_monthly_usd, tire_set_cost_usd, gas_price_usd_per_gallon,
-            comparisons, updated_at, updated_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9)
+            projection_years, comparisons, updated_at, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10)
          ON CONFLICT (vehicle_id) DO UPDATE SET
            purchase_price_usd = EXCLUDED.purchase_price_usd,
            purchase_date = EXCLUDED.purchase_date,
@@ -489,6 +526,7 @@ pub async fn save_settings(
            insurance_monthly_usd = EXCLUDED.insurance_monthly_usd,
            tire_set_cost_usd = EXCLUDED.tire_set_cost_usd,
            gas_price_usd_per_gallon = EXCLUDED.gas_price_usd_per_gallon,
+           projection_years = EXCLUDED.projection_years,
            comparisons = EXCLUDED.comparisons,
            updated_at = now(),
            updated_by = EXCLUDED.updated_by",
@@ -500,6 +538,7 @@ pub async fn save_settings(
     .bind(settings.insurance_monthly_usd)
     .bind(settings.tire_set_cost_usd)
     .bind(settings.gas_price_usd_per_gallon)
+    .bind(settings.projection_years)
     .bind(comparisons)
     .bind(user_id)
     .execute(pool)
@@ -522,6 +561,11 @@ pub struct UsageMonth {
     /// without a matching price carry no cost, so they must not dilute the rate.
     pub priced_kwh: f64,
     pub charging_cost_usd: f64,
+    /// DC fast charging, a subset of the totals above. Fast charging costs
+    /// several times what home charging does, so the two are priced apart.
+    pub fast_kwh: f64,
+    pub fast_priced_kwh: f64,
+    pub fast_cost_usd: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -547,7 +591,14 @@ pub async fn load_usage(pool: &PgPool, vehicle_id: Uuid) -> Result<Usage, AppErr
                   COALESCE(SUM(COALESCE(energy_added_wh / 1000.0, kwh_added)), 0)::float8 AS charged_kwh,
                   COALESCE(SUM(COALESCE(energy_added_wh / 1000.0, kwh_added))
                            FILTER (WHERE cost_usd IS NOT NULL), 0)::float8 AS priced_kwh,
-                  COALESCE(SUM(cost_usd), 0)::float8 AS charging_cost_usd
+                  COALESCE(SUM(cost_usd), 0)::float8 AS charging_cost_usd,
+                  COALESCE(SUM(COALESCE(energy_added_wh / 1000.0, kwh_added))
+                           FILTER (WHERE charger_type = 'dc' OR cost_method = 'rivian_paid_total'), 0)::float8 AS fast_kwh,
+                  COALESCE(SUM(COALESCE(energy_added_wh / 1000.0, kwh_added))
+                           FILTER (WHERE (charger_type = 'dc' OR cost_method = 'rivian_paid_total')
+                                     AND cost_usd IS NOT NULL), 0)::float8 AS fast_priced_kwh,
+                  COALESCE(SUM(cost_usd)
+                           FILTER (WHERE charger_type = 'dc' OR cost_method = 'rivian_paid_total'), 0)::float8 AS fast_cost_usd
            FROM riviamigo.charge_sessions
            WHERE vehicle_id = $1 AND ended_at IS NOT NULL
            GROUP BY 1
@@ -557,7 +608,10 @@ pub async fn load_usage(pool: &PgPool, vehicle_id: Uuid) -> Result<Usage, AppErr
                 COALESCE(drive.drive_energy_kwh, 0)::float8 AS drive_energy_kwh,
                 COALESCE(charge.charged_kwh, 0)::float8 AS charged_kwh,
                 COALESCE(charge.priced_kwh, 0)::float8 AS priced_kwh,
-                COALESCE(charge.charging_cost_usd, 0)::float8 AS charging_cost_usd
+                COALESCE(charge.charging_cost_usd, 0)::float8 AS charging_cost_usd,
+                COALESCE(charge.fast_kwh, 0)::float8 AS fast_kwh,
+                COALESCE(charge.fast_priced_kwh, 0)::float8 AS fast_priced_kwh,
+                COALESCE(charge.fast_cost_usd, 0)::float8 AS fast_cost_usd
          FROM drive
          FULL OUTER JOIN charge ON charge.month = drive.month
          ORDER BY 1",
@@ -1087,6 +1141,19 @@ mod tests {
             ..base.clone()
         };
         assert!(validate_settings(future, today()).is_err());
+
+        for (years, ok) in [
+            (Some(1), true),
+            (Some(20), true),
+            (Some(0), false),
+            (Some(21), false),
+        ] {
+            let projection = OwnershipSettings {
+                projection_years: years,
+                ..base.clone()
+            };
+            assert_eq!(validate_settings(projection, today()).is_ok(), ok);
+        }
 
         let custom = |id: &str, powertrain, mpg, kwh| CustomVehicle {
             id: id.into(),

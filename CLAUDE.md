@@ -27,7 +27,9 @@ allocation.
 
 `pnpm stop` ends this checkout's dev servers (launcher, Vite, API, restore
 agent) and leaves Docker services running. The dev stack always runs the API
-with password login on and SSO off; see `docs/development.md`.
+with password login on and SSO off. Pause Rivian collection per vehicle in
+Settings > Vehicles when the dev database is a copy of production; see
+`docs/development.md`.
 
 The launcher uses the existing `riviamigo` Docker Compose project by default
 for the infrastructure services it starts: TimescaleDB, Redis, and Garage.

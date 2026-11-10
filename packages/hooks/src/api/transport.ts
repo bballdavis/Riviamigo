@@ -894,6 +894,13 @@ export class AuthenticatedTransport {
     return this.request('PUT', `/v1/vehicles/${vehicleId}/name`, { name });
   }
 
+  async updateVehicleCollection(
+    vehicleId: string,
+    paused: boolean,
+  ): Promise<{ ok: boolean; collection_paused: boolean; worker_command_queued: boolean }> {
+    return this.request('PUT', `/v1/vehicles/${vehicleId}/collection`, { paused });
+  }
+
   async setDefaultVehicle(vehicleId: string): Promise<{ ok: boolean; default_vehicle_id: string }> {
     return this.request('POST', `/v1/vehicles/${vehicleId}/default`);
   }

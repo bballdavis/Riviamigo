@@ -1751,6 +1751,8 @@ export interface OwnershipSettings {
   insurance_monthly_usd: number | null;
   tire_set_cost_usd: number | null;
   gas_price_usd_per_gallon: number | null;
+  /** Years of ownership the Projected view covers, from the purchase date; null uses 5. */
+  projection_years: number | null;
   comparisons: OwnershipComparisons;
 }
 
@@ -1762,6 +1764,10 @@ export interface OwnershipUsageMonth {
   charged_kwh: number;
   /** The part of `charged_kwh` from sessions that have a cost. */
   priced_kwh: number;
+  /** DC fast charging, a subset of the totals; priced apart from home charging. */
+  fast_kwh: number;
+  fast_priced_kwh: number;
+  fast_cost_usd: number;
   charging_cost_usd: number;
 }
 

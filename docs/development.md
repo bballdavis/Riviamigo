@@ -50,6 +50,14 @@ mixed, or production Compose identity metadata fails closed; set
 `DEV_COMPOSE_PROJECT_NAME` to a unique isolated name to avoid a same-named
 production project.
 
+A development database is often a copy of production, including the
+production Rivian sign-in. Two servers polling one Rivian account interfere
+with each other, and Rivian requests start failing with
+`User is unauthenticated`. Before connecting a copy, pause collection for each
+copied vehicle in **Settings > Vehicles** (the pause button on the vehicle
+card), or start the API with `RIVIAMIGO_RIVIAN_WORKERS_ENABLED=false` to keep
+every vehicle offline. A paused vehicle stays paused across restarts.
+
 `pnpm stop` ends this checkout's host-run dev servers: any `dev:stack`
 launcher, the Vite web server, the API, and the restore agent. It matches
 processes by this checkout's paths, so Vite servers from other repositories

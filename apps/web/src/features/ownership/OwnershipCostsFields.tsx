@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useOwnershipSettings, useUpdateOwnershipSettings } from '@riviamigo/hooks';
 import type { OwnershipSettings } from '@riviamigo/types';
 import { Button, Input } from '@riviamigo/ui/primitives';
+import { DEFAULT_PROJECTION_YEARS, MAX_PROJECTION_YEARS } from './model';
 
 /** The purchase and running-cost inputs, held as text while they are edited. */
 export interface OwnershipCostsForm {
@@ -11,6 +12,7 @@ export interface OwnershipCostsForm {
   insuranceMonthly: string;
   tireSetCost: string;
   gasPrice: string;
+  projectionYears: string;
 }
 
 export type OwnershipCostsErrors = Partial<Record<keyof OwnershipCostsForm, string>>;
@@ -25,6 +27,7 @@ export function settingsToForm(settings: OwnershipSettings): OwnershipCostsForm 
     insuranceMonthly: text(settings.insurance_monthly_usd),
     tireSetCost: text(settings.tire_set_cost_usd),
     gasPrice: text(settings.gas_price_usd_per_gallon),
+    projectionYears: text(settings.projection_years),
   };
 }
 
@@ -74,6 +77,17 @@ export function formToSettings(
     }
   }
 
+  let projectionYears: number | null = null;
+  const rawYears = form.projectionYears.trim();
+  if (rawYears) {
+    const years = Number(rawYears);
+    if (!Number.isInteger(years) || years < 1 || years > MAX_PROJECTION_YEARS) {
+      errors.projectionYears = `Enter whole years from 1 to ${MAX_PROJECTION_YEARS}.`;
+    } else {
+      projectionYears = years;
+    }
+  }
+
   const settings: OwnershipSettings = {
     ...base,
     purchase_price_usd: amount('purchasePrice', 10_000_000),
@@ -82,6 +96,7 @@ export function formToSettings(
     insurance_monthly_usd: amount('insuranceMonthly', 100_000),
     tire_set_cost_usd: amount('tireSetCost', 100_000),
     gas_price_usd_per_gallon: amount('gasPrice', 100, { positive: true }),
+    projection_years: projectionYears,
   };
   // The dashboard has nothing to start from without a purchase price, so it
   // is required whenever anything else is entered. Clearing every field is allowed.
@@ -140,6 +155,14 @@ export function OwnershipCostsFields({ form, errors, onChange, idPrefix, disable
         {...money}
         {...field('gasPrice')}
       />
+      <Input
+        label="Projected ownership (years)"
+        placeholder={`${DEFAULT_PROJECTION_YEARS} when blank`}
+        hint="How long the Projected view runs from the purchase date."
+        inputMode="numeric"
+        autoComplete="off"
+        {...field('projectionYears')}
+      />
     </div>
   );
 }
@@ -157,7 +180,7 @@ export function OwnershipCostsSettings({ vehicleId }: { vehicleId: string }) {
   }, [data]);
 
   if (isError) {
-    return <p className="text-xs text-status-danger">Ownership costs could not be loaded.</p>;
+    return <p className="text-xs text-status-danger">Ownership settings could not be loaded.</p>;
   }
   if (isLoading || !data || !form) {
     return <p className="text-xs text-fg-tertiary">Loading ownership costs...</p>;
@@ -174,9 +197,9 @@ export function OwnershipCostsSettings({ vehicleId }: { vehicleId: string }) {
   return (
     <div className="grid gap-3 border-t border-border/70 pt-3">
       <div>
-        <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Ownership costs</p>
+        <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Ownership settings</p>
         <p className="mt-1 text-xs text-fg-tertiary">
-          Used by the Ownership dashboard. The same fields open from Edit costs on that page.
+          Used by the Ownership dashboard. The same fields open from Edit settings on that page.
         </p>
       </div>
       <OwnershipCostsFields
@@ -191,10 +214,10 @@ export function OwnershipCostsSettings({ vehicleId }: { vehicleId: string }) {
       />
       <div className="flex flex-wrap items-center gap-3">
         <Button variant="secondary" size="sm" loading={update.isPending} disabled={!data.can_edit} onClick={save}>
-          Save ownership costs
+          Save ownership settings
         </Button>
         <span className="text-xs text-fg-tertiary" role="status">
-          {update.isError ? 'Ownership costs could not be saved.' : saved ? 'Saved.' : ''}
+          {update.isError ? 'Ownership settings could not be saved.' : saved ? 'Saved.' : ''}
         </span>
       </div>
     </div>

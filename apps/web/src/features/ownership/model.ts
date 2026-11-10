@@ -17,13 +17,25 @@ import type {
   OwnershipResponse,
 } from '@riviamigo/types';
 
-export type Horizon = 'to_date' | '5y' | '10y';
+export type Horizon = 'to_date' | 'projected';
 
 export const HORIZONS: Array<{ value: Horizon; label: string }> = [
   { value: 'to_date', label: 'To date' },
-  { value: '5y', label: '5 years' },
-  { value: '10y', label: '10 years' },
+  { value: 'projected', label: 'Projected' },
 ];
+
+/** Years of ownership the Projected view covers when none is stored. */
+export const DEFAULT_PROJECTION_YEARS = 5;
+export const MAX_PROJECTION_YEARS = 20;
+
+export function projectionYearsOf(settings: { projection_years: number | null }): number {
+  return settings.projection_years ?? DEFAULT_PROJECTION_YEARS;
+}
+
+/** How the span reads in sentences: "So far" for to date, "Over 5 years" when projected. */
+export function horizonSpan(horizon: Horizon, years: number): string {
+  return horizon === 'to_date' ? 'So far' : `Over ${years} year${years === 1 ? '' : 's'} of ownership`;
+}
 
 export const OWN_VEHICLE_ID = 'own';
 
@@ -34,6 +46,8 @@ const DAYS_PER_MONTH = 30.44;
 export const DEFAULT_DAILY_MILES = 1000 / DAYS_PER_MONTH;
 /** Used for reference EVs when no charging cost has been recorded. */
 export const DEFAULT_ELECTRICITY_USD_PER_KWH = 0.16;
+/** Typical U.S. DC fast-charging price, used only when no fast session has a price. */
+export const DEFAULT_FAST_CHARGING_USD_PER_KWH = 0.45;
 /** Used when neither stored prices nor a flat price are available. */
 export const DEFAULT_GAS_USD_PER_GALLON = 3.5;
 export const DEFAULT_PREMIUM_SURCHARGE_USD = 0.8;
@@ -94,8 +108,20 @@ export interface LedgerTotals {
   netPerMile: number | null;
 }
 
+export type OneTimeKind = 'oil' | 'brakes' | 'tires' | 'service';
+
+/** What one vehicle spent in one period. */
+export interface LedgerMonth {
+  fuel: number;
+  insurance: number;
+  /** One-time costs that fell due in the period, in a fixed order. */
+  oneTime: Array<{ kind: OneTimeKind; count: number; usd: number }>;
+}
+
 export interface VehicleLedger {
   vehicle: LedgerVehicle;
+  /** One entry per period, aligned with `Ledger.periods`. */
+  months: LedgerMonth[];
   /** Polyline, including the vertical jumps of one-time costs. */
   points: LedgerPoint[];
   /** Value at the purchase date (index 0) and at the end of each period. */
@@ -117,6 +143,12 @@ export interface Ledger {
   /** True when no driving has been recorded and a typical mileage is assumed. */
   mileageAssumed: boolean;
   electricityUsdPerKwh: number;
+  /** What home and other AC charging costs you per kWh. */
+  homeUsdPerKwh: number;
+  /** What DC fast charging costs you per kWh. */
+  fastUsdPerKwh: number;
+  /** Share of recorded charging energy from DC fast charging, 0 to 1. */
+  fastShare: number;
   /** True when no charging cost has been recorded to derive the rate from. */
   electricityRateAssumed: boolean;
   /** True when the ledger starts at first tracking because no purchase date is set. */
@@ -278,6 +310,8 @@ export interface BuildLedgerOptions {
   horizon: Horizon;
   now: Date;
   ownLabel: string;
+  /** Years from the purchase date the Projected view covers. Defaults to the stored setting. */
+  projectionYears?: number;
   /** Comparison vehicle ids to include. Defaults to the stored selection. */
   enabledIds?: string[];
 }
@@ -288,29 +322,49 @@ export function buildLedger(data: OwnershipResponse, options: BuildLedgerOptions
   const trackedFromMs = usage.tracked_from ? Date.parse(usage.tracked_from) : nowMs;
   const purchaseMs = settings.purchase_date ? parseDay(settings.purchase_date) : null;
   const startMs = Math.min(purchaseMs ?? trackedFromMs, nowMs);
-  const horizonYears = options.horizon === '5y' ? 5 : options.horizon === '10y' ? 10 : 0;
+  const horizonYears =
+    options.horizon === 'projected' ? (options.projectionYears ?? projectionYearsOf(settings)) : 0;
   const endMs = horizonYears ? Math.max(addYears(startMs, horizonYears), nowMs) : nowMs;
 
   // Averages from everything recorded so far.
   const startMonth = monthKey(startMs);
   const recorded = usage.months.filter((row) => row.month.slice(0, 7) >= startMonth);
   const trackedMiles = recorded.reduce((sum, row) => sum + row.miles, 0);
-  const trackedCost = recorded.reduce((sum, row) => sum + row.charging_cost_usd, 0);
-  // Sessions without a matching price carry no cost. Their energy is left
-  // out of the rate and then charged at it, so it is not counted as free.
-  const pricedKwh = recorded.reduce((sum, row) => sum + row.priced_kwh, 0);
-  const unpricedKwh = (row: { charged_kwh: number; priced_kwh: number }) =>
-    Math.max(0, row.charged_kwh - row.priced_kwh);
+  // Home and fast charging are priced apart: a fast session can cost ten times
+  // a night at home, so one average would bill home energy at fast-charge rates.
+  // A session without a price is charged at the owner's own rate for its kind.
+  const sum = (pick: (row: (typeof recorded)[number]) => number) =>
+    recorded.reduce((total, row) => total + pick(row), 0);
+  // A response cached by an older build lacks the fast-charging split; read it as all home charging.
+  const fastOf = (row: (typeof recorded)[number]) => ({
+    kwh: row.fast_kwh ?? 0,
+    pricedKwh: row.fast_priced_kwh ?? 0,
+    cost: row.fast_cost_usd ?? 0,
+  });
+  const fastCost = sum((row) => fastOf(row).cost);
+  const fastPricedKwh = sum((row) => fastOf(row).pricedKwh);
+  const homeCost = sum((row) => row.charging_cost_usd - fastOf(row).cost);
+  const homePricedKwh = sum((row) => row.priced_kwh - fastOf(row).pricedKwh);
+  const trackedKwh = sum((row) => row.charged_kwh);
+  const fastKwh = sum((row) => fastOf(row).kwh);
+  const homeUsdPerKwh = homePricedKwh > 0 ? Math.max(0, homeCost) / homePricedKwh : DEFAULT_ELECTRICITY_USD_PER_KWH;
+  const fastUsdPerKwh = fastPricedKwh > 0 ? fastCost / fastPricedKwh : DEFAULT_FAST_CHARGING_USD_PER_KWH;
+  const unpricedFastKwh = (row: (typeof recorded)[number]) => Math.max(0, fastOf(row).kwh - fastOf(row).pricedKwh);
+  const unpricedHomeKwh = (row: (typeof recorded)[number]) =>
+    Math.max(0, row.charged_kwh - fastOf(row).kwh - (row.priced_kwh - fastOf(row).pricedKwh));
   const trackedDays = Math.max(1, (nowMs - Math.max(trackedFromMs, startMs)) / DAY_MS);
   const mileageAssumed = trackedMiles <= 0;
   const avgDailyMiles = mileageAssumed ? DEFAULT_DAILY_MILES : trackedMiles / trackedDays;
-  const electricityRateAssumed = !(trackedCost > 0 && pricedKwh > 0);
+  const monthEnergyCost = (row: (typeof recorded)[number]) =>
+    row.charging_cost_usd + unpricedFastKwh(row) * fastUsdPerKwh + unpricedHomeKwh(row) * homeUsdPerKwh;
+  const trackedEnergyCost = sum(monthEnergyCost);
+  // The blended rate the owner actually pays. Electric comparison vehicles use
+  // it too, so they charge with the same habits: mostly home, some fast.
+  const electricityRateAssumed = !(homePricedKwh > 0 || fastPricedKwh > 0) || trackedKwh <= 0;
   const electricityUsdPerKwh = electricityRateAssumed
     ? DEFAULT_ELECTRICITY_USD_PER_KWH
-    : trackedCost / pricedKwh;
-  const monthEnergyCost = (row: (typeof recorded)[number]) =>
-    row.charging_cost_usd + unpricedKwh(row) * electricityUsdPerKwh;
-  const trackedEnergyCost = recorded.reduce((sum, row) => sum + monthEnergyCost(row), 0);
+    : trackedEnergyCost / trackedKwh;
+  const fastShare = trackedKwh > 0 ? fastKwh / trackedKwh : 0;
   const ownCostPerMile =
     trackedEnergyCost > 0 && trackedMiles > 0
       ? trackedEnergyCost / trackedMiles
@@ -398,6 +452,9 @@ export function buildLedger(data: OwnershipResponse, options: BuildLedgerOptions
     avgMonthlyMiles: avgDailyMiles * DAYS_PER_MONTH,
     mileageAssumed,
     electricityUsdPerKwh,
+    homeUsdPerKwh,
+    fastUsdPerKwh,
+    fastShare,
     electricityRateAssumed,
     startAssumed: purchaseMs == null,
   };
@@ -462,6 +519,7 @@ function buildVehicleLedger(
   });
   const points: LedgerPoint[] = [point(startMs)];
   const atPeriodEnd: LedgerPoint[] = [point(startMs)];
+  const months: LedgerMonth[] = [];
 
   periods.forEach((period, index) => {
     const milesBefore = totals.miles;
@@ -496,6 +554,12 @@ function buildVehicleLedger(
     const tires = tireCount * costs.tire_cost_usd;
     const service = serviceCount * costs.annual_service_usd;
     const events = oil + brakes + tires + service;
+    const oneTime: LedgerMonth['oneTime'] = [];
+    if (oilCount && oil > 0) oneTime.push({ kind: 'oil', count: oilCount, usd: oil });
+    if (brakeCount) oneTime.push({ kind: 'brakes', count: brakeCount, usd: brakes });
+    if (tireCount) oneTime.push({ kind: 'tires', count: tireCount, usd: tires });
+    if (serviceCount && service > 0) oneTime.push({ kind: 'service', count: serviceCount, usd: service });
+    months.push({ fuel, insurance, oneTime });
     totals.oil += oil;
     totals.oilCount += oilCount;
     totals.brakes += brakes;
@@ -514,6 +578,7 @@ function buildVehicleLedger(
   const resaleValue = vehicle.priceUsd + running - last.net;
   return {
     vehicle,
+    months,
     points,
     atPeriodEnd,
     totals: {
@@ -557,7 +622,7 @@ export function ordinal(value: number): string {
 }
 
 /** One sentence placing the tracked vehicle against the cheapest and dearest alternatives. */
-export function insightSentence(ledger: Ledger, horizonLabel: string): string | null {
+export function insightSentence(ledger: Ledger, span: string): string | null {
   const own = ledger.vehicles.find((entry) => entry.vehicle.isOwn);
   const others = ledger.vehicles.filter((entry) => !entry.vehicle.isOwn);
   if (!own || others.length === 0) return null;
@@ -571,7 +636,6 @@ export function insightSentence(ledger: Ledger, horizonLabel: string): string | 
   };
   const cheapest = sorted[0] as VehicleLedger;
   const dearest = sorted[sorted.length - 1] as VehicleLedger;
-  const span = horizonLabel === 'To date' ? 'So far' : `Over ${horizonLabel.toLowerCase()}`;
   const parts = cheapest === dearest ? [describe(cheapest)] : [describe(dearest), describe(cheapest)];
   return `${span}, ${own.vehicle.label} nets out ${parts.join(' and ')} after resale.`;
 }

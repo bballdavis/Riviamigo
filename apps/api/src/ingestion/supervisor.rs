@@ -88,6 +88,7 @@ mod tests {
             redis,
             age_key: "test-key".into(),
             config: test_config(),
+            workers_enabled: true,
             workers: extra_workers,
             cmd_rx,
         };
@@ -159,6 +160,27 @@ mod tests {
         })
         .await
         .expect("worker should have received the shutdown broadcast within 2s");
+    }
+
+    // ── Rivian connection switched off ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn start_worker_is_ignored_while_the_rivian_connection_is_off() {
+        let (handle, mut sup) = make_supervisor_with_workers(HashMap::new());
+        sup.workers_enabled = false;
+        assert!(
+            handle
+                .send(SupervisorCommand::StartWorker {
+                    vehicle_id: Uuid::new_v4(),
+                })
+                .await
+        );
+        // Closing the channel ends the run loop once the queued command is handled.
+        drop(handle);
+        timeout(Duration::from_secs(2), sup.run())
+            .await
+            .expect("supervisor should stop when its channel closes");
+        assert!(sup.workers.is_empty());
     }
 
     // ── StartWorker is idempotent ─────────────────────────────────────────────
@@ -294,6 +316,8 @@ pub struct WorkerSupervisor {
     redis: redis::Client,
     age_key: String,
     config: Config,
+    /// False when the Rivian connection is switched off for this server.
+    workers_enabled: bool,
     workers: HashMap<Uuid, WorkerEntry>,
     cmd_rx: mpsc::Receiver<SupervisorCommand>,
 }
@@ -304,6 +328,7 @@ impl WorkerSupervisor {
         redis: redis::Client,
         age_key: String,
         config: Config,
+        workers_enabled: bool,
     ) -> SupervisorHandle {
         let (cmd_tx, cmd_rx) = mpsc::channel(64);
 
@@ -312,6 +337,7 @@ impl WorkerSupervisor {
             redis,
             age_key,
             config,
+            workers_enabled,
             workers: HashMap::new(),
             cmd_rx,
         };
@@ -325,6 +351,13 @@ impl WorkerSupervisor {
         while let Some(cmd) = self.cmd_rx.recv().await {
             match cmd {
                 SupervisorCommand::StartWorker { vehicle_id } => {
+                    if !self.workers_enabled {
+                        tracing::info!(
+                            vehicle_id = %vehicle_id,
+                            "worker not started: Rivian connection is off for this server"
+                        );
+                        continue;
+                    }
                     if !prepare_worker_start(&mut self.workers, vehicle_id) {
                         continue;
                     }

@@ -44,6 +44,20 @@ without a browser reload. If credentials are saved but telemetry is still
 starting, Riviamigo keeps the new credentials and shows a recoverable waiting
 state.
 
+## Pausing data collection
+
+An owner or manager can pause the Rivian connection for one vehicle with the
+pause button on its card in **Settings → Vehicles**. While paused, Riviamigo
+stops live data, charge history sync, and artwork repair for that vehicle, and
+the card shows **Paused**. Recorded history stays available. The play button
+resumes collection. The choice is saved, so a paused vehicle stays paused after
+a restart.
+
+Pause a vehicle before running a second copy of the same data, such as a
+restored backup on a test machine. Two servers polling one Rivian account
+interfere with each other, and Rivian requests start failing with
+`User is unauthenticated`.
+
 ## Troubleshooting
 
 - Watch the app logs with `docker compose --env-file .env -f compose/docker-compose.yml logs -f riviamigo`.

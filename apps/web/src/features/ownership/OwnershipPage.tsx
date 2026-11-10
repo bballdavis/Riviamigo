@@ -1,5 +1,22 @@
-import React, { useMemo, useState } from 'react';
-import { CircleDollarSign, Pencil, Plus, X } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Calculator,
+  CarFront,
+  ChartLine,
+  ChartPie,
+  CircleDollarSign,
+  Database,
+  Fuel,
+  GitCompareArrows,
+  Info,
+  Plus,
+  Receipt,
+  ShieldCheck,
+  SlidersHorizontal,
+  TrendingDown,
+  Wrench,
+  X,
+} from 'lucide-react';
 import {
   useAuth,
   useOwnership,
@@ -18,8 +35,9 @@ import {
   PageLayout,
   SelectPicker,
   Skeleton,
-  StatCard,
+  Tooltip,
 } from '@riviamigo/ui/primitives';
+import { SensorChipSummary } from '@riviamigo/dashboards';
 import { AppLayout } from '../../components/layout/AppLayout';
 import { NoVehicleState } from '../../components/layout/NoVehicleState';
 import { formatMonth, OwnershipChart, type ValueMode } from './OwnershipChart';
@@ -29,12 +47,14 @@ import {
   comparisonVehicles,
   enabledComparisonIds,
   formatUsd,
-  HORIZONS,
+  horizonSpan,
   insightSentence,
   ordinal,
   ownRank,
+  projectionYearsOf,
   type Horizon,
   type Ledger,
+  type OneTimeKind,
   type VehicleLedger,
 } from './model';
 
@@ -51,8 +71,6 @@ export function OwnershipContent() {
     <AppLayout activeKey="ownership">
       <PageLayout
         title="Ownership"
-        subtitle="What your Rivian has cost so far, and how the alternatives would have compared."
-        className="pt-10 lg:pt-0"
         actions={
           vehicles.length > 1 ? (
             <SelectPicker
@@ -69,7 +87,7 @@ export function OwnershipContent() {
         }
       >
         {!authReady || !vehicleSelectionReady ? (
-          <div className="p-4 text-xs text-fg-tertiary">Loading...</div>
+          <div className="p-4 text-sm text-fg-secondary">Loading...</div>
         ) : !effectiveVehicleId ? (
           <NoVehicleState
             title="No vehicle selected"
@@ -83,14 +101,21 @@ export function OwnershipContent() {
   );
 }
 
-/** The accent is reserved for the owner's vehicle; the two greens sit furthest apart. */
+/**
+ * One color per built-in vehicle, in their listed order (EV9, Model Y, Tahoe,
+ * X7, Range Rover, Cayenne, Camry Hybrid, Prius). The six on by default get
+ * the clearly different hues; indigo and teal, which sit close to sky and
+ * emerald, go to the two that start off. Amber is left out because some
+ * themes use it as the accent, which is reserved for the owner's vehicle.
+ */
 const COMPARISON_COLORS = [
   CHART_COLORS.sky,
   CHART_COLORS.yellow,
-  CHART_COLORS.violet,
-  CHART_COLORS.rose,
   CHART_COLORS.emerald,
+  CHART_COLORS.rose,
   CHART_COLORS.indigo,
+  CHART_COLORS.violet,
+  CHART_COLORS.muted,
   CHART_COLORS.teal,
 ];
 
@@ -99,7 +124,7 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
   const update = useUpdateOwnershipSettings(vehicleId);
   const [horizon, setHorizon] = useState<Horizon>('to_date');
   const [mode, setMode] = useState<ValueMode>('spent');
-  const [dialog, setDialog] = useState<'costs' | 'add' | null>(null);
+  const [dialog, setDialog] = useState<'settings' | 'add' | null>(null);
   const [localEnabled, setLocalEnabled] = useState<string[] | null>(null);
   const [cursor, setCursor] = useState<number | null>(null);
   // One clock reading per mount keeps the ledger stable across re-renders.
@@ -173,8 +198,8 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
     );
   };
 
-  const editCostsDialog =
-    dialog === 'costs' ? (
+  const settingsDialog =
+    dialog === 'settings' ? (
       <EditCostsDialog
         settings={data.settings}
         saving={update.isPending}
@@ -195,109 +220,151 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
               ? 'Enter the purchase price and date to see what the vehicle has cost and how other cars compare.'
               : 'The vehicle owner has not entered a purchase price yet.'
           }
-          {...(data.can_edit ? { action: { label: 'Edit costs', onClick: () => setDialog('costs') } } : {})}
+          {...(data.can_edit ? { action: { label: 'Edit settings', onClick: () => setDialog('settings') } } : {})}
         />
-        {editCostsDialog}
+        {settingsDialog}
       </>
     );
   }
 
+  const projectionYears = projectionYearsOf(data.settings);
+  const span = horizonSpan(horizon, projectionYears);
   const own = ledger.vehicles.find((entry) => entry.vehicle.isOwn) as VehicleLedger;
   const rank = ownRank(ledger);
-  const horizonLabel = HORIZONS.find((entry) => entry.value === horizon)?.label ?? '';
-  const lastRecorded = ledger.periods.reduce(
+  // The month holding today: the default inspection point in both views.
+  const todayIndex = ledger.periods.reduce(
     (last, period, index) => (period.kind === 'projected' ? last : index),
     0,
   );
-  const cursorIndex = Math.min(cursor ?? lastRecorded, Math.max(0, ledger.periods.length - 1));
+  const cursorIndex = Math.min(cursor ?? todayIndex, Math.max(0, ledger.periods.length - 1));
   const allVehicles = comparisonVehicles(data);
   const customCount = data.settings.comparisons.custom.length;
-  const insight = insightSentence(ledger, horizonLabel);
+  const insight = insightSentence(ledger, span);
 
   return (
     <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-2">
         <Segmented
           label="Time span"
           value={horizon}
-          options={HORIZONS}
+          options={[
+            { value: 'to_date', label: 'To Date' },
+            { value: 'projected', label: 'Project' },
+          ]}
           onChange={(value) => {
             setHorizon(value);
             setCursor(null);
           }}
         />
         {data.can_edit ? (
-          <Button variant="secondary" size="md" iconLeft={<Pencil className="h-4 w-4" />} onClick={() => setDialog('costs')}>
-            Edit costs
+          <Button
+            variant="secondary"
+            size="md"
+            aria-label="Edit settings"
+            title={`Edit settings (projection: ${projectionYears} years)`}
+            className={`${CONTROL_HEIGHT} w-11 shrink-0 px-0 sm:w-auto sm:px-4`}
+            onClick={() => setDialog('settings')}
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            <span className="hidden sm:inline">Edit settings</span>
           </Button>
         ) : null}
       </div>
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard
-          label="Total Spent"
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <SensorChipSummary
+          title="Total Spent"
           value={formatUsd(own.totals.spent)}
-          detail={`Purchase price plus ${formatUsd(own.totals.spent - own.vehicle.priceUsd)} in running costs`}
+          icon="lucide:wallet"
+          secondary={`+${formatUsd(own.totals.spent - own.vehicle.priceUsd)} running costs`}
+          dataAccent="series-03"
+          valueColor="data"
         />
-        <StatCard
-          label="Net Cost"
+        <SensorChipSummary
+          title="Net Cost"
           value={formatUsd(own.totals.net)}
-          detail={`After a resale value of ${formatUsd(own.totals.resaleValue)}`}
-          accent
+          icon="lucide:circle-dollar-sign"
+          secondary={`After ${formatUsd(own.totals.resaleValue)} resale`}
+          accentBorder
         />
-        <StatCard
-          label="Net Cost per Mile"
+        <SensorChipSummary
+          title="Net per Mile"
           value={own.totals.netPerMile == null ? 'N/A' : formatUsd(own.totals.netPerMile, { cents: true })}
-          detail={`Over ${Math.round(own.totals.miles).toLocaleString('en-US')} mi`}
+          icon="lucide:route"
+          secondary={`Over ${Math.round(own.totals.miles).toLocaleString('en-US')} mi`}
+          dataAccent="series-04"
+          valueColor="data"
         />
-        <StatCard
-          label="Rank Among Compared"
+        <SensorChipSummary
+          title="Rank"
           value={rank.of > 1 ? ordinal(rank.rank) : 'N/A'}
-          detail={rank.of > 1 ? `Of ${rank.of} by net cost, lowest first` : 'Turn on a vehicle to compare'}
+          icon="lucide:trophy"
+          secondary={rank.of > 1 ? `Of ${rank.of} by net cost` : 'Turn on a vehicle to compare'}
+          dataAccent="series-02"
+          valueColor="data"
         />
       </div>
 
       <Card>
         <CardHeader>
-          <div>
-            <CardTitle>Compare with</CardTitle>
-            <p className="mt-1 text-sm text-fg-tertiary">
-              Every vehicle is driven your miles, month by month, from your purchase date.
-            </p>
-          </div>
+          <SectionTitle
+            icon={<GitCompareArrows />}
+            infoLabel="How the comparison works"
+            info={
+              <>
+                <span className="block font-semibold text-fg">How the comparison works</span>
+                <span className="mt-1 block text-fg-secondary">
+                  Every vehicle is driven your miles, month by month, from your purchase date, and pays the same gas
+                  and electricity prices. Turn a vehicle on or off to add or remove its line.
+                </span>
+                {insight ? <span className="mt-2 block border-t border-border pt-2 text-fg">{insight}</span> : null}
+              </>
+            }
+          >
+            Compare with
+          </SectionTitle>
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap gap-2">
-            <span className="inline-flex min-h-11 items-center gap-2 rounded-full border border-accent/40 bg-accent/10 px-3 text-sm font-medium text-fg sm:min-h-9">
-              <Dot color={colors.own} />
+            <span
+              className={`${CHIP} border-2 bg-accent/10 font-medium text-fg`}
+              style={{ borderColor: colors.own }}
+            >
               {ownLabel}
             </span>
             {allVehicles.map((vehicle) => {
               const on = enabledIds.includes(vehicle.id);
+              const removable = vehicle.isCustom && data.can_edit;
+              const edge = on ? { borderColor: colors[vehicle.id] } : undefined;
               return (
-                <span key={vehicle.id} className="inline-flex items-center">
+                <span key={vehicle.id} className="inline-flex items-stretch">
                   <button
                     type="button"
                     aria-pressed={on}
                     onClick={() => toggleVehicle(vehicle.id)}
+                    style={edge}
                     className={[
-                      'inline-flex min-h-11 items-center gap-2 border px-3 text-sm transition-colors sm:min-h-9',
-                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent',
-                      vehicle.isCustom && data.can_edit ? 'rounded-l-full' : 'rounded-full',
+                      CHIP,
+                      'border-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent',
+                      removable ? 'rounded-r-none' : '',
                       on
-                        ? 'border-border-strong bg-bg-elevated text-fg'
-                        : 'border-border text-fg-tertiary hover:text-fg-secondary',
+                        ? 'bg-bg-elevated font-medium text-fg'
+                        : 'border-border text-fg-secondary hover:border-border-strong hover:text-fg-secondary',
                     ].join(' ')}
                   >
-                    <Dot color={on ? colors[vehicle.id] : undefined} />
                     {vehicle.label}
                   </button>
-                  {vehicle.isCustom && data.can_edit ? (
+                  {removable ? (
                     <button
                       type="button"
                       aria-label={`Remove ${vehicle.label}`}
                       onClick={() => removeCustom(vehicle.id)}
-                      className="inline-flex min-h-11 w-11 items-center justify-center rounded-r-full border border-l-0 border-border text-fg-tertiary transition-colors hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-9 sm:w-9"
+                      style={edge}
+                      className={[
+                        'inline-flex w-11 items-center justify-center rounded-r-lg border-2 border-l-0 transition-colors sm:w-9',
+                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent',
+                        on ? 'bg-bg-elevated text-fg-secondary hover:text-fg' : 'border-border text-fg-secondary hover:text-fg',
+                      ].join(' ')}
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
@@ -312,14 +379,13 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
                   update.reset();
                   setDialog('add');
                 }}
-                className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-dashed border-border-strong px-3 text-sm text-fg-secondary transition-colors hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-9"
+                className={`${CHIP} gap-1.5 border-2 border-dashed border-border-strong text-fg-secondary hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
               >
                 <Plus className="h-4 w-4" />
                 Add a vehicle
               </button>
             ) : null}
           </div>
-          {insight ? <p className="mt-4 text-sm text-fg-secondary">{insight}</p> : null}
         </CardContent>
       </Card>
 
@@ -327,8 +393,10 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
         <CardHeader>
           <div className="flex w-full flex-wrap items-start justify-between gap-3">
             <div>
-              <CardTitle>{mode === 'net' ? 'Net cost over time' : 'Money spent over time'}</CardTitle>
-              <p className="mt-1 text-sm text-fg-tertiary">
+              <SectionTitle icon={<ChartLine />}>
+                {mode === 'net' ? 'Net cost over time' : 'Money spent over time'}
+              </SectionTitle>
+              <p className="mt-1 text-base text-fg-secondary">
                 {mode === 'net'
                   ? 'Purchase price and running costs, less what each vehicle would sell for.'
                   : 'Starts at the purchase price and adds every cost as it lands.'}
@@ -346,7 +414,7 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
           </div>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_17rem]">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(22rem,26rem)]">
             <div className="min-w-0">
               <OwnershipChart
                 ledger={ledger}
@@ -355,9 +423,21 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
                 cursorIndex={cursorIndex}
                 onCursorChange={setCursor}
               />
-              <label className="mt-3 grid gap-1 text-xs text-fg-tertiary">
-                Drag to inspect a month
+              <div className="mt-3 grid gap-1 text-sm text-fg-secondary">
+                <div className="flex items-center justify-between gap-3">
+                  <label htmlFor="ownership-month-slider">Drag to inspect a month</label>
+                  {cursorIndex !== todayIndex ? (
+                    <button
+                      type="button"
+                      onClick={() => setCursor(null)}
+                      className="min-h-11 rounded-md px-2 font-medium text-fg-secondary hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-6"
+                    >
+                      Back to today
+                    </button>
+                  ) : null}
+                </div>
                 <input
+                  id="ownership-month-slider"
                   type="range"
                   min={0}
                   max={Math.max(0, ledger.periods.length - 1)}
@@ -367,25 +447,28 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
                   aria-valuetext={formatMonth(ledger.periods[cursorIndex]?.startMs ?? ledger.startMs, { long: true })}
                   className="h-11 w-full accent-accent sm:h-6"
                 />
-              </label>
-              <p className="mt-2 text-xs text-fg-tertiary">
+              </div>
+              <p className="mt-2 text-sm text-fg-secondary">
                 Fuel and charging accrue with the miles you drove each month. Oil changes, brakes, tires and
                 annual service land as one-time jumps at the mileage they fall due.
               </p>
             </div>
-            <CursorReadout ledger={ledger} mode={mode} colors={colors} cursorIndex={cursorIndex} />
+            <CursorReadout
+              ledger={ledger}
+              mode={mode}
+              colors={colors}
+              cursorIndex={cursorIndex}
+              isToday={cursorIndex === todayIndex}
+            />
           </div>
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
-        <BreakdownCard ledger={ledger} horizonLabel={horizonLabel} />
-        <SourcesCard data={data} ledger={ledger} />
-      </div>
-
+      <BreakdownCard ledger={ledger} colors={colors} span={span} />
       <CostTable ledger={ledger} colors={colors} />
+      <SourcesCard data={data} ledger={ledger} />
 
-      {editCostsDialog}
+      {settingsDialog}
       {dialog === 'add' ? (
         <AddVehicleDialog
           lookupEnabled={data.vehicle_lookup_enabled}
@@ -402,6 +485,47 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
 // ---------------------------------------------------------------------------
 // Pieces
 // ---------------------------------------------------------------------------
+
+/** Shared height for the toolbar controls: touch-sized on phones, compact from `sm`. */
+const CONTROL_HEIGHT = 'h-11 sm:h-9';
+
+/** Rounded-rectangle chip shared by the comparison toggles. */
+const CHIP = 'inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-base transition-colors sm:min-h-9';
+
+function SectionTitle({
+  icon,
+  info,
+  infoLabel = 'About this section',
+  infoWidth = 'w-80',
+  children,
+}: {
+  icon: React.ReactElement<{ className?: string }>;
+  info?: React.ReactNode;
+  /** Accessible name of the info button; each one on the page should differ. */
+  infoLabel?: string;
+  infoWidth?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span aria-hidden className="text-fg-secondary">
+        {React.cloneElement(icon, { className: 'h-4 w-4' })}
+      </span>
+      <CardTitle>{children}</CardTitle>
+      {info ? (
+        <Tooltip content={info} align="start" contentClassName={`${infoWidth} px-3.5 py-3 text-sm leading-relaxed`}>
+          <button
+            type="button"
+            aria-label={infoLabel}
+            className="-m-2 inline-flex min-h-11 min-w-11 items-center justify-center rounded-md text-fg-secondary transition-colors hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-8 sm:min-w-8"
+          >
+            <Info className="h-4 w-4" />
+          </button>
+        </Tooltip>
+      ) : null}
+    </div>
+  );
+}
 
 function Dot({ color }: { color: string | undefined }) {
   return (
@@ -425,7 +549,11 @@ function Segmented<TValue extends string>({
   onChange: (value: TValue) => void;
 }) {
   return (
-    <div role="group" aria-label={label} className="inline-flex rounded-lg border border-border bg-bg-elevated/50 p-0.5">
+    <div
+      role="group"
+      aria-label={label}
+      className={`inline-flex shrink-0 rounded-lg border border-border bg-bg-elevated/50 p-0.5 ${CONTROL_HEIGHT}`}
+    >
       {options.map((option) => (
         <button
           key={option.value}
@@ -433,9 +561,9 @@ function Segmented<TValue extends string>({
           aria-pressed={option.value === value}
           onClick={() => onChange(option.value)}
           className={[
-            'min-h-11 rounded-md px-3 text-sm font-medium transition-colors sm:min-h-8',
+            'h-full rounded-md px-3 text-base font-medium transition-colors',
             'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent',
-            option.value === value ? 'bg-bg-surface text-fg shadow-sm' : 'text-fg-tertiary hover:text-fg-secondary',
+            option.value === value ? 'bg-bg-surface text-fg shadow-sm' : 'text-fg-secondary hover:text-fg-secondary',
           ].join(' ')}
         >
           {option.label}
@@ -447,58 +575,167 @@ function Segmented<TValue extends string>({
 
 const PERIOD_KIND_LABEL = { estimated: 'Estimated', actual: 'Recorded', projected: 'Projected' } as const;
 
+const ONE_TIME_LABEL: Record<OneTimeKind, [string, string]> = {
+  oil: ['Oil change', 'Oil changes'],
+  brakes: ['Brakes', 'Brakes'],
+  tires: ['Tires', 'Tires'],
+  service: ['Annual service', 'Annual service'],
+};
+
 function CursorReadout({
   ledger,
   mode,
   colors,
   cursorIndex,
+  isToday,
 }: {
   ledger: Ledger;
   mode: ValueMode;
   colors: Record<string, string>;
   cursorIndex: number;
+  isToday: boolean;
 }) {
   const period = ledger.periods[cursorIndex];
   if (!period) return null;
-  const values = ledger.vehicles
-    .map((entry) => ({ entry, value: entry.atPeriodEnd[cursorIndex + 1]?.[mode] ?? 0 }))
+  const valueAt = (entry: VehicleLedger, index: number) => entry.atPeriodEnd[index]?.[mode] ?? 0;
+  const own = ledger.vehicles.find((entry) => entry.vehicle.isOwn);
+  const ownValue = own ? valueAt(own, cursorIndex + 1) : 0;
+  const rows = ledger.vehicles
+    .map((entry) => ({
+      entry,
+      value: valueAt(entry, cursorIndex + 1),
+      // Money spent that month, whichever value the chart shows.
+      month: (entry.atPeriodEnd[cursorIndex + 1]?.spent ?? 0) - (entry.atPeriodEnd[cursorIndex]?.spent ?? 0),
+      oneTime: entry.months[cursorIndex]?.oneTime ?? [],
+    }))
     .sort((a, b) => a.value - b.value);
+  const ownMonth = own?.months[cursorIndex];
+  const ownOneTime = ownMonth?.oneTime.reduce((sum, item) => sum + item.usd, 0) ?? 0;
+  const totalLabel = mode === 'net' ? 'Net' : 'Spent';
+
   return (
-    <aside className="rounded-xl border border-border bg-bg-elevated/40 p-4" aria-live="polite">
-      <div className="flex items-baseline justify-between gap-2">
-        <p className="text-sm font-semibold text-fg">{formatMonth(period.startMs, { long: true })}</p>
-        <p className="text-xs text-fg-tertiary">{PERIOD_KIND_LABEL[period.kind]}</p>
+    <aside className="flex min-w-0 flex-col rounded-xl border border-border bg-bg-elevated/40 p-3 sm:p-4" aria-live="polite">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-lg font-semibold text-fg">
+          {formatMonth(period.startMs, { long: true })}
+          {/* The to-date ledger stops today, part way through the month. */}
+          {period.endMs === ledger.nowMs && ledger.endMs === ledger.nowMs ? (
+            <span className="ml-1.5 text-sm font-normal text-fg-secondary">through today</span>
+          ) : null}
+        </p>
+        <span className="flex items-center gap-1.5 text-sm text-fg-secondary">
+          {isToday ? <span className="rounded bg-accent/10 px-1.5 py-0.5 font-medium text-accent">Today</span> : null}
+          {PERIOD_KIND_LABEL[period.kind]}
+        </span>
       </div>
-      <ul className="mt-3 grid gap-2">
-        {values.map(({ entry, value }) => (
-          <li key={entry.vehicle.id} className="flex items-center justify-between gap-3 text-sm">
-            <span className={`flex min-w-0 items-center gap-2 ${entry.vehicle.isOwn ? 'font-semibold text-fg' : 'text-fg-secondary'}`}>
-              <Dot color={colors[entry.vehicle.id]} />
-              <span className="truncate">{entry.vehicle.label}</span>
-            </span>
-            <span className="font-mono tabular-nums text-fg">{formatUsd(value)}</span>
-          </li>
-        ))}
-      </ul>
-      <dl className="mt-4 grid gap-1.5 border-t border-border pt-3 text-xs text-fg-tertiary">
-        <ReadoutRow label="Miles that month" value={Math.round(period.miles).toLocaleString('en-US')} />
-        <ReadoutRow
-          label={period.gasFromSeries ? 'Gas that month' : 'Gas, estimated'}
-          value={`${formatUsd(period.gasRegularUsd, { cents: true })}/gal`}
-        />
-        <ReadoutRow
-          label={ledger.electricityRateAssumed ? 'Charging rate, typical' : 'Your charging rate'}
-          value={`${formatUsd(ledger.electricityUsdPerKwh, { cents: true })}/kWh`}
-        />
-      </dl>
+
+      <table className="mt-3 w-full table-fixed text-base">
+        <thead>
+          <tr className="text-xs uppercase tracking-wide text-fg-secondary">
+            <th scope="col" className="pb-1.5 text-left font-medium">Vehicle</th>
+            <th scope="col" className="hidden w-[4.5rem] pb-1.5 text-right font-medium sm:table-cell">Month</th>
+            <th scope="col" className="w-[6.25rem] pb-1.5 pl-3 text-right font-medium">{totalLabel}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ entry, value, month, oneTime }) => {
+            const isOwn = entry.vehicle.isOwn;
+            const delta = own && !isOwn ? value - ownValue : null;
+            return (
+              <tr key={entry.vehicle.id} className="border-t border-border/60 align-top">
+                <th scope="row" className="py-1.5 pr-2 text-left font-normal">
+                  <span className={`flex min-w-0 items-start gap-2 ${isOwn ? 'font-semibold text-fg' : 'text-fg-secondary'}`}>
+                    <span className="mt-[0.3rem] flex">
+                      <Dot color={colors[entry.vehicle.id]} />
+                    </span>
+                    <span className="min-w-0 break-words">{entry.vehicle.label}</span>
+                  </span>
+                  <span className="mt-0.5 block pl-[1.125rem] text-xs text-fg-secondary">
+                    {/* Phones have no Month column, so the month's cost leads this line. */}
+                    <span className="sm:hidden">+{formatUsd(month)} this month</span>
+                    {oneTime.length ? (
+                      <span>
+                        <span className="sm:hidden">, </span>
+                        {oneTime.map((item) => ONE_TIME_LABEL[item.kind][item.count > 1 ? 1 : 0]).join(', ')}
+                      </span>
+                    ) : null}
+                  </span>
+                </th>
+                <td className="hidden whitespace-nowrap py-1.5 text-right font-mono text-sm tabular-nums text-fg-secondary sm:table-cell">
+                  +{formatUsd(month)}
+                </td>
+                <td className="whitespace-nowrap py-1.5 pl-3 text-right">
+                  <span className={`block font-mono tabular-nums ${isOwn ? 'font-semibold text-fg' : 'text-fg'}`}>
+                    {formatUsd(value)}
+                  </span>
+                  {delta != null ? (
+                    <span className="block font-mono text-xs tabular-nums text-fg-secondary">
+                      {delta >= 0 ? '+' : '-'}
+                      {formatUsd(Math.abs(delta))}
+                    </span>
+                  ) : null}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {own && ledger.vehicles.length > 1 ? (
+        <p className="mt-1 text-xs text-fg-secondary">Small figures under each total compare it with {own.vehicle.label}.</p>
+      ) : null}
+
+      <div className="mt-auto grid gap-4 border-t border-border pt-3 sm:grid-cols-2 xl:grid-cols-2">
+        {ownMonth && own ? (
+          <div className="grid content-start gap-1.5">
+            <ReadoutHeading icon={<CarFront />}>{own.vehicle.label} this month</ReadoutHeading>
+            <dl className="grid gap-1.5 text-sm">
+              <ReadoutRow label="Charging" value={formatUsd(ownMonth.fuel)} />
+              <ReadoutRow label="Insurance and other" value={formatUsd(ownMonth.insurance)} />
+              <ReadoutRow label="One-time" value={formatUsd(ownOneTime)} />
+            </dl>
+          </div>
+        ) : null}
+        <div className="grid content-start gap-1.5">
+          <ReadoutHeading icon={<Fuel />}>Driving &amp; prices</ReadoutHeading>
+          <dl className="grid gap-1.5 text-sm">
+          <ReadoutRow label="Miles" value={Math.round(period.miles).toLocaleString('en-US')} />
+          <ReadoutRow
+            label={period.gasFromSeries ? 'Gas' : 'Gas, est.'}
+            value={`${formatUsd(period.gasRegularUsd, { cents: true })}/gal`}
+          />
+          <ReadoutRow
+            label={ledger.electricityRateAssumed ? 'Charging, typical' : 'Your charging'}
+            value={`${formatUsd(ledger.electricityUsdPerKwh, { cents: true })}/kWh`}
+          />
+          </dl>
+        </div>
+      </div>
     </aside>
   );
 }
 
+function ReadoutHeading({
+  icon,
+  children,
+}: {
+  icon: React.ReactElement<{ className?: string }>;
+  children: React.ReactNode;
+}) {
+  return (
+    <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-fg">
+      <span aria-hidden className="text-accent">
+        {React.cloneElement(icon, { className: 'h-3.5 w-3.5' })}
+      </span>
+      {children}
+    </p>
+  );
+}
+
+/** A label that reads as the heading of its value: bold and full-strength, with the figure quieter. */
 function ReadoutRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <dt>{label}</dt>
+      <dt className="font-semibold text-fg">{label}</dt>
       <dd className="font-mono tabular-nums text-fg-secondary">{value}</dd>
     </div>
   );
@@ -523,20 +760,44 @@ function breakdownOf(entry: VehicleLedger): Record<(typeof BREAKDOWN_PARTS)[numb
   };
 }
 
-function BreakdownCard({ ledger, horizonLabel }: { ledger: Ledger; horizonLabel: string }) {
+function partsTotal(parts: ReturnType<typeof breakdownOf>): number {
+  return BREAKDOWN_PARTS.reduce((sum, part) => sum + parts[part.key], 0);
+}
+
+function BreakdownCard({ ledger, colors, span }: { ledger: Ledger; colors: Record<string, string>; span: string }) {
   const own = ledger.vehicles.find((entry) => entry.vehicle.isOwn);
   const sorted = [...ledger.vehicles].sort((a, b) => a.totals.net - b.totals.net);
   const max = Math.max(1, ...sorted.map((entry) => entry.totals.net));
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!openId) return;
+    const closeOnOutside = (event: PointerEvent) => {
+      if (!(event.target as Element | null)?.closest?.('[data-breakdown-item]')) setOpenId(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenId(null);
+    };
+    document.addEventListener('pointerdown', closeOnOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [openId]);
+
   return (
     <Card>
       <CardHeader>
         <div>
-          <CardTitle>Where the money goes</CardTitle>
-          <p className="mt-1 text-sm text-fg-tertiary">Net cost by category, {horizonLabel.toLowerCase()}.</p>
+          <SectionTitle icon={<ChartPie />}>Where the money goes</SectionTitle>
+          <p className="mt-1 text-base text-fg-secondary">
+            Net cost by category. {span}, lowest first. Hover over or tap a bar for the split.
+          </p>
         </div>
       </CardHeader>
       <CardContent>
-        <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-tertiary">
+        <ul className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-fg-secondary">
           {BREAKDOWN_PARTS.map((part) => (
             <li key={part.key} className="flex items-center gap-1.5">
               <Dot color={part.color} />
@@ -548,31 +809,71 @@ function BreakdownCard({ ledger, horizonLabel }: { ledger: Ledger; horizonLabel:
           {sorted.map((entry) => {
             const parts = breakdownOf(entry);
             const delta = own && !entry.vehicle.isOwn ? entry.totals.net - own.totals.net : null;
+            const open = openId === entry.vehicle.id;
+            const panelId = `breakdown-${entry.vehicle.id}`;
             return (
-              <li key={entry.vehicle.id} className="grid gap-1">
-                <div className="flex items-baseline justify-between gap-3 text-sm">
-                  <span className={entry.vehicle.isOwn ? 'font-semibold text-fg' : 'text-fg-secondary'}>
-                    {entry.vehicle.label}
+              <li
+                key={entry.vehicle.id}
+                className="relative grid gap-1"
+                data-breakdown-item
+                // A mouse opens the split on hover; touch keeps tap-to-toggle below.
+                onPointerEnter={(event) => {
+                  if (event.pointerType === 'mouse') setOpenId(entry.vehicle.id);
+                }}
+                onPointerLeave={(event) => {
+                  if (event.pointerType === 'mouse') setOpenId((current) => (current === entry.vehicle.id ? null : current));
+                }}
+              >
+                <div className="flex items-baseline justify-between gap-3 text-base">
+                  <span
+                    className={`flex min-w-0 items-center gap-2 ${entry.vehicle.isOwn ? 'font-semibold text-fg' : 'text-fg-secondary'}`}
+                  >
+                    <Dot color={colors[entry.vehicle.id]} />
+                    <span className="truncate">{entry.vehicle.label}</span>
                   </span>
-                  <span className="text-right font-mono tabular-nums text-fg">
+                  <span className="whitespace-nowrap text-right font-mono tabular-nums text-fg">
                     {formatUsd(entry.totals.net)}
                     {delta != null ? (
-                      <span className="ml-2 text-xs text-fg-tertiary">
+                      <span className="ml-2 text-sm text-fg-secondary">
                         {delta >= 0 ? '+' : '-'}
                         {formatUsd(Math.abs(delta))}
                       </span>
                     ) : null}
                   </span>
                 </div>
-                <div className="flex h-3 overflow-hidden rounded-full bg-bg-elevated" aria-hidden>
-                  {BREAKDOWN_PARTS.map((part) => (
+                <button
+                  type="button"
+                  aria-expanded={open}
+                  aria-controls={panelId}
+                  aria-label={`Show where ${entry.vehicle.label}'s money goes`}
+                  onClick={(event) => {
+                    // A mouse already opened it on hover; a click there should not close it.
+                    if ((event.nativeEvent as PointerEvent).pointerType === 'mouse') return;
+                    setOpenId(open ? null : entry.vehicle.id);
+                  }}
+                  className="-my-2 flex min-h-7 w-full items-center rounded-full py-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  <span
+                    className={`flex h-3 w-full rounded-full bg-bg-elevated transition-shadow ${open ? 'ring-2 ring-border-strong' : ''}`}
+                  >
+                    {/* The filled run is its own rounded pill, so its right end is rounded too. */}
                     <span
-                      key={part.key}
-                      title={`${part.label}: ${formatUsd(parts[part.key])}`}
-                      style={{ width: `${(parts[part.key] / max) * 100}%`, backgroundColor: part.color }}
-                    />
-                  ))}
-                </div>
+                      className="flex h-full overflow-hidden rounded-full"
+                      style={{ width: `${(partsTotal(parts) / max) * 100}%` }}
+                    >
+                      {BREAKDOWN_PARTS.map((part) => (
+                        <span
+                          key={part.key}
+                          style={{
+                            width: `${partsTotal(parts) > 0 ? (parts[part.key] / partsTotal(parts)) * 100 : 0}%`,
+                            backgroundColor: part.color,
+                          }}
+                        />
+                      ))}
+                    </span>
+                  </span>
+                </button>
+                {open ? <BreakdownPanel id={panelId} entry={entry} color={colors[entry.vehicle.id]} /> : null}
               </li>
             );
           })}
@@ -580,6 +881,63 @@ function BreakdownCard({ ledger, horizonLabel }: { ledger: Ledger; horizonLabel:
       </CardContent>
     </Card>
   );
+}
+
+/** The split behind one bar: each category's amount and share, with its legend color. */
+function BreakdownPanel({ id, entry, color }: { id: string; entry: VehicleLedger; color: string | undefined }) {
+  const parts = breakdownOf(entry);
+  const total = BREAKDOWN_PARTS.reduce((sum, part) => sum + parts[part.key], 0);
+  return (
+    <div
+      id={id}
+      role="region"
+      aria-label={`${entry.vehicle.label} cost split`}
+      // Padding, not margin, separates it from the bar, so a mouse can move onto it without closing it.
+      className="absolute left-0 right-0 top-full z-20 pt-1 sm:left-auto sm:w-80"
+    >
+      <div className="rounded-lg border border-border bg-bg-surface p-3 shadow-lg">
+      <div className="flex items-baseline justify-between gap-3 border-b border-border pb-2">
+        <span className="flex min-w-0 items-center gap-2 text-base font-semibold text-fg">
+          <Dot color={color} />
+          <span className="truncate">{entry.vehicle.label}</span>
+        </span>
+        <span className="font-mono text-base font-semibold tabular-nums text-fg">{formatUsd(entry.totals.net)}</span>
+      </div>
+      <ul className="mt-2 grid gap-2">
+        {BREAKDOWN_PARTS.map((part) => {
+          const share = total > 0 ? parts[part.key] / total : 0;
+          return (
+            <li key={part.key} className="grid gap-1">
+              <div className="flex items-center justify-between gap-3 text-sm">
+                <span className="flex items-center gap-2 text-fg-secondary">
+                  <Dot color={part.color} />
+                  {part.label}
+                </span>
+                <span className="flex items-baseline gap-2 font-mono tabular-nums">
+                  <span className="text-fg">{formatUsd(parts[part.key])}</span>
+                  <span className="w-10 text-right text-fg-secondary">{Math.round(share * 100)}%</span>
+                </span>
+              </div>
+              <span className="block h-1 overflow-hidden rounded-full bg-bg-elevated" aria-hidden>
+                <span className="block h-full rounded-full" style={{ width: `${share * 100}%`, backgroundColor: part.color }} />
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-2.5 text-xs text-fg-secondary">
+        Shares of the net cost. Maintenance covers oil changes, brakes, and annual service.
+      </p>
+      </div>
+    </div>
+  );
+}
+
+/** A per-kWh price in cents under a dollar, for example 1.9¢ or 49¢. */
+function cents(usdPerKwh: number): string {
+  if (usdPerKwh >= 1) return formatUsd(usdPerKwh, { cents: true });
+  const value = usdPerKwh * 100;
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)}¢`;
 }
 
 function SourcesCard({ data, ledger }: { data: OwnershipResponse; ledger: Ledger }) {
@@ -591,22 +949,25 @@ function SourcesCard({ data, ledger }: { data: OwnershipResponse; ledger: Ledger
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Where the numbers come from</CardTitle>
+        <SectionTitle icon={<Database />}>Where the numbers come from</SectionTitle>
       </CardHeader>
       <CardContent>
-        <dl className="grid gap-4 text-sm">
+        <dl className="grid gap-4 text-base md:grid-cols-3 md:gap-6">
           <div>
             <dt className="font-medium text-fg">Your driving and charging</dt>
-            <dd className="mt-1 text-fg-tertiary">
+            <dd className="mt-1 text-fg-secondary">
               {ledger.mileageAssumed
                 ? `No drives are recorded yet, so every month assumes a typical ${miles}.`
                 : `Recorded since ${usage.tracked_from ? date(usage.tracked_from) : 'tracking began'}; earlier and future months use your average of ${miles}.`}
               {ledger.startAssumed ? ' Add a purchase date to count the months before tracking began.' : ''}
+              {ledger.electricityRateAssumed
+                ? ` No charging cost is recorded yet, so charging assumes ${cents(ledger.electricityUsdPerKwh)} per kWh.`
+                : ` Home charging has cost you ${cents(ledger.homeUsdPerKwh)} per kWh and fast charging ${cents(ledger.fastUsdPerKwh)}, with ${Math.round(ledger.fastShare * 100)}% of your energy from fast charging. Sessions without a price use your rate for their kind.`}
             </dd>
           </div>
           <div>
             <dt className="font-medium text-fg">Gas prices</dt>
-            <dd className="mt-1 text-fg-tertiary">
+            <dd className="mt-1 text-fg-secondary">
               {fuel.connection_enabled ? (
                 fuel.months.length ? (
                   <>
@@ -615,7 +976,7 @@ function SourcesCard({ data, ledger }: { data: OwnershipResponse; ledger: Ledger
                     {fuel.refresh_failed ? ' The latest refresh failed, so stored prices are in use.' : ''}
                   </>
                 ) : (
-                  <>Prices could not be fetched, so every month uses a flat price. Set it in Edit costs.</>
+                  <>Prices could not be fetched, so every month uses a flat price. Set it in Edit settings.</>
                 )
               ) : (
                 <>
@@ -623,14 +984,14 @@ function SourcesCard({ data, ledger }: { data: OwnershipResponse; ledger: Ledger
                   <ExternalConnectionsLink>Settings, under External Connections</ExternalConnectionsLink>.{' '}
                   {lastMonth
                     ? `Stored prices through ${formatMonth(Date.parse(lastMonth.month), { long: true })} are still used; later months use a flat price.`
-                    : 'Every month uses a flat price, which you can set in Edit costs.'}
+                    : 'Every month uses a flat price, which you can set in Edit settings.'}
                 </>
               )}
             </dd>
           </div>
           <div>
             <dt className="font-medium text-fg">Compared vehicles</dt>
-            <dd className="mt-1 text-fg-tertiary">
+            <dd className="mt-1 text-fg-secondary">
               Prices, fuel economy, and maintenance for the built-in vehicles are typical U.S. figures, not quotes.
               {data.vehicle_lookup_enabled ? '' : ' Vehicle lookup is turned off, so added vehicles are entered by hand.'}
             </dd>
@@ -641,59 +1002,240 @@ function SourcesCard({ data, ledger }: { data: OwnershipResponse; ledger: Ledger
   );
 }
 
+interface CostColumn {
+  key: string;
+  label: string;
+  value: (entry: VehicleLedger) => number;
+  count?: (entry: VehicleLedger) => number;
+  /** Hidden from a vehicle's chips when it never applies, such as oil for an EV. */
+  optional?: boolean;
+}
+
+const COST_COLUMNS: CostColumn[] = [
+  { key: 'depreciation', label: 'Depreciation', value: (entry) => entry.totals.depreciation },
+  { key: 'fuel', label: 'Fuel or energy', value: (entry) => entry.totals.fuel },
+  {
+    key: 'oil',
+    label: 'Oil changes',
+    value: (entry) => entry.totals.oil,
+    count: (entry) => entry.totals.oilCount,
+    optional: true,
+  },
+  { key: 'brakes', label: 'Brakes', value: (entry) => entry.totals.brakes, count: (entry) => entry.totals.brakeCount },
+  { key: 'tires', label: 'Tires', value: (entry) => entry.totals.tires, count: (entry) => entry.totals.tireCount },
+  { key: 'service', label: 'Service', value: (entry) => entry.totals.service },
+  { key: 'insurance', label: 'Insurance', value: (entry) => entry.totals.insurance },
+];
+
+const MAINTENANCE_ITEMS = COST_COLUMNS.filter((column) => ['oil', 'brakes', 'tires', 'service'].includes(column.key));
+
+const MAINTENANCE_COLORS: Record<string, string> = {
+  oil: CHART_COLORS.amber,
+  brakes: CHART_COLORS.rose,
+  tires: CHART_COLORS.violet,
+  service: CHART_COLORS.sky,
+};
+
+/**
+ * Maintenance as one full-width, compact tile under the main three: its
+ * total on the right and a colored chip for each item that fell due.
+ */
+function MaintenanceTile({ entry }: { entry: VehicleLedger }) {
+  const due = MAINTENANCE_ITEMS.filter((column) => column.value(entry) > 0);
+  const total = MAINTENANCE_ITEMS.reduce((sum, column) => sum + column.value(entry), 0);
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-lg bg-bg-elevated/70 px-2 py-2">
+      <span className="mr-1 text-xs font-medium tracking-tight text-fg-secondary">Maintenance</span>
+        {due.length === 0 ? (
+          <span className="text-sm text-fg-secondary">None due yet</span>
+        ) : (
+          due.map((column) => {
+            const count = column.count?.(entry) ?? 0;
+            const color = MAINTENANCE_COLORS[column.key] ?? CHART_COLORS.muted;
+            return (
+              <span
+                key={column.key}
+                className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-sm"
+                style={{ borderColor: color, backgroundColor: `color-mix(in oklab, ${color} 16%, transparent)` }}
+              >
+                <span className="font-medium text-fg">
+                  {column.key === 'oil' && count <= 1 ? 'Oil change' : column.label}
+                  {count > 1 ? ` ×${count}` : ''}
+                </span>
+                <span className="font-mono tabular-nums text-fg-secondary">{formatUsd(column.value(entry))}</span>
+              </span>
+            );
+          })
+        )}
+      <span className="ml-auto pl-1 font-mono text-base font-semibold tabular-nums text-fg">{formatUsd(total)}</span>
+    </div>
+  );
+}
+
+const METHOD_ITEMS: Array<{
+  key: string;
+  title: string;
+  icon: React.ReactElement<{ className?: string }>;
+  color: string;
+  body: string;
+}> = [
+  {
+    key: 'depreciation',
+    title: 'Depreciation',
+    icon: <TrendingDown />,
+    color: CHART_COLORS.indigo,
+    body: 'Purchase price minus resale value at the end of the period. Uses your resale value when entered, otherwise a typical yearly loss.',
+  },
+  {
+    key: 'fuel',
+    title: 'Fuel or charging',
+    icon: <Fuel />,
+    color: CHART_COLORS.amber,
+    body: "Every vehicle drives your miles each month. Gas uses that month's U.S. pump price. Your Rivian uses its recorded charging, with home and fast charging priced apart; other EVs pay your blended rate.",
+  },
+  {
+    key: 'maintenance',
+    title: 'Maintenance',
+    icon: <Wrench />,
+    color: CHART_COLORS.sky,
+    body: 'Oil, brakes, and tires fall due by mileage; service once a year on your purchase anniversary. A ×2 or (2) is how many times.',
+  },
+  {
+    key: 'insurance',
+    title: 'Insurance',
+    icon: <ShieldCheck />,
+    color: CHART_COLORS.teal,
+    body: 'Your monthly insurance, registration, and other fixed costs, counted for each month owned.',
+  },
+  {
+    key: 'net',
+    title: 'Net cost',
+    icon: <Calculator />,
+    // Not the accent: some themes make it the same orange as fuel.
+    color: CHART_COLORS.rose,
+    body: 'Depreciation plus every running cost: what owning the vehicle cost once it is sold.',
+  },
+];
+
+/** How every figure in the cost breakdown is worked out, for the info tooltip. */
+function CostMethodology() {
+  return (
+    <>
+      <span className="block text-base font-bold text-fg">How each cost is worked out</span>
+      <span className="mt-2 grid gap-x-5 gap-y-3 sm:grid-cols-2">
+        {METHOD_ITEMS.map((item) => (
+          <span key={item.key} className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-x-2.5">
+            <span
+              aria-hidden
+              className="mt-0.5 inline-flex h-7 w-7 items-center justify-center rounded-md"
+              style={{ color: item.color, backgroundColor: `color-mix(in oklab, ${item.color} 16%, transparent)` }}
+            >
+              {React.cloneElement(item.icon, { className: 'h-4 w-4' })}
+            </span>
+            <span className="min-w-0">
+              <span className="block font-bold" style={{ color: item.color }}>
+                {item.title}
+              </span>
+              <span className="mt-0.5 block text-fg-secondary">{item.body}</span>
+            </span>
+          </span>
+        ))}
+      </span>
+      <span className="mt-3 block border-t border-border pt-2 text-fg-secondary">
+        Compared vehicles use typical U.S. estimates, not quotes.
+      </span>
+    </>
+  );
+}
+
 function CostTable({ ledger, colors }: { ledger: Ledger; colors: Record<string, string> }) {
   const counted = (amount: number, count: number) => (count ? `${formatUsd(amount)} (${count})` : formatUsd(amount));
   const sorted = [...ledger.vehicles].sort((a, b) => a.totals.net - b.totals.net);
   const cell = 'whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums';
-  const head = 'whitespace-nowrap px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-fg-tertiary';
+  const head = 'whitespace-nowrap px-3 py-2 text-right text-sm font-medium uppercase tracking-wide text-fg-secondary';
   return (
     <Card padding="none">
       <CardHeader className="mb-0 px-5 pt-5 pb-3">
-        <CardTitle>Cost breakdown</CardTitle>
+        <SectionTitle
+          icon={<Receipt />}
+          info={<CostMethodology />}
+          infoLabel="How the costs are worked out"
+          infoWidth="w-[38rem]"
+        >
+          Cost breakdown
+        </SectionTitle>
       </CardHeader>
       <CardContent>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[56rem] text-sm">
+        {/* Small screens: one card per vehicle with its costs as labeled chips. */}
+        <ul className="grid gap-3 px-4 pb-1 xl:hidden">
+          {sorted.map((entry) => (
+            <li
+              key={entry.vehicle.id}
+              className="rounded-xl border-2 bg-bg-elevated/30 p-3"
+              style={{ borderColor: colors[entry.vehicle.id] }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className={`truncate text-base ${entry.vehicle.isOwn ? 'font-semibold text-fg' : 'font-medium text-fg'}`}>
+                    {entry.vehicle.label}
+                  </p>
+                  <p className="text-sm text-fg-secondary">Price {formatUsd(entry.vehicle.priceUsd)}</p>
+                </div>
+                <div className="text-right">
+                  <p className="font-mono text-base font-semibold tabular-nums text-fg">{formatUsd(entry.totals.net)}</p>
+                  <p className="text-xs uppercase tracking-wide text-fg-secondary">Net cost</p>
+                </div>
+              </div>
+              <dl className="mt-3 grid grid-cols-3 gap-2">
+                {[
+                  { label: 'Depreciation', value: entry.totals.depreciation },
+                  { label: entry.vehicle.powertrain === 'ev' ? 'Charging' : 'Fuel', value: entry.totals.fuel },
+                  { label: 'Insurance', value: entry.totals.insurance },
+                ].map((tile) => (
+                  <div key={tile.label} className="min-w-0 rounded-lg bg-bg-elevated/70 px-2 py-2">
+                    <dt className="truncate text-xs font-medium tracking-tight text-fg-secondary">{tile.label}</dt>
+                    <dd className="mt-0.5 truncate font-mono text-base tabular-nums text-fg">{formatUsd(tile.value)}</dd>
+                  </div>
+                ))}
+              </dl>
+              <MaintenanceTile entry={entry} />
+            </li>
+          ))}
+        </ul>
+        <div className="hidden overflow-x-auto xl:block">
+          <table className="w-full min-w-[60rem] text-base">
             <thead>
               <tr className="border-b border-border">
                 <th scope="col" className={`${head} text-left`}>Vehicle</th>
                 <th scope="col" className={head}>Price</th>
-                <th scope="col" className={head}>Depreciation</th>
-                <th scope="col" className={head}>Fuel or energy</th>
-                <th scope="col" className={head}>Oil changes</th>
-                <th scope="col" className={head}>Brakes</th>
-                <th scope="col" className={head}>Tires</th>
-                <th scope="col" className={head}>Service</th>
-                <th scope="col" className={head}>Insurance</th>
+                {COST_COLUMNS.map((column) => (
+                  <th key={column.key} scope="col" className={head}>{column.label}</th>
+                ))}
                 <th scope="col" className={head}>Net cost</th>
               </tr>
             </thead>
             <tbody>
-              {sorted.map(({ vehicle, totals }) => (
-                <tr key={vehicle.id} className="border-b border-border/60 last:border-b-0">
+              {sorted.map((entry) => (
+                <tr key={entry.vehicle.id} className="border-b border-border/60 last:border-b-0">
                   <th scope="row" className="px-3 py-2.5 text-left font-medium text-fg">
                     <span className="flex items-center gap-2">
-                      <Dot color={colors[vehicle.id]} />
-                      {vehicle.label}
+                      <Dot color={colors[entry.vehicle.id]} />
+                      {entry.vehicle.label}
                     </span>
                   </th>
-                  <td className={`${cell} text-fg-secondary`}>{formatUsd(vehicle.priceUsd)}</td>
-                  <td className={`${cell} text-fg-secondary`}>{formatUsd(totals.depreciation)}</td>
-                  <td className={`${cell} text-fg-secondary`}>{formatUsd(totals.fuel)}</td>
-                  <td className={`${cell} text-fg-secondary`}>{counted(totals.oil, totals.oilCount)}</td>
-                  <td className={`${cell} text-fg-secondary`}>{counted(totals.brakes, totals.brakeCount)}</td>
-                  <td className={`${cell} text-fg-secondary`}>{counted(totals.tires, totals.tireCount)}</td>
-                  <td className={`${cell} text-fg-secondary`}>{formatUsd(totals.service)}</td>
-                  <td className={`${cell} text-fg-secondary`}>{formatUsd(totals.insurance)}</td>
-                  <td className={`${cell} font-semibold text-fg`}>{formatUsd(totals.net)}</td>
+                  <td className={`${cell} text-fg-secondary`}>{formatUsd(entry.vehicle.priceUsd)}</td>
+                  {COST_COLUMNS.map((column) => (
+                    <td key={column.key} className={`${cell} text-fg-secondary`}>
+                      {counted(column.value(entry), column.count?.(entry) ?? 0)}
+                    </td>
+                  ))}
+                  <td className={`${cell} font-semibold text-fg`}>{formatUsd(entry.totals.net)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <p className="px-5 py-3 text-xs text-fg-tertiary">
-          Numbers in parentheses count how many times the item fell due. Figures for compared vehicles are estimates.
-        </p>
+        <div className="h-4" aria-hidden />
       </CardContent>
     </Card>
   );

@@ -459,6 +459,7 @@ vi.mock('@riviamigo/hooks', () => ({
     }),
     updateVehicleSettings: vi.fn().mockResolvedValue({}),
     updateVehicleName: vi.fn().mockResolvedValue({}),
+    updateVehicleCollection: vi.fn().mockResolvedValue({ ok: true, collection_paused: true, worker_command_queued: true }),
     refreshVehicleArtwork: vi.fn().mockResolvedValue({ ok: true, vehicle_id: 'v1' }),
   },
   useAuth: (selector?: (state: typeof settingsMocks.auth) => unknown) => selector ? selector(settingsMocks.auth) : settingsMocks.auth,
@@ -576,6 +577,7 @@ vi.mock('lucide-react', () => ({
   LogOut: () => <svg data-testid="icon-logout" />,
   MapPin: () => <svg data-testid="icon-map-pin" />,
   Plus: () => <svg data-testid="icon-plus" />,
+  Pause: () => <svg data-testid="icon-pause" />,
   Pencil: () => <svg data-testid="icon-pencil" />,
   Play: () => <svg data-testid="icon-play" />,
   RefreshCw: () => <svg data-testid="icon-refresh" />,
@@ -857,6 +859,41 @@ describe('Settings page', () => {
     expect(
       screen.getByRole('button', { name: 'Hide sharing for Adventure Truck' })
     ).toBeInTheDocument();
+  });
+
+  it('pauses and resumes Rivian collection from a connected vehicle card', async () => {
+    settingsMocks.me = { user_id: 'u1', email: 'owner@example.com', role: 'user', default_vehicle_id: 'v1' };
+    const vehicle = {
+      id: 'v1',
+      display_name: 'Adventure Truck',
+      model: 'R1T',
+      year: null,
+      trim: null,
+      vin: null,
+      rivian_vehicle_id: 'rivian-1',
+      battery_capacity_kwh: 135,
+      target_tire_pressure_psi: 48,
+      membership_role: 'owner',
+      is_demo: false,
+    };
+    settingsMocks.vehicles = [
+      vehicle,
+      { ...vehicle, id: 'demo-v1', display_name: 'Demo R2S', rivian_vehicle_id: 'demo-r2s-local', is_demo: true },
+    ];
+    const hooks = await import('@riviamigo/hooks');
+    const { unmount } = renderSettings();
+
+    expect(screen.queryByRole('button', { name: /data collection for Demo R2S/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Pause data collection for Adventure Truck' }));
+    await waitFor(() => expect(hooks.api.updateVehicleCollection).toHaveBeenCalledWith('v1', true));
+    unmount();
+
+    settingsMocks.vehicles = [Object.assign({}, vehicle, { collection_paused: true })];
+    renderSettings();
+    expect(screen.getByText('Collection paused')).toBeInTheDocument();
+    expect(screen.getByText('Paused')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Resume data collection for Adventure Truck' }));
+    await waitFor(() => expect(hooks.api.updateVehicleCollection).toHaveBeenCalledWith('v1', false));
   });
 
   it('renders dashboard persistence controls and triggers dashboard actions for admins', async () => {
@@ -1142,7 +1179,7 @@ describe('Settings page', () => {
     const price = screen.getByLabelText('Purchase price ($)');
     expect(price).toHaveValue('82000');
     fireEvent.change(price, { target: { value: '79,500' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save ownership costs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save ownership settings' }));
 
     await waitFor(() => {
       expect(ownershipMocks.update).toHaveBeenCalledWith(

@@ -112,6 +112,7 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/{id}/settings", put(update_vehicle_settings))
         .route("/vehicles/{id}/battery-config", put(update_battery_config))
         .route("/vehicles/{id}/name", put(update_vehicle_name))
+        .route("/vehicles/{id}/collection", put(update_vehicle_collection))
 }
 
 #[derive(Deserialize)]
@@ -471,6 +472,7 @@ struct VehicleListRow {
     history_backfill_status: Option<String>,
     history_backfilled_at: Option<chrono::DateTime<chrono::Utc>>,
     history_session_count: Option<i32>,
+    collection_paused: bool,
     worker_health: Option<String>,
     worker_health_msg: Option<String>,
     auth_state: Option<String>,
@@ -1891,6 +1893,56 @@ struct UpdateVehicleMemberBody {
     role: String,
 }
 
+#[derive(Deserialize)]
+struct UpdateVehicleCollectionBody {
+    paused: bool,
+}
+
+/// Pause or resume the background Rivian connection for one vehicle. The
+/// choice is stored, so a paused vehicle stays paused across restarts.
+async fn update_vehicle_collection(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
+    Json(body): Json<UpdateVehicleCollectionBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_role(&state.pool, auth.user_id, vid, &["owner", "manager"]).await?;
+    let rivian_vehicle_id: String =
+        sqlx::query_scalar("SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id = $1")
+            .bind(vid)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    if is_demo_vehicle_key(&rivian_vehicle_id) {
+        return Err(AppError::Validation(
+            "demo vehicles have no Rivian connection to pause".into(),
+        ));
+    }
+    sqlx::query("UPDATE riviamigo.vehicles SET collection_paused = $2 WHERE id = $1")
+        .bind(vid)
+        .bind(body.paused)
+        .execute(&state.pool)
+        .await?;
+    let command = if body.paused {
+        SupervisorCommand::StopWorker { vehicle_id: vid }
+    } else {
+        SupervisorCommand::StartWorker { vehicle_id: vid }
+    };
+    let queued = state.supervisor.send(command).await;
+    info!(
+        user_id = %auth.user_id,
+        vehicle_id = %vid,
+        paused = body.paused,
+        queued,
+        "vehicle.collection.updated"
+    );
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "collection_paused": body.paused,
+        "worker_command_queued": queued,
+    })))
+}
+
 async fn update_vehicle_name(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -2339,6 +2391,7 @@ async fn list_vehicles(
                 v.battery_config, v.created_at, v.interior_color, v.wheel_option, v.max_vehicle_power_kw, \
                 v.charge_port_type, v.battery_cell_type, v.supported_features, \
                 v.history_backfill_status, v.history_backfilled_at, v.history_session_count, \
+                v.collection_paused, \
                 vrs.worker_health, vrs.worker_health_msg, vrs.auth_state, vrs.auth_reason_code, \
                 vc.token_created_at, \
                 vm.role AS membership_role \
@@ -2403,6 +2456,7 @@ async fn list_vehicles(
             "history_backfill_status":  r.history_backfill_status,
             "history_backfilled_at":    r.history_backfilled_at,
             "history_session_count":    r.history_session_count,
+            "collection_paused":        r.collection_paused,
             "worker_health":            r.worker_health,
             "worker_health_msg":        r.worker_health_msg,
             "auth_state":               r.auth_state,

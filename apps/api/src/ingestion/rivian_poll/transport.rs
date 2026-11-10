@@ -30,10 +30,21 @@ struct GqlErrorExtensions {
     code: Option<String>,
 }
 
+/// Messages in source order, each followed by its `extensions.code` when
+/// Rivian sends one, so a log line shows whether an error was classified.
 fn fmt_errors(errors: &[GqlError]) -> String {
     errors
         .iter()
-        .map(|error| error.message.as_str())
+        .map(|error| {
+            match error
+                .extensions
+                .as_ref()
+                .and_then(|value| value.code.as_deref())
+            {
+                Some(code) => format!("{} [{code}]", error.message),
+                None => error.message.clone(),
+            }
+        })
         .collect::<Vec<_>>()
         .join("; ")
 }
@@ -86,13 +97,16 @@ pub async fn gql_request<T: for<'de> Deserialize<'de>>(
         request = request.bearer_auth(&tokens.access_token);
     }
 
-    let response = request.send().await.context("HTTP request failed")?;
+    let response = request
+        .send()
+        .await
+        .with_context(|| format!("Rivian {operation} request could not be sent"))?;
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
         return Err(anyhow!(AuthError));
     }
     if !status.is_success() {
-        return Err(anyhow!("Rivian API: HTTP {status}"));
+        return Err(anyhow!("Rivian {operation} request failed: HTTP {status}"));
     }
 
     let envelope: GqlEnvelope<T> = crate::services::outbound::read_json(
@@ -107,13 +121,16 @@ pub async fn gql_request<T: for<'de> Deserialize<'de>>(
             if errors_indicate_auth(errors) {
                 return Err(anyhow!(AuthError));
             }
-            return Err(anyhow!("Rivian GQL errors: {}", fmt_errors(errors)));
+            return Err(anyhow!(
+                "Rivian {operation} request returned errors: {}",
+                fmt_errors(errors)
+            ));
         }
     }
 
     envelope
         .data
-        .ok_or_else(|| anyhow!("Rivian API: empty data for {operation}"))
+        .ok_or_else(|| anyhow!("Rivian {operation} request returned no data"))
 }
 
 #[cfg(test)]
@@ -153,5 +170,17 @@ mod tests {
         ];
 
         assert_eq!(fmt_errors(&errors), "first; second");
+    }
+
+    #[test]
+    fn formats_graphql_error_codes_when_present() {
+        let errors = vec![GqlError {
+            message: "User is unauthenticated".into(),
+            extensions: Some(GqlErrorExtensions {
+                code: Some("FORBIDDEN".into()),
+            }),
+        }];
+
+        assert_eq!(fmt_errors(&errors), "User is unauthenticated [FORBIDDEN]");
     }
 }

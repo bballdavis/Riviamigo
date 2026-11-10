@@ -7,6 +7,7 @@ import {
   createGasPriceResolver,
   enabledComparisonIds,
   impliedRetention,
+  horizonSpan,
   insightSentence,
   ordinal,
   ownRank,
@@ -38,13 +39,14 @@ function response(overrides: Partial<OwnershipResponse> = {}): OwnershipResponse
       insurance_monthly_usd: null,
       tire_set_cost_usd: null,
       gas_price_usd_per_gallon: null,
+      projection_years: null,
       comparisons: { enabled: null, custom: [] },
     },
     usage: {
       months: [
-        { month: '2025-07-01', miles: 1_000, drive_energy_kwh: 420, charged_kwh: 500, priced_kwh: 500, charging_cost_usd: 60 },
-        { month: '2025-08-01', miles: 1_000, drive_energy_kwh: 420, charged_kwh: 500, priced_kwh: 500, charging_cost_usd: 60 },
-        { month: '2025-09-01', miles: 1_000, drive_energy_kwh: 420, charged_kwh: 500, priced_kwh: 500, charging_cost_usd: 60 },
+        { month: '2025-07-01', miles: 1_000, drive_energy_kwh: 420, charged_kwh: 500, priced_kwh: 500, charging_cost_usd: 60, fast_kwh: 0, fast_priced_kwh: 0, fast_cost_usd: 0 },
+        { month: '2025-08-01', miles: 1_000, drive_energy_kwh: 420, charged_kwh: 500, priced_kwh: 500, charging_cost_usd: 60, fast_kwh: 0, fast_priced_kwh: 0, fast_cost_usd: 0 },
+        { month: '2025-09-01', miles: 1_000, drive_energy_kwh: 420, charged_kwh: 500, priced_kwh: 500, charging_cost_usd: 60, fast_kwh: 0, fast_priced_kwh: 0, fast_cost_usd: 0 },
       ],
       tracked_from: '2025-07-01T00:00:00Z',
       tracked_to: '2025-09-30T00:00:00Z',
@@ -77,7 +79,7 @@ function response(overrides: Partial<OwnershipResponse> = {}): OwnershipResponse
 }
 
 const now = new Date('2025-10-01T00:00:00Z');
-const build = (data = response(), horizon: 'to_date' | '5y' | '10y' = 'to_date', enabledIds?: string[]) =>
+const build = (data = response(), horizon: 'to_date' | 'projected' = 'to_date', enabledIds?: string[]) =>
   buildLedger(data, { horizon, now, ownLabel: 'R1S', ...(enabledIds ? { enabledIds } : {}) });
 const find = (ledger: ReturnType<typeof build>, id: string) => {
   const entry = ledger.vehicles.find((candidate) => candidate.vehicle.id === id);
@@ -148,6 +150,37 @@ describe('buildLedger', () => {
     expect(find(ledger, 'own').totals.fuel).toBeCloseTo(180 + estimatedMiles * 0.06);
   });
 
+  it('reads a cached response without the fast-charging split as all home charging', () => {
+    const data = response();
+    data.usage.months = data.usage.months.map(({ fast_kwh: _a, fast_priced_kwh: _b, fast_cost_usd: _c, ...row }) => row) as typeof data.usage.months;
+    const ledger = build(data);
+    expect(Number.isFinite(find(ledger, 'own').totals.net)).toBe(true);
+    expect(ledger.electricityUsdPerKwh).toBeCloseTo(0.12);
+  });
+
+  it('prices unpriced home charging at the home rate, not the fast-charging rate', () => {
+    const data = response();
+    // Each month: 400 kWh at home (100 kWh priced at $0.02), 100 kWh fast-charged at $0.50.
+    data.usage.months = data.usage.months.map((row) => ({
+      ...row,
+      charged_kwh: 500,
+      priced_kwh: 200,
+      charging_cost_usd: 2 + 50,
+      fast_kwh: 100,
+      fast_priced_kwh: 100,
+      fast_cost_usd: 50,
+    }));
+    const ledger = build(data);
+    expect(ledger.homeUsdPerKwh).toBeCloseTo(0.02);
+    expect(ledger.fastUsdPerKwh).toBeCloseTo(0.5);
+    expect(ledger.fastShare).toBeCloseTo(0.2);
+    // 300 unpriced home kWh at $0.02 each month, not at the fast or blended rate.
+    const monthCost = 52 + 300 * 0.02;
+    expect(ledger.electricityUsdPerKwh).toBeCloseTo(monthCost / 500);
+    const estimatedMiles = (3_000 / 92) * 181;
+    expect(find(ledger, 'own').totals.fuel).toBeCloseTo(monthCost * 3 + estimatedMiles * (monthCost / 1_000));
+  });
+
   it('ends on the entered resale value, even soon after purchase', () => {
     const data = response();
     data.settings.purchase_date = '2025-08-01';
@@ -183,8 +216,22 @@ describe('buildLedger', () => {
     expect((gas.points[jump]?.spent ?? 0) - (gas.points[jump - 1]?.spent ?? 0)).toBe(100);
   });
 
+  it('records each month\'s running and one-time costs per vehicle', () => {
+    const ledger = build();
+    const gas = find(ledger, 'gas_suv');
+    expect(gas.months).toHaveLength(ledger.periods.length);
+    const oil = gas.months.flatMap((month) => month.oneTime).filter((item) => item.kind === 'oil');
+    expect(oil.reduce((sum, item) => sum + item.count, 0)).toBe(gas.totals.oilCount);
+    gas.months.forEach((month, index) => {
+      const before = gas.atPeriodEnd[index]?.spent ?? 0;
+      const after = gas.atPeriodEnd[index + 1]?.spent ?? 0;
+      const oneTime = month.oneTime.reduce((sum, item) => sum + item.usd, 0);
+      expect(after - before).toBeCloseTo(month.fuel + month.insurance + oneTime);
+    });
+  });
+
   it('keeps spent, net, and the cost categories consistent', () => {
-    const ledger = build(response(), '5y');
+    const ledger = build(response(), 'projected');
     for (const { vehicle, totals } of ledger.vehicles) {
       const running = totals.fuel + totals.oil + totals.brakes + totals.tires + totals.service + totals.insurance;
       expect(totals.spent).toBeCloseTo(vehicle.priceUsd + running);
@@ -193,8 +240,19 @@ describe('buildLedger', () => {
     }
   });
 
+  it('projects the stored number of years from the purchase date, or five by default', () => {
+    expect(build(response(), 'projected').endMs).toBe(Date.UTC(2030, 0, 1));
+    const data = response();
+    data.settings.projection_years = 2;
+    expect(build(data, 'projected').endMs).toBe(Date.UTC(2027, 0, 1));
+    // A projection that would end before today still runs through today.
+    data.settings.purchase_date = '2023-01-01';
+    data.settings.projection_years = 1;
+    expect(build(data, 'projected').endMs).toBe(now.getTime());
+  });
+
   it('projects future months and annual service across a longer horizon', () => {
-    const ledger = build(response(), '5y');
+    const ledger = build(response(), 'projected');
     expect(ledger.endMs).toBe(Date.UTC(2030, 0, 1));
     expect(ledger.projectedFromMs).toBe(now.getTime());
     expect(ledger.periods).toHaveLength(60);
@@ -266,9 +324,9 @@ describe('presentation helpers', () => {
   });
 
   it('describes the gap to the compared vehicles, or nothing when none are on', () => {
-    expect(insightSentence(build(response(), 'to_date', []), 'To date')).toBeNull();
-    expect(insightSentence(build(), 'To date')).toMatch(/^So far, R1S nets out \$[\d,]+ more than the Gas SUV after resale\.$/);
-    expect(insightSentence(build(response(), '5y'), '5 years')).toMatch(/^Over 5 years, /);
+    expect(insightSentence(build(response(), 'to_date', []), 'So far')).toBeNull();
+    expect(insightSentence(build(), 'So far')).toMatch(/^So far, R1S nets out \$[\d,]+ more than the Gas SUV after resale\.$/);
+    expect(insightSentence(build(response(), 'projected'), horizonSpan('projected', 5))).toMatch(/^Over 5 years of ownership, /);
   });
 
   it('formats ordinals', () => {
