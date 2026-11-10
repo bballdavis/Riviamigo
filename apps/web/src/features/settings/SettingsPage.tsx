@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, AuthenticatedVehicleArtwork, queryKeys, resolveVehicleArtwork, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
+import { api, AuthenticatedVehicleArtwork, invalidateVehicleCapacityData, queryKeys, resolveVehicleArtwork, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
 import { type UnitPreferences, type Vehicle, type VehicleImages, type VehicleMember } from '@riviamigo/types';
 import {
   downloadDashboardYaml,
@@ -835,7 +835,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
         target_tire_pressure_psi: targetTirePressurePsi,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      invalidateVehicleCapacityData(queryClient);
     },
   });
 
