@@ -2,6 +2,24 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub(crate) fn model_year_from_vin(vin: &str) -> Option<i32> {
+    let vin = vin.trim().to_ascii_uppercase();
+    if vin.len() != 17
+        || !vin
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() && !matches!(c, b'I' | b'O' | b'Q'))
+        || !vin.as_bytes()[6].is_ascii_alphabetic()
+    {
+        return None;
+    }
+
+    // An alphabetic seventh position disambiguates the 2010-2039 VIN year cycle.
+    b"ABCDEFGHJKLMNPRSTVWXY123456789"
+        .iter()
+        .position(|&code| code == vin.as_bytes()[9])
+        .map(|offset| 2010 + offset as i32)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Vehicle {
     pub id: Uuid,
@@ -34,4 +52,41 @@ pub struct VehicleRuntimeState {
     pub auth_state: Option<String>,
     pub auth_reason_code: Option<String>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::model_year_from_vin;
+
+    #[test]
+    fn decodes_modern_vin_model_year_without_optional_graphql_fields() {
+        for (code, year) in [
+            ('N', 2022),
+            ('P', 2023),
+            ('R', 2024),
+            ('S', 2025),
+            ('T', 2026),
+        ] {
+            let vin = format!("7FCTGAAL0{code}N000001");
+            assert_eq!(model_year_from_vin(&vin), Some(year));
+            assert_eq!(model_year_from_vin(&vin.to_lowercase()), Some(year));
+        }
+    }
+
+    #[test]
+    fn rejects_missing_invalid_and_ambiguous_vin_years() {
+        for vin in [
+            "",
+            "7FCTGAAL0SN00000",
+            "7FCTGAAL0SN0000011",
+            "7FCTGAAL0ZN000001",
+            "7FCTGAAL0IN000001",
+            "7FCTGAAL0SN00000Q",
+            "7FCTGA1L0SN000001",
+            "7FCTGAAL0SN00000!",
+            "7FCTGAAL0SN0000é",
+        ] {
+            assert_eq!(model_year_from_vin(vin), None);
+        }
+    }
 }

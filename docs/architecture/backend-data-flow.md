@@ -25,12 +25,18 @@ feed unhealthy. Older battery, range, or charging timestamps are reported as
 field freshness diagnostics instead; parked vehicles are not expected to emit
 continuous trip or charging telemetry.
 
-Vehicle enrollment persists Rivian's `vehicle.modelYear` in
-`riviamigo.vehicles.model_year`; `GET /v1/vehicles` exposes it as `year`.
-Credential renewal and startup vehicle enrichment refresh this nullable metadata for existing
-vehicles without clearing a known year when Rivian omits it. The forward-only
-model-year migration adds storage only; it does not infer a year from a VIN or
-rewrite saved battery capacity. Settings uses the year before battery-capacity
+Vehicle enrollment derives model year from Rivian's supported account `vin`
+field and persists it in `riviamigo.vehicles.model_year`; `GET /v1/vehicles`
+exposes it as `year`, falling back locally to the saved VIN for older records.
+The decoder validates the 17-character VIN alphabet and uses its alphabetic
+seventh position to disambiguate the 2010-2039 tenth-position model-year codes.
+Discovery and enrichment request the supported account `vin` field rather than
+depending on `vehicle.modelYear`; an unsupported GraphQL selection can reject
+the entire account query. Credential renewal and
+startup enrichment refresh the VIN and year without clearing known values when
+Rivian omits them. Missing usable VIN metadata is logged without including VINs.
+The forward-only model-year migration adds storage only and never rewrites saved
+battery capacity. Settings uses the year before battery-capacity
 presets when selecting R1 generation (2025 onward is Gen 2), preserving an
 incompatible saved capacity as a custom value rather than silently changing the
 battery-health baseline.

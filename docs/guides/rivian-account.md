@@ -25,12 +25,20 @@ require a project update.
 
 ## Vehicle generation and battery capacity
 
-In **Settings > Vehicles**, the R1 battery generation uses Rivian's model year:
-2025 and newer are Gen 2; earlier model years are Gen 1. Riviamigo saves the year
-when adding a vehicle and refreshes it during collector startup, including for
-vehicles added before model-year storage was introduced. After upgrading, let
-the collector connect successfully, then reload Settings to see the corrected
-generation. Removing and re-adding the vehicle is not necessary.
+In **Settings > Vehicles**, the R1 battery generation uses the vehicle's model
+year: 2025 and newer are Gen 2; earlier model years are Gen 1. Riviamigo derives
+the year from the VIN returned by Rivian's account query, rather than depending
+on a `vehicle.modelYear` GraphQL field. It saves the year when adding
+a vehicle and refreshes the VIN and year during collector startup, including
+for vehicles added before model-year storage was introduced.
+
+After upgrading, a vehicle with an existing valid VIN can show its corrected
+year immediately when Settings loads, without another Rivian request. If the
+VIN is missing, let the collector connect successfully, then reload Settings.
+Removing and re-adding the vehicle is not necessary. If the year remains
+unavailable, check the app logs for `fetch_vehicle_enrichment failed` or
+`vehicle model year unavailable`; a connected telemetry stream alone does not
+prove that account metadata was fetched successfully.
 
 If the model year is unavailable, Riviamigo uses a generation hint in the model
 name or a matching saved battery-capacity preset, falling back to Gen 1 when

@@ -2404,7 +2404,7 @@ async fn list_vehicles(
             "is_demo":                  is_demo,
             "vin":                      r.vin,
             "model":                    canonical_vehicle_model(&r.model),
-            "year":                     r.model_year,
+            "year":                     r.model_year.or_else(|| r.vin.as_deref().and_then(crate::models::vehicle::model_year_from_vin)),
             "trim":                     r.trim,
             "color":                    r.color,
             "interior_color":           r.interior_color,
@@ -5640,17 +5640,23 @@ mod tests {
         .await
         .unwrap();
 
-        for year in [Some(2024), Some(2025), None] {
+        for (year, vin) in [
+            (Some(2024), None),
+            (Some(2025), None),
+            (None, Some("7FCTGAAL0TN000001")),
+            (None, None),
+        ] {
             let vehicle_id = Uuid::new_v4();
             sqlx::query(
                 "INSERT INTO riviamigo.vehicles
-                 (id, user_id, rivian_vehicle_id, model, model_year)
-                 VALUES ($1, $2, $3, 'R1S', $4)",
+                 (id, user_id, rivian_vehicle_id, model, model_year, vin)
+                 VALUES ($1, $2, $3, 'R1S', $4, $5)",
             )
             .bind(vehicle_id)
             .bind(user_id)
             .bind(format!("demo-model-year-{vehicle_id}"))
             .bind(year)
+            .bind(vin)
             .execute(&pool)
             .await
             .unwrap();
@@ -5683,10 +5689,11 @@ mod tests {
             .iter()
             .map(|vehicle| vehicle["year"].clone())
             .collect();
-        assert_eq!(years.len(), 3);
+        assert_eq!(years.len(), 4);
         for year in [
             serde_json::json!(2024),
             serde_json::json!(2025),
+            serde_json::json!(2026),
             serde_json::Value::Null,
         ] {
             assert!(years.contains(&year));

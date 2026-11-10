@@ -351,13 +351,13 @@ struct CurrentUserEnrichment {
 #[serde(rename_all = "camelCase")]
 struct VehicleEnrichmentItem {
     id: String,
+    vin: Option<String>,
     vehicle: Option<VehicleEnrichmentDetails>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VehicleEnrichmentDetails {
-    model_year: Option<i32>,
     mobile_configuration: Option<MobileConfiguration>,
     vehicle_state: Option<VehicleStateEnrichment>,
 }
@@ -403,13 +403,27 @@ pub async fn fetch_vehicle_enrichment(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<()> {
+    let item = request_vehicle_enrichment(rivian_vehicle_id, client, tokens, GATEWAY_URL).await?;
+    save_vehicle_enrichment(pool, vehicle_id, item.vehicle, item.vin.as_deref()).await?;
+
+    increment_poll_counter(pool, vehicle_id).await;
+    tracing::debug!(vehicle_id=%vehicle_id, "vehicle enrichment upserted");
+    Ok(())
+}
+
+async fn request_vehicle_enrichment(
+    rivian_vehicle_id: &str,
+    client: &reqwest::Client,
+    tokens: &RivianTokenBundle,
+    gateway_url: &str,
+) -> Result<VehicleEnrichmentItem> {
     const Q: &str = r#"
         query getUserInfo {
           currentUser {
             vehicles {
               id
+              vin
               vehicle {
-                modelYear
                 mobileConfiguration {
                   trimOption          { optionId optionName }
                   exteriorColorOption { optionId optionName }
@@ -429,7 +443,7 @@ pub async fn fetch_vehicle_enrichment(
 
     let data: UserInfoEnrichmentData = gql_request(
         client,
-        GATEWAY_URL,
+        gateway_url,
         tokens,
         "getUserInfo",
         Q,
@@ -437,32 +451,22 @@ pub async fn fetch_vehicle_enrichment(
     )
     .await?;
 
-    let item = data
-        .current_user
+    data.current_user
         .and_then(|u| u.vehicles)
         .unwrap_or_default()
         .into_iter()
-        .find(|v| v.id == rivian_vehicle_id);
-
-    let Some(item) = item else {
-        return Err(anyhow!(
-            "vehicle {rivian_vehicle_id} not found in getUserInfo"
-        ));
-    };
-
-    save_vehicle_enrichment(pool, vehicle_id, item.vehicle).await?;
-
-    increment_poll_counter(pool, vehicle_id).await;
-    tracing::debug!(vehicle_id=%vehicle_id, "vehicle enrichment upserted");
-    Ok(())
+        .find(|v| v.id == rivian_vehicle_id)
+        .ok_or_else(|| anyhow!("vehicle {rivian_vehicle_id} not found in getUserInfo"))
 }
 
 async fn save_vehicle_enrichment(
     pool: &PgPool,
     vehicle_id: Uuid,
     details: Option<VehicleEnrichmentDetails>,
+    vin: Option<&str>,
 ) -> Result<()> {
-    let model_year = details.as_ref().and_then(|d| d.model_year);
+    let vin = vin.map(str::trim).filter(|vin| !vin.is_empty());
+    let model_year = vin.and_then(crate::models::vehicle::model_year_from_vin);
     let mobile_config = details
         .as_ref()
         .and_then(|d| d.mobile_configuration.as_ref());
@@ -486,23 +490,29 @@ async fn save_vehicle_enrichment(
             )
         });
 
-    sqlx::query(
+    let saved_year: Option<i32> = sqlx::query_scalar(
         "UPDATE riviamigo.vehicles
          SET interior_color     = COALESCE($2, interior_color),
              trim               = COALESCE($3, trim),
              supported_features = COALESCE($4, supported_features),
              model_year         = COALESCE($5, model_year),
+             vin                = COALESCE($6, vin),
              updated_at         = now()
-         WHERE id = $1",
+         WHERE id = $1
+         RETURNING model_year",
     )
     .bind(vehicle_id)
     .bind(interior_color)
     .bind(trim)
     .bind(features_json)
     .bind(model_year)
-    .execute(pool)
+    .bind(vin)
+    .fetch_one(pool)
     .await?;
 
+    if saved_year.is_none() {
+        tracing::warn!(vehicle_id=%vehicle_id, "vehicle model year unavailable: Rivian did not return a usable VIN");
+    }
     Ok(())
 }
 
@@ -2852,21 +2862,76 @@ mod tests {
     }
 
     #[test]
-    fn vehicle_model_year_is_read_from_enrichment() {
-        for year in [Some(2024), Some(2025), Some(2026), None] {
+    fn vehicle_model_year_is_read_from_enrichment_vin() {
+        for (vin, year) in [
+            (Some("7FCTGAAL0RN000001"), Some(2024)),
+            (Some("7FCTGAAL0SN000001"), Some(2025)),
+            (Some("7FCTGAAL0TN000001"), Some(2026)),
+            (None, None),
+        ] {
             let data: super::UserInfoEnrichmentData = serde_json::from_value(json!({
                 "currentUser": { "vehicles": [{
                     "id": "test-vehicle",
-                    "vehicle": { "modelYear": year }
+                    "vin": vin,
+                    "vehicle": {}
                 }] }
             }))
             .unwrap();
             let item = data.current_user.unwrap().vehicles.unwrap().remove(0);
-            assert_eq!(item.vehicle.unwrap().model_year, year);
+            assert_eq!(
+                item.vin
+                    .as_deref()
+                    .and_then(crate::models::vehicle::model_year_from_vin),
+                year
+            );
         }
+    }
 
-        let details: super::VehicleEnrichmentDetails = serde_json::from_value(json!({})).unwrap();
-        assert_eq!(details.model_year, None);
+    #[tokio::test]
+    async fn vehicle_model_year_enrichment_requests_supported_vin_field() {
+        let app = Router::new().route(
+            "/graphql",
+            post(|Json(body): Json<serde_json::Value>| async move {
+                let query = body["query"].as_str().unwrap();
+                if query.contains("modelYear") {
+                    return Json(json!({ "errors": [{
+                        "message": "Cannot query field modelYear on type Vehicle"
+                    }] }));
+                }
+                assert!(query.contains("vin"));
+                Json(json!({ "data": { "currentUser": { "vehicles": [
+                    { "id": "other", "vin": "7FCTGAAL0RN000001", "vehicle": {} },
+                    { "id": "target", "vin": "7FCTGAAL0SN000001", "vehicle": {} }
+                ] } } }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let tokens = RivianTokenBundle {
+            access_token: "test-access".into(),
+            refresh_token: "test-refresh".into(),
+            app_session_token: "test-app".into(),
+            user_session_token: "test-user".into(),
+            csrf_token: "test-csrf".into(),
+            created_at: Utc::now(),
+        };
+        let item = super::request_vehicle_enrichment(
+            "target",
+            &reqwest::Client::new(),
+            &tokens,
+            &format!("http://{address}/graphql"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(item.id, "target");
+        assert_eq!(
+            item.vin
+                .as_deref()
+                .and_then(crate::models::vehicle::model_year_from_vin),
+            Some(2025)
+        );
+        server.abort();
     }
 
     #[tokio::test]
@@ -2884,17 +2949,22 @@ mod tests {
         .await
         .unwrap();
 
-        for details in [Some(json!({ "modelYear": 2025 })), Some(json!({})), None] {
+        for (details, vin) in [
+            (Some(json!({})), Some("7FCTGAAL0SN000001")),
+            (Some(json!({})), None),
+            (None, None),
+        ] {
             super::save_vehicle_enrichment(
                 &db.pool,
                 vehicle_id,
                 details.map(|value| serde_json::from_value(value).unwrap()),
+                vin,
             )
             .await
             .unwrap();
 
-            let saved: (Option<i32>, Option<f64>, Option<String>) = sqlx::query_as(
-                "SELECT model_year, battery_capacity_wh, battery_config
+            let saved: (Option<i32>, Option<f64>, Option<String>, Option<String>) = sqlx::query_as(
+                "SELECT model_year, battery_capacity_wh, battery_config, vin
                  FROM riviamigo.vehicles WHERE id = $1",
             )
             .bind(vehicle_id)
@@ -2906,7 +2976,8 @@ mod tests {
                 (
                     Some(2025),
                     Some(135000.0),
-                    Some("R1T / R1S Large (Gen 1)".into())
+                    Some("R1T / R1S Large (Gen 1)".into()),
+                    Some("7FCTGAAL0SN000001".into())
                 )
             );
         }
