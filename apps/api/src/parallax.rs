@@ -1675,8 +1675,9 @@ async fn collect_connection_with_context(
                             json!({
                                 "event": if renewal { "ttl_expired" } else if hold.is_some() { "session_hold" } else { "closed" },
                                 "hold_reason": hold.map(HoldReason::as_str),
+                                // The close reason is provider text that can carry
+                                // identifiers; the hold reason already classifies it.
                                 "close_code": frame.as_ref().map(|f| u16::from(f.code)),
-                                "close_reason": frame.as_ref().map(|f| f.reason.to_string()),
                             }),
                         );
                         if let Err(error) =
