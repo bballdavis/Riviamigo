@@ -157,7 +157,7 @@ Used to ensure full parity with the best-in-class EV trackers.
 
 ### Schema additions needed (timeseries.telemetry)
 - `heading_deg` FLOAT8
-  - Rivian's `gnssBearing` is the course over ground (direction of travel), so it points backwards while reversing and a parked vehicle keeps the course of its last movement. `GET /v1/vehicles/{id}/status` therefore also returns a derived `facing_deg` (not stored): the course turned 180° when the last driving gear was reverse and a newer bearing has turned at least 45° from the one held when reverse was engaged. See `apps/api/src/services/vehicle_facing.rs`.
+  - Rivian's `gnssBearing` is the course over ground (direction of travel), so it points backwards while reversing and a parked vehicle keeps the course of its last movement. `GET /v1/vehicles/{id}/status` therefore also returns a derived `facing_deg` (not stored): the course turned 180° when the most recent drive or reverse shift that the vehicle moved after was reverse. A reverse shift counts when a later bearing (before the next shift) turned at least 45° from the one held at the shift; a drive shift counts on the same turn or on a reported speed of at least 1 mph within 15 minutes. Shifting to drive or reverse without moving leaves the earlier facing in place, and gear values are matched case-insensitively. See `apps/api/src/services/vehicle_facing.rs`.
 - Raw `outside_temp_c` acquisition remains unavailable from the current Rivian subscription; the normalized column is retained so vehicle readings can supersede estimates if upstream support appears.
 - `hvac_active` BOOLEAN
 - `regen_power_kw` FLOAT8 (direct upstream field when available)

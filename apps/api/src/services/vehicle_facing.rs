@@ -6,107 +6,167 @@
 //! movement. After backing into a space, the stored bearing therefore points
 //! out of the space, 180° from where the vehicle faces.
 //!
-//! The bearing is flipped only when the last driving gear was reverse and a
-//! bearing newer than that shift has turned at least [`REVERSE_COURSE_TURN_DEG`]
-//! away from the bearing held when reverse was engaged. Shifting to reverse and
-//! back to park without moving leaves the course, and so the facing, alone.
+//! The course reflects whichever motion gear last moved the vehicle, so the
+//! facing is anchored on the most recent `drive` or `reverse` shift that was
+//! followed by movement:
+//!
+//! - a reverse shift counts only when a later bearing (before the next shift)
+//!   turned at least [`COURSE_TURN_DEG`] away from the bearing held at the
+//!   shift, because reversing straight back can leave the stored course
+//!   unchanged until it updates;
+//! - a drive shift counts when the course turned the same way or the vehicle
+//!   reported a speed of at least [`MOVING_SPEED_MPH`] soon after the shift.
+//!
+//! Shifts the vehicle did not move after are skipped. Shifting to reverse,
+//! or to drive, and back to park without moving therefore leaves the facing
+//! of the earlier manoeuvre in place. The bearing is flipped only when the
+//! anchor is a reverse shift.
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-/// A course change this large after engaging reverse means the vehicle moved
-/// backwards: a straight back-in turns the course about 180°, a back-in to a
+/// A course change this large after a shift means the vehicle moved in that
+/// gear: a straight back-in turns the course about 180°, a back-in to a
 /// perpendicular space about 90°. Parked GNSS jitter stays well below it.
-pub const REVERSE_COURSE_TURN_DEG: f64 = 45.0;
+pub const COURSE_TURN_DEG: f64 = 45.0;
+
+/// A reported speed at least this high after a drive shift means the vehicle
+/// pulled away.
+pub const MOVING_SPEED_MPH: f64 = 1.0;
+
+/// How many recent motion-gear shifts are examined for an anchor.
+const MAX_SHIFTS: i64 = 6;
+
+/// One `drive` or `reverse` shift and what happened before the next one.
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct GearShift {
+    /// The gear, lower-cased.
+    pub gear: String,
+    pub shifted_at: DateTime<Utc>,
+    /// The bearing held when the shift was reported.
+    pub bearing_at_shift: Option<f64>,
+    /// A later bearing, before the next shift, turned at least
+    /// [`COURSE_TURN_DEG`] from `bearing_at_shift`.
+    pub course_turned: bool,
+    /// A drive shift was followed by a moving speed report.
+    pub moved: bool,
+}
+
+impl GearShift {
+    /// `Some(true)` when this shift left the course pointing backwards,
+    /// `Some(false)` when forwards, and `None` when the vehicle did not move
+    /// after it.
+    fn course_points_backwards(&self) -> Option<bool> {
+        if self.gear.eq_ignore_ascii_case("reverse") {
+            self.course_turned.then_some(true)
+        } else if self.gear.eq_ignore_ascii_case("drive") {
+            (self.course_turned || self.moved).then_some(false)
+        } else {
+            None
+        }
+    }
+}
 
 /// Telemetry facts that decide whether the latest bearing is a reverse course.
-#[derive(Debug, Clone, Default, PartialEq, sqlx::FromRow)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct FacingEvidence {
-    /// The most recent `drive` or `reverse` gear report.
-    pub last_motion_gear: Option<String>,
-    pub last_motion_gear_at: Option<DateTime<Utc>>,
-    /// The newest recorded bearing and when it was recorded.
-    pub latest_bearing_at: Option<DateTime<Utc>>,
-    /// The bearing held when the last motion gear was reported.
-    pub bearing_at_gear: Option<f64>,
+    /// Recent motion-gear shifts, newest first.
+    pub shifts: Vec<GearShift>,
 }
 
 /// The vehicle's facing in compass degrees `[0, 360)`, or `None` without a bearing.
 pub fn facing_deg(bearing_deg: Option<f64>, evidence: &FacingEvidence) -> Option<f64> {
     let bearing = normalize(bearing_deg?)?;
-    Some(if backed_into_position(bearing, evidence) {
+    Some(if backed_into_position(evidence) {
         normalize(bearing + 180.0).unwrap_or(bearing)
     } else {
         bearing
     })
 }
 
-fn backed_into_position(bearing: f64, evidence: &FacingEvidence) -> bool {
-    let reversing = evidence
-        .last_motion_gear
-        .as_deref()
-        .is_some_and(|gear| gear.eq_ignore_ascii_case("reverse"));
-    let course_updated_after_shift = matches!(
-        (evidence.latest_bearing_at, evidence.last_motion_gear_at),
-        (Some(bearing_at), Some(gear_at)) if bearing_at > gear_at
-    );
-    let course_turned = evidence
-        .bearing_at_gear
-        .and_then(normalize)
-        .is_some_and(|before| angular_distance(bearing, before) >= REVERSE_COURSE_TURN_DEG);
-    reversing && course_updated_after_shift && course_turned
+fn backed_into_position(evidence: &FacingEvidence) -> bool {
+    evidence
+        .shifts
+        .iter()
+        .find_map(GearShift::course_points_backwards)
+        .unwrap_or(false)
 }
 
 fn normalize(degrees: f64) -> Option<f64> {
     degrees.is_finite().then(|| degrees.rem_euclid(360.0))
 }
 
-fn angular_distance(a: f64, b: f64) -> f64 {
-    let difference = (a - b).rem_euclid(360.0);
-    difference.min(360.0 - difference)
-}
-
-/// Loads the evidence for [`facing_deg`] from the last 30 days of telemetry.
-/// Each lookup is a single-row index scan on `(vehicle_id, ts DESC)`.
+/// Loads the evidence for [`facing_deg`] from the last 30 days of telemetry:
+/// up to [`MAX_SHIFTS`] recent motion-gear shifts, and for each the bearing
+/// at the shift, whether the course later turned before the next shift, and
+/// (for drive) whether a moving speed followed within 15 minutes. Gear values
+/// are compared case-insensitively, as everywhere else in ingestion.
 pub async fn load_facing_evidence(pool: &PgPool, vehicle_id: Uuid) -> sqlx::Result<FacingEvidence> {
-    let evidence = sqlx::query_as::<_, FacingEvidence>(
-        r#"WITH gear AS (
-               SELECT ts, gear_status
+    let shifts = sqlx::query_as::<_, GearShift>(
+        r#"WITH shifts AS (
+               SELECT ts, lower(gear_status) AS gear
                FROM timeseries.telemetry
                WHERE vehicle_id = $1
                  AND ts > now() - interval '30 days'
-                 AND gear_status IN ('drive', 'reverse')
+                 AND lower(gear_status) IN ('drive', 'reverse')
                ORDER BY ts DESC
-               LIMIT 1
+               LIMIT $2
            ),
-           bearing AS (
-               SELECT ts
-               FROM timeseries.telemetry
-               WHERE vehicle_id = $1
-                 AND ts > now() - interval '30 days'
-                 AND heading_deg IS NOT NULL
-               ORDER BY ts DESC
-               LIMIT 1
+           phases AS (
+               SELECT ts, gear,
+                      COALESCE(lag(ts) OVER (ORDER BY ts DESC), 'infinity'::timestamptz) AS ended_at
+               FROM shifts
            )
-           SELECT gear.gear_status AS last_motion_gear,
-                  gear.ts AS last_motion_gear_at,
-                  bearing.ts AS latest_bearing_at,
-                  (SELECT t.heading_deg
-                   FROM timeseries.telemetry t
-                   WHERE t.vehicle_id = $1
-                     AND t.ts <= gear.ts
-                     AND t.ts > gear.ts - interval '1 day'
-                     AND t.heading_deg IS NOT NULL
-                   ORDER BY t.ts DESC
-                   LIMIT 1) AS bearing_at_gear
-           FROM gear
-           FULL JOIN bearing ON true"#,
+           SELECT p.gear,
+                  p.ts AS shifted_at,
+                  held.heading_deg AS bearing_at_shift,
+                  turned.ts IS NOT NULL AS course_turned,
+                  moving.ts IS NOT NULL AS moved
+           FROM phases p
+           LEFT JOIN LATERAL (
+               SELECT t.heading_deg
+               FROM timeseries.telemetry t
+               WHERE t.vehicle_id = $1
+                 AND t.ts > now() - interval '31 days'
+                 AND t.ts <= p.ts
+                 AND t.ts > p.ts - interval '1 day'
+                 AND t.heading_deg IS NOT NULL
+               ORDER BY t.ts DESC
+               LIMIT 1
+           ) held ON TRUE
+           LEFT JOIN LATERAL (
+               SELECT t.ts
+               FROM timeseries.telemetry t
+               WHERE t.vehicle_id = $1
+                 AND t.ts > now() - interval '31 days'
+                 AND t.ts > p.ts
+                 AND t.ts < p.ended_at
+                 AND t.heading_deg IS NOT NULL
+                 AND abs((t.heading_deg - held.heading_deg)
+                         - 360 * floor((t.heading_deg - held.heading_deg + 180) / 360)) >= $3
+               LIMIT 1
+           ) turned ON TRUE
+           LEFT JOIN LATERAL (
+               SELECT t.ts
+               FROM timeseries.telemetry t
+               WHERE p.gear = 'drive'
+                 AND t.vehicle_id = $1
+                 AND t.ts > now() - interval '31 days'
+                 AND t.ts >= p.ts
+                 AND t.ts < LEAST(p.ended_at, p.ts + interval '15 minutes')
+                 AND t.speed_mph >= $4
+               LIMIT 1
+           ) moving ON TRUE
+           ORDER BY p.ts DESC"#,
     )
     .bind(vehicle_id)
-    .fetch_optional(pool)
+    .bind(MAX_SHIFTS)
+    .bind(COURSE_TURN_DEG)
+    .bind(MOVING_SPEED_MPH)
+    .fetch_all(pool)
     .await?;
-    Ok(evidence.unwrap_or_default())
+    Ok(FacingEvidence { shifts })
 }
 
 /// [`facing_deg`] for a status response. Evidence that cannot be loaded leaves
@@ -130,86 +190,112 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
-    fn at(hour: u32, minute: u32) -> Option<DateTime<Utc>> {
-        Some(Utc.with_ymd_and_hms(2026, 11, 9, hour, minute, 0).unwrap())
+    fn at(hour: u32, minute: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 11, 9, hour, minute, 0).unwrap()
     }
 
-    fn reversed(bearing_at_gear: f64, latest_bearing_at: Option<DateTime<Utc>>) -> FacingEvidence {
+    fn shift(gear: &str, minute: u32, course_turned: bool, moved: bool) -> GearShift {
+        GearShift {
+            gear: gear.into(),
+            shifted_at: at(23, minute),
+            bearing_at_shift: Some(103.6),
+            course_turned,
+            moved,
+        }
+    }
+
+    fn evidence(newest_first: Vec<GearShift>) -> FacingEvidence {
         FacingEvidence {
-            last_motion_gear: Some("reverse".into()),
-            last_motion_gear_at: at(23, 41),
-            latest_bearing_at,
-            bearing_at_gear: Some(bearing_at_gear),
+            shifts: newest_first,
         }
     }
 
     #[test]
     fn forward_driving_keeps_the_bearing_and_normalizes_it() {
-        let evidence = FacingEvidence {
-            last_motion_gear: Some("drive".into()),
-            last_motion_gear_at: at(23, 38),
-            latest_bearing_at: at(23, 40),
-            bearing_at_gear: Some(80.0),
-        };
-        let facing = facing_deg(Some(-88.6), &evidence).unwrap();
+        let driven = evidence(vec![shift("drive", 38, true, true)]);
+        let facing = facing_deg(Some(-88.6), &driven).unwrap();
         assert!((facing - 271.4).abs() < 1e-9, "{facing}");
-        assert_eq!(facing_deg(Some(360.0), &evidence), Some(0.0));
+        assert_eq!(facing_deg(Some(360.0), &driven), Some(0.0));
     }
 
     #[test]
-    fn backing_straight_in_flips_the_course_to_the_nose() {
+    fn backing_in_flips_the_course_to_the_nose() {
         // Recorded case: east-bound at 103.6°, reverse engaged, the next-day
         // parked bearing reads -88.6° (west). The nose faces east.
-        let facing = facing_deg(Some(-88.6), &reversed(103.6, at(23, 59))).unwrap();
+        let backed_in = evidence(vec![
+            shift("reverse", 41, true, false),
+            shift("drive", 30, true, true),
+        ]);
+        let facing = facing_deg(Some(-88.6), &backed_in).unwrap();
+        assert!((facing - 91.4).abs() < 1e-9, "{facing}");
+        // A perpendicular back-in: reversing north, so the nose points south.
+        assert_eq!(facing_deg(Some(0.0), &backed_in), Some(180.0));
+    }
+
+    #[test]
+    fn shifting_to_drive_without_moving_keeps_the_backed_in_facing() {
+        // Back into a space, shift to drive without moving, then park.
+        let still = evidence(vec![
+            shift("drive", 50, false, false),
+            shift("reverse", 41, true, false),
+            shift("drive", 30, true, true),
+        ]);
+        let facing = facing_deg(Some(-88.6), &still).unwrap();
         assert!((facing - 91.4).abs() < 1e-9, "{facing}");
     }
 
     #[test]
-    fn backing_into_a_perpendicular_space_also_flips() {
-        // East-bound, then reversing north into a space: the nose points south.
-        assert_eq!(
-            facing_deg(Some(0.0), &reversed(90.0, at(23, 50))),
-            Some(180.0)
-        );
+    fn pulling_away_after_backing_in_trusts_the_course_again() {
+        for pulled_away in [
+            shift("drive", 50, false, true),
+            shift("drive", 50, true, false),
+        ] {
+            let driven = evidence(vec![pulled_away, shift("reverse", 41, true, false)]);
+            assert_eq!(facing_deg(Some(271.4), &driven), Some(271.4));
+        }
     }
 
     #[test]
     fn engaging_reverse_without_moving_keeps_the_bearing() {
-        // The course has not turned since the shift (jitter only).
-        assert_eq!(
-            facing_deg(Some(95.9), &reversed(103.6, at(23, 47))),
-            Some(95.9)
-        );
-        // No bearing newer than the shift: the course cannot reflect reversing.
-        assert_eq!(
-            facing_deg(Some(283.0), &reversed(103.6, at(23, 41))),
-            Some(283.0)
-        );
-        assert_eq!(
-            facing_deg(Some(283.0), &reversed(103.6, at(23, 30))),
-            Some(283.0)
-        );
+        // The course has not turned since the shift (jitter only, or no bearing
+        // newer than the shift), so the earlier forward drive anchors.
+        let still = evidence(vec![
+            shift("reverse", 41, false, false),
+            shift("drive", 30, true, true),
+        ]);
+        assert_eq!(facing_deg(Some(95.9), &still), Some(95.9));
+        // Reverse with speed but an unchanged course: the course still shows
+        // the earlier forward travel.
+        let lagging = evidence(vec![
+            shift("reverse", 41, false, true),
+            shift("drive", 30, true, true),
+        ]);
+        assert_eq!(facing_deg(Some(95.9), &lagging), Some(95.9));
+    }
+
+    #[test]
+    fn gear_names_are_compared_case_insensitively() {
+        let backed_in = evidence(vec![
+            shift("Drive", 50, false, false),
+            shift("REVERSE", 41, true, false),
+        ]);
+        assert_eq!(facing_deg(Some(0.0), &backed_in), Some(180.0));
     }
 
     #[test]
     fn missing_or_invalid_bearings_yield_nothing_or_the_raw_course() {
-        assert_eq!(facing_deg(None, &reversed(10.0, at(23, 59))), None);
+        let backed_in = evidence(vec![shift("reverse", 41, true, false)]);
+        assert_eq!(facing_deg(None, &backed_in), None);
         assert_eq!(facing_deg(Some(f64::NAN), &FacingEvidence::default()), None);
         assert_eq!(
             facing_deg(Some(45.0), &FacingEvidence::default()),
             Some(45.0)
         );
-        let unknown_prior = FacingEvidence {
-            bearing_at_gear: None,
-            ..reversed(0.0, at(23, 59))
-        };
-        assert_eq!(facing_deg(Some(45.0), &unknown_prior), Some(45.0));
-    }
-
-    #[test]
-    fn angular_distance_wraps_around_north() {
-        assert_eq!(angular_distance(350.0, 10.0), 20.0);
-        assert_eq!(angular_distance(10.0, 350.0), 20.0);
-        assert!((angular_distance(91.4, 271.4) - 180.0).abs() < 1e-9);
+        // No shift moved the vehicle: nothing to anchor on.
+        let unmoved = evidence(vec![
+            shift("reverse", 41, false, false),
+            shift("drive", 30, false, false),
+        ]);
+        assert_eq!(facing_deg(Some(45.0), &unmoved), Some(45.0));
     }
 }
