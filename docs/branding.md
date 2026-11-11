@@ -217,6 +217,18 @@ Common usage:
 - The Ownership month slider sits on the chart's time axis: its track is inset by `COST_TIMELINE_PLOT_INSET` so it spans exactly the plot area, and its value is a time snapped to whole months, so the mark always lines up with the dashed cursor. It keeps a native range input for keyboard and screen-reader support, hides its thumb, and draws the Rivian mark (no circle) in the accent color at the thumb's position, with a halo in the page color so it stays clear of the filled track.
 - A stacked bar that splits a total opens a panel on hover with a mouse and on tap with touch (tap again or tap outside to close); Enter opens it from the keyboard. Keep the panel flush with its bar (use padding, not margin) so the pointer can move onto it. The panel lists every segment with its legend color, amount, and share of the total, and closes on an outside tap or Escape.
 
+### Maps
+
+- **Follow appearance** paints OpenFreeMap vector basemaps from the active theme instead of the provider's stock palette, so maps match their cards in classic and RAD, light and dark. `packages/ui/src/lib/basemapTheme.ts` owns the transform; `TripMapChart` applies it through MapLibre's `setStyle(url, { transformStyle })`. Do not recolor maps elsewhere.
+- Layers are matched by layer type and OpenMapTiles `source-layer`, never by provider layer IDs:
+  - Background and land use the map ground. In dark themes the ground is `--rm-bg-surface`. In light themes it sits halfway from `--rm-bg-surface` toward `--rm-bg-elevated`, so white road fills stay visible.
+  - `water` and `waterway` are muted tints of `--rm-status-info`. `park`, park-like `landuse`, and vegetated `landcover` are lighter tints of `--rm-status-positive`. Glaciers and ice stay neutral.
+  - Roads, rails, buildings, boundaries, and other features keep the provider style's tonal hierarchy: casing still sits darker than its fill. Each one moves from the ground toward `--rm-text-primary`, or back toward the page or surface, by the same amount it differed from the stock background. Ink-ward mixes are capped, so roads stay quiet and trip routes, the active point, and the vehicle marker lead.
+  - Every text label uses `--rm-text-secondary` (water names lean toward the water tint), with a halo in the ground color at 1.75px. Unit tests hold every label at WCAG AA (4.5:1) against its halo in all four built-in theme modes.
+- The transform only touches layers backed by the provider style's own sources. App overlays (`trip-*` layers, DOM markers), raster layers, and icon-only symbols such as road shields are left as they are.
+- A palette or custom-theme change repaints the loaded map in place with `setPaintProperty`. It does not reload the style, so route overlays never flicker. A light/dark change still swaps the provider style (Positron ↔ Dark) and themes the new one.
+- Named presets (Positron, Bright, Liberty, Dark, Fiord, 3D) keep the provider's stock look. Raster providers (CARTO, custom XYZ) cannot be recolored per layer and are left unchanged.
+
 ### Vehicle artwork
 
 - Rivian API artwork remains the primary source. Local model artwork is the final fallback for missing image metadata, protected-image fetch failures, browser image errors, and demo/test vehicles. Packaged fallbacks support R1S, R1T, and R2; the legacy R2S model value resolves to the same R2 artwork while existing `r2s/` asset URLs remain stable. Unsupported models keep the neutral vehicle icon.
