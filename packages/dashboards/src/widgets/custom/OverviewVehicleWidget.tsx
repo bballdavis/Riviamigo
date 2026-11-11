@@ -11,7 +11,9 @@ import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { isVehiclePluggedIn } from '../../dashboardVisibility';
 import { getDoorOverlayUrls, getOpenDoorStates } from './imageUtils';
-import { getOverviewStatDefinition, resolveOverviewStatIds } from './overviewStats';
+import { resolveOverviewStatIds } from './overviewStats';
+import { getOverviewStatRequirements, presentOverviewStat, type OverviewStatData } from './overviewStatDisplay';
+import { useOverviewStatData } from './useOverviewStatData';
 
 type AnchorSet = {
   tire: { rl: string; fl: string; rr: string; fr: string };
@@ -60,6 +62,8 @@ function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ct
   const { data: status } = useCurrentVehicleStatus(vehicleId);
   const { data: vehicles } = useVehicles();
   const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
+  const statIds = resolveOverviewStatIds(instance.options?.stats);
+  const statData = useOverviewStatData(statIds, ctx, vehicleId ?? null);
 
   return (
     <CurrentVehicleStatePanel
@@ -69,7 +73,8 @@ function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ct
       vehicleModel={activeVehicle?.model}
       isDemoVehicle={activeVehicle?.is_demo ?? activeVehicle?.rivian_vehicle_id?.startsWith('demo-') ?? false}
       targetTirePressurePsi={activeVehicle?.target_tire_pressure_psi}
-      statIds={instance.options?.stats}
+      statIds={statIds}
+      statData={statData}
     />
   );
 }
@@ -82,6 +87,7 @@ export function CurrentVehicleStatePanel({
   isDemoVehicle = false,
   targetTirePressurePsi,
   statIds,
+  statData,
 }: {
   status: VehicleStatus | null | undefined;
   images?: VehicleImages | null | undefined;
@@ -91,6 +97,8 @@ export function CurrentVehicleStatePanel({
   targetTirePressurePsi?: number | null | undefined;
   /** Saved `stats` option: which sensors fill the five stat rows. Defaults apply when absent. */
   statIds?: unknown;
+  /** Metric and summary values for rows that read more than live vehicle status. */
+  statData?: OverviewStatData;
 }) {
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const resolvedOverhead = resolveVehicleArtwork(images, vehicleModel, 'overview');
@@ -121,11 +129,7 @@ export function CurrentVehicleStatePanel({
     rl: makeTireDisplay(status?.tire_rl_psi, status?.tire_rl_status, targetTirePressurePsi),
     rr: makeTireDisplay(status?.tire_rr_psi, status?.tire_rr_status, targetTirePressurePsi),
   };
-  const stats = resolveOverviewStatIds(statIds).map((id) => {
-    const definition = getOverviewStatDefinition(id)!;
-    const Icon = definition.icon;
-    return { id, label: definition.label, value: definition.format(status), icon: <Icon /> };
-  });
+  const stats = resolveOverviewStatIds(statIds).map((id) => ({ id, ...presentOverviewStat(id, status, statData) }));
   const freshnessLabel = status?.telemetry_stale
     ? 'Telemetry stale'
     : status?.last_updated
@@ -592,6 +596,6 @@ registerWidget({
   defaultSize: { w: 12, h: 7 },
   minSize: { w: 8, h: 6 },
   defaultOptions: {},
-  dataRequirements: () => ({ status: true }),
+  dataRequirements: (instance) => getOverviewStatRequirements(resolveOverviewStatIds(instance.options?.stats)),
   component: OverviewVehicleWidget,
 });

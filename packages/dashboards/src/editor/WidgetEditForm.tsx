@@ -35,7 +35,7 @@ import {
   type SensorValueColor,
 } from '../widgets/sensor/sensorDefinitions';
 import {
-  OVERVIEW_STAT_DEFINITIONS,
+  getOverviewStatOptions,
   resolveOverviewStatIds,
 } from '../widgets/custom/overviewStats';
 import { IconPicker } from './IconPicker';
@@ -67,6 +67,7 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
   const options = (widget.options ?? {}) as Record<string, unknown>;
   const overviewVehicleMode = customMode && widget.definitionId === 'overview.vehicle';
   const overviewStatIds = resolveOverviewStatIds(options.stats);
+  const overviewStatOptions = useMemo(() => getOverviewStatOptions(catalog), [catalog]);
   const title = widget.title ?? '';
   const connectionVisibility = getWidgetVisibilityRules(widget)
     .find((rule) => rule.type === 'vehicle-connection')?.value ?? 'always';
@@ -631,7 +632,7 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
         {overviewVehicleMode ? (
           <Section title="Stat rows">
             <p className="text-[11px] text-fg-tertiary">
-              Choose the five sensors shown beside the vehicle. A sensor can only appear once.
+              Choose the five readings shown beside the vehicle: any vehicle state, sensor or metric. Search by name. A reading can only appear once.
             </p>
             {overviewStatIds.map((statId, slot) => (
               <Field key={slot} label={`Row ${slot + 1}`}>
@@ -644,9 +645,12 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                     patch({ stats: nextIds });
                   }}
                   aria-label={`Stat row ${slot + 1}`}
-                  options={OVERVIEW_STAT_DEFINITIONS
-                    .filter((definition) => definition.id === statId || !overviewStatIds.includes(definition.id))
-                    .map((definition) => ({ value: definition.id, label: definition.description }))}
+                  searchable
+                  searchPlaceholder="Search sensors and metrics"
+                  menuClassName="min-w-64"
+                  options={overviewStatOptions
+                    .filter((option) => option.id === statId || !overviewStatIds.includes(option.id))
+                    .map((option) => ({ value: option.id, label: option.label, group: option.group, keywords: option.keywords }))}
                 />
               </Field>
             ))}

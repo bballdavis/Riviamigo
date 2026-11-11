@@ -1,16 +1,23 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowDownWideNarrow,
+  CalendarClock,
   Calculator,
   CarFront,
   ChartLine,
   ChartPie,
   CircleDollarSign,
   Database,
+  Disc,
+  Droplet,
   Fuel,
   GitCompareArrows,
   Info,
+  LifeBuoy,
+  MousePointerClick,
   Plus,
   Receipt,
+  Scale,
   ShieldCheck,
   SlidersHorizontal,
   TrendingDown,
@@ -42,6 +49,7 @@ import { AppLayout } from '../../components/layout/AppLayout';
 import { NoVehicleState } from '../../components/layout/NoVehicleState';
 import { formatMonth, OwnershipChart, type ValueMode } from './OwnershipChart';
 import { AddVehicleDialog, EditCostsDialog, ExternalConnectionsLink } from './OwnershipDialogs';
+import { RivianMark } from './RivianMark';
 import {
   buildLedger,
   comparisonVehicles,
@@ -393,7 +401,12 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
         <CardHeader>
           <div className="flex w-full flex-wrap items-start justify-between gap-3">
             <div>
-              <SectionTitle icon={<ChartLine />}>
+              <SectionTitle
+                icon={<ChartLine />}
+                info={<RichInfo title="Reading the chart" items={CHART_INFO} />}
+                infoLabel="How to read the chart"
+                infoWidth="w-[36rem]"
+              >
                 {mode === 'net' ? 'Net cost over time' : 'Money spent over time'}
               </SectionTitle>
               <p className="mt-1 text-base text-fg-secondary">
@@ -415,14 +428,18 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
         </CardHeader>
         <CardContent>
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(22rem,26rem)]">
-            <div className="min-w-0">
-              <OwnershipChart
-                ledger={ledger}
-                mode={mode}
-                colors={colors}
-                cursorIndex={cursorIndex}
-                onCursorChange={setCursor}
-              />
+            {/* On wide screens the chart grows to the readout's height instead of leaving a gap. */}
+            <div className="flex min-w-0 flex-col">
+              <div className="h-[20rem] sm:h-[24rem] xl:h-auto xl:min-h-[24rem] xl:flex-1">
+                <OwnershipChart
+                  ledger={ledger}
+                  mode={mode}
+                  colors={colors}
+                  cursorIndex={cursorIndex}
+                  onCursorChange={setCursor}
+                  className="h-full w-full"
+                />
+              </div>
               <div className="mt-3 grid gap-1 text-sm text-fg-secondary">
                 <div className="flex items-center justify-between gap-3">
                   <label htmlFor="ownership-month-slider">Drag to inspect a month</label>
@@ -436,22 +453,13 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
                     </button>
                   ) : null}
                 </div>
-                <input
-                  id="ownership-month-slider"
-                  type="range"
-                  min={0}
-                  max={Math.max(0, ledger.periods.length - 1)}
-                  step={1}
+                <MonthSlider
                   value={cursorIndex}
-                  onChange={(event) => setCursor(Number(event.target.value))}
-                  aria-valuetext={formatMonth(ledger.periods[cursorIndex]?.startMs ?? ledger.startMs, { long: true })}
-                  className="h-11 w-full accent-accent sm:h-6"
+                  max={Math.max(0, ledger.periods.length - 1)}
+                  onChange={setCursor}
+                  valueText={formatMonth(ledger.periods[cursorIndex]?.startMs ?? ledger.startMs, { long: true })}
                 />
               </div>
-              <p className="mt-2 text-sm text-fg-secondary">
-                Fuel and charging accrue with the miles you drove each month. Oil changes, brakes, tires and
-                annual service land as one-time jumps at the mileage they fall due.
-              </p>
             </div>
             <CursorReadout
               ledger={ledger}
@@ -492,6 +500,172 @@ const CONTROL_HEIGHT = 'h-11 sm:h-9';
 /** Rounded-rectangle chip shared by the comparison toggles. */
 const CHIP = 'inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-base transition-colors sm:min-h-9';
 
+interface InfoItem {
+  key: string;
+  title: string;
+  icon: React.ReactElement<{ className?: string }>;
+  color: string;
+  body: string;
+}
+
+/**
+ * The layout every info tooltip on this page shares: a bold heading, then
+ * items with a tinted icon and a bold title in the item's color. Two columns
+ * from `sm`, one on phones, so it stays short enough to fit the screen.
+ */
+function RichInfo({ title, items, footer }: { title: string; items: InfoItem[]; footer?: string }) {
+  return (
+    <>
+      <span className="block text-base font-bold text-fg">{title}</span>
+      <span className="mt-2 grid gap-x-5 gap-y-3 sm:grid-cols-2">
+        {items.map((item) => (
+          <span key={item.key} className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-x-2.5">
+            <span
+              aria-hidden
+              className="mt-0.5 inline-flex h-7 w-7 items-center justify-center rounded-md"
+              style={{ color: item.color, backgroundColor: `color-mix(in oklab, ${item.color} 16%, transparent)` }}
+            >
+              {React.cloneElement(item.icon, { className: 'h-4 w-4' })}
+            </span>
+            <span className="min-w-0">
+              <span className="block font-bold" style={{ color: item.color }}>
+                {item.title}
+              </span>
+              <span className="mt-0.5 block text-fg-secondary">{item.body}</span>
+            </span>
+          </span>
+        ))}
+      </span>
+      {footer ? <span className="mt-3 block border-t border-border pt-2 text-fg-secondary">{footer}</span> : null}
+    </>
+  );
+}
+
+const CHART_INFO: InfoItem[] = [
+  {
+    key: 'running',
+    title: 'Running costs',
+    icon: <Fuel />,
+    color: CHART_COLORS.amber,
+    body: 'Fuel and charging accrue with the miles you drove each month, along with insurance.',
+  },
+  {
+    key: 'one-time',
+    title: 'One-time costs',
+    icon: <Wrench />,
+    color: CHART_COLORS.sky,
+    body: 'Oil changes, brakes, tires, and annual service land as vertical jumps at the mileage or anniversary they fall due.',
+  },
+  {
+    key: 'shaded',
+    title: 'Shaded months',
+    icon: <CalendarClock />,
+    color: CHART_COLORS.violet,
+    body: 'Estimated months before tracking began and Projected months after today use your average miles a month.',
+  },
+  {
+    key: 'inspect',
+    title: 'Inspect a month',
+    icon: <MousePointerClick />,
+    color: CHART_COLORS.emerald,
+    body: 'Hover or tap the chart, or drag the slider. The panel lists each total, what it added that month, and the gap to your vehicle.',
+  },
+  {
+    key: 'mode',
+    title: 'Money spent or net',
+    icon: <Scale />,
+    color: CHART_COLORS.rose,
+    body: 'Money spent counts every dollar paid. Net of resale subtracts what each vehicle would sell for at that point.',
+  },
+];
+
+function breakdownInfo(span: string, ownLabel: string): InfoItem[] {
+  return [
+    {
+      key: 'bars',
+      title: 'What each bar shows',
+      icon: <ChartPie />,
+      color: CHART_COLORS.indigo,
+      body: `A vehicle's net cost ${span.toLowerCase()}, split by category. Longer bars cost more.`,
+    },
+    {
+      key: 'order',
+      title: 'Order',
+      icon: <ArrowDownWideNarrow />,
+      color: CHART_COLORS.sky,
+      body: 'Vehicles are sorted by net cost, cheapest at the top.',
+    },
+    {
+      key: 'gap',
+      title: 'The small figure',
+      icon: <GitCompareArrows />,
+      color: CHART_COLORS.emerald,
+      body: `How much more (+) or less (-) each vehicle cost than ${ownLabel}.`,
+    },
+    {
+      key: 'split',
+      title: 'See the split',
+      icon: <MousePointerClick />,
+      color: CHART_COLORS.violet,
+      body: 'Hover over a bar, or tap it on a phone, for each category with its amount and share.',
+    },
+  ];
+}
+
+/**
+ * The month slider. A native range input keeps keyboard and screen-reader
+ * support; its own thumb is invisible and the Rivian mark is drawn in its place.
+ */
+function MonthSlider({
+  value,
+  max,
+  onChange,
+  valueText,
+}: {
+  value: number;
+  max: number;
+  onChange: (value: number) => void;
+  valueText: string;
+}) {
+  const share = max > 0 ? value / max : 0;
+  // The browser keeps the thumb inside the track, so its center travels from
+  // half a thumb in from the left to half a thumb in from the right.
+  const center = `calc(${share * 100}% + ${(0.5 - share) * SLIDER_THUMB_PX}px)`;
+  return (
+    <div className="relative h-11">
+      <div aria-hidden className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-border">
+        <div className="h-full rounded-full bg-accent" style={{ width: center }} />
+      </div>
+      <input
+        id="ownership-month-slider"
+        type="range"
+        min={0}
+        max={max}
+        step={1}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        aria-valuetext={valueText}
+        className={[
+          'peer absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent focus:outline-none',
+          '[&::-webkit-slider-thumb]:h-10 [&::-webkit-slider-thumb]:w-10 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:opacity-0',
+          '[&::-moz-range-thumb]:h-10 [&::-moz-range-thumb]:w-10 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:opacity-0',
+        ].join(' ')}
+      />
+      <span
+        aria-hidden
+        className="pointer-events-none absolute top-1/2 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-md text-accent peer-focus-visible:ring-2 peer-focus-visible:ring-accent"
+        style={{ left: center }}
+      >
+        {/* Just the mark; a halo in the page color keeps it clear of the filled track. */}
+        <RivianMark className="h-10 w-10 [filter:drop-shadow(0_0_2px_var(--rm-bg-page))_drop-shadow(0_0_2px_var(--rm-bg-page))]" />
+      </span>
+    </div>
+  );
+}
+
+/** Width of the slider's hit area, which the drawn mark is centered on. */
+const SLIDER_THUMB_PX = 40;
+
 function SectionTitle({
   icon,
   info,
@@ -508,10 +682,10 @@ function SectionTitle({
 }) {
   return (
     <div className="flex items-center gap-2">
-      <span aria-hidden className="text-fg-secondary">
-        {React.cloneElement(icon, { className: 'h-4 w-4' })}
+      <span aria-hidden className="text-accent">
+        {React.cloneElement(icon, { className: 'h-5 w-5' })}
       </span>
-      <CardTitle>{children}</CardTitle>
+      <CardTitle className="text-base font-bold text-fg">{children}</CardTitle>
       {info ? (
         <Tooltip content={info} align="start" contentClassName={`${infoWidth} px-3.5 py-3 text-sm leading-relaxed`}>
           <button
@@ -789,12 +963,14 @@ function BreakdownCard({ ledger, colors, span }: { ledger: Ledger; colors: Recor
   return (
     <Card>
       <CardHeader>
-        <div>
-          <SectionTitle icon={<ChartPie />}>Where the money goes</SectionTitle>
-          <p className="mt-1 text-base text-fg-secondary">
-            Net cost by category. {span}, lowest first. Hover over or tap a bar for the split.
-          </p>
-        </div>
+        <SectionTitle
+          icon={<ChartPie />}
+          info={<RichInfo title="Reading the bars" items={breakdownInfo(span, own?.vehicle.label ?? 'your vehicle')} />}
+          infoLabel="How to read the bars"
+          infoWidth="w-[34rem]"
+        >
+          Where the money goes
+        </SectionTitle>
       </CardHeader>
       <CardContent>
         <ul className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-fg-secondary">
@@ -887,13 +1063,39 @@ function BreakdownCard({ ledger, colors, span }: { ledger: Ledger; colors: Recor
 function BreakdownPanel({ id, entry, color }: { id: string; entry: VehicleLedger; color: string | undefined }) {
   const parts = breakdownOf(entry);
   const total = BREAKDOWN_PARTS.reduce((sum, part) => sum + parts[part.key], 0);
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [above, setAbove] = useState(false);
+
+  // Open below the bar, or above it when the window has no room below,
+  // measured before paint so it never draws off screen first.
+  useLayoutEffect(() => {
+    const place = () => {
+      const panel = ref.current;
+      const anchor = panel?.parentElement;
+      if (!panel || !anchor) return;
+      const box = anchor.getBoundingClientRect();
+      const height = panel.offsetHeight;
+      const spaceBelow = window.innerHeight - box.bottom;
+      const spaceAbove = box.top;
+      setAbove(height > spaceBelow - 8 && spaceAbove > spaceBelow);
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, []);
+
   return (
     <div
+      ref={ref}
       id={id}
       role="region"
       aria-label={`${entry.vehicle.label} cost split`}
       // Padding, not margin, separates it from the bar, so a mouse can move onto it without closing it.
-      className="absolute left-0 right-0 top-full z-20 pt-1 sm:left-auto sm:w-80"
+      className={`absolute left-0 right-0 z-20 sm:left-auto sm:w-80 ${above ? 'bottom-full pb-1' : 'top-full pt-1'}`}
     >
       <div className="rounded-lg border border-border bg-bg-surface p-3 shadow-lg">
       <div className="flex items-baseline justify-between gap-3 border-b border-border pb-2">
@@ -1036,49 +1238,100 @@ const MAINTENANCE_COLORS: Record<string, string> = {
   service: CHART_COLORS.sky,
 };
 
+const MAINTENANCE_ICONS: Record<string, React.ReactElement<{ className?: string }>> = {
+  oil: <Droplet />,
+  brakes: <Disc />,
+  tires: <LifeBuoy />,
+  service: <Wrench />,
+};
+
+/** How the maintenance chips fit their row: full labels, icons only, or (last resort) a second line. */
+type ChipFit = 'full' | 'icons' | 'wrap';
+
 /**
  * Maintenance as one full-width, compact tile under the main three: its
- * total on the right and a colored chip for each item that fell due.
+ * total on the right and a colored chip for each item that fell due. When
+ * the labeled chips do not fit on one line they drop to icon and amount
+ * first, and wrap only if even that does not fit.
  */
 function MaintenanceTile({ entry }: { entry: VehicleLedger }) {
   const due = MAINTENANCE_ITEMS.filter((column) => column.value(entry) > 0);
   const total = MAINTENANCE_ITEMS.reduce((sum, column) => sum + column.value(entry), 0);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const [fit, setFit] = useState<ChipFit>('full');
+  const [width, setWidth] = useState(0);
+  const widthRef = useRef(0);
+
+  // Start from full labels whenever the row's width changes...
+  useEffect(() => {
+    const row = rowRef.current;
+    if (!row || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([item]) => {
+      const next = Math.round(item?.contentRect.width ?? 0);
+      if (next === widthRef.current) return;
+      widthRef.current = next;
+      setFit('full');
+      setWidth(next);
+    });
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, []);
+
+  // ...then step down, before paint, until the chips fit on one line.
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (!row || fit === 'wrap') return;
+    if (row.scrollWidth > row.clientWidth + 1) setFit(fit === 'full' ? 'icons' : 'wrap');
+  }, [fit, width, due.length]);
+
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-lg bg-bg-elevated/70 px-2 py-2">
-      <span className="mr-1 text-xs font-medium tracking-tight text-fg-secondary">Maintenance</span>
+    <div className="mt-2 flex min-w-0 items-center gap-1 rounded-lg bg-bg-elevated/70 px-2 py-2">
+      <span className="mr-0.5 shrink-0 text-xs font-medium tracking-tight text-fg-secondary">Maintenance</span>
+      <div
+        ref={rowRef}
+        className={`flex min-w-0 flex-1 items-center ${fit === 'full' ? 'gap-1.5' : 'gap-1'} ${fit === 'wrap' ? 'flex-wrap' : 'overflow-hidden'}`}
+      >
         {due.length === 0 ? (
           <span className="text-sm text-fg-secondary">None due yet</span>
         ) : (
           due.map((column) => {
             const count = column.count?.(entry) ?? 0;
             const color = MAINTENANCE_COLORS[column.key] ?? CHART_COLORS.muted;
+            const label = `${column.key === 'oil' && count <= 1 ? 'Oil change' : column.label}${count > 1 ? ` ×${count}` : ''}`;
+            const icon = MAINTENANCE_ICONS[column.key];
+            const iconOnly = fit !== 'full';
             return (
               <span
                 key={column.key}
-                className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-sm"
+                title={iconOnly ? label : undefined}
+                className={`inline-flex shrink-0 items-center rounded-md border py-0.5 text-sm ${iconOnly ? 'gap-0.5 px-1' : 'gap-1 px-1.5'}`}
                 style={{ borderColor: color, backgroundColor: `color-mix(in oklab, ${color} 16%, transparent)` }}
               >
-                <span className="font-medium text-fg">
-                  {column.key === 'oil' && count <= 1 ? 'Oil change' : column.label}
-                  {count > 1 ? ` ×${count}` : ''}
-                </span>
+                {icon ? (
+                  <span aria-hidden style={{ color }}>
+                    {React.cloneElement(icon, { className: 'h-3.5 w-3.5' })}
+                  </span>
+                ) : null}
+                {iconOnly ? (
+                  <>
+                    <span className="sr-only">{label}</span>
+                    {count > 1 ? <span className="text-xs font-semibold text-fg">×{count}</span> : null}
+                  </>
+                ) : (
+                  <span className="font-medium text-fg">{label}</span>
+                )}
                 <span className="font-mono tabular-nums text-fg-secondary">{formatUsd(column.value(entry))}</span>
               </span>
             );
           })
         )}
-      <span className="ml-auto pl-1 font-mono text-base font-semibold tabular-nums text-fg">{formatUsd(total)}</span>
+      </div>
+      <span className="shrink-0 pl-0.5 font-mono text-base font-semibold tabular-nums text-fg">{formatUsd(total)}</span>
     </div>
   );
 }
 
-const METHOD_ITEMS: Array<{
-  key: string;
-  title: string;
-  icon: React.ReactElement<{ className?: string }>;
-  color: string;
-  body: string;
-}> = [
+const METHOD_ITEMS: InfoItem[] = [
   {
     key: 'depreciation',
     title: 'Depreciation',
@@ -1120,31 +1373,11 @@ const METHOD_ITEMS: Array<{
 /** How every figure in the cost breakdown is worked out, for the info tooltip. */
 function CostMethodology() {
   return (
-    <>
-      <span className="block text-base font-bold text-fg">How each cost is worked out</span>
-      <span className="mt-2 grid gap-x-5 gap-y-3 sm:grid-cols-2">
-        {METHOD_ITEMS.map((item) => (
-          <span key={item.key} className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-x-2.5">
-            <span
-              aria-hidden
-              className="mt-0.5 inline-flex h-7 w-7 items-center justify-center rounded-md"
-              style={{ color: item.color, backgroundColor: `color-mix(in oklab, ${item.color} 16%, transparent)` }}
-            >
-              {React.cloneElement(item.icon, { className: 'h-4 w-4' })}
-            </span>
-            <span className="min-w-0">
-              <span className="block font-bold" style={{ color: item.color }}>
-                {item.title}
-              </span>
-              <span className="mt-0.5 block text-fg-secondary">{item.body}</span>
-            </span>
-          </span>
-        ))}
-      </span>
-      <span className="mt-3 block border-t border-border pt-2 text-fg-secondary">
-        Compared vehicles use typical U.S. estimates, not quotes.
-      </span>
-    </>
+    <RichInfo
+      title="How each cost is worked out"
+      items={METHOD_ITEMS}
+      footer="Compared vehicles use typical U.S. estimates, not quotes."
+    />
   );
 }
 
@@ -1167,11 +1400,11 @@ function CostTable({ ledger, colors }: { ledger: Ledger; colors: Record<string, 
       </CardHeader>
       <CardContent>
         {/* Small screens: one card per vehicle with its costs as labeled chips. */}
-        <ul className="grid gap-3 px-4 pb-1 xl:hidden">
+        <ul className="grid grid-cols-[minmax(0,1fr)] gap-3 px-4 pb-1 xl:hidden">
           {sorted.map((entry) => (
             <li
               key={entry.vehicle.id}
-              className="rounded-xl border-2 bg-bg-elevated/30 p-3"
+              className="min-w-0 rounded-xl border-2 bg-bg-elevated/30 p-3"
               style={{ borderColor: colors[entry.vehicle.id] }}
             >
               <div className="flex items-start justify-between gap-3">

@@ -49,9 +49,11 @@ interface OwnershipChartProps {
   /** Index into `ledger.periods` of the inspected month. */
   cursorIndex: number;
   onCursorChange: (index: number) => void;
+  /** Size of the plot; defaults to the shared chart's fixed height. */
+  className?: string;
 }
 
-export function OwnershipChart({ ledger, mode, colors, cursorIndex, onCursorChange }: OwnershipChartProps) {
+export function OwnershipChart({ ledger, mode, colors, cursorIndex, onCursorChange, className }: OwnershipChartProps) {
   const rows = useMemo(() => buildChartRows(ledger, mode), [ledger, mode]);
   const series = useMemo(
     () =>
@@ -87,6 +89,7 @@ export function OwnershipChart({ ledger, mode, colors, cursorIndex, onCursorChan
         onCursorChange(index === -1 ? ledger.periods.length - 1 : index);
       }}
       ariaLabel={`${mode === 'net' ? 'Net cost' : 'Money spent'} over time for ${ledger.vehicles.length} vehicles`}
+      {...(className ? { className } : {})}
     />
   );
 }

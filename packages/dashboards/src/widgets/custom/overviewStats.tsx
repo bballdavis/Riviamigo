@@ -1,9 +1,10 @@
 import React from 'react';
-import { Compass, Cpu, Gauge, MapPin, Power, Route, Thermometer, Car, CircleGauge, BatteryCharging } from 'lucide-react';
+import { Compass, Cpu, Gauge, MapPin, Power, Route, Thermometer, Car, CircleGauge, BatteryCharging, BatteryFull, Plug, Timer, Lock, DoorOpen } from 'lucide-react';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
-import { formatAltitude, formatMiles, formatMph, formatTemp } from '@riviamigo/ui/lib/utils';
+import { formatAltitude, formatDuration, formatMiles, formatMph, formatTemp } from '@riviamigo/ui/lib/utils';
 import { formatTireLabel } from '@riviamigo/ui/lib/vehicleTires';
-import type { VehicleStatus } from '@riviamigo/types';
+import type { MetricCatalogEntry, VehicleStatus } from '@riviamigo/types';
+import { SENSOR_DEFINITIONS, type SensorDefinition } from '../sensor/sensorDefinitions';
 
 /** Number of stat rows the Vehicle Overview widget shows beside the vehicle art. */
 export const OVERVIEW_STAT_SLOT_COUNT = 5;
@@ -36,6 +37,11 @@ export const OVERVIEW_STAT_DEFINITIONS: readonly OverviewStatDefinition[] = [
   { id: 'heading', label: 'Heading', description: 'Compass heading', icon: icon(Compass, 'var(--rm-chart-teal)'), format: (s) => formatHeading(s?.heading_deg) },
   { id: 'tire_min', label: 'Lowest tire', description: 'Lowest tire pressure', icon: icon(CircleGauge, 'var(--rm-chart-amber)'), format: (s) => formatTireLabel(s?.tire_min_psi) },
   { id: 'twelve_volt', label: '12V battery', description: '12V battery health', icon: icon(BatteryCharging, 'var(--rm-chart-rose)'), format: (s) => prettify(s?.twelve_volt_health) },
+  { id: 'charge_limit', label: 'Charge limit', description: 'Charge limit', icon: icon(BatteryFull, 'var(--rm-chart-emerald)'), format: (s) => formatPercentValue(s?.battery_limit) },
+  { id: 'charger_state', label: 'Charger', description: 'Charger state', icon: icon(Plug, 'var(--rm-chart-sky)'), format: (s) => prettify(s?.charger_state ?? s?.charger_status) },
+  { id: 'time_to_full', label: 'Time to full', description: 'Time to end of charge', icon: icon(Timer, 'var(--rm-chart-amber)'), format: (s) => formatDuration(s?.time_to_end_of_charge_min) },
+  { id: 'doors_locked', label: 'Doors', description: 'Door lock state', icon: icon(Lock, 'var(--rm-status-positive)'), format: (s) => formatDoorsLocked(s?.doors_locked) },
+  { id: 'open_closures', label: 'Open', description: 'Open doors and closures', icon: icon(DoorOpen, 'var(--rm-chart-orange)'), format: (s) => formatOpenClosures(s?.open_closures) },
 ];
 
 export const DEFAULT_OVERVIEW_STAT_IDS: readonly string[] = [
@@ -47,6 +53,95 @@ export const DEFAULT_OVERVIEW_STAT_IDS: readonly string[] = [
 ];
 
 const DEFINITIONS_BY_ID = new Map(OVERVIEW_STAT_DEFINITIONS.map((definition) => [definition.id, definition]));
+
+/** Prefix for a stat row backed directly by a backend metric catalog entry. */
+export const METRIC_STAT_PREFIX = 'metric:';
+
+/**
+ * Sensors whose reading the live-status rows above already present, so the
+ * picker lists each of these once.
+ */
+const DUPLICATE_SENSOR_IDS: ReadonlySet<string> = new Set([
+  'odometer_miles',
+  'speed_mph',
+  'outside_temp_c',
+  'twelve_volt_health',
+]);
+
+const SENSORS_BY_ID = new Map<string, SensorDefinition>(
+  SENSOR_DEFINITIONS.filter((definition) => !DUPLICATE_SENSOR_IDS.has(definition.id)).map((definition) => [definition.id, definition]),
+);
+
+/** Metric ids a sensor definition already presents, so the catalog does not list them twice. */
+const SENSOR_METRIC_IDS: ReadonlySet<string> = new Set(
+  SENSOR_DEFINITIONS.flatMap((definition) => (definition.metric ? [definition.metric] : [])),
+);
+
+export function metricStatId(metric: string) {
+  return `${METRIC_STAT_PREFIX}${metric}`;
+}
+
+export function getOverviewSensorDefinition(id: string): SensorDefinition | undefined {
+  return SENSORS_BY_ID.get(id);
+}
+
+/**
+ * Whether `id` can fill a row: a live-status stat, any sensor, or a backend metric.
+ * Metric ids are accepted by prefix because the metric catalog loads asynchronously;
+ * one the backend no longer serves simply shows "-".
+ */
+export function isKnownOverviewStatId(id: string) {
+  return DEFINITIONS_BY_ID.has(id)
+    || SENSORS_BY_ID.has(id)
+    || (id.startsWith(METRIC_STAT_PREFIX) && id.length > METRIC_STAT_PREFIX.length);
+}
+
+export interface OverviewStatOption {
+  id: string;
+  label: string;
+  /** Section heading the picker lists this stat under. */
+  group: string;
+  /** Extra lowercase text the picker search matches against. */
+  keywords: string;
+}
+
+const SENSOR_GROUP_BY_SOURCE: Record<NonNullable<SensorDefinition['dataSource']>, string> = {
+  metric: 'Metrics',
+  batteryHealth: 'Battery health',
+  chargingSummary: 'Charging',
+  efficiencySummary: 'Efficiency',
+  vehicleStatus: 'Vehicle systems',
+};
+
+/**
+ * Every stat that can fill an overview row: live vehicle state, every sensor chip,
+ * and any metric the backend catalog serves that no sensor presents yet. New
+ * sensors and backend metrics appear here without further wiring.
+ */
+export function getOverviewStatOptions(metricCatalog: readonly MetricCatalogEntry[] = []): OverviewStatOption[] {
+  const options: OverviewStatOption[] = [];
+  for (const definition of OVERVIEW_STAT_DEFINITIONS) {
+    options.push({ id: definition.id, label: definition.description, group: 'Vehicle state', keywords: `${definition.label} ${definition.id}`.toLowerCase() });
+  }
+  for (const definition of SENSORS_BY_ID.values()) {
+    options.push({
+      id: definition.id,
+      label: definition.title,
+      group: SENSOR_GROUP_BY_SOURCE[definition.dataSource ?? 'metric'],
+      keywords: `${definition.id} ${definition.metric ?? ''} ${definition.labelSuffix ?? ''}`.toLowerCase(),
+    });
+  }
+  for (const entry of metricCatalog) {
+    if (SENSOR_METRIC_IDS.has(entry.id)) continue;
+    options.push({
+      id: metricStatId(entry.id),
+      label: entry.label,
+      group: 'Metrics',
+      keywords: `${entry.id} ${entry.kind} ${entry.source} ${entry.unit ?? ''}`.toLowerCase(),
+    });
+  }
+  return options;
+}
 
 export function getOverviewStatDefinition(id: string): OverviewStatDefinition | undefined {
   return DEFINITIONS_BY_ID.get(id);
@@ -63,7 +158,7 @@ export function resolveOverviewStatIds(value: unknown): string[] {
   const result: string[] = [];
   for (let slot = 0; slot < OVERVIEW_STAT_SLOT_COUNT; slot += 1) {
     const candidate = saved[slot];
-    const id = typeof candidate === 'string' && DEFINITIONS_BY_ID.has(candidate) && !used.has(candidate)
+    const id = typeof candidate === 'string' && isKnownOverviewStatId(candidate) && !used.has(candidate)
       ? candidate
       : undefined;
     if (id) {
@@ -83,6 +178,21 @@ export function resolveOverviewStatIds(value: unknown): string[] {
     result[slot] = id;
   }
   return result;
+}
+
+function formatPercentValue(value: number | null | undefined) {
+  return value === null || value === undefined || Number.isNaN(value) ? '-' : `${Math.round(value)}%`;
+}
+
+function formatDoorsLocked(locked: boolean | null | undefined) {
+  if (locked === null || locked === undefined) return '-';
+  return locked ? 'Locked' : 'Unlocked';
+}
+
+function formatOpenClosures(closures: string[] | null | undefined) {
+  if (!closures) return '-';
+  if (closures.length === 0) return 'All closed';
+  return closures.map((closure) => prettify(closure)).join(', ');
 }
 
 function renderDriverMode(driveMode: string | null | undefined, gearStatus: string | null | undefined) {
