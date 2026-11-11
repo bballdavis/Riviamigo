@@ -38,6 +38,13 @@ import {
   getOverviewStatOptions,
   resolveOverviewStatIds,
 } from '../widgets/custom/overviewStats';
+import {
+  OVERVIEW_MAP_MODE_OPTIONS,
+  OVERVIEW_MAP_STYLE_OPTIONS,
+  resolveOverviewMapOptions,
+  type OverviewMapMode,
+  type OverviewMapStyle,
+} from '../widgets/custom/overviewMap';
 import { IconPicker } from './IconPicker';
 import { resolveIconId } from './iconMigration';
 
@@ -68,6 +75,7 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
   const overviewVehicleMode = customMode && widget.definitionId === 'overview.vehicle';
   const overviewStatIds = resolveOverviewStatIds(options.stats);
   const overviewStatOptions = useMemo(() => getOverviewStatOptions(), []);
+  const overviewMap = resolveOverviewMapOptions(options);
   const title = widget.title ?? '';
   const connectionVisibility = getWidgetVisibilityRules(widget)
     .find((rule) => rule.type === 'vehicle-connection')?.value ?? 'always';
@@ -661,6 +669,44 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
             >
               Reset to defaults
             </button>
+          </Section>
+        ) : null}
+
+        {overviewVehicleMode ? (
+          <Section title="Location map">
+            <p className="text-[11px] text-fg-tertiary">
+              Adds a cluster and map toggle to the overview header. The cluster view stays the default; the map view replaces the vehicle image with its current location.
+            </p>
+            <ToggleSwitch
+              label="Offer location map"
+              checked={overviewMap.enabled}
+              onChange={(checked) => (checked ? clearOption('locationMap') : patch({ locationMap: false }))}
+            />
+            {overviewMap.enabled ? (
+              <>
+                <Field label="Light or dark">
+                  <SelectPicker
+                    className="w-full"
+                    value={overviewMap.mode}
+                    onChange={(next) => patch({ mapMode: next as OverviewMapMode })}
+                    aria-label="Map light or dark mode"
+                    options={OVERVIEW_MAP_MODE_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                  />
+                </Field>
+                <Field label="Map type">
+                  <SelectPicker
+                    className="w-full"
+                    value={overviewMap.style}
+                    onChange={(next) => patch({ mapStyle: next as OverviewMapStyle })}
+                    aria-label="Map type"
+                    options={OVERVIEW_MAP_STYLE_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                  />
+                </Field>
+                <p className="text-[11px] text-fg-tertiary">
+                  App setting uses the map style chosen in Settings &gt; Appearance.
+                </p>
+              </>
+            ) : null}
           </Section>
         ) : null}
 

@@ -641,4 +641,44 @@ describe('TripMapChart', () => {
       }),
     })));
   });
+
+  it('renders around a focus point without any routes and follows it as it moves', async () => {
+    const mockMap = Object.assign(new MockMap(), { jumpTo: vi.fn() });
+    const MapCtor = vi.fn(function Map() { return mockMap; });
+    const mapLoader = vi.fn(async () => ({ Map: MapCtor }));
+
+    const { rerender } = render(
+      <TripMapChart
+        track={[]}
+        focusPoint={{ lat: 37.77, lng: -122.42 }}
+        basemapConfig={{ enabled: true, resolved_provider: 'openfreemap', revision: 'vector-1' }}
+        mapLoader={mapLoader as never}
+      />,
+    );
+
+    await waitFor(() => expect(MapCtor).toHaveBeenCalledWith(expect.objectContaining({
+      center: [-122.42, 37.77],
+      zoom: 14,
+    })));
+    expect(screen.queryByText('No route points in this period')).not.toBeInTheDocument();
+
+    await act(async () => mockMap.emit('load'));
+    await waitFor(() => expect(mockMap.layers.has('trip-active-point-layer')).toBe(true));
+    expect(mockMap.fitBounds).not.toHaveBeenCalled();
+
+    rerender(
+      <TripMapChart
+        track={[]}
+        focusPoint={{ lat: 37.8, lng: -122.4 }}
+        basemapConfig={{ enabled: true, resolved_provider: 'openfreemap', revision: 'vector-1' }}
+        mapLoader={mapLoader as never}
+      />,
+    );
+    await waitFor(() => expect(mockMap.jumpTo).toHaveBeenCalledWith({ center: [-122.4, 37.8] }));
+  });
+
+  it('shows the empty label when there is neither a route nor a focus point', () => {
+    render(<TripMapChart track={[]} focusPoint={null} emptyLabel="Nothing to map" />);
+    expect(screen.getByText('Nothing to map')).toBeInTheDocument();
+  });
 });
