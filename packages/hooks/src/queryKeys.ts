@@ -47,4 +47,11 @@ export const queryKeys = {
   charging: {
     detail: (sessionId: string | null, vehicleId: string | null) => ['charging', 'detail', sessionId, vehicleId] as const,
   },
+  ownership: {
+    /** One step of the vehicle lookup cascade; the year, make, and model narrow it. */
+    vehicleLookup: (
+      menu: 'years' | 'makes' | 'models' | 'options',
+      params: { year?: string; make?: string; model?: string },
+    ) => ['ownership', 'vehicle-lookup', menu, params.year ?? '', params.make ?? '', params.model ?? ''] as const,
+  },
 } as const;

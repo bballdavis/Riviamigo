@@ -85,7 +85,9 @@ mod tests {
     fn uses_backup_volume_preserves_reserve_and_removes_only_its_workspace() {
         let root = tempfile::tempdir().unwrap();
         let mut limits = RecoveryConfig {
-            min_free_bytes: fs2::available_space(root.path()).unwrap() + 1,
+            // A reserve no disk can satisfy, so the refusal does not race
+            // other writers freeing space between measurement and check.
+            min_free_bytes: u64::MAX,
             ..RecoveryConfig::default()
         };
         assert!(matches!(

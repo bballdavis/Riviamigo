@@ -1661,6 +1661,8 @@ async fn external_connections_loads_without_rivian_credentials() {
             "nominatim",
             "basemap",
             "iconify",
+            "fuel_prices",
+            "vehicle_lookup",
             "s3_backup",
         ]
     );
