@@ -37,4 +37,5 @@ pub mod security_audit;
 pub mod sessions;
 pub mod trip_enrichment;
 pub mod trip_routes;
+pub mod vehicle_facing;
 pub mod weather_enrichment;
