@@ -30,6 +30,22 @@ after a reload or sign-in from another browser; it does not change other chart
 widgets. The bundled Overview dashboard defaults to **Battery Capacity by
 Mileage**.
 
+## Vehicle Overview location map
+
+The Vehicle Overview header has two icons on the right: a telemetry indicator
+(hover or focus it for the last update time) and a toggle between the
+**cluster** view and the **current location** map. The cluster view is the
+default and shows the vehicle as before. The map view replaces the vehicle
+image with a map centered on the vehicle's last reported location; the battery
+panel and stat rows stay in place.
+
+In edit mode, select the Vehicle Overview widget and open **Location map** in
+the editor drawer:
+
+- **Offer location map** turns the toggle on or off for that widget.
+- **Light or dark** follows the app appearance by default, or forces a light or dark map.
+- **Map type** uses the map style from **Settings > Appearance** by default, or picks a specific style for this widget.
+
 ## Reset, delete, and restore
 
 The recovery action depends on who owns the row:
