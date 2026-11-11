@@ -24,6 +24,110 @@ const SYNC_LINKED_SESSION_COST_PROFILE_SQL: &str = "UPDATE riviamigo.charge_sess
       WHERE geofence_id=$1 AND cost_override_mode='automatic'
       RETURNING id";
 
+/// Re-link automatically located charge sessions to the owner's nearest saved
+/// place after places change, so a place's price reaches history and not only
+/// sessions that close afterwards.
+///
+/// Candidates are sessions on vehicles `$1` owns, still in automatic location
+/// mode and with known coordinates, that are linked to one of the places in
+/// `$2`, listed in `$3`, or inside the radius of a place in `$2`. Each gets
+/// the same nearest-place match ingestion applies. Its pinned profile is
+/// cleared under automatic pricing because `recompute_charge_session_cost`
+/// stores whichever profile it resolved, which would otherwise outrank the
+/// place's profile.
+const REMATCH_PLACE_SESSIONS_SQL: &str = r#"
+WITH candidates AS (
+    SELECT cs.id,
+           cs.geofence_id AS previous_geofence_id,
+           COALESCE(cs.source_location_lat, cs.location_lat) AS lat,
+           COALESCE(cs.source_location_lng, cs.location_lng) AS lng
+      FROM riviamigo.charge_sessions cs
+      JOIN riviamigo.vehicle_memberships vm
+        ON vm.vehicle_id = cs.vehicle_id AND vm.user_id = $1 AND vm.role = 'owner'
+     WHERE cs.location_override_mode = 'automatic'
+       AND COALESCE(cs.source_location_lat, cs.location_lat) IS NOT NULL
+       AND COALESCE(cs.source_location_lng, cs.location_lng) IS NOT NULL
+       AND (cs.geofence_id = ANY($2)
+            OR cs.id = ANY($3)
+            OR EXISTS (
+                SELECT 1 FROM riviamigo.geofences g
+                 WHERE g.id = ANY($2) AND g.user_id = $1
+                   AND earth_box(ll_to_earth(g.latitude, g.longitude), g.radius_m)
+                       @> ll_to_earth(COALESCE(cs.source_location_lat, cs.location_lat),
+                                      COALESCE(cs.source_location_lng, cs.location_lng))
+                   AND earth_distance(ll_to_earth(g.latitude, g.longitude),
+                                      ll_to_earth(COALESCE(cs.source_location_lat, cs.location_lat),
+                                                  COALESCE(cs.source_location_lng, cs.location_lng)))
+                       <= g.radius_m))
+),
+matched AS (
+    SELECT c.id, c.previous_geofence_id, m.id AS geofence_id, m.address_id, m.is_home
+      FROM candidates c
+      LEFT JOIN LATERAL (
+          SELECT g.id, g.address_id, g.is_home
+            FROM riviamigo.geofences g
+           WHERE g.user_id = $1
+             AND earth_box(ll_to_earth(g.latitude, g.longitude), g.radius_m)
+                 @> ll_to_earth(c.lat, c.lng)
+             AND earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(c.lat, c.lng))
+                 <= g.radius_m
+           ORDER BY earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(c.lat, c.lng))
+           LIMIT 1
+      ) m ON true
+)
+UPDATE riviamigo.charge_sessions cs
+   SET geofence_id = matched.geofence_id,
+       address_id = COALESCE(matched.address_id, cs.address_id),
+       is_home = CASE
+                     WHEN matched.geofence_id IS NOT NULL THEN matched.is_home
+                     WHEN matched.previous_geofence_id IS NOT NULL THEN NULL
+                     ELSE cs.is_home
+                 END,
+       cost_profile_id = CASE WHEN cs.cost_override_mode = 'automatic' THEN NULL ELSE cs.cost_profile_id END
+  FROM matched
+ WHERE cs.id = matched.id
+RETURNING cs.id"#;
+
+/// Detach every session from a place that is about to be deleted. Sessions
+/// pinned to it fall back to automatic location, since the place is gone.
+const DETACH_PLACE_SESSIONS_SQL: &str = "UPDATE riviamigo.charge_sessions
+        SET geofence_id = NULL,
+            is_home = NULL,
+            location_override_mode = 'automatic',
+            cost_profile_id = CASE WHEN cost_override_mode = 'automatic' THEN NULL ELSE cost_profile_id END
+      WHERE geofence_id = $1
+      RETURNING id";
+
+/// Rematch sessions near `place_ids` (plus `session_ids`) to the owner's
+/// nearest place inside `tx`, returning the sessions whose cost must be
+/// recomputed once the transaction commits.
+async fn rematch_place_sessions(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    place_ids: &[Uuid],
+    session_ids: &[Uuid],
+) -> Result<Vec<Uuid>, AppError> {
+    sqlx::query_scalar::<_, Uuid>(REMATCH_PLACE_SESSIONS_SQL)
+        .bind(user_id)
+        .bind(place_ids)
+        .bind(session_ids)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(AppError::from)
+}
+
+async fn recompute_session_costs(
+    pool: &sqlx::PgPool,
+    mut session_ids: Vec<Uuid>,
+) -> Result<(), AppError> {
+    session_ids.sort_unstable();
+    session_ids.dedup();
+    for session_id in session_ids {
+        recompute_charge_session_cost(pool, session_id).await?;
+    }
+    Ok(())
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/places", get(list_places).post(create_place))
@@ -307,7 +411,13 @@ async fn create_place(
     .fetch_one(&mut *tx)
     .await?;
 
+    let sessions = rematch_place_sessions(&mut tx, auth.user_id, &[place_id], &[]).await?;
+
     tx.commit().await?;
+
+    // A new place covers charges that happened before it existed, so its
+    // price applies to that history too.
+    recompute_session_costs(&state.pool, sessions).await?;
 
     get_place(auth, State(state), Path(place_id)).await
 }
@@ -370,21 +480,25 @@ async fn update_place(
         return Err(AppError::NotFound);
     }
 
+    // A moved or resized place can gain or lose automatically located
+    // sessions; rematch them before syncing profiles.
+    let mut sessions = rematch_place_sessions(&mut tx, auth.user_id, &[id], &[]).await?;
+
     // Keep each linked automatic session's explicit profile synchronized with
     // the place before recomputing. This also clears a removed place profile.
-    let sessions = sqlx::query_scalar::<_, Uuid>(SYNC_LINKED_SESSION_COST_PROFILE_SQL)
-        .bind(id)
-        .bind(cost_profile_id)
-        .fetch_all(&mut *tx)
-        .await?;
+    sessions.extend(
+        sqlx::query_scalar::<_, Uuid>(SYNC_LINKED_SESSION_COST_PROFILE_SQL)
+            .bind(id)
+            .bind(cost_profile_id)
+            .fetch_all(&mut *tx)
+            .await?,
+    );
 
     tx.commit().await?;
 
     // Place pricing is an automatic policy. Explicit Free/Manual session
     // overrides are excluded above and retain their precedence.
-    for session_id in sessions {
-        recompute_charge_session_cost(&state.pool, session_id).await?;
-    }
+    recompute_session_costs(&state.pool, sessions).await?;
 
     get_place(auth, State(state), Path(id)).await
 }
@@ -394,17 +508,42 @@ async fn delete_place(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
+    let owned = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM riviamigo.geofences WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    if owned.is_none() {
+        return Err(AppError::NotFound);
+    }
+
+    let mut tx = state.pool.begin().await?;
+    // Sessions reference the place without ON DELETE, so detach them first;
+    // then give them the next-nearest place, if any, and its price.
+    let detached = sqlx::query_scalar::<_, Uuid>(DETACH_PLACE_SESSIONS_SQL)
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await?;
+
     let result = sqlx::query!(
         "DELETE FROM riviamigo.geofences WHERE id = $1 AND user_id = $2",
         id,
         auth.user_id
     )
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
+
+    let mut sessions = rematch_place_sessions(&mut tx, auth.user_id, &[], &detached).await?;
+    sessions.extend(detached);
+    tx.commit().await?;
+
+    recompute_session_costs(&state.pool, sessions).await?;
 
     Ok(Json(serde_json::json!({ "deleted": true })))
 }

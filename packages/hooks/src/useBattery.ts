@@ -1,6 +1,19 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, type QueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import { useAuthReady } from './useAuthState';
+
+/**
+ * Invalidate everything derived from a vehicle's configured battery capacity.
+ * Battery health, degradation and cycle counts use the capacity saved in
+ * vehicle settings as their "new" baseline, and these queries are long-lived
+ * and persisted across reloads, so a settings save must drop them explicitly.
+ */
+export function invalidateVehicleCapacityData(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+  void queryClient.invalidateQueries({ queryKey: ['battery'] });
+  void queryClient.invalidateQueries({ queryKey: ['chart-dataset'] });
+  void queryClient.invalidateQueries({ queryKey: ['metrics', 'batch'] });
+}
 
 export function useSocHistory(vehicleId: string | null, from: string | null, to: string | null) {
   const authReady = useAuthReady();
