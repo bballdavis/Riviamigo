@@ -22,8 +22,8 @@ use std::{
 use crate::{
     db::users::require_admin_or_super_user,
     db::vehicles::{
-        get_default_vehicle_id, require_vehicle_read_access, require_vehicle_role,
-        require_vehicle_session_access,
+        get_default_vehicle_id, is_demo_vehicle_key, require_vehicle_read_access,
+        require_vehicle_role, require_vehicle_session_access,
     },
     errors::AppError,
     ingestion::{
@@ -286,10 +286,6 @@ struct AddVehicleBody {
 #[derive(Deserialize)]
 struct CreateDemoVehicleBody {
     model: String,
-}
-
-fn is_demo_vehicle_key(value: &str) -> bool {
-    value.starts_with("demo-")
 }
 
 fn canonical_vehicle_model(model: &str) -> &str {
@@ -1431,6 +1427,8 @@ async fn add_vehicle(
     let is_new = existing_vehicle_id.is_none();
 
     let vehicle_id = if let Some(existing_vehicle_id) = existing_vehicle_id {
+        refresh_vehicle_vin(&mut tx, existing_vehicle_id, verified.vin.as_deref()).await?;
+
         let already_member = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(
                 SELECT 1
@@ -1481,7 +1479,9 @@ async fn add_vehicle(
             verified.model.as_deref().unwrap_or("R1T"),
         ))
         .bind(body.trim.as_deref())
-        .bind(verified.vin.as_deref())
+        .bind(crate::models::vehicle::normalized_vin(
+            verified.vin.as_deref(),
+        ))
         .bind(body.name.as_deref().map(canonical_vehicle_name))
         .bind(body.home_lat)
         .bind(body.home_lng)
@@ -1635,6 +1635,29 @@ async fn verify_account_vehicle(
         .ok_or_else(|| AppError::Validation("Rivian account does not include this vehicle".into()))
 }
 
+/// Stores the VIN Rivian reported for a verified account vehicle. A missing or
+/// blank VIN leaves the saved value untouched; model year is derived from the
+/// VIN at read time, so nothing else needs refreshing.
+async fn refresh_vehicle_vin(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    vehicle_id: Uuid,
+    reported_vin: Option<&str>,
+) -> Result<(), AppError> {
+    let Some(vin) = crate::models::vehicle::normalized_vin(reported_vin) else {
+        return Ok(());
+    };
+    sqlx::query(
+        "UPDATE riviamigo.vehicles
+         SET vin = $2, updated_at = now()
+         WHERE id = $1 AND vin IS DISTINCT FROM $2",
+    )
+    .bind(vehicle_id)
+    .bind(vin)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 async fn refresh_vehicle_credentials(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -1661,13 +1684,15 @@ async fn refresh_vehicle_credentials(
     .await?
     .ok_or(AppError::RivianConnectSessionExpired)?;
 
-    verify_account_vehicle(&tokens, &rivian_vehicle_id).await?;
+    let verified = verify_account_vehicle(&tokens, &rivian_vehicle_id).await?;
 
     let identity = age_identity(&state)?;
     let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
         .map_err(AppError::Internal)?;
 
     let mut tx = state.pool.begin().await?;
+
+    refresh_vehicle_vin(&mut tx, vid, verified.vin.as_deref()).await?;
 
     sqlx::query(
         "INSERT INTO riviamigo.vehicle_credentials (vehicle_id, encrypted_tokens, token_created_at, last_refreshed_at)
@@ -2435,7 +2460,7 @@ async fn list_vehicles(
             "is_demo":                  is_demo,
             "vin":                      r.vin,
             "model":                    canonical_vehicle_model(&r.model),
-            "year":                     serde_json::Value::Null,
+            "year":                     r.vin.as_deref().and_then(crate::models::vehicle::model_year_from_vin),
             "trim":                     r.trim,
             "color":                    r.color,
             "interior_color":           r.interior_color,
@@ -3766,83 +3791,79 @@ async fn vehicle_images(
     ))
 }
 
+/// Result of one artwork cache pass. Completeness of the local cache decides
+/// success; this only reports whether another pass could change the outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArtworkCachePass {
+    /// The pass ran, failed, or was skipped; a retry may help.
+    Attempted,
+    /// Rivian answered but tagged no artwork with this vehicle's provider ID,
+    /// for example a new delivery with order-only images or a preorder.
+    NoProviderArtwork,
+}
+
 async fn cache_vehicle_images(
     pool: &sqlx::PgPool,
     config: &crate::config::Config,
     vehicle_id: Uuid,
     tokens: &crate::ingestion::session_store::RivianTokenBundle,
     force_remirror: bool,
-) {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .unwrap_or_default();
+) -> ArtworkCachePass {
     mark_vehicle_artwork_repair_attempt(pool, vehicle_id).await;
     crate::services::external_connections::record_attempt(
         pool,
         crate::services::external_connections::RIVIAN_ACCOUNT,
     )
     .await;
-    match crate::ingestion::rivian_auth::rivian_vehicle_images(&client, tokens).await {
-        Ok(images) => {
-            let image_count = images.len();
-            for image in images {
-                let _ = sqlx::query(
-                    r#"
-                    INSERT INTO riviamigo.vehicle_images
-                      (vehicle_id, placement, design, size, resolution, url, overlays, metadata)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-                    ON CONFLICT (vehicle_id, url) DO UPDATE
-                    SET placement = EXCLUDED.placement,
-                        design = EXCLUDED.design,
-                        size = EXCLUDED.size,
-                        resolution = EXCLUDED.resolution,
-                        overlays = EXCLUDED.overlays,
-                        -- A manifest refresh must never discard a working local
-                        -- mirror. Keep the ready mirror identity and only take
-                        -- the descriptive manifest fields; the mirror pass below
-                        -- replaces the asset only after a successful download.
-                        metadata = CASE
-                          WHEN riviamigo.vehicle_images.metadata->>'mirror_status' = 'ready'
-                            THEN riviamigo.vehicle_images.metadata
-                              || (EXCLUDED.metadata - 'mirror_key' - 'mirror_status')
-                          ELSE EXCLUDED.metadata
-                        END,
-                        updated_at = now()
-                    "#,
-                )
-                .bind(vehicle_id)
-                .bind(image.placement.as_deref().unwrap_or("unknown"))
-                .bind(image.design)
-                .bind(image.size)
-                .bind(image.resolution)
-                .bind(&image.url)
-                .bind(image.overlays)
-                .bind(build_cached_vehicle_image_metadata(
-                    &image.url,
-                    serde_json::json!({
-                    "source": image.source,
-                    "vehicle_version": image.vehicle_version,
-                    "rivian_vehicle_id": image.vehicle_id,
-                    "rivian_order_id": image.order_id,
-                    "extension": image.extension
-                    }),
-                ))
-                .execute(pool)
-                .await;
-            }
+    let result = async {
+        let rivian_vehicle_id = sqlx::query_scalar::<_, String>(
+            "SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id = $1",
+        )
+        .bind(vehicle_id)
+        .fetch_one(pool)
+        .await?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()?;
+        let images = crate::ingestion::rivian_auth::rivian_vehicle_images(
+            &client,
+            tokens,
+            &rivian_vehicle_id,
+        )
+        .await?;
+        let image_count = images.len();
+        let mut tx = pool.begin().await?;
+        store_vehicle_image_manifest(&mut tx, vehicle_id, &rivian_vehicle_id, images).await?;
+        tx.commit().await?;
+        Ok::<_, anyhow::Error>(image_count)
+    }
+    .await;
+    match result {
+        Ok(image_count) => {
             mirror_vehicle_images(pool, config, vehicle_id, force_remirror).await;
-            refresh_vehicle_artwork_cache_state(pool, config, vehicle_id, None).await;
+            refresh_vehicle_artwork_cache_state(
+                pool,
+                config,
+                vehicle_id,
+                ArtworkCacheStateUpdate::Observe,
+            )
+            .await;
             crate::services::external_connections::record_success(
                 pool,
                 crate::services::external_connections::RIVIAN_ACCOUNT,
             )
             .await;
-            info!(vehicle_id = %vehicle_id, image_count, "vehicle.images.cached");
+            if image_count == 0 {
+                info!(vehicle_id = %vehicle_id, "vehicle.images.no_provider_artwork");
+                ArtworkCachePass::NoProviderArtwork
+            } else {
+                info!(vehicle_id = %vehicle_id, image_count, "vehicle.images.cached");
+                ArtworkCachePass::Attempted
+            }
         }
         Err(error) => {
-            refresh_vehicle_artwork_cache_state(pool, config, vehicle_id, Some(&error.to_string()))
-                .await;
+            // The repair that owns this pass records the terminal cache state
+            // and its retry backoff once all attempts are exhausted.
             crate::services::external_connections::record_failure(
                 pool,
                 crate::services::external_connections::RIVIAN_ACCOUNT,
@@ -3850,8 +3871,76 @@ async fn cache_vehicle_images(
             )
             .await;
             warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.add.image_cache_failed");
+            ArtworkCachePass::Attempted
         }
     }
+}
+
+/// Replaces a vehicle's cached manifest with Rivian entries already filtered to
+/// its provider ID. An empty manifest is still authoritative: foreign and
+/// unidentified legacy rows are removed so they cannot be served or block
+/// repair, while rows tagged with this vehicle keep their local mirrors.
+async fn store_vehicle_image_manifest(
+    conn: &mut sqlx::PgConnection,
+    vehicle_id: Uuid,
+    rivian_vehicle_id: &str,
+    images: Vec<crate::ingestion::rivian_auth::RivianVehicleImage>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM riviamigo.vehicle_images
+         WHERE vehicle_id = $1
+           AND metadata->>'rivian_vehicle_id' IS DISTINCT FROM $2",
+    )
+    .bind(vehicle_id)
+    .bind(rivian_vehicle_id)
+    .execute(&mut *conn)
+    .await?;
+    for image in images {
+        sqlx::query(
+            r#"
+                INSERT INTO riviamigo.vehicle_images
+                  (vehicle_id, placement, design, size, resolution, url, overlays, metadata)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                ON CONFLICT (vehicle_id, url) DO UPDATE
+                SET placement = EXCLUDED.placement,
+                    design = EXCLUDED.design,
+                    size = EXCLUDED.size,
+                    resolution = EXCLUDED.resolution,
+                    overlays = EXCLUDED.overlays,
+                    -- A manifest refresh must never discard a working local
+                    -- mirror. Keep the ready mirror identity and only take
+                    -- the descriptive manifest fields; the later mirror pass
+                    -- replaces the asset only after a successful download.
+                    metadata = CASE
+                      WHEN riviamigo.vehicle_images.metadata->>'mirror_status' = 'ready'
+                        THEN riviamigo.vehicle_images.metadata
+                          || (EXCLUDED.metadata - 'mirror_key' - 'mirror_status')
+                      ELSE EXCLUDED.metadata
+                    END,
+                    updated_at = now()
+                "#,
+        )
+        .bind(vehicle_id)
+        .bind(image.placement.as_deref().unwrap_or("unknown"))
+        .bind(image.design)
+        .bind(image.size)
+        .bind(image.resolution)
+        .bind(&image.url)
+        .bind(image.overlays)
+        .bind(build_cached_vehicle_image_metadata(
+            &image.url,
+            serde_json::json!({
+            "source": image.source,
+            "vehicle_version": image.vehicle_version,
+            "rivian_vehicle_id": image.vehicle_id,
+            "rivian_order_id": image.order_id,
+            "extension": image.extension
+            }),
+        ))
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
 }
 
 async fn ensure_vehicle_images_cached(
@@ -3860,16 +3949,14 @@ async fn ensure_vehicle_images_cached(
     vehicle_id: Uuid,
     age_key: &str,
     force_manifest_refresh: bool,
-) {
-    let rows = sqlx::query_as::<_, VehicleImageRow>(
-        "SELECT placement, design, size, resolution, url, overlays, metadata
-         FROM riviamigo.vehicle_images
-         WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+) -> ArtworkCachePass {
+    let rows = match fetch_vehicle_image_rows(pool, vehicle_id).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_rows_failed");
+            return ArtworkCachePass::Attempted;
+        }
+    };
 
     if !rows.is_empty() && !force_manifest_refresh {
         if rows
@@ -3878,16 +3965,22 @@ async fn ensure_vehicle_images_cached(
         {
             mark_vehicle_artwork_repair_attempt(pool, vehicle_id).await;
             mirror_vehicle_images(pool, config, vehicle_id, false).await;
-            refresh_vehicle_artwork_cache_state(pool, config, vehicle_id, None).await;
+            refresh_vehicle_artwork_cache_state(
+                pool,
+                config,
+                vehicle_id,
+                ArtworkCacheStateUpdate::Observe,
+            )
+            .await;
         }
-        return;
+        return ArtworkCachePass::Attempted;
     }
 
     let identity = match age_key.parse::<age::x25519::Identity>() {
         Ok(identity) => identity,
         Err(error) => {
             warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_bad_age_key");
-            return;
+            return ArtworkCachePass::Attempted;
         }
     };
 
@@ -3899,10 +3992,10 @@ async fn ensure_vehicle_images_cached(
     .await
     {
         Ok(Some(tokens)) => tokens,
-        Ok(None) => return,
+        Ok(None) => return ArtworkCachePass::Attempted,
         Err(error) => {
             warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_credentials_failed");
-            return;
+            return ArtworkCachePass::Attempted;
         }
     };
 
@@ -3911,14 +4004,9 @@ async fn ensure_vehicle_images_cached(
             cache_vehicle_images(pool, config, vehicle_id, &tokens, force_manifest_refresh).await
         }
         Err(error) => {
-            refresh_vehicle_artwork_cache_state(
-                pool,
-                config,
-                vehicle_id,
-                Some("Stored Rivian session could not be used for artwork repair."),
-            )
-            .await;
+            // The owning repair records the sanitized failure and backoff.
             warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_decrypt_failed");
+            ArtworkCachePass::Attempted
         }
     }
 }
@@ -4117,15 +4205,7 @@ async fn mirror_vehicle_images(
     vehicle_id: Uuid,
     force_remirror: bool,
 ) {
-    let rows = match sqlx::query_as::<_, VehicleImageRow>(
-        "SELECT placement, design, size, resolution, url, overlays, metadata
-         FROM riviamigo.vehicle_images
-         WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await
-    {
+    let rows = match fetch_vehicle_image_rows(pool, vehicle_id).await {
         Ok(rows) => rows,
         Err(error) => {
             warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.mirror_rows_failed");
@@ -4144,6 +4224,17 @@ async fn mirror_vehicle_images(
         if !needs_mirror && !(force_remirror && is_remote) {
             continue;
         }
+        // Each download can take up to the client timeout, so keep an active
+        // repair's lease fresh; otherwise a long mirror pass could be taken
+        // over as stale and run twice.
+        let _ = sqlx::query(
+            "UPDATE riviamigo.vehicle_artwork_cache_state
+             SET last_repair_attempt_at = now()
+             WHERE vehicle_id = $1 AND status = 'repairing'",
+        )
+        .bind(vehicle_id)
+        .execute(pool)
+        .await;
         let overlays = overlay_entries_from_value(&row.overlays);
         match mirror_vehicle_image_assets(&client, config, vehicle_id, &row.url, &overlays).await {
             Ok(mirror_metadata) => {
@@ -4228,60 +4319,138 @@ fn artwork_asset_counts(config: &crate::config::Config, rows: &[VehicleImageRow]
 }
 
 async fn mark_vehicle_artwork_repair_attempt(pool: &sqlx::PgPool, vehicle_id: Uuid) {
+    // `attempts` counts consecutive failed repairs for backoff, so a pass
+    // inside a repair only refreshes the active-repair lease.
     let _ = sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_artwork_cache_state
-              (vehicle_id, status, attempts, last_repair_attempt_at, updated_at)
-           VALUES ($1, 'repairing', 1, now(), now())
+              (vehicle_id, status, last_repair_attempt_at, updated_at)
+           VALUES ($1, 'repairing', now(), now())
            ON CONFLICT (vehicle_id) DO UPDATE SET
-             status = 'repairing', attempts = riviamigo.vehicle_artwork_cache_state.attempts + 1,
-             last_repair_attempt_at = now(), last_error = NULL, updated_at = now()"#,
+             status = 'repairing', last_repair_attempt_at = now(),
+             last_error = NULL, updated_at = now()"#,
     )
     .bind(vehicle_id)
     .execute(pool)
     .await;
 }
 
+/// How a cache-state write affects repair scheduling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArtworkCacheStateUpdate {
+    /// Record asset counts. A ready cache clears the backoff; an incomplete
+    /// one is pending, or stays repairing while a claimed repair runs.
+    Observe,
+    /// A repair ended without a complete cache after a provider, credential,
+    /// or download error. Retries back off exponentially.
+    RepairFailed,
+    /// Rivian answered but has no artwork tagged with this vehicle yet.
+    NoProviderArtwork,
+}
+
+const ARTWORK_REPAIR_BASE_BACKOFF_SECS: f64 = 5.0 * 60.0;
+const ARTWORK_REPAIR_MAX_BACKOFF_SECS: f64 = 6.0 * 60.0 * 60.0;
+const ARTWORK_NO_PROVIDER_ARTWORK_RETRY_SECS: f64 = 12.0 * 60.0 * 60.0;
+const ARTWORK_REPAIR_FAILED_ERROR: &str = "Rivian artwork repair failed; retry is scheduled.";
+const ARTWORK_NO_PROVIDER_ARTWORK_ERROR: &str =
+    "Rivian has no artwork for this vehicle yet; using the standard model image.";
+
 async fn refresh_vehicle_artwork_cache_state(
     pool: &sqlx::PgPool,
     config: &crate::config::Config,
     vehicle_id: Uuid,
-    error: Option<&str>,
+    update: ArtworkCacheStateUpdate,
 ) {
-    let rows = sqlx::query_as::<_, VehicleImageRow>(
-        "SELECT placement, design, size, resolution, url, overlays, metadata
-         FROM riviamigo.vehicle_images WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-    let (asset_count, ready_asset_count) = artwork_asset_counts(config, &rows);
-    let ready = asset_count > 0 && asset_count == ready_asset_count;
-    let status = if ready {
-        "ready"
-    } else if error.is_some() {
-        "failed"
-    } else {
-        "pending"
+    let rows = match fetch_vehicle_image_rows(pool, vehicle_id).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.cache_state_rows_failed");
+            return;
+        }
     };
-    let sanitized_error = error.map(|_| "Rivian artwork repair failed; retry is scheduled.");
-    let _ = sqlx::query(
-        r#"INSERT INTO riviamigo.vehicle_artwork_cache_state
-              (vehicle_id, status, asset_count, ready_asset_count, last_repair_success_at, last_error, updated_at)
-           VALUES ($1, $2, $3, $4, CASE WHEN $2 = 'ready' THEN now() ELSE NULL END, $5, now())
+    let (asset_count, ready_asset_count) = artwork_asset_counts(config, &rows);
+    if let Err(error) =
+        write_vehicle_artwork_cache_state(pool, vehicle_id, asset_count, ready_asset_count, update)
+            .await
+    {
+        warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.cache_state_write_failed");
+    }
+}
+
+/// Single writer for terminal and observed artwork cache state. A complete
+/// cache always wins over a failure report.
+async fn write_vehicle_artwork_cache_state<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    vehicle_id: Uuid,
+    asset_count: i32,
+    ready_asset_count: i32,
+    update: ArtworkCacheStateUpdate,
+) -> Result<(), sqlx::Error> {
+    let ready = asset_count > 0 && asset_count == ready_asset_count;
+    let (status, failure, last_error) = match (ready, update) {
+        (true, _) => ("ready", None, None),
+        (false, ArtworkCacheStateUpdate::Observe) => ("pending", None, None),
+        (false, ArtworkCacheStateUpdate::RepairFailed) => (
+            "failed",
+            Some("repair_failed"),
+            Some(ARTWORK_REPAIR_FAILED_ERROR),
+        ),
+        (false, ArtworkCacheStateUpdate::NoProviderArtwork) => (
+            "failed",
+            Some("no_provider_artwork"),
+            Some(ARTWORK_NO_PROVIDER_ARTWORK_ERROR),
+        ),
+    };
+    // `attempts` is the number of consecutive failed repairs. Real errors back
+    // off as base * 2^attempts (before this failure), capped; an empty
+    // provider manifest waits a fixed interval because it rarely changes soon.
+    sqlx::query(
+        r#"INSERT INTO riviamigo.vehicle_artwork_cache_state AS s
+              (vehicle_id, status, asset_count, ready_asset_count, attempts, next_attempt_at,
+               last_repair_success_at, last_error, updated_at)
+           VALUES ($1, $2, $3, $4,
+                   CASE WHEN $6::text = 'repair_failed' THEN 1 ELSE 0 END,
+                   now() + make_interval(secs => CASE $6::text
+                     WHEN 'no_provider_artwork' THEN $8::double precision
+                     WHEN 'repair_failed' THEN $7::double precision
+                     ELSE 0 END),
+                   CASE WHEN $2 = 'ready' THEN now() ELSE NULL END, $5, now())
            ON CONFLICT (vehicle_id) DO UPDATE SET
-             status = EXCLUDED.status, asset_count = EXCLUDED.asset_count,
+             status = CASE
+               WHEN EXCLUDED.status = 'pending' AND s.status = 'repairing' THEN 'repairing'
+               ELSE EXCLUDED.status
+             END,
+             asset_count = EXCLUDED.asset_count,
              ready_asset_count = EXCLUDED.ready_asset_count,
-             last_repair_success_at = CASE WHEN EXCLUDED.status = 'ready' THEN now() ELSE riviamigo.vehicle_artwork_cache_state.last_repair_success_at END,
+             attempts = CASE
+               WHEN EXCLUDED.status = 'ready' THEN 0
+               WHEN $6::text = 'repair_failed' THEN s.attempts + 1
+               ELSE s.attempts
+             END,
+             next_attempt_at = CASE
+               WHEN EXCLUDED.status = 'ready' THEN now()
+               WHEN $6::text = 'no_provider_artwork'
+                 THEN now() + make_interval(secs => $8::double precision)
+               WHEN $6::text = 'repair_failed'
+                 THEN now() + make_interval(secs => LEAST(
+                   $7::double precision * power(2::double precision, LEAST(s.attempts, 16)),
+                   $9::double precision))
+               ELSE s.next_attempt_at
+             END,
+             last_repair_success_at = CASE WHEN EXCLUDED.status = 'ready' THEN now() ELSE s.last_repair_success_at END,
              last_error = EXCLUDED.last_error, updated_at = now()"#,
     )
     .bind(vehicle_id)
     .bind(status)
     .bind(asset_count)
     .bind(ready_asset_count)
-    .bind(sanitized_error)
-    .execute(pool)
-    .await;
+    .bind(last_error)
+    .bind(failure)
+    .bind(ARTWORK_REPAIR_BASE_BACKOFF_SECS)
+    .bind(ARTWORK_NO_PROVIDER_ARTWORK_RETRY_SECS)
+    .bind(ARTWORK_REPAIR_MAX_BACKOFF_SECS)
+    .execute(executor)
+    .await?;
+    Ok(())
 }
 
 async fn vehicle_artwork_cache_state_json(
@@ -4365,14 +4534,10 @@ async fn find_mirrored_asset(
     vehicle_id: Uuid,
     image_key: &str,
 ) -> Result<Option<serde_json::Value>, AppError> {
-    let metadatas = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT metadata FROM riviamigo.vehicle_images WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await?;
+    let rows = fetch_vehicle_image_rows(pool, vehicle_id).await?;
 
-    for metadata in metadatas {
+    for row in rows {
+        let metadata = row.metadata;
         if metadata.get("mirror_key").and_then(|value| value.as_str()) == Some(image_key) {
             return Ok(Some(metadata));
         }
@@ -4392,26 +4557,37 @@ async fn find_mirrored_asset(
     Ok(None)
 }
 
+async fn fetch_vehicle_image_rows<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    vehicle_id: Uuid,
+) -> Result<Vec<VehicleImageRow>, sqlx::Error> {
+    // Older caches contain account-wide manifests. Enforce provider identity
+    // on every read, including overlays, cache completeness, and repair.
+    sqlx::query_as::<_, VehicleImageRow>(
+        r#"
+        SELECT i.placement, i.design, i.size, i.resolution, i.url, i.overlays, i.metadata
+        FROM riviamigo.vehicle_images i
+        JOIN riviamigo.vehicles v ON v.id = i.vehicle_id
+        WHERE i.vehicle_id = $1
+          AND i.metadata->>'rivian_vehicle_id' = v.rivian_vehicle_id
+        ORDER BY
+          CASE WHEN i.size = 'large' THEN 0 ELSE 1 END,
+          i.placement,
+          i.design NULLS LAST,
+          i.created_at
+        "#,
+    )
+    .bind(vehicle_id)
+    .fetch_all(executor)
+    .await
+}
+
 async fn fetch_vehicle_images_json(
     pool: &sqlx::PgPool,
     config: &crate::config::Config,
     vehicle_id: Uuid,
 ) -> Result<serde_json::Value, AppError> {
-    let rows = sqlx::query_as::<_, VehicleImageRow>(
-        r#"
-        SELECT placement, design, size, resolution, url, overlays, metadata
-        FROM riviamigo.vehicle_images
-        WHERE vehicle_id = $1
-        ORDER BY
-          CASE WHEN size = 'large' THEN 0 ELSE 1 END,
-          placement,
-          design NULLS LAST,
-                    created_at
-                "#,
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await?;
+    let rows = fetch_vehicle_image_rows(pool, vehicle_id).await?;
 
     let all: Vec<_> = rows
         .iter()
@@ -4475,9 +4651,9 @@ async fn vehicle_image_cache_asset(
         return Err(AppError::NotFound);
     }
     require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
-    let Some(metadata) = find_mirrored_asset(&state.pool, vehicle_id, &image_key).await? else {
-        return Ok(vehicle_artwork_placeholder_response());
-    };
+    let metadata = find_mirrored_asset(&state.pool, vehicle_id, &image_key)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     let Some(relpath) = metadata
         .get("mirror_relpath")
@@ -4572,7 +4748,13 @@ async fn admin_purge_vehicle_artwork_cache(
     .bind(vehicle_id)
     .execute(&state.pool)
     .await?;
-    refresh_vehicle_artwork_cache_state(&state.pool, &state.config, vehicle_id, None).await;
+    refresh_vehicle_artwork_cache_state(
+        &state.pool,
+        &state.config,
+        vehicle_id,
+        ArtworkCacheStateUpdate::Observe,
+    )
+    .await;
     Ok(Json(
         serde_json::json!({ "ok": true, "vehicle_id": vehicle_id }),
     ))
@@ -4583,35 +4765,61 @@ async fn vehicle_artwork_cache_complete(
     config: &crate::config::Config,
     vehicle_id: Uuid,
 ) -> bool {
-    let rows = sqlx::query_as::<_, VehicleImageRow>(
-        "SELECT placement, design, size, resolution, url, overlays, metadata
-         FROM riviamigo.vehicle_images WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let rows = match fetch_vehicle_image_rows(pool, vehicle_id).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.cache_complete_rows_failed");
+            return false;
+        }
+    };
     let (total, ready) = artwork_asset_counts(config, &rows);
     total > 0 && total == ready
 }
 
-async fn claim_vehicle_artwork_repair(pool: &sqlx::PgPool, vehicle_id: Uuid) -> bool {
-    sqlx::query_scalar::<_, Uuid>(
-        r#"INSERT INTO riviamigo.vehicle_artwork_cache_state
-              (vehicle_id, status, next_attempt_at, updated_at)
-           VALUES ($1, 'pending', now(), now())
+/// Claims the single active artwork repair for a vehicle. An active repair is
+/// only taken over once its lease is stale. A failed repair is not retried
+/// before `next_attempt_at` unless `bypass_backoff` is set by an explicit
+/// refresh.
+async fn claim_vehicle_artwork_repair(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+    bypass_backoff: bool,
+) -> bool {
+    match try_claim_vehicle_artwork_repair(pool, vehicle_id, bypass_backoff).await {
+        Ok(claimed) => claimed,
+        Err(error) => {
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.repair_claim_failed");
+            false
+        }
+    }
+}
+
+async fn try_claim_vehicle_artwork_repair<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    vehicle_id: Uuid,
+    bypass_backoff: bool,
+) -> Result<bool, sqlx::Error> {
+    // Claiming marks the repair active immediately so concurrent listings
+    // cannot start a second repair before the first pass begins.
+    let claimed = sqlx::query_scalar::<_, Uuid>(
+        r#"INSERT INTO riviamigo.vehicle_artwork_cache_state AS s
+              (vehicle_id, status, last_repair_attempt_at, updated_at)
+           VALUES ($1, 'repairing', now(), now())
            ON CONFLICT (vehicle_id) DO UPDATE SET
-             status = 'pending', next_attempt_at = now(), updated_at = now()
-           WHERE riviamigo.vehicle_artwork_cache_state.status <> 'repairing'
-              OR riviamigo.vehicle_artwork_cache_state.last_repair_attempt_at < now() - interval '5 minutes'
+             status = 'repairing', last_repair_attempt_at = now(), updated_at = now()
+           WHERE CASE s.status
+             WHEN 'repairing' THEN s.last_repair_attempt_at IS NULL
+               OR s.last_repair_attempt_at < now() - interval '5 minutes'
+             WHEN 'failed' THEN $2 OR s.next_attempt_at <= now()
+             ELSE TRUE
+           END
            RETURNING vehicle_id"#,
     )
     .bind(vehicle_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .is_some()
+    .bind(bypass_backoff)
+    .fetch_optional(executor)
+    .await?;
+    Ok(claimed.is_some())
 }
 
 async fn queue_vehicle_artwork_repair(state: &AppState, vehicle_id: Uuid) {
@@ -4640,7 +4848,7 @@ async fn queue_vehicle_artwork_repair_with_mode(
     {
         return;
     }
-    if !claim_vehicle_artwork_repair(&state.pool, vehicle_id).await {
+    if !claim_vehicle_artwork_repair(&state.pool, vehicle_id, force_manifest_refresh).await {
         return;
     }
     let pool = state.pool.clone();
@@ -4658,24 +4866,36 @@ async fn repair_vehicle_artwork(
     vehicle_id: Uuid,
     force_manifest_refresh: bool,
 ) {
+    let mut failure = ArtworkCacheStateUpdate::RepairFailed;
     for attempt in 0..3 {
-        ensure_vehicle_images_cached(&pool, &config, vehicle_id, &age_key, force_manifest_refresh)
-            .await;
+        let pass = ensure_vehicle_images_cached(
+            &pool,
+            &config,
+            vehicle_id,
+            &age_key,
+            force_manifest_refresh,
+        )
+        .await;
         if vehicle_artwork_cache_complete(&pool, &config, vehicle_id).await {
-            refresh_vehicle_artwork_cache_state(&pool, &config, vehicle_id, None).await;
+            refresh_vehicle_artwork_cache_state(
+                &pool,
+                &config,
+                vehicle_id,
+                ArtworkCacheStateUpdate::Observe,
+            )
+            .await;
             return;
+        }
+        if pass == ArtworkCachePass::NoProviderArtwork {
+            // An empty provider manifest will not change within seconds.
+            failure = ArtworkCacheStateUpdate::NoProviderArtwork;
+            break;
         }
         if attempt < 2 {
             tokio::time::sleep(Duration::from_secs(5 * (attempt + 1))).await;
         }
     }
-    refresh_vehicle_artwork_cache_state(
-        &pool,
-        &config,
-        vehicle_id,
-        Some("Artwork cache is incomplete."),
-    )
-    .await;
+    refresh_vehicle_artwork_cache_state(&pool, &config, vehicle_id, failure).await;
 }
 
 /// Starts a bounded repair pass after the API has loaded its encrypted vehicle
@@ -4696,9 +4916,17 @@ pub fn start_vehicle_artwork_repair_worker(
         .unwrap_or_default();
 
         for vehicle_id in vehicle_ids {
-            if vehicle_artwork_cache_complete(&pool, &config, vehicle_id).await
-                || !claim_vehicle_artwork_repair(&pool, vehicle_id).await
-            {
+            if vehicle_artwork_cache_complete(&pool, &config, vehicle_id).await {
+                refresh_vehicle_artwork_cache_state(
+                    &pool,
+                    &config,
+                    vehicle_id,
+                    ArtworkCacheStateUpdate::Observe,
+                )
+                .await;
+                continue;
+            }
+            if !claim_vehicle_artwork_repair(&pool, vehicle_id, false).await {
                 continue;
             }
 
@@ -5655,6 +5883,152 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn verified_vin_refresh_keeps_known_vin_when_rivian_omits_it() {
+        let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+            .await
+            .expect("test database");
+        crate::db::migrations::run_current_migrations(&pool)
+            .await
+            .expect("migrate test database");
+        let user_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO riviamigo.users (id, email, password_hash) VALUES ($1, $2, 'unused')",
+        )
+        .bind(user_id)
+        .bind(format!("vin-refresh-{user_id}@example.test"))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let vehicle_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO riviamigo.vehicles (user_id, rivian_vehicle_id, model)
+             VALUES ($1, $2, 'R1S') RETURNING id",
+        )
+        .bind(user_id)
+        .bind(format!("vin-refresh-{user_id}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        for (reported, expected) in [
+            (Some(" 7FCTGAAL0SN000001 "), Some("7FCTGAAL0SN000001")),
+            (None, Some("7FCTGAAL0SN000001")),
+            (Some("   "), Some("7FCTGAAL0SN000001")),
+            (Some("7FCTGAAL0TN000001"), Some("7FCTGAAL0TN000001")),
+        ] {
+            let mut tx = pool.begin().await.unwrap();
+            super::refresh_vehicle_vin(&mut tx, vehicle_id, reported)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            let saved: Option<String> =
+                sqlx::query_scalar("SELECT vin FROM riviamigo.vehicles WHERE id = $1")
+                    .bind(vehicle_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(saved.as_deref(), expected);
+        }
+
+        // A vehicle removed concurrently is not an error.
+        let mut tx = pool.begin().await.unwrap();
+        super::refresh_vehicle_vin(&mut tx, Uuid::new_v4(), Some("7FCTGAAL0SN000001"))
+            .await
+            .unwrap();
+        tx.rollback().await.unwrap();
+
+        sqlx::query("DELETE FROM riviamigo.users WHERE id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn vehicle_list_derives_year_from_stored_vin() {
+        let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+            .await
+            .expect("test database");
+        crate::db::migrations::run_current_migrations(&pool)
+            .await
+            .expect("migrate test database");
+        let user_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO riviamigo.users (id, email, password_hash) VALUES ($1, $2, 'unused')",
+        )
+        .bind(user_id)
+        .bind(format!("model-year-{user_id}@example.test"))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let cases = [
+            (Some("7FCTGAAL0RN000001"), serde_json::json!(2024)),
+            (Some("7FCTGAAL0SN000001"), serde_json::json!(2025)),
+            (Some("7FCTGAAL0TN000001"), serde_json::json!(2026)),
+            (Some("NOT-A-VALID-VIN"), serde_json::Value::Null),
+            (None, serde_json::Value::Null),
+        ];
+        for (vin, _) in &cases {
+            let vehicle_id = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO riviamigo.vehicles
+                 (id, user_id, rivian_vehicle_id, model, vin)
+                 VALUES ($1, $2, $3, 'R1S', $4)",
+            )
+            .bind(vehicle_id)
+            .bind(user_id)
+            .bind(format!("demo-model-year-{vehicle_id}"))
+            .bind(vin)
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role)
+                 VALUES ($1, $2, 'owner')",
+            )
+            .bind(vehicle_id)
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let mut state = make_helper_state("redis://127.0.0.1/".into());
+        state.pool = pool.clone();
+        let Json(body) = super::list_vehicles(
+            State(state),
+            crate::middleware::auth::AuthUser {
+                user_id,
+                default_vehicle_id: None,
+                api_access_level: None,
+                api_vehicle_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let vehicles = body["vehicles"].as_array().expect("vehicle list");
+        assert_eq!(vehicles.len(), cases.len());
+        for (vin, year) in &cases {
+            let vin = vin.map_or(serde_json::Value::Null, serde_json::Value::from);
+            let vehicle = vehicles
+                .iter()
+                .find(|vehicle| vehicle["vin"] == vin)
+                .expect("listed vehicle");
+            assert_eq!(&vehicle["year"], year, "year for VIN {vin}");
+        }
+
+        sqlx::query("DELETE FROM riviamigo.users WHERE id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn add_vehicle_requires_auth() {
         let app = make_app().await;
         let status = post_status(
@@ -5693,6 +6067,380 @@ mod tests {
         assert!(super::is_demo_vehicle_key("demo-r2-local"));
         assert!(super::is_demo_vehicle_key("demo-r2s-local"));
         assert!(!super::is_demo_vehicle_key("rivian-1234"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn vehicle_images_ignore_foreign_and_unidentified_legacy_cache_entries() {
+        let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+            .await
+            .expect("test database");
+        let mut tx = pool.begin().await.expect("test transaction");
+        let user_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO riviamigo.users (id, email, password_hash) VALUES ($1, $2, 'unused')",
+        )
+        .bind(user_id)
+        .bind(format!("artwork-{user_id}@example.com"))
+        .execute(&mut *tx)
+        .await
+        .expect("test user");
+
+        for (model, paint) in [
+            ("R1T", "compass-yellow"),
+            ("R1T", "rivian-blue"),
+            ("R1S", "forest-green"),
+            ("R2", "glacier-white"),
+            ("R1S", "missing-artwork"),
+        ] {
+            let vehicle_id = Uuid::new_v4();
+            let provider_id = format!("provider-{vehicle_id}");
+            sqlx::query(
+                "INSERT INTO riviamigo.vehicles (id, user_id, rivian_vehicle_id, model, color)
+                 VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind(vehicle_id)
+            .bind(user_id)
+            .bind(&provider_id)
+            .bind(model)
+            .bind(paint)
+            .execute(&mut *tx)
+            .await
+            .expect("test vehicle");
+
+            for placement in ["side", "overhead", "three-quarter"] {
+                let mut entries = vec![
+                    (
+                        "foreign",
+                        serde_json::json!({ "rivian_vehicle_id": "another-vehicle" }),
+                    ),
+                    (
+                        "order",
+                        serde_json::json!({ "rivian_order_id": "unassigned-order" }),
+                    ),
+                    ("null", serde_json::json!({ "rivian_vehicle_id": null })),
+                ];
+                if paint != "missing-artwork" {
+                    entries.push((
+                        paint,
+                        serde_json::json!({ "rivian_vehicle_id": provider_id }),
+                    ));
+                }
+                for (image_paint, metadata) in entries {
+                    sqlx::query(
+                        "INSERT INTO riviamigo.vehicle_images
+                         (vehicle_id, placement, design, size, url, metadata, overlays)
+                         VALUES ($1, $2, 'light', 'large', $3, $4, $5)",
+                    )
+                    .bind(vehicle_id)
+                    .bind(placement)
+                    .bind(format!("https://rivian.com/{image_paint}/{placement}.webp"))
+                    .bind(metadata)
+                    .bind(serde_json::json!([{ "url": format!("https://rivian.com/{image_paint}/overlay.webp") }]))
+                    .execute(&mut *tx)
+                    .await
+                    .expect("legacy cache entry");
+                }
+            }
+
+            let rows = super::fetch_vehicle_image_rows(&mut *tx, vehicle_id)
+                .await
+                .expect("scoped cache rows");
+            if paint == "missing-artwork" {
+                assert!(rows.is_empty(), "foreign artwork must not prevent repair");
+            } else {
+                assert_eq!(rows.len(), 3);
+                for row in rows {
+                    assert!(row.url.contains(paint));
+                    assert_eq!(row.metadata["rivian_vehicle_id"], provider_id);
+                    assert!(row.overlays[0]["url"].as_str().unwrap().contains(paint));
+                }
+            }
+        }
+        tx.rollback().await.expect("rollback test fixtures");
+    }
+
+    async fn insert_artwork_test_vehicle(
+        conn: &mut sqlx::PgConnection,
+        user_id: Uuid,
+        provider_id: &str,
+    ) -> Uuid {
+        let vehicle_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicles (id, user_id, rivian_vehicle_id, model, color)
+             VALUES ($1, $2, $3, 'R1S', 'forest-green')",
+        )
+        .bind(vehicle_id)
+        .bind(user_id)
+        .bind(provider_id)
+        .execute(&mut *conn)
+        .await
+        .expect("test vehicle");
+        vehicle_id
+    }
+
+    async fn insert_artwork_test_user(conn: &mut sqlx::PgConnection) -> Uuid {
+        let user_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO riviamigo.users (id, email, password_hash) VALUES ($1, $2, 'unused')",
+        )
+        .bind(user_id)
+        .bind(format!("artwork-{user_id}@example.com"))
+        .execute(&mut *conn)
+        .await
+        .expect("test user");
+        user_id
+    }
+
+    async fn set_artwork_cache_state(
+        conn: &mut sqlx::PgConnection,
+        vehicle_id: Uuid,
+        status: &str,
+        next_attempt_offset_secs: f64,
+        last_attempt_offset_secs: Option<f64>,
+    ) {
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_artwork_cache_state
+               (vehicle_id, status, next_attempt_at, last_repair_attempt_at)
+             VALUES ($1, $2, now() + make_interval(secs => $3),
+                     now() + make_interval(secs => $4))
+             ON CONFLICT (vehicle_id) DO UPDATE SET
+               status = EXCLUDED.status,
+               next_attempt_at = EXCLUDED.next_attempt_at,
+               last_repair_attempt_at = EXCLUDED.last_repair_attempt_at",
+        )
+        .bind(vehicle_id)
+        .bind(status)
+        .bind(next_attempt_offset_secs)
+        .bind(last_attempt_offset_secs)
+        .execute(&mut *conn)
+        .await
+        .expect("cache state fixture");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn artwork_repair_claim_respects_failure_backoff_unless_forced() {
+        let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+            .await
+            .expect("test database");
+        let mut tx = pool.begin().await.expect("test transaction");
+        let user_id = insert_artwork_test_user(&mut tx).await;
+        let vehicle_id = insert_artwork_test_vehicle(&mut tx, user_id, "provider-claim").await;
+        // No state row yet: the first claim creates an active repair.
+        assert!(
+            super::try_claim_vehicle_artwork_repair(&mut *tx, vehicle_id, false)
+                .await
+                .unwrap()
+        );
+        let status: String = sqlx::query_scalar(
+            "SELECT status FROM riviamigo.vehicle_artwork_cache_state WHERE vehicle_id = $1",
+        )
+        .bind(vehicle_id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(status, "repairing");
+
+        // A fresh active repair blocks both automatic and forced claims.
+        for bypass in [false, true] {
+            assert!(
+                !super::try_claim_vehicle_artwork_repair(&mut *tx, vehicle_id, bypass)
+                    .await
+                    .unwrap()
+            );
+        }
+
+        // A stale active repair is taken over.
+        set_artwork_cache_state(&mut tx, vehicle_id, "repairing", 0.0, Some(-600.0)).await;
+        assert!(
+            super::try_claim_vehicle_artwork_repair(&mut *tx, vehicle_id, false)
+                .await
+                .unwrap()
+        );
+
+        // A failed repair waits for next_attempt_at unless forced.
+        set_artwork_cache_state(&mut tx, vehicle_id, "failed", 3600.0, Some(-600.0)).await;
+        assert!(
+            !super::try_claim_vehicle_artwork_repair(&mut *tx, vehicle_id, false)
+                .await
+                .unwrap()
+        );
+        assert!(
+            super::try_claim_vehicle_artwork_repair(&mut *tx, vehicle_id, true)
+                .await
+                .unwrap()
+        );
+
+        set_artwork_cache_state(&mut tx, vehicle_id, "failed", -1.0, Some(-600.0)).await;
+        assert!(
+            super::try_claim_vehicle_artwork_repair(&mut *tx, vehicle_id, false)
+                .await
+                .unwrap()
+        );
+
+        for status in ["pending", "ready"] {
+            set_artwork_cache_state(&mut tx, vehicle_id, status, 3600.0, Some(-1.0)).await;
+            assert!(
+                super::try_claim_vehicle_artwork_repair(&mut *tx, vehicle_id, false)
+                    .await
+                    .unwrap(),
+                "{status} caches are claimable"
+            );
+        }
+        tx.rollback().await.expect("rollback test fixtures");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn artwork_cache_state_schedules_backoff_by_failure_kind() {
+        use super::ArtworkCacheStateUpdate::{NoProviderArtwork, Observe, RepairFailed};
+
+        let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+            .await
+            .expect("test database");
+        let mut tx = pool.begin().await.expect("test transaction");
+        let user_id = insert_artwork_test_user(&mut tx).await;
+        let vehicle_id = insert_artwork_test_vehicle(&mut tx, user_id, "provider-backoff").await;
+
+        async fn state(
+            conn: &mut sqlx::PgConnection,
+            vehicle_id: Uuid,
+        ) -> (String, i32, i64, Option<String>) {
+            sqlx::query_as(
+                "SELECT status, attempts,
+                        EXTRACT(EPOCH FROM next_attempt_at - now())::bigint,
+                        last_error
+                 FROM riviamigo.vehicle_artwork_cache_state WHERE vehicle_id = $1",
+            )
+            .bind(vehicle_id)
+            .fetch_one(&mut *conn)
+            .await
+            .expect("cache state")
+        }
+
+        assert!(
+            super::try_claim_vehicle_artwork_repair(&mut *tx, vehicle_id, false)
+                .await
+                .unwrap()
+        );
+        // Observing an incomplete cache mid-repair keeps the repair active.
+        super::write_vehicle_artwork_cache_state(&mut *tx, vehicle_id, 2, 1, Observe)
+            .await
+            .unwrap();
+        assert_eq!(state(&mut tx, vehicle_id).await.0, "repairing");
+
+        // Real errors back off 5 min * 2^attempts, capped at 6 h.
+        for (expected_attempts, expected_delay) in [
+            (1, 300),
+            (2, 600),
+            (3, 1200),
+            (4, 2400),
+            (5, 4800),
+            (6, 9600),
+            (7, 19200),
+            (8, 21600),
+            (9, 21600),
+        ] {
+            super::write_vehicle_artwork_cache_state(&mut *tx, vehicle_id, 0, 0, RepairFailed)
+                .await
+                .unwrap();
+            let (status, attempts, delay, last_error) = state(&mut tx, vehicle_id).await;
+            assert_eq!(status, "failed");
+            assert_eq!(attempts, expected_attempts);
+            assert_eq!(delay, expected_delay);
+            assert_eq!(
+                last_error.as_deref(),
+                Some(super::ARTWORK_REPAIR_FAILED_ERROR)
+            );
+        }
+
+        // A complete cache wins over a failure report and resets the backoff.
+        super::write_vehicle_artwork_cache_state(&mut *tx, vehicle_id, 2, 2, RepairFailed)
+            .await
+            .unwrap();
+        let (status, attempts, delay, last_error) = state(&mut tx, vehicle_id).await;
+        assert_eq!((status.as_str(), attempts, delay), ("ready", 0, 0));
+        assert_eq!(last_error, None);
+
+        // No provider artwork waits a fixed 12 h with a user-facing reason.
+        super::write_vehicle_artwork_cache_state(&mut *tx, vehicle_id, 0, 0, NoProviderArtwork)
+            .await
+            .unwrap();
+        let (status, attempts, delay, last_error) = state(&mut tx, vehicle_id).await;
+        assert_eq!((status.as_str(), attempts, delay), ("failed", 0, 43_200));
+        assert_eq!(
+            last_error.as_deref(),
+            Some(super::ARTWORK_NO_PROVIDER_ARTWORK_ERROR)
+        );
+        assert!(
+            !super::try_claim_vehicle_artwork_repair(&mut *tx, vehicle_id, false)
+                .await
+                .unwrap()
+        );
+        tx.rollback().await.expect("rollback test fixtures");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn empty_provider_manifest_cleans_only_the_target_vehicle() {
+        let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+            .await
+            .expect("test database");
+        let mut tx = pool.begin().await.expect("test transaction");
+        let user_id = insert_artwork_test_user(&mut tx).await;
+        let target = insert_artwork_test_vehicle(&mut tx, user_id, "provider-target").await;
+        let sibling = insert_artwork_test_vehicle(&mut tx, user_id, "provider-sibling").await;
+
+        // Both vehicles cached the same account-wide manifest URLs.
+        let urls = [
+            ("https://rivian.com/target/side.webp", "provider-target"),
+            ("https://rivian.com/sibling/side.webp", "provider-sibling"),
+            ("https://rivian.com/preorder/side.webp", ""),
+        ];
+        for vehicle_id in [target, sibling] {
+            for (url, provider_id) in urls {
+                let metadata = if provider_id.is_empty() {
+                    serde_json::json!({ "rivian_order_id": "unassigned-order" })
+                } else {
+                    serde_json::json!({ "rivian_vehicle_id": provider_id })
+                };
+                sqlx::query(
+                    "INSERT INTO riviamigo.vehicle_images
+                     (vehicle_id, placement, design, size, url, metadata, overlays)
+                     VALUES ($1, 'side', 'light', 'large', $2, $3, '[]'::jsonb)",
+                )
+                .bind(vehicle_id)
+                .bind(url)
+                .bind(metadata)
+                .execute(&mut *tx)
+                .await
+                .expect("legacy cache entry");
+            }
+        }
+
+        super::store_vehicle_image_manifest(&mut tx, target, "provider-target", Vec::new())
+            .await
+            .expect("store empty manifest");
+
+        let urls_for = |vehicle_id| {
+            sqlx::query_scalar::<_, String>(
+                "SELECT url FROM riviamigo.vehicle_images WHERE vehicle_id = $1 ORDER BY url",
+            )
+            .bind(vehicle_id)
+        };
+        let target_urls = urls_for(target).fetch_all(&mut *tx).await.unwrap();
+        assert_eq!(target_urls, vec!["https://rivian.com/target/side.webp"]);
+        let sibling_urls = urls_for(sibling).fetch_all(&mut *tx).await.unwrap();
+        assert_eq!(
+            sibling_urls,
+            vec![
+                "https://rivian.com/preorder/side.webp",
+                "https://rivian.com/sibling/side.webp",
+                "https://rivian.com/target/side.webp",
+            ]
+        );
+        tx.rollback().await.expect("rollback test fixtures");
     }
 
     #[test]
