@@ -14,8 +14,10 @@ import { useReleaseCheckStatus } from '../../hooks/useGithubReleaseCheck';
 import { RELEASES_URL } from '../../lib/releaseCheck';
 import { useSettingsDraft, useSettingsLeaveGuard } from '../../features/settings/drafts/SettingsDraftProvider';
 import { useStagedValue } from '../../features/settings/drafts/useStagedValue';
+import { saveFailure } from '../../features/settings/drafts/saveFailure';
+import { SettingsConfirmationDialog, type SettingsConfirmation } from '../../features/settings/SettingsConfirmationDialog';
 
-const CONNECTION_QUERY_KEY = ['external-connections'] as const;
+const CONNECTION_QUERY_KEY = queryKeys.externalConnections.all;
 const GITHUB_RELEASES_ID = 'github_releases';
 /** Ownership responses carry the fuel-price and vehicle-lookup connection state. */
 const OWNERSHIP_QUERY_KEY = ['vehicles', 'ownership'] as const;
@@ -42,6 +44,7 @@ export function ExternalConnectionsSection() {
   const canManage = connections.data?.can_manage ?? false;
   const items = connections.data?.connections ?? [];
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
+  const [optionalConfirmation, setOptionalConfirmation] = React.useState<SettingsConfirmation | null>(null);
   const releaseCheckSettings = useQuery({
     queryKey: queryKeys.updateCheck.current,
     queryFn: () => api.getUpdateCheckSettings(),
@@ -73,11 +76,12 @@ export function ExternalConnectionsSection() {
                 iconLeft={<ShieldOff className="h-3.5 w-3.5" />}
                 loading={disableOptional.isPending}
                 className="shrink-0"
-                onClick={() => {
-                  if (window.confirm('Disable every optional external connection? Rivian vehicle connectivity remains configured, but weather, geocoding, basemaps, Iconify, fuel prices, and vehicle lookup will stop.')) {
-                    disableOptional.mutate();
-                  }
-                }}
+                onClick={() => setOptionalConfirmation({
+                  title: 'Disable every optional external connection?',
+                  description: 'Rivian vehicle connectivity remains configured, but weather, geocoding, basemaps, Iconify, fuel prices, and vehicle lookup will stop.',
+                  confirmLabel: 'Disable optional',
+                  run: () => disableOptional.mutateAsync(),
+                })}
               >
                 Disable optional
               </Button>
@@ -146,6 +150,9 @@ export function ExternalConnectionsSection() {
           {showReleases ? <GitHubReleasesCard canManage={canManage} connectionsLoaded={connections.isSuccess} /> : null}
           {selected ? <ConnectionCard key={selected.id} connection={selected} canManage={canManage} onUpdated={(data) => queryClient.setQueryData(CONNECTION_QUERY_KEY, data)} /> : null}
         </div>
+      ) : null}
+      {optionalConfirmation ? (
+        <SettingsConfirmationDialog confirmation={optionalConfirmation} onClose={() => setOptionalConfirmation(null)} />
       ) : null}
     </div>
   );
@@ -320,8 +327,14 @@ function ConnectionCard({
   const [isReplacingApiKey, setIsReplacingApiKey] = React.useState(false);
   const [isClearingApiKey, setIsClearingApiKey] = React.useState(false);
   const [bearerToken, setBearerToken] = React.useState('');
+  // Latest typed secrets, read after an awaited save to tell whether they changed since submit.
+  const apiKeyRef = React.useRef(apiKey);
+  apiKeyRef.current = apiKey;
+  const bearerTokenRef = React.useRef(bearerToken);
+  bearerTokenRef.current = bearerToken;
   const [message, setMessage] = React.useState<string | null>(null);
   const [previewDataUrl, setPreviewDataUrl] = React.useState<string | null>(null);
+  const [confirmation, setConfirmation] = React.useState<SettingsConfirmation | null>(null);
   // A secret counts (and is sent) only while its field is on screen: switching
   // the mode or provider away from it must not save a hidden key.
   const draftActive = draft.enabled && draft.mode !== 'disabled';
@@ -374,27 +387,47 @@ function ConnectionCard({
   const basemapProviderChanged = connection.id === 'basemap'
     && (draft.basemap_provider ?? 'auto') !== (connection.basemap_provider ?? 'auto');
 
-  /** Save for the page bar. Rejects with a short message when the user keeps the connection as it is. */
+  /**
+   * Stages a mode. Turning off a live connection is confirmed here, before it is staged, so the page
+   * save never opens a dialog on top of another one (such as the unsaved-changes prompt).
+   */
+  function chooseMode(value: ExternalConnectionMode) {
+    const stage = () => setDraft((current) => ({ ...current, mode: value, enabled: value !== 'disabled' }));
+    if (value === 'disabled' && connection.enabled) {
+      setConfirmation({
+        title: `Disable ${connection.name}?`,
+        description: connection.disabled_effect,
+        confirmLabel: 'Disable',
+        run: async () => stage(),
+      });
+      return;
+    }
+    stage();
+  }
+
+  /** Save for the page bar. Rejects with a short message when the server refuses the change. */
   async function saveDraft() {
     const submitted = draft;
-    const submittedActive = submitted.enabled && submitted.mode !== 'disabled';
-    if (!submittedActive && connection.enabled && !window.confirm(`Disable ${connection.name}? ${connection.disabled_effect}`)) {
-      throw new Error('Save cancelled.');
-    }
+    const submittedApiKey = apiKey;
+    const submittedBearerToken = bearerToken;
     const response = await update.mutateAsync({
       ...submitted,
       ...(pendingApiKey ? { api_key: pendingApiKey } : {}),
       ...(pendingBearerToken ? { bearer_token: pendingBearerToken } : {}),
       ...(isReplacingApiKey ? { clear_api_key: false } : {}),
     }).catch((error: unknown) => {
-      throw error instanceof Error && error.message ? error : new Error('Could not save connection.');
+      throw saveFailure(error, 'Could not save connection.');
     });
     const saved = response.connections.find((item) => item.id === connection.id);
-    staged.commit(saved ? toDraft(saved) : submitted);
-    setApiKey('');
-    setBearerToken('');
-    setIsReplacingApiKey(false);
-    setIsClearingApiKey(false);
+    // Edits made while the request was in flight stay staged; only the submitted part is adopted.
+    staged.commit(saved ? toDraft(saved) : submitted, submitted);
+    // A secret is cleared only if the user has not typed a new one since submitting.
+    if (apiKeyRef.current === submittedApiKey) {
+      setApiKey('');
+      setIsReplacingApiKey(false);
+      setIsClearingApiKey(false);
+    }
+    if (bearerTokenRef.current === submittedBearerToken) setBearerToken('');
   }
 
   function discardDraft() {
@@ -469,7 +502,12 @@ function ConnectionCard({
                   size="sm"
                   loading={purgeCache.isPending}
                   onClick={() => {
-                    if (window.confirm(`Purge the ${connection.name} cache? The next matching request may contact the provider again.`)) purgeCache.mutate();
+                    setConfirmation({
+                      title: `Purge the ${connection.name} cache?`,
+                      description: 'The next matching request may contact the provider again.',
+                      confirmLabel: 'Purge cache',
+                      run: () => purgeCache.mutateAsync(),
+                    });
                   }}
                 >
                   Purge cache
@@ -488,7 +526,7 @@ function ConnectionCard({
                 <SelectPicker
                   className="w-full"
                   value={draft.mode}
-                  onChange={(value) => setDraft((current) => ({ ...current, mode: value as ExternalConnectionMode, enabled: value !== 'disabled' }))}
+                  onChange={(value) => chooseMode(value as ExternalConnectionMode)}
                   aria-label={`${connection.name} mode`}
                   options={modeOptions(connection.id)}
                 />
@@ -640,6 +678,7 @@ function ConnectionCard({
           {connection.attribution_url ? <ExternalAnchor href={connection.attribution_url}>{connection.attribution ?? 'Attribution'}</ExternalAnchor> : null}
         </div>
       </CardContent>
+      {confirmation ? <SettingsConfirmationDialog confirmation={confirmation} onClose={() => setConfirmation(null)} /> : null}
     </Card>
   );
 }

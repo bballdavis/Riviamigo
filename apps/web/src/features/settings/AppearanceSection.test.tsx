@@ -156,7 +156,7 @@ describe('AppearanceSection staged draft', () => {
     await waitFor(() => expect(bar()).not.toBeInTheDocument());
   });
 
-  it('Save with both a mode and a theme change sends the staged mode with the theme payload', async () => {
+  it('Save with both a mode and a theme change sends one theme save that carries the mode and skips the legacy mode save', async () => {
     renderSection();
     fireEvent.click(await themesReady());
     fireEvent.change(screen.getByLabelText('Appearance mode'), { target: { value: 'light' } });
@@ -166,8 +166,25 @@ describe('AppearanceSection staged draft', () => {
       { schemaVersion: 2, mode: 'light', selection: { kind: 'builtin', themeId: 'rad' } },
       '"theme-preferences-1"',
     ));
-    await waitFor(() => expect(mocks.api.updateThemePreferences).toHaveBeenCalledWith({ mode: 'light', palette: 'classic' }));
     await waitFor(() => expect(bar()).not.toBeInTheDocument());
+    // The legacy endpoint would reset the just-saved selection to the pre-save palette.
+    expect(mocks.api.updateThemePreferences).not.toHaveBeenCalled();
+    expect(mocks.themeClient.updatePreferences).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText('Appearance mode')).toHaveValue('light');
+    expect(screen.getByRole('radio', { name: /^RAD/ })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('a combined save keeps the bar open when the theme save fails and does not run the legacy mode save', async () => {
+    mocks.themeClient.updatePreferences.mockRejectedValueOnce(new Error('HTTP 412'));
+    renderSection();
+    fireEvent.click(await themesReady());
+    fireEvent.change(screen.getByLabelText('Appearance mode'), { target: { value: 'light' } });
+    fireEvent.click(saveButton());
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The theme changed elsewhere or could not be saved. Refresh and try again.');
+    expect(bar()).toBeInTheDocument();
+    expect(mocks.api.updateThemePreferences).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Appearance mode')).toHaveValue('light');
   });
 
   it('a failed theme save keeps the bar and the staged theme open with a user-facing message', async () => {

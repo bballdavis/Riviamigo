@@ -135,7 +135,7 @@ export function VehicleBatteryEditor({ vehicle, onDone }: { vehicle: Vehicle; on
     mutationFn: ({ vehicleId, name }: { vehicleId: string; name: string }) =>
       api.updateVehicleName(vehicleId, name),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
     },
   });
 
@@ -288,7 +288,7 @@ export function VehicleBatteryEditor({ vehicle, onDone }: { vehicle: Vehicle; on
           </label>
         </div>
         {capacityGenerationMismatch && (
-          <p role="note" className="text-xs text-warning">
+          <p role="note" className="text-xs text-status-warning">
             Your saved capacity ({vehicle.battery_capacity_kwh} kWh) matches a {BATTERY_GEN_LABELS[capacityGenerationMismatch.saved]} pack; your vehicle&apos;s VIN indicates {BATTERY_GEN_LABELS[capacityGenerationMismatch.detected]}.
           </p>
         )}

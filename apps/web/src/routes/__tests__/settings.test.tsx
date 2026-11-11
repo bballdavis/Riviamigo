@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dashboardSearchSchema } from '../dashboardSearch';
@@ -150,6 +150,8 @@ vi.mock('@riviamigo/hooks', () => ({
       all: ['vehicles'],
       status: (vehicleId: string) => ['vehicles', 'status', vehicleId],
     },
+    places: { all: ['places'] },
+    externalConnections: { all: ['external-connections'] },
   },
   themeClient: {
     getCatalog: vi.fn().mockResolvedValue({ builtInThemes: ['classic', 'rad'], customThemes: [] }),
@@ -443,6 +445,14 @@ vi.mock('@riviamigo/hooks', () => ({
     createDemoVehicle: vi
       .fn()
       .mockResolvedValue({ ok: true, vehicle_id: 'demo-v1', created: true }),
+    deleteVehicle: vi.fn().mockResolvedValue({ ok: true, default_vehicle_id: 'v1' }),
+    setDefaultVehicle: vi.fn().mockResolvedValue({ default_vehicle_id: 'v2' }),
+    listVehicleMembers: vi.fn().mockResolvedValue([]),
+    listVehicleInvites: vi.fn().mockResolvedValue([]),
+    addVehicleMember: vi.fn().mockResolvedValue({ invite_created: false, invite_token: null }),
+    updateVehicleMember: vi.fn().mockResolvedValue(undefined),
+    removeVehicleMember: vi.fn().mockResolvedValue(undefined),
+    revokeVehicleInvite: vi.fn().mockResolvedValue(undefined),
     refreshDemoVehicle: vi.fn().mockResolvedValue({
       ok: true,
       vehicle_id: 'demo-v1',
@@ -621,7 +631,32 @@ vi.mock('lucide-react', () => ({
 
 import { SettingsContent } from '../settings';
 
-function renderSettings() {
+type SettingsSearch = { section?: string };
+type InitialSection = NonNullable<NonNullable<Parameters<typeof SettingsContent>[0]>['initialSection']>;
+
+/** Sets the Settings route search from outside the page, as a sidebar link or back/forward would. */
+let applyRouteSearch: ((search: SettingsSearch) => void) | null = null;
+
+/**
+ * Stands in for the Settings route: the open section is whatever the search names. Navigations the page
+ * makes through `navigate` update that search, so a section switch re-renders the new section as it does
+ * in the app.
+ */
+function SettingsRouteHarness({ initialSearch }: { initialSearch: SettingsSearch }) {
+  const [search, setSearch] = React.useState<SettingsSearch>(initialSearch);
+  React.useEffect(() => {
+    applyRouteSearch = setSearch;
+    mockNavigate.mockImplementation((options: { to: string; search?: SettingsSearch }) => {
+      if (options.to === '/settings') setSearch(options.search ?? {});
+    });
+    return () => {
+      applyRouteSearch = null;
+    };
+  }, []);
+  return <SettingsContent {...(search.section ? { initialSection: search.section as InitialSection } : {})} />;
+}
+
+function renderSettings(initialSearch: SettingsSearch = {}) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -630,9 +665,13 @@ function renderSettings() {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <SettingsContent />
+      <SettingsRouteHarness initialSearch={initialSearch} />
     </QueryClientProvider>
   );
+}
+
+function navigateSettingsRoute(search: SettingsSearch) {
+  act(() => applyRouteSearch?.(search));
 }
 
 function clickSettingsSection(label: string) {
@@ -809,6 +848,51 @@ describe('Settings page', () => {
     renderSettings();
 
     expect(screen.getByRole('option', { name: 'Backups' })).toBeInTheDocument();
+  });
+
+  it('shows Vehicles for a plain /settings navigation after another section was open', () => {
+    renderSettings({ section: 'account' });
+    expect(screen.getByText('Sign Out')).toBeInTheDocument();
+
+    navigateSettingsRoute({});
+
+    expect(screen.getByLabelText('Settings section')).toHaveValue('vehicles');
+    expect(screen.queryByText('Sign Out')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Vehicle' })).toBeInTheDocument();
+  });
+
+  it('follows the section named by the URL on back and forward navigation', () => {
+    renderSettings({ section: 'places' });
+    expect(screen.getByLabelText('Settings section')).toHaveValue('places');
+
+    navigateSettingsRoute({ section: 'account' });
+    expect(screen.getByLabelText('Settings section')).toHaveValue('account');
+    expect(screen.getByText('Sign Out')).toBeInTheDocument();
+
+    navigateSettingsRoute({ section: 'places' });
+    expect(screen.getByLabelText('Settings section')).toHaveValue('places');
+    expect(screen.queryByText('Sign Out')).not.toBeInTheDocument();
+  });
+
+  it('keeps the chosen section open after a sidebar switch with no unsaved edits', () => {
+    renderSettings();
+
+    clickSettingsSection('Account');
+    expect(screen.getByText('Sign Out')).toBeInTheDocument();
+
+    clickSettingsSection('Places');
+    expect(screen.getByLabelText('Settings section')).toHaveValue('places');
+    expect(screen.queryByText('Sign Out')).not.toBeInTheDocument();
+    expect(mockNavigate).toHaveBeenLastCalledWith({ to: '/settings', search: { section: 'places' } });
+  });
+
+  it('selecting the section that is already open does not navigate', () => {
+    renderSettings({ section: 'account' });
+
+    clickSettingsSection('Account');
+
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(screen.getByText('Sign Out')).toBeInTheDocument();
   });
 
   it('renders the connected vehicle display name', () => {
@@ -1171,7 +1255,7 @@ describe('Settings page', () => {
     await waitFor(() => {
       expect(settingsMocks.auth.setActiveVehicleId).toHaveBeenCalledWith('demo-v1');
     });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles'], exact: true });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'status', 'demo-v1'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'health', 'demo-v1'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'images', 'demo-v1'] });
@@ -1247,6 +1331,87 @@ describe('Settings page', () => {
         target_tire_pressure_psi: 46,
       });
     });
+  });
+
+  it('refreshes only the vehicle list after the default vehicle changes', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.vehicles = [
+      ...settingsMocks.vehicles,
+      { ...settingsMocks.vehicles[0]!, id: 'v2', display_name: 'Weekend Car', rivian_vehicle_id: 'rivian-2' },
+    ];
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
+    renderSettings();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set Weekend Car as default vehicle' }));
+
+    await waitFor(() => expect(hooks.api.setDefaultVehicle).toHaveBeenCalledWith('v2'));
+    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles'], exact: true }));
+    // A prefix match on ['vehicles'] would also refetch every vehicle's status, health, images, and ownership.
+    const prefixMatches = invalidateSpy.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["vehicles"]' && !filters?.exact);
+    expect(prefixMatches).toHaveLength(0);
+    invalidateSpy.mockRestore();
+  });
+
+  it('adds a member from the sharing panel and keeps the invite token on the page', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.auth.accessToken = 'session-token';
+    vi.mocked(hooks.api.addVehicleMember).mockResolvedValueOnce({ invite_created: true, invite_token: 'invite-token-123' } as never);
+    renderSettings();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage sharing for Adventure Truck' }));
+    fireEvent.change(screen.getByPlaceholderText('user@example.com'), { target: { value: 'friend@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Member' }));
+
+    await waitFor(() => expect(hooks.api.addVehicleMember).toHaveBeenCalledWith('v1', { email: 'friend@example.com', role: 'viewer' }));
+    expect(await screen.findByText('invite-token-123')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('user@example.com')).toHaveValue('');
+  });
+
+  it('lists the members of an expanded vehicle and removes one from the sharing panel', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.auth.accessToken = 'session-token';
+    vi.mocked(hooks.api.listVehicleMembers).mockResolvedValueOnce([
+      { user_id: 'u2', email: 'friend@example.com', role: 'viewer', is_default: false, created_at: '2026-05-04T12:00:00Z' },
+    ] as never);
+    renderSettings();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage sharing for Adventure Truck' }));
+    expect(await screen.findByText('friend@example.com')).toBeInTheDocument();
+    expect(hooks.api.listVehicleMembers).toHaveBeenCalledWith('v1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(hooks.api.removeVehicleMember).toHaveBeenCalledWith('v1', 'u2'));
+  });
+
+  it('deletes a vehicle only after DELETE is typed in a labelled dialog', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    renderSettings();
+
+    fireEvent.click(screen.getByLabelText('Delete Adventure Truck'));
+    const dialog = screen.getByRole('dialog', { name: 'Delete Adventure Truck?' });
+    const deleteButton = within(dialog).getByRole('button', { name: 'Delete Vehicle' });
+    expect(deleteButton).toBeDisabled();
+
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Type DELETE to confirm' }), { target: { value: 'DELETE' } });
+    expect(deleteButton).toBeEnabled();
+    fireEvent.click(deleteButton);
+
+    await waitFor(() => expect(hooks.api.deleteVehicle).toHaveBeenCalledWith('v1'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('cancels the vehicle delete dialog without deleting, even after DELETE is typed', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    renderSettings();
+
+    fireEvent.click(screen.getByLabelText('Delete Adventure Truck'));
+    const dialog = screen.getByRole('dialog', { name: 'Delete Adventure Truck?' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Type DELETE to confirm' }), { target: { value: 'DELETE' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(hooks.api.deleteVehicle).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Delete Adventure Truck')).toBeInTheDocument();
   });
 
   it('opens and edits every dashboard via links the /d/$slug route accepts', () => {

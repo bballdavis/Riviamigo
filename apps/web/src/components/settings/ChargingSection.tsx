@@ -4,6 +4,7 @@ import { Badge, Button, Card, CardContent, CardHeader, CardTitle, EmptyState } f
 import { AlertCircle, Zap } from 'lucide-react';
 import { useSettingsDraft } from '../../features/settings/drafts/SettingsDraftProvider';
 import { useStagedValue } from '../../features/settings/drafts/useStagedValue';
+import { saveFailure } from '../../features/settings/drafts/saveFailure';
 
 type CostMode = 'automatic' | 'free';
 /** Staged cost mode keyed by network vendor. */
@@ -56,8 +57,7 @@ function VehicleChargingSection() {
       try {
         await updatePreference.mutateAsync(change);
       } catch (error) {
-        const detail = error instanceof Error && error.message ? error.message : 'Charging policy could not be saved.';
-        throw new Error(`${detail} Try again.`, { cause: error });
+        throw saveFailure(error, 'Charging policy could not be saved. Try again.');
       }
     }
     staged.commit({ ...savedModes, ...submitted }, submitted);
