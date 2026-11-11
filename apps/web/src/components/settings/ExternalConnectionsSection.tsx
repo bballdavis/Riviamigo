@@ -321,6 +321,11 @@ function ConnectionCard({
   const [isReplacingApiKey, setIsReplacingApiKey] = React.useState(false);
   const [isClearingApiKey, setIsClearingApiKey] = React.useState(false);
   const [bearerToken, setBearerToken] = React.useState('');
+  // Latest typed secrets, read after an awaited save to tell whether they changed since submit.
+  const apiKeyRef = React.useRef(apiKey);
+  apiKeyRef.current = apiKey;
+  const bearerTokenRef = React.useRef(bearerToken);
+  bearerTokenRef.current = bearerToken;
   const [message, setMessage] = React.useState<string | null>(null);
   const [previewDataUrl, setPreviewDataUrl] = React.useState<string | null>(null);
   // A secret counts (and is sent) only while its field is on screen: switching
@@ -378,6 +383,8 @@ function ConnectionCard({
   /** Save for the page bar. Rejects with a short message when the user keeps the connection as it is. */
   async function saveDraft() {
     const submitted = draft;
+    const submittedApiKey = apiKey;
+    const submittedBearerToken = bearerToken;
     const submittedActive = submitted.enabled && submitted.mode !== 'disabled';
     if (!submittedActive && connection.enabled && !window.confirm(`Disable ${connection.name}? ${connection.disabled_effect}`)) {
       throw new Error('Save cancelled.');
@@ -391,11 +398,15 @@ function ConnectionCard({
       throw saveFailure(error, 'Could not save connection.');
     });
     const saved = response.connections.find((item) => item.id === connection.id);
-    staged.commit(saved ? toDraft(saved) : submitted);
-    setApiKey('');
-    setBearerToken('');
-    setIsReplacingApiKey(false);
-    setIsClearingApiKey(false);
+    // Edits made while the request was in flight stay staged; only the submitted part is adopted.
+    staged.commit(saved ? toDraft(saved) : submitted, submitted);
+    // A secret is cleared only if the user has not typed a new one since submitting.
+    if (apiKeyRef.current === submittedApiKey) {
+      setApiKey('');
+      setIsReplacingApiKey(false);
+      setIsClearingApiKey(false);
+    }
+    if (bearerTokenRef.current === submittedBearerToken) setBearerToken('');
   }
 
   function discardDraft() {
