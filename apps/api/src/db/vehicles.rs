@@ -5,6 +5,12 @@ use crate::{
 use sqlx::PgPool;
 use uuid::Uuid;
 
+/// Demo vehicles are local fixtures keyed with a `demo-` Rivian vehicle ID;
+/// they never correspond to a real Rivian account vehicle.
+pub fn is_demo_vehicle_key(value: &str) -> bool {
+    value.starts_with("demo-")
+}
+
 /// Require that a session user belongs to a vehicle.
 ///
 /// This checks `vehicle_memberships`, not `vehicles.user_id`; role checks must
