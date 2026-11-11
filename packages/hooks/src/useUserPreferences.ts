@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { MapStylePreference, UserPreferencesResponse } from '@riviamigo/types';
+import type { MapStylePreference, OverviewViewPreference, UserPreferencesResponse } from '@riviamigo/types';
 import { api } from './api';
 import { useAuthReady } from './useAuthState';
 import { queryKeys } from './queryKeys';
@@ -54,6 +54,31 @@ export function useUpdateOwnershipPreference() {
       return { previous };
     },
     onError: (_error, _enabled, context) => {
+      if (context?.previous) queryClient.setQueryData(queryKeys.unitPreferences.current, context.previous);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.unitPreferences.current });
+    },
+  });
+}
+
+/** Remember the Vehicle Overview view (cluster or map) for the signed-in user. */
+export function useUpdateOverviewView() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (view: OverviewViewPreference) =>
+      api.apiFetch<{ overview_view: OverviewViewPreference }>('PUT', '/v1/auth/preferences/overview-view', {
+        overview_view: view,
+      }),
+    onMutate: async (view) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.unitPreferences.current });
+      const previous = queryClient.getQueryData<UserPreferencesResponse>(queryKeys.unitPreferences.current);
+      if (previous) {
+        queryClient.setQueryData(queryKeys.unitPreferences.current, { ...previous, overview_view: view });
+      }
+      return { previous };
+    },
+    onError: (_error, _view, context) => {
       if (context?.previous) queryClient.setQueryData(queryKeys.unitPreferences.current, context.previous);
     },
     onSettled: () => {

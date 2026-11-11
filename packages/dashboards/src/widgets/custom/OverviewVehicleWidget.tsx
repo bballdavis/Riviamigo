@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Battery, Car, CheckCircle2, CircleAlert, Gauge, LocateFixed, Lock, Maximize2, Minimize2, Package, PackageOpen, RadioTower, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
-import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
+import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useUpdateOverviewView, useUserPreferences, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
 import { formatMiles } from '@riviamigo/ui/lib/utils';
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI, formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
 import { FrunkIcon, LiftgateIcon, Tooltip } from '@riviamigo/ui/primitives';
@@ -76,6 +76,16 @@ function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ct
   const statIds = resolveOverviewStatIds(instance.options?.stats);
   const statData = useOverviewStatData(statIds, vehicleId ?? null);
   useUnitPreferencesVersion();
+  // The cluster/map choice is saved to the account so it follows the user
+  // across sessions and devices. A local copy keeps the toggle instant while
+  // the save is in flight or if it fails.
+  const savedView = useUserPreferences().data?.overview_view === 'map' ? 'map' : 'cluster';
+  const updateOverviewView = useUpdateOverviewView();
+  const [chosenView, setChosenView] = useState<OverviewView | null>(null);
+  const changeView = (next: OverviewView) => {
+    setChosenView(next);
+    updateOverviewView.mutate(next);
+  };
 
   return (
     <CurrentVehicleStatePanel
@@ -88,6 +98,8 @@ function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ct
       statIds={statIds}
       statData={statData}
       mapOptions={resolveOverviewMapOptions(instance.options)}
+      view={chosenView ?? savedView}
+      onViewChange={changeView}
     />
   );
 }
@@ -102,6 +114,8 @@ export function CurrentVehicleStatePanel({
   statIds,
   statData,
   mapOptions,
+  view: controlledView,
+  onViewChange,
 }: {
   status: VehicleStatus | null | undefined;
   images?: VehicleImages | null | undefined;
@@ -115,8 +129,16 @@ export function CurrentVehicleStatePanel({
   statData?: OverviewStatData;
   /** Location map settings. Omitted or disabled, the panel offers no cluster/map toggle. */
   mapOptions?: OverviewMapOptions | undefined;
+  /** Controlled cluster/map view (the widget saves it per user); uncontrolled starts on the cluster. */
+  view?: OverviewView | undefined;
+  onViewChange?: ((view: OverviewView) => void) | undefined;
 }) {
-  const [view, setView] = useState<OverviewView>('cluster');
+  const [uncontrolledView, setUncontrolledView] = useState<OverviewView>('cluster');
+  const view = controlledView ?? uncontrolledView;
+  const setView = (next: OverviewView) => {
+    if (onViewChange) onViewChange(next);
+    else setUncontrolledView(next);
+  };
   const mapAvailable = mapOptions?.enabled === true;
   const showMap = mapAvailable && view === 'map';
   const [mapExpandedPreference, setMapExpanded] = useState(false);
@@ -300,7 +322,7 @@ export function CurrentVehicleStatePanel({
               aria-pressed={mapExpanded}
               title={mapExpanded ? 'Collapse map' : 'Expand map'}
               onClick={() => setMapExpanded((expanded) => !expanded)}
-              className="absolute right-0 top-0 z-20 inline-flex h-11 w-11 items-center justify-center rounded-bl-xl border-b border-l border-border bg-bg-elevated/95 text-fg-secondary shadow-sm backdrop-blur transition-colors hover:text-accent focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent @min-[34rem]/overview:h-8 @min-[34rem]/overview:w-8 @min-[34rem]/overview:rounded-bl-lg"
+              className="absolute right-0 top-0 z-20 inline-flex h-11 w-11 items-center justify-center rounded-bl-xl border-b border-l border-border/60 bg-bg-elevated/50 text-fg-secondary backdrop-blur-sm transition-colors hover:bg-bg-elevated/85 hover:text-accent focus-visible:bg-bg-elevated/85 focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent @min-[34rem]/overview:h-8 @min-[34rem]/overview:w-8 @min-[34rem]/overview:rounded-bl-lg"
             >
               {mapExpanded ? <Minimize2 className="h-4 w-4" aria-hidden="true" /> : <Maximize2 className="h-4 w-4" aria-hidden="true" />}
             </button>

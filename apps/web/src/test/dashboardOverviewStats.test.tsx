@@ -13,6 +13,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@riviamigo/hooks')>();
   return {
     ...actual,
+    useUpdateOverviewView: () => ({ mutate: vi.fn() }),
     useAuth: () => ({ defaultVehicleId: 'vehicle-1' }),
     useMetricCatalog: () => ({ data: [] }),
     useBatteryHealth: () => ({ data: { battery_health_pct: 93, usable_now_kwh: 120 } }),
