@@ -64,7 +64,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
 import { DashboardRenderer } from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 import { WidgetEditForm } from '../../../../packages/dashboards/src/editor/WidgetEditForm';
-import { resolveOverviewMapOptions } from '../../../../packages/dashboards/src/widgets/custom/overviewMap';
+import { resolveOverviewMapOptions, resolveVehicleFacingDeg } from '../../../../packages/dashboards/src/widgets/custom/overviewMap';
 
 type Widget = DashboardConfig['widgets'][number];
 
@@ -187,6 +187,62 @@ describe('vehicle overview location map', () => {
     }
     fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));
     expect(screen.getByTestId('overview-location-panel').className).toContain('@min-[34rem]/overview:border-r-0');
+  });
+});
+
+describe('vehicle overview map expansion', () => {
+  it('collapses the SoC panel to its battery rail and gives the map the freed width', () => {
+    renderOverview();
+    fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));
+    const layout = screen.getByTestId('overview-layout');
+    expect(layout.className).toContain('@min-[34rem]/overview:grid-cols-[11.25rem_minmax(0,1fr)_8.75rem]');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand map' }));
+    expect(layout).toHaveAttribute('data-map-expanded', 'true');
+    expect(layout.className).toContain('@min-[34rem]/overview:grid-cols-[3.75rem_minmax(0,1fr)_16.25rem]');
+    expect(layout.className).toContain('@min-[58rem]/overview:grid-cols-[5.75rem_minmax(22rem,1fr)_28.25rem]');
+    expect(layout.className).not.toContain('11.25rem');
+    expect(screen.getByTestId('overview-soc-panel')).toHaveAttribute('data-collapsed', 'true');
+    expect(screen.getByTestId('overview-soc-details').className).toContain('@min-[34rem]/overview:hidden');
+    // The battery rail stays, and still says the charge level.
+    expect(screen.getByRole('img', { name: 'State of charge 64%' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Collapse map' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('overview-image-stage')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse map' }));
+    expect(layout).not.toHaveAttribute('data-map-expanded');
+    expect(screen.getByTestId('overview-soc-details').className).not.toContain('hidden');
+  });
+
+  it('returns to the normal layout when switching back to the cluster', () => {
+    renderOverview();
+    fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand map' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Vehicle cluster' }));
+    expect(screen.getByTestId('overview-layout')).not.toHaveAttribute('data-map-expanded');
+    expect(screen.getByTestId('overview-soc-panel')).not.toHaveAttribute('data-collapsed');
+    expect(screen.getByTestId('overview-stats').children).toHaveLength(5);
+  });
+});
+
+describe('resolveVehicleFacingDeg', () => {
+  it('prefers the server facing over the stored course while parked', () => {
+    vehicleStatus.current = { ...vehicleStatus.current, heading_deg: -88.6, facing_deg: 91.4, speed_mph: 0, gear_status: 'park' };
+    renderOverview();
+    fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));
+    expect(screen.getByTestId('trip-map')).toHaveAttribute('data-rotation', '91.4');
+  });
+
+  it('uses the live course while moving, turned around in reverse', () => {
+    expect(resolveVehicleFacingDeg({ heading_deg: 10, speed_mph: 12, gear_status: 'drive', facing_deg: 200 } as never)).toBe(10);
+    expect(resolveVehicleFacingDeg({ heading_deg: 10, speed_mph: 4, gear_status: 'reverse', facing_deg: 200 } as never)).toBe(190);
+    expect(resolveVehicleFacingDeg({ heading_deg: -90, speed_mph: 30, gear_status: 'drive' } as never)).toBe(270);
+  });
+
+  it('falls back to the course, and to nothing without either', () => {
+    expect(resolveVehicleFacingDeg({ heading_deg: 45, speed_mph: 0 } as never)).toBe(45);
+    expect(resolveVehicleFacingDeg({ heading_deg: null, facing_deg: null } as never)).toBeNull();
+    expect(resolveVehicleFacingDeg(null)).toBeNull();
   });
 });
 
