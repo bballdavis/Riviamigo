@@ -21,7 +21,6 @@ import {
 } from '@riviamigo/ui/lib/utils';
 import {
   formatAppDate,
-  formatAppDateTime,
   getAppTimezone,
   setAppTimezone,
 } from '@riviamigo/ui/lib/dateTime';
@@ -43,6 +42,7 @@ import { ChargingSection } from '../../components/settings/ChargingSection';
 import { AppearanceSection } from './AppearanceSection';
 import { SettingsConfirmationDialog } from './SettingsConfirmationDialog';
 import { UnitsSection } from './UnitsSection';
+import { ApiAccessSection } from './ApiAccessSection';
 import { SettingsDraftProvider, useSettingsDraft, useSettingsLeaveGuard } from './drafts/SettingsDraftProvider';
 import { useStagedValue } from './drafts/useStagedValue';
 import { saveFailure } from './drafts/saveFailure';
@@ -60,7 +60,7 @@ import {
   getRivianCredentialRenewalNotice,
 } from '../../lib/rivianCredentialRenewal';
 import {
-  Car, ChartLine, CircleDollarSign, Clipboard, Database, DatabaseBackup, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Ruler, Search, ShieldCheck, Star, Trash2, Users, Zap,
+  Car, ChartLine, CircleDollarSign, Clipboard, Database, DatabaseBackup, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Ruler, ShieldCheck, Star, Trash2, Users, Zap,
 } from 'lucide-react';
 
 type SettingsSection = 'vehicles' | 'dashboards' | 'charts' | 'units' | 'places' | 'charging' | 'ownership' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account' | 'authentication';
@@ -1345,153 +1345,24 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
             {activeSection === 'charts' && <ChartManagerSection />}
 
             {activeSection === 'api' && (
-              <div className="flex flex-col gap-5">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Integration Keys</CardTitle>
-                  </CardHeader>
-                  <CardContent className="grid gap-4">
-                    <p className="text-sm text-fg-tertiary">
-                      Integration keys are read-only and limited to one vehicle. Dashboard, account, and administrative changes stay in the signed-in app.
-                    </p>
-                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_13rem_auto] md:items-end">
-                      <label className="grid gap-1">
-                        <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Name</span>
-                        <input
-                          value={apiKeyName}
-                          onChange={(event) => setApiKeyName(event.target.value)}
-                          className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                        />
-                      </label>
-                      <label className="grid gap-1">
-                        <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Vehicle</span>
-                        <SelectPicker
-                          className="w-full"
-                          value={apiKeyVehicleId}
-                          onChange={setApiKeyVehicleId}
-                          aria-label="API key vehicle"
-                          options={vehicles?.map((vehicle) => ({ value: vehicle.id, label: vehicle.display_name })) ?? []}
-                        />
-                      </label>
-                      <Button
-                        size="sm"
-                        iconLeft={<KeyRound className="h-3.5 w-3.5" />}
-                        loading={createApiKey.isPending}
-                        disabled={!apiKeyVehicleId || !apiKeyName.trim()}
-                        onClick={() => createApiKey.mutate()}
-                      >
-                        Create
-                      </Button>
-                    </div>
-
-                    {createdKey && (
-                      <div className="rounded-lg border border-accent/40 bg-accent/10 p-3">
-                        <div className="mb-2 flex items-center justify-between gap-3">
-                          <p className="text-sm font-medium text-fg">New key</p>
-                          <Button variant="secondary" size="sm" iconLeft={<Clipboard className="h-3.5 w-3.5" />} onClick={copyCreatedKey}>
-                            Copy
-                          </Button>
-                        </div>
-                        <p className="break-all font-mono text-xs text-fg">{createdKey}</p>
-                        <p className="mt-2 text-xs text-fg-tertiary">This is shown once. Store it before leaving this section.</p>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Issued Keys</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    {apiKeys.isError && (
-                      <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-status-danger/30 bg-status-danger/10 p-3 text-sm text-fg">
-                        <span>Could not load integration keys. The server logged the request details; retry after checking the API migration status.</span>
-                        <Button variant="secondary" size="sm" onClick={() => apiKeys.refetch()}>Retry</Button>
-                      </div>
-                    )}
-                    {(apiKeys.data?.length ?? 0) === 0 && (
-                      <p className="text-sm text-fg-tertiary">No API keys issued yet.</p>
-                    )}
-                    <div className="divide-y divide-border">
-                      {apiKeys.data?.map((key) => (
-                        <div key={key.id} className="grid gap-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <p className="text-sm font-medium text-fg">{key.name}</p>
-                              <Badge variant={key.revoked_at ? 'default' : key.access_level_state === 'legacy_unmigrated' ? 'warning' : 'success'}>
-                                {key.revoked_at ? 'revoked' : key.access_level_state === 'legacy_unmigrated' ? `${key.access_level} · migrate` : key.access_level}
-                              </Badge>
-                            </div>
-                            <p className="mt-1 font-mono text-xs text-fg-tertiary">{key.id}</p>
-                            <p className="mt-1 text-xs text-fg-tertiary">
-                              Created {formatAppDateTime(key.created_at)}
-                              {key.last_used_at ? ` / Last used ${formatAppDateTime(key.last_used_at)}` : ' / Never used'}
-                            </p>
-                          </div>
-                          {!key.revoked_at && (
-                            <Button
-                              variant="danger"
-                              size="sm"
-                              iconLeft={<Trash2 className="h-3.5 w-3.5" />}
-                              loading={revokeApiKey.isPending}
-                              onClick={() => revokeApiKey.mutate(key.id)}
-                            >
-                              Revoke
-                            </Button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Integration Reference</CardTitle>
-                  </CardHeader>
-                  <CardContent className="grid gap-3">
-                    <div className="relative">
-                      <label className="sr-only" htmlFor="api-endpoint-search">Search API endpoints</label>
-                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-tertiary" />
-                      <input
-                        id="api-endpoint-search"
-                        value={apiCatalogSearch}
-                        onChange={(event) => setApiCatalogSearch(event.target.value)}
-                        placeholder="Search API endpoints"
-                        className="h-9 w-full rounded-lg border border-border bg-bg-surface pl-9 pr-3 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-accent"
-                      />
-                    </div>
-
-                    {apiCatalog.isLoading && <p className="text-sm text-fg-tertiary">Loading API endpoints...</p>}
-                    {apiCatalog.isError && (
-                      <div className="flex items-center justify-between gap-3 rounded-lg border border-status-danger/30 bg-status-danger/10 p-3 text-sm text-fg">
-                        <span>Could not load the API endpoint list.</span>
-                        <Button variant="secondary" size="sm" onClick={() => apiCatalog.refetch()}>Retry</Button>
-                      </div>
-                    )}
-                    {!apiCatalog.isLoading && !apiCatalog.isError && (
-                      <>
-                        <p className="text-xs text-fg-tertiary">
-                          Showing {filteredApiEndpoints.length} of {apiCatalog.data?.endpoints.length ?? 0} endpoints
-                        </p>
-                        {filteredApiEndpoints.length > 0 ? (
-                          <div className="divide-y divide-border rounded-lg border border-border">
-                            {filteredApiEndpoints.map((endpoint) => (
-                              <div key={`${endpoint.method}-${endpoint.path}`} className="flex items-center gap-3 px-3 py-2.5">
-                                <Badge variant="default">{endpoint.method}</Badge>
-                                <span className="min-w-0 break-all font-mono text-xs text-fg">{endpoint.path}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-sm text-fg-tertiary">No endpoints match your search.</p>
-                        )}
-                      </>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
+              <ApiAccessSection
+                vehicles={vehicles}
+                apiKeys={apiKeys}
+                apiCatalog={apiCatalog}
+                apiKeyName={apiKeyName}
+                onApiKeyNameChange={setApiKeyName}
+                apiKeyVehicleId={apiKeyVehicleId}
+                onApiKeyVehicleIdChange={setApiKeyVehicleId}
+                createdKey={createdKey}
+                onCopyCreatedKey={copyCreatedKey}
+                createPending={createApiKey.isPending}
+                onCreate={() => createApiKey.mutate()}
+                revokePending={revokeApiKey.isPending}
+                onRevoke={(keyId) => revokeApiKey.mutate(keyId)}
+                apiCatalogSearch={apiCatalogSearch}
+                onApiCatalogSearchChange={setApiCatalogSearch}
+                filteredApiEndpoints={filteredApiEndpoints}
+              />
             )}
 
             {activeSection === 'units' && (
