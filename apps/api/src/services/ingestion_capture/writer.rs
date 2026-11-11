@@ -1,21 +1,36 @@
 //! Batch writer: drains accepted records, enforces the per-capture event cap,
 //! and inserts each batch in one statement.
 
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use sqlx::PgPool;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use super::{registry::Record, Kind, MAX_EVENTS_PER_CAPTURE};
+use super::{registry::Record, Kind, CAPTURE_DURATION, MAX_EVENTS_PER_CAPTURE};
 
 const BATCH_ROWS: usize = 200;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
+/// A capture whose records stopped arriving this long ago is forgotten. A
+/// capture runs for at most [`CAPTURE_DURATION`], so this only drops finished
+/// ones; a late record re-seeds its count from the database.
+const LEDGER_IDLE: Duration =
+    Duration::from_secs(CAPTURE_DURATION.num_seconds().unsigned_abs() + 15 * 60);
+
+#[derive(Debug)]
+struct CapEntry {
+    stored: u64,
+    truncated: bool,
+    touched: Instant,
+}
 
 /// Per-capture stored-row accounting for the writer.
 #[derive(Debug, Default)]
 pub(super) struct CapLedger {
-    counts: HashMap<Uuid, (u64, bool)>,
+    counts: HashMap<Uuid, CapEntry>,
 }
 
 pub(super) enum Admit {
@@ -31,20 +46,40 @@ impl CapLedger {
     }
 
     pub(super) fn seed(&mut self, capture_id: Uuid, stored: u64) {
-        self.counts.entry(capture_id).or_insert((stored, false));
+        self.counts.entry(capture_id).or_insert(CapEntry {
+            stored,
+            truncated: false,
+            touched: Instant::now(),
+        });
     }
 
     pub(super) fn admit(&mut self, capture_id: Uuid, cap: u64) -> Admit {
-        let (count, truncated) = self.counts.entry(capture_id).or_insert((0, false));
-        if *count < cap {
-            *count += 1;
+        let entry = self.counts.entry(capture_id).or_insert(CapEntry {
+            stored: 0,
+            truncated: false,
+            touched: Instant::now(),
+        });
+        entry.touched = Instant::now();
+        if entry.stored < cap {
+            entry.stored += 1;
             Admit::Store
-        } else if !*truncated {
-            *truncated = true;
+        } else if !entry.truncated {
+            entry.truncated = true;
             Admit::Truncate
         } else {
             Admit::Drop
         }
+    }
+
+    /// Forget captures that have received no records for `idle` by `now`.
+    pub(super) fn prune(&mut self, now: Instant, idle: Duration) {
+        self.counts
+            .retain(|_, entry| now.saturating_duration_since(entry.touched) < idle);
+    }
+
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.counts.len()
     }
 }
 
@@ -64,6 +99,7 @@ pub(super) async fn run_writer(pool: PgPool, mut rx: mpsc::Receiver<Record>) {
             }
             _ = flush.tick() => {
                 if batch.is_empty() {
+                    ledger.prune(Instant::now(), LEDGER_IDLE);
                     continue;
                 }
             }

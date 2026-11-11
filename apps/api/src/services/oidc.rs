@@ -18,6 +18,7 @@ use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::sync::{LazyLock, Mutex};
 use std::{future::Future, pin::Pin};
 use url::Url;
 
@@ -332,10 +333,42 @@ fn validate_client_configuration(
 /// the discovered `issuer` with the requested one exactly (OIDC Discovery 1.0
 /// §4.3). Providers such as Authentik publish their issuer with a trailing
 /// slash, so try the canonical form first and the slash form only when the
-/// first attempt fails on that exact issuer comparison.
+/// first attempt fails on that exact issuer comparison. After a successful
+/// discovery the matching form is tried first (see
+/// [`ordered_issuer_variants`]).
 fn issuer_variants(issuer: &str) -> Vec<String> {
     let canonical = issuer.trim().trim_end_matches('/').to_owned();
     vec![canonical.clone(), format!("{canonical}/")]
+}
+
+/// The issuer form that last passed discovery, keyed by the canonical issuer.
+/// A provider that publishes a trailing-slash issuer then costs one discovery
+/// round trip per login instead of a failed one first. Only one provider is
+/// configured at a time, so one slot is enough.
+static MATCHED_ISSUER_FORM: LazyLock<Mutex<Option<(String, String)>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+/// [`issuer_variants`] with the form that last matched tried first.
+fn ordered_issuer_variants(issuer: &str) -> Vec<String> {
+    let mut variants = issuer_variants(issuer);
+    let matched = MATCHED_ISSUER_FORM
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .filter(|(canonical, _)| *canonical == variants[0])
+        .map(|(_, form)| form.clone());
+    if let Some(position) = matched.and_then(|form| variants.iter().position(|v| *v == form)) {
+        let form = variants.remove(position);
+        variants.insert(0, form);
+    }
+    variants
+}
+
+fn remember_matched_issuer_form(issuer: &str, form: &str) {
+    let canonical = issuer.trim().trim_end_matches('/').to_owned();
+    *MATCHED_ISSUER_FORM
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((canonical, form.to_owned()));
 }
 
 async fn discover_with_issuer_variants(
@@ -345,14 +378,17 @@ async fn discover_with_issuer_variants(
     let discovery_failed =
         || AppError::Validation("OIDC provider discovery or JWKS retrieval failed".into());
     let mut last_mismatch = None;
-    for candidate in issuer_variants(issuer) {
-        let issuer_url = IssuerUrl::new(candidate)
+    for candidate in ordered_issuer_variants(issuer) {
+        let issuer_url = IssuerUrl::new(candidate.clone())
             .map_err(|_| AppError::Validation("OIDC issuer is invalid".into()))?;
         if issuer_url.url().scheme() != "https" {
             return Err(AppError::Validation("OIDC issuer must use HTTPS".into()));
         }
         match CoreProviderMetadata::discover_async(issuer_url, http).await {
-            Ok(metadata) => return Ok(metadata),
+            Ok(metadata) => {
+                remember_matched_issuer_form(issuer, &candidate);
+                return Ok(metadata);
+            }
             Err(DiscoveryError::Validation(reason)) => {
                 tracing::debug!(
                     target = "auth.oidc",
@@ -625,6 +661,26 @@ mod tests {
             issuer_variants(" https://auth.example/application/o/app/ "),
             expected
         );
+    }
+
+    #[test]
+    fn the_issuer_form_that_matched_is_tried_first_next_time() {
+        let issuer = "https://matched-form.example/application/o/app";
+        let slash = format!("{issuer}/");
+        assert_eq!(ordered_issuer_variants(issuer)[0], issuer);
+
+        remember_matched_issuer_form(issuer, &slash);
+        assert_eq!(
+            ordered_issuer_variants(issuer),
+            vec![slash.clone(), issuer.to_owned()]
+        );
+        assert_eq!(ordered_issuer_variants(&slash)[0], slash);
+        // Another issuer is unaffected by the remembered form.
+        let other = "https://other-form.example/application/o/app";
+        assert_eq!(ordered_issuer_variants(other)[0], other);
+
+        remember_matched_issuer_form(issuer, issuer);
+        assert_eq!(ordered_issuer_variants(issuer)[0], issuer);
     }
 
     /// Authentik-shaped discovery: the published issuer ends in `/`. The
