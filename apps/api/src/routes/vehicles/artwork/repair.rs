@@ -79,33 +79,86 @@ pub(in crate::routes::vehicles) async fn queue_vehicle_artwork_repair(
     state: &AppState,
     vehicle_id: Uuid,
 ) {
-    queue_vehicle_artwork_repair_with_mode(state, vehicle_id, false).await;
+    let _ = queue_vehicle_artwork_repair_with_mode(state, vehicle_id, false).await;
 }
 
-pub(super) async fn queue_vehicle_artwork_repair_with_mode(
+/// Why an artwork repair must not contact Rivian for a vehicle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::routes::vehicles) enum ArtworkRepairBlocked {
+    /// The vehicle no longer exists or could not be read.
+    Missing,
+    /// Demo vehicles have no Rivian connection.
+    Demo,
+    /// A manager paused data collection for this vehicle.
+    Paused,
+    /// `RIVIAMIGO_RIVIAN_WORKERS_ENABLED` turned the Rivian connection off for
+    /// this server.
+    RivianConnectionOff,
+}
+
+/// Artwork repair follows the same switches as live data collection: a
+/// paused vehicle, or a server whose Rivian connection is off, never repairs
+/// artwork from Rivian.
+pub(in crate::routes::vehicles) fn artwork_repair_blocked(
+    is_demo: bool,
+    collection_paused: bool,
+    rivian_workers_enabled: bool,
+) -> Option<ArtworkRepairBlocked> {
+    if is_demo {
+        Some(ArtworkRepairBlocked::Demo)
+    } else if collection_paused {
+        Some(ArtworkRepairBlocked::Paused)
+    } else if !rivian_workers_enabled {
+        Some(ArtworkRepairBlocked::RivianConnectionOff)
+    } else {
+        None
+    }
+}
+
+async fn vehicle_artwork_repair_blocked(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+) -> Option<ArtworkRepairBlocked> {
+    let row = sqlx::query_as::<_, (String, bool)>(
+        "SELECT rivian_vehicle_id, collection_paused FROM riviamigo.vehicles WHERE id = $1",
+    )
+    .bind(vehicle_id)
+    .fetch_optional(pool)
+    .await;
+    let (rivian_vehicle_id, collection_paused) = match row {
+        Ok(Some(row)) => row,
+        Ok(None) => return Some(ArtworkRepairBlocked::Missing),
+        Err(error) => {
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.repair_gate_failed");
+            return Some(ArtworkRepairBlocked::Missing);
+        }
+    };
+    // An unreadable switch fails closed; startup already rejects it.
+    let workers_enabled = crate::ingestion::rivian_workers_enabled().unwrap_or(false);
+    artwork_repair_blocked(
+        is_demo_vehicle_key(&rivian_vehicle_id),
+        collection_paused,
+        workers_enabled,
+    )
+}
+
+/// Queues a background repair unless the vehicle may not contact Rivian. An
+/// already-complete cache or an active repair is not an error: `Ok(false)`.
+pub(in crate::routes::vehicles) async fn queue_vehicle_artwork_repair_with_mode(
     state: &AppState,
     vehicle_id: Uuid,
     force_manifest_refresh: bool,
-) {
-    let is_demo = sqlx::query_scalar::<_, String>(
-        "SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id=$1",
-    )
-    .bind(vehicle_id)
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten()
-    .is_some_and(|key| is_demo_vehicle_key(&key));
-    if is_demo {
-        return;
+) -> Result<bool, ArtworkRepairBlocked> {
+    if let Some(blocked) = vehicle_artwork_repair_blocked(&state.pool, vehicle_id).await {
+        return Err(blocked);
     }
     if !force_manifest_refresh
         && vehicle_artwork_cache_complete(&state.pool, &state.config, vehicle_id).await
     {
-        return;
+        return Ok(false);
     }
     if !claim_vehicle_artwork_repair(&state.pool, vehicle_id, force_manifest_refresh).await {
-        return;
+        return Ok(false);
     }
     let pool = state.pool.clone();
     let config = state.config.clone();
@@ -113,6 +166,7 @@ pub(super) async fn queue_vehicle_artwork_repair_with_mode(
     tokio::spawn(async move {
         repair_vehicle_artwork(pool, config, age_key, vehicle_id, force_manifest_refresh).await;
     });
+    Ok(true)
 }
 
 async fn repair_vehicle_artwork(
@@ -155,7 +209,10 @@ async fn repair_vehicle_artwork(
 }
 
 /// Starts a bounded repair pass after the API has loaded its encrypted vehicle
-/// credentials. Browser requests only read local files; they never trigger this.
+/// credentials. It is only started while the Rivian connection is on, and it
+/// skips paused vehicles. Reading a vehicle's status or a missing cached asset
+/// can queue the same background repair, subject to the same switches, the
+/// single active claim, and the failure backoff; listing vehicles never does.
 pub fn start_vehicle_artwork_repair_worker(
     pool: sqlx::PgPool,
     config: crate::config::Config,
@@ -165,7 +222,8 @@ pub fn start_vehicle_artwork_repair_worker(
         let vehicle_ids = sqlx::query_scalar::<_, Uuid>(
             "SELECT v.id FROM riviamigo.vehicles v
              JOIN riviamigo.vehicle_credentials c ON c.vehicle_id = v.id
-             WHERE v.rivian_vehicle_id NOT LIKE 'demo-%'",
+             WHERE v.rivian_vehicle_id NOT LIKE 'demo-%'
+               AND NOT v.collection_paused",
         )
         .fetch_all(&pool)
         .await

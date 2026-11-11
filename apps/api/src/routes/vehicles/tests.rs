@@ -17,9 +17,10 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use super::artwork::{
-    fetch_vehicle_image_rows, mirror_file_path, resolved_image_url, store_vehicle_image_manifest,
+    artwork_repair_blocked, fetch_vehicle_image_rows, mirror_file_path,
+    queue_vehicle_artwork_repair_with_mode, resolved_image_url, store_vehicle_image_manifest,
     try_claim_vehicle_artwork_repair, write_vehicle_artwork_cache_state, ArtworkCacheStateUpdate,
-    ARTWORK_NO_PROVIDER_ARTWORK_ERROR, ARTWORK_REPAIR_FAILED_ERROR,
+    ArtworkRepairBlocked, ARTWORK_NO_PROVIDER_ARTWORK_ERROR, ARTWORK_REPAIR_FAILED_ERROR,
 };
 use super::{
     canonical_battery_config, canonical_vehicle_model, canonical_vehicle_name, capture_export_body,
