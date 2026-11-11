@@ -114,3 +114,128 @@ fn recent_only_insert_policy_respects_lookback() {
         Some(Utc.with_ymd_and_hms(2026, 4, 10, 12, 0, 0).unwrap()),
     ));
 }
+
+async fn insert_matching_session(
+    conn: &mut sqlx::PgConnection,
+    id: Uuid,
+    vehicle_id: Uuid,
+    started_at: DateTime<Utc>,
+    source: &str,
+    alias: &str,
+    grouping_key: &str,
+) {
+    sqlx::query(
+        "INSERT INTO riviamigo.charge_sessions (id, vehicle_id, started_at, source)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(id)
+    .bind(vehicle_id)
+    .bind(started_at)
+    .bind(source)
+    .execute(&mut *conn)
+    .await
+    .expect("charge session fixture");
+    // Two alias rows per session: a join would see each session twice.
+    for suffix in ["txn", "vtxn"] {
+        sqlx::query(
+            "INSERT INTO riviamigo.charge_session_external_aliases
+             (charge_session_id, external_id, alias_kind, transaction_id_grouping_key)
+             VALUES ($1, $2, 'txn', $3)",
+        )
+        .bind(id)
+        .bind(format!("{alias}-{suffix}"))
+        .bind(grouping_key)
+        .execute(&mut *conn)
+        .await
+        .expect("alias fixture");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
+async fn alias_and_grouping_matches_prefer_priority_then_closest_start_not_lowest_id() {
+    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+        .await
+        .expect("test database");
+    let mut tx = pool.begin().await.expect("test transaction");
+    let user_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO riviamigo.users (id, email, password_hash) VALUES ($1, $2, 'unused')")
+        .bind(user_id)
+        .bind(format!("charge-match-{user_id}@example.test"))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let vehicle_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicles (id, user_id, rivian_vehicle_id, model)
+         VALUES ($1, $2, $3, 'R1S')",
+    )
+    .bind(vehicle_id)
+    .bind(user_id)
+    .bind(format!("provider-{vehicle_id}"))
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+
+    // Give the lowest-priority session the lowest UUID, so ordering by id
+    // first (the previous DISTINCT ON behavior) would pick it.
+    let mut ids = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+    ids.sort();
+    let [api_only, far_telemetry, near_telemetry] = ids;
+    let summary_start = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
+    insert_matching_session(
+        &mut tx,
+        api_only,
+        vehicle_id,
+        summary_start,
+        CHARGE_SESSION_SOURCE_RIVIAN_API,
+        "shared",
+        "GK-1",
+    )
+    .await;
+    insert_matching_session(
+        &mut tx,
+        far_telemetry,
+        vehicle_id,
+        summary_start - chrono::Duration::minutes(50),
+        CHARGE_SESSION_SOURCE_TELEMETRY,
+        "shared",
+        "GK-1",
+    )
+    .await;
+    insert_matching_session(
+        &mut tx,
+        near_telemetry,
+        vehicle_id,
+        summary_start + chrono::Duration::minutes(5),
+        CHARGE_SESSION_SOURCE_TELEMETRY,
+        "shared",
+        "GK-1",
+    )
+    .await;
+
+    let aliases = [ChargeSessionExternalAlias {
+        external_id: "shared-txn".into(),
+        alias_kind: ExternalAliasKind::Txn,
+        transaction_id_grouping_key: None,
+    }];
+    let by_alias = find_session_by_external_alias(&mut *tx, vehicle_id, &aliases)
+        .await
+        .unwrap()
+        .expect("alias match");
+    // Equal-priority telemetry sessions tie-break on the earliest start.
+    assert_eq!(by_alias.id, far_telemetry);
+
+    let by_group =
+        find_session_by_grouping_key(&mut *tx, vehicle_id, Some("GK-1"), Some(summary_start))
+            .await
+            .unwrap()
+            .expect("grouping match");
+    assert_eq!(by_group.id, near_telemetry);
+    assert_eq!(
+        by_group.source.as_deref(),
+        Some(CHARGE_SESSION_SOURCE_TELEMETRY)
+    );
+
+    tx.rollback().await.expect("rollback test fixtures");
+}
