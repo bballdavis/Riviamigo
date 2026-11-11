@@ -70,9 +70,9 @@ const dashboardMocks = vi.hoisted(() => ({
   downloadDashboardYaml: vi.fn(),
   cloneMutateAsync: vi.fn(),
   createMutateAsync: vi.fn(),
-  deleteMutate: vi.fn(),
+  deleteMutateAsync: vi.fn(),
   lockMutate: vi.fn(),
-  restoreMutate: vi.fn(),
+  restoreMutateAsync: vi.fn(),
 }));
 
 const hooksMocks = vi.hoisted(() => ({
@@ -525,7 +525,7 @@ vi.mock('@riviamigo/dashboards', () => ({
     variables: undefined,
   }),
   useDeleteDashboard: () => ({
-    mutate: dashboardMocks.deleteMutate,
+    mutateAsync: dashboardMocks.deleteMutateAsync,
     isPending: false,
     variables: undefined,
   }),
@@ -535,7 +535,7 @@ vi.mock('@riviamigo/dashboards', () => ({
     variables: undefined,
   }),
   useRestoreAdminDashboardDefault: () => ({
-    mutate: dashboardMocks.restoreMutate,
+    mutateAsync: dashboardMocks.restoreMutateAsync,
     isPending: false,
     variables: undefined,
   }),
@@ -691,9 +691,9 @@ describe('Settings page', () => {
     dashboardMocks.downloadDashboardYaml.mockReset();
     dashboardMocks.cloneMutateAsync.mockReset();
     dashboardMocks.createMutateAsync.mockReset();
-    dashboardMocks.deleteMutate.mockReset();
+    dashboardMocks.deleteMutateAsync.mockReset();
     dashboardMocks.lockMutate.mockReset();
-    dashboardMocks.restoreMutate.mockReset();
+    dashboardMocks.restoreMutateAsync.mockReset();
     localStorage.clear();
     settingsMocks.me = {
       user_id: 'u1',
@@ -982,8 +982,6 @@ describe('Settings page', () => {
       ownerId: 'u1',
       widgets: [],
     });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
     renderSettings();
     clickSettingsSection('Dashboards');
 
@@ -1043,10 +1041,19 @@ describe('Settings page', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Restore bundled' }));
-    expect(dashboardMocks.restoreMutate).toHaveBeenCalledWith('00000000-0000-0000-0000-000000000001');
+    const restoreDialog = screen.getByRole('dialog');
+    expect(within(restoreDialog).getByRole('heading', { name: 'Restore "Overview" to the bundled default layout?' })).toBeInTheDocument();
+    expect(dashboardMocks.restoreMutateAsync).not.toHaveBeenCalled();
+    fireEvent.click(within(restoreDialog).getByRole('button', { name: 'Restore bundled' }));
+    expect(dashboardMocks.restoreMutateAsync).toHaveBeenCalledWith('00000000-0000-0000-0000-000000000001');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('22222222-2222-2222-2222-222222222222');
+    const deleteDialog = screen.getByRole('dialog');
+    expect(within(deleteDialog).getByRole('heading', { name: 'Delete "My Charging"? This removes your saved dashboard.' })).toBeInTheDocument();
+    fireEvent.click(within(deleteDialog).getByRole('button', { name: 'Delete' }));
+    expect(dashboardMocks.deleteMutateAsync).toHaveBeenCalledWith('22222222-2222-2222-2222-222222222222');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
     const showEditButton = screen.getByRole('switch', {
       name: 'Show edit button on dashboard pages',
@@ -1060,7 +1067,6 @@ describe('Settings page', () => {
     await waitFor(() => {
       expect(localStorage.getItem('rm-show-dashboard-edit-button:u1')).toBe('true');
     });
-    confirmSpy.mockRestore();
   });
 
   it('marks a same-slug personal copy active and resets it back to the system default', () => {
@@ -1086,8 +1092,6 @@ describe('Settings page', () => {
         widgets: [{ id: 'w2' }],
       },
     ];
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
     renderSettings();
     clickSettingsSection('Dashboards');
 
@@ -1102,8 +1106,37 @@ describe('Settings page', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
-    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('55555555-5555-5555-5555-555555555555');
-    confirmSpy.mockRestore();
+    const resetDialog = screen.getByRole('dialog');
+    expect(within(resetDialog).getByRole('heading', { name: 'Reset "Overview" to the system default? This removes your personal dashboard copy.' })).toBeInTheDocument();
+    fireEvent.click(within(resetDialog).getByRole('button', { name: 'Reset to default' }));
+    expect(dashboardMocks.deleteMutateAsync).toHaveBeenCalledWith('55555555-5555-5555-5555-555555555555');
+  });
+
+  it('leaves a system dashboard unchanged when its restore is cancelled', () => {
+    settingsMocks.me = { ...settingsMocks.me, role: 'admin' };
+    dashboardMocks.dashboards = [
+      {
+        id: 'default-overview',
+        slug: 'dashboard',
+        name: 'Overview',
+        description: null,
+        isDefault: true,
+        isLocked: false,
+        ownerId: null,
+        widgets: [{ id: 'w1' }],
+      },
+    ];
+
+    renderSettings();
+    clickSettingsSection('Dashboards');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore bundled' }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(dashboardMocks.restoreMutateAsync).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Restore bundled' })).toBeInTheDocument();
   });
 
   it('navigates to /connect when Vehicle is clicked', () => {
@@ -1937,7 +1970,7 @@ describe('Settings page', () => {
     await waitFor(() => expect(hooks.api.downloadVehicleIngestionCapture).toHaveBeenCalledWith('v1'));
   });
 
-  it('confirms before a new capture replaces the previous one', async () => {
+  it('asks before a new capture replaces the previous one and keeps it when cancelled', async () => {
     const hooks = await import('@riviamigo/hooks');
     vi.mocked(hooks.api.getVehicleIngestionCapture).mockResolvedValueOnce({
       state: 'stopped',
@@ -1949,7 +1982,6 @@ describe('Settings page', () => {
       last_event_at: null,
       truncated: false,
     });
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderSettings();
     clickSettingsSection('Raw Data');
     const newCapture = await screen.findByRole('button', { name: 'Start capture for Adventure Truck' });
@@ -1957,9 +1989,36 @@ describe('Settings page', () => {
     expect(screen.getByRole('button', { name: 'Download capture for Adventure Truck' })).toBeDisabled();
     await waitFor(() => expect(newCapture).not.toBeDisabled());
     fireEvent.click(newCapture);
-    expect(confirm).toHaveBeenCalled();
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Start a new capture?' })).toBeInTheDocument();
+    expect(within(dialog).getByText('This replaces the previous capture and its file.')).toBeInTheDocument();
     expect(hooks.api.startVehicleIngestionCapture).not.toHaveBeenCalled();
-    confirm.mockRestore();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(hooks.api.startVehicleIngestionCapture).not.toHaveBeenCalled();
+  });
+
+  it('starts a new capture once the replacement is confirmed in the dialog', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    vi.mocked(hooks.api.getVehicleIngestionCapture).mockResolvedValueOnce({
+      state: 'stopped',
+      started_at: '2026-09-24T17:00:00Z',
+      ends_at: '2026-09-24T18:00:00Z',
+      stopped_at: '2026-09-24T18:00:00Z',
+      stop_reason: 'expired',
+      event_count: 0,
+      last_event_at: null,
+      truncated: false,
+    });
+    renderSettings();
+    clickSettingsSection('Raw Data');
+    const newCapture = await screen.findByRole('button', { name: 'Start capture for Adventure Truck' });
+    await waitFor(() => expect(newCapture).not.toBeDisabled());
+    fireEvent.click(newCapture);
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'New capture' }));
+    await waitFor(() => expect(hooks.api.startVehicleIngestionCapture).toHaveBeenCalledWith('v1'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
   it('renders and operates the admin Backups section', async () => {
