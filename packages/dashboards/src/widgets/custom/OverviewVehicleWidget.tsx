@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Battery, Car, CheckCircle2, CircleAlert, Gauge, LocateFixed, Lock, Package, PackageOpen, RadioTower, TriangleAlert, Unlock } from 'lucide-react';
+import { Battery, Car, CheckCircle2, CircleAlert, Gauge, LocateFixed, Lock, Maximize2, Minimize2, Package, PackageOpen, RadioTower, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
 import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
 import { formatMiles } from '@riviamigo/ui/lib/utils';
@@ -14,7 +14,7 @@ import { getDoorOverlayUrls, getOpenDoorStates } from './imageUtils';
 import { resolveOverviewStatIds } from './overviewStats';
 import { getOverviewStatRequirements, presentOverviewStat, type OverviewStatData } from './overviewStatDisplay';
 import { useOverviewStatData, useUnitPreferencesVersion } from './useOverviewStatData';
-import { resolveOverviewMapOptions, type OverviewMapOptions, type OverviewView } from './overviewMap';
+import { resolveOverviewMapOptions, resolveVehicleFacingDeg, type OverviewMapOptions, type OverviewView } from './overviewMap';
 import { OverviewLocationMap } from './OverviewLocationMap';
 
 type AnchorSet = {
@@ -57,6 +57,15 @@ const OVERVIEW_ANCHORS: Record<string, AnchorSet> = {
   R2: SHARED_OVERVIEW_ANCHORS,
   R2S: SHARED_OVERVIEW_ANCHORS,
 };
+
+// Grid columns for the three-column tiers. Each set is chosen whole, since
+// conflicting utilities at the same breakpoint resolve by stylesheet order.
+const DEFAULT_LAYOUT_COLUMNS = '@min-[34rem]/overview:grid-cols-[11.25rem_minmax(0,1fr)_8.75rem] @min-[58rem]/overview:grid-cols-[16rem_minmax(22rem,1fr)_18rem]';
+// The SoC column shrinks to its battery rail (rail width plus panel padding)
+// and the map column takes the freed width; the vehicle column keeps `1fr`.
+const EXPANDED_LAYOUT_COLUMNS = '@min-[34rem]/overview:grid-cols-[3.75rem_minmax(0,1fr)_16.25rem] @min-[58rem]/overview:grid-cols-[5.75rem_minmax(22rem,1fr)_28.25rem]';
+const SOC_DEFAULT_COLUMNS = '@min-[34rem]/overview:grid-cols-[2.25rem_minmax(0,1fr)] @min-[58rem]/overview:grid-cols-[3.75rem_minmax(0,1fr)]';
+const SOC_RAIL_ONLY_COLUMNS = '@min-[34rem]/overview:grid-cols-[minmax(0,1fr)]';
 
 function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { defaultVehicleId } = useAuth();
@@ -110,6 +119,10 @@ export function CurrentVehicleStatePanel({
   const [view, setView] = useState<OverviewView>('cluster');
   const mapAvailable = mapOptions?.enabled === true;
   const showMap = mapAvailable && view === 'map';
+  const [mapExpandedPreference, setMapExpanded] = useState(false);
+  // Expansion only applies while the map is showing; switching back to the
+  // cluster restores the normal three-column layout.
+  const mapExpanded = showMap && mapExpandedPreference;
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const resolvedOverhead = resolveVehicleArtwork(images, vehicleModel, 'overview');
   const baseOverheadLight = resolvedOverhead.light;
@@ -184,11 +197,13 @@ export function CurrentVehicleStatePanel({
           rather than silently clipped. */}
       <div
         data-testid="overview-layout"
-        className="grid flex-1 min-h-0 content-stretch gap-4 overflow-y-auto @min-[34rem]/overview:-mx-4 @min-[34rem]/overview:grid-cols-[11.25rem_minmax(0,1fr)_8.75rem] @min-[34rem]/overview:gap-3 @min-[58rem]/overview:grid-cols-[16rem_minmax(22rem,1fr)_18rem] @min-[58rem]/overview:gap-4"
+        data-map-expanded={mapExpanded || undefined}
+        className={`grid flex-1 min-h-0 content-stretch gap-4 overflow-y-auto transition-[grid-template-columns] duration-300 ease-out motion-reduce:transition-none @min-[34rem]/overview:-mx-4 @min-[34rem]/overview:gap-3 @min-[58rem]/overview:gap-4 ${mapExpanded ? EXPANDED_LAYOUT_COLUMNS : DEFAULT_LAYOUT_COLUMNS}`}
       >
         <div
           data-testid="overview-soc-panel"
-          className="grid min-h-60 grid-cols-[3.75rem_minmax(0,1fr)] gap-4 rounded-2xl border p-4 @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-l-none @min-[34rem]/overview:border-l-0 @min-[34rem]/overview:grid-cols-[2.25rem_minmax(0,1fr)] @min-[34rem]/overview:gap-3 @min-[34rem]/overview:p-3 @min-[58rem]/overview:min-h-60 @min-[58rem]/overview:grid-cols-[3.75rem_minmax(0,1fr)] @min-[58rem]/overview:gap-4 @min-[58rem]/overview:p-4"
+          data-collapsed={mapExpanded || undefined}
+          className={`grid min-h-60 grid-cols-[3.75rem_minmax(0,1fr)] gap-4 rounded-2xl border p-4 @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-l-none @min-[34rem]/overview:border-l-0 @min-[34rem]/overview:gap-3 @min-[34rem]/overview:p-3 @min-[58rem]/overview:min-h-60 @min-[58rem]/overview:gap-4 @min-[58rem]/overview:p-4 ${mapExpanded ? SOC_RAIL_ONLY_COLUMNS : SOC_DEFAULT_COLUMNS}`}
           style={{
             backgroundColor: 'color-mix(in srgb, var(--rm-accent) 8%, var(--rm-bg-surface))',
             borderColor: 'color-mix(in srgb, var(--rm-accent) 28%, var(--rm-border-default))',
@@ -198,7 +213,13 @@ export function CurrentVehicleStatePanel({
             className="relative h-full min-h-48 overflow-hidden rounded-2xl border bg-bg-surface @min-[34rem]/overview:min-h-0"
             style={{ borderColor: 'color-mix(in srgb, var(--rm-accent) 32%, var(--rm-border-default))' }}
           >
-            <div data-testid="overview-soc-rail" className="absolute inset-1 flex items-end overflow-hidden rounded-xl p-1">
+            <div
+              data-testid="overview-soc-rail"
+              role="img"
+              aria-label={`State of charge ${formatPercent(status?.battery_level)}`}
+              title={mapExpanded ? `SoC ${formatPercent(status?.battery_level)}` : undefined}
+              className="absolute inset-1 flex items-end overflow-hidden rounded-xl p-1"
+            >
               <div
                 data-testid="overview-soc-fill"
                 className="h-full w-full rounded-lg transition-[clip-path]"
@@ -210,7 +231,10 @@ export function CurrentVehicleStatePanel({
             </div>
             <Battery className="absolute left-1/2 top-3 h-4 w-4 -translate-x-1/2 text-fg/80" />
           </div>
-          <div className="flex min-w-0 flex-col justify-between gap-4 @min-[34rem]/overview:gap-3 @min-[58rem]/overview:gap-4">
+          <div
+            data-testid="overview-soc-details"
+            className={`min-w-0 flex-col justify-between gap-4 @min-[34rem]/overview:gap-3 @min-[58rem]/overview:gap-4 ${mapExpanded ? 'flex @min-[34rem]/overview:hidden' : 'flex'}`}
+          >
             <div>
               <span className="text-xs uppercase tracking-[0.16em] text-fg-tertiary">SoC</span>
               <p className="mt-1 font-mono text-4xl font-semibold tabular-nums text-fg @min-[34rem]/overview:text-3xl @min-[58rem]/overview:text-4xl">{formatPercent(status?.battery_level)}</p>
@@ -267,13 +291,24 @@ export function CurrentVehicleStatePanel({
           <div
             ref={locationPanelRef}
             data-testid="overview-location-panel"
-            className="relative min-h-60 overflow-hidden rounded-xl border border-border bg-bg-surface @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-r-none @min-[34rem]/overview:border-r-0"
+            className={`relative overflow-hidden rounded-xl border border-border bg-bg-surface transition-[min-height] duration-300 motion-reduce:transition-none @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-r-none @min-[34rem]/overview:border-r-0 ${mapExpanded ? 'min-h-96' : 'min-h-60'}`}
           >
+            <button
+              type="button"
+              data-testid="overview-map-expand"
+              aria-label={mapExpanded ? 'Collapse map' : 'Expand map'}
+              aria-pressed={mapExpanded}
+              title={mapExpanded ? 'Collapse map' : 'Expand map'}
+              onClick={() => setMapExpanded((expanded) => !expanded)}
+              className="absolute right-0 top-0 z-20 inline-flex h-11 w-11 items-center justify-center rounded-bl-xl border-b border-l border-border bg-bg-elevated/95 text-fg-secondary shadow-sm backdrop-blur transition-colors hover:text-accent focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent @min-[34rem]/overview:h-8 @min-[34rem]/overview:w-8 @min-[34rem]/overview:rounded-bl-lg"
+            >
+              {mapExpanded ? <Minimize2 className="h-4 w-4" aria-hidden="true" /> : <Maximize2 className="h-4 w-4" aria-hidden="true" />}
+            </button>
             <div className="absolute inset-0">
               <OverviewLocationMap
                 latitude={status?.latitude}
                 longitude={status?.longitude}
-                headingDeg={status?.heading_deg}
+                headingDeg={resolveVehicleFacingDeg(status)}
                 artwork={resolvedOverhead}
                 options={mapOptions}
                 heightPx={locationPanelHeight - 2}
