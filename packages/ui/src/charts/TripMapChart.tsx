@@ -5,6 +5,7 @@ import type { BasemapStyleDescriptor, MapStylePreference } from '@riviamigo/type
 import { CHART_COLORS } from './ChartProvider';
 import { useDocumentPalette } from '../hooks/useDocumentPalette';
 import { useDocumentTheme } from '../hooks/useDocumentTheme';
+import { resolveBasemapThemeColors, themeBasemapStyle, type BasemapStyleLike } from '../lib/basemapTheme';
 import { isAbortError, reportClientError } from '../lib/clientDiagnostics';
 import { useThemeRevision } from '../lib/themeRuntime';
 import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
@@ -115,7 +116,7 @@ interface MapApi {
   removeLayer(id: string): void;
   setPaintProperty(layerId: string, name: string, value: unknown): void;
   getCanvas(): { style: CSSStyleDeclaration };
-  setStyle(style: unknown): void;
+  setStyle(style: unknown, options?: BasemapStyleOptions): void;
   triggerRepaint?(): void;
   setPitch?(pitch: number): void;
   setBearing?(bearing: number): void;
@@ -191,6 +192,85 @@ function buildMapLibreStyle(mode: MapStyleMode, basemap: BasemapConfig, preferen
     },
     layers: [{ id: 'background', type: 'raster' as const, source: 'carto-base' }],
   };
+}
+
+interface BasemapStyleOptions {
+  transformStyle: (previous: unknown, next: BasemapStyleLike) => BasemapStyleLike;
+}
+
+/**
+ * "Follow appearance" on a vector provider is repainted from the active
+ * theme's tokens. Explicitly chosen presets keep the provider's stock look,
+ * and raster providers (Carto) cannot be recolored per layer.
+ */
+function isThemedBasemap(basemap: BasemapConfig, preference: MapStylePreference, mode: MapStyleMode) {
+  if (!basemap.enabled) return false;
+  const { descriptor, url } = resolveStyleDescriptor(basemap, preference, mode);
+  return descriptor?.id === 'follow-theme' && descriptor.kind === 'style' && Boolean(url);
+}
+
+/** The provider style JSON a themed basemap was painted from. */
+interface StockBasemapStyle {
+  url: string;
+  mode: MapStyleMode;
+  style: BasemapStyleLike;
+}
+
+type StockBasemapListener = (stock: StockBasemapStyle) => void;
+
+function basemapStyleOptions(
+  basemap: BasemapConfig,
+  preference: MapStylePreference,
+  mode: MapStyleMode,
+  onStockStyle: StockBasemapListener,
+): BasemapStyleOptions | undefined {
+  if (!isThemedBasemap(basemap, preference, mode)) return undefined;
+  const { url } = resolveStyleDescriptor(basemap, preference, mode);
+  // Tokens are read when the style JSON arrives, so the transform always
+  // paints from the theme that is active at that moment. The stock JSON is
+  // kept so later palette changes can repaint without reloading the style.
+  return {
+    transformStyle: (_previous, next) => {
+      onStockStyle({ url, mode, style: structuredClone(next) });
+      return themeBasemapStyle(next, resolveBasemapThemeColors(mode), mode);
+    },
+  };
+}
+
+function applyBasemapStyle(
+  map: MapApi,
+  mode: MapStyleMode,
+  basemap: BasemapConfig,
+  preference: MapStylePreference,
+  onStockStyle: StockBasemapListener,
+) {
+  const style = buildMapLibreStyle(mode, basemap, preference);
+  const options = basemapStyleOptions(basemap, preference, mode, onStockStyle);
+  if (options) map.setStyle(style, options);
+  else map.setStyle(style);
+}
+
+/**
+ * Repaints the loaded basemap from the current tokens in place. Palette and
+ * custom-theme changes keep the same provider style, so reloading it would
+ * only drop and re-add the route overlays.
+ */
+function repaintThemedBasemap(
+  map: MapApi,
+  stock: StockBasemapStyle | null,
+  basemap: BasemapConfig,
+  preference: MapStylePreference,
+  mode: MapStyleMode,
+) {
+  if (!stock || stock.mode !== mode || !isThemedBasemap(basemap, preference, mode)) return;
+  if (stock.url !== resolveStyleDescriptor(basemap, preference, mode).url) return;
+  const themed = themeBasemapStyle(stock.style, resolveBasemapThemeColors(mode), mode);
+  for (const layer of themed.layers ?? []) {
+    if (!layer.paint || !map.getLayer(layer.id)) continue;
+    for (const [property, value] of Object.entries(layer.paint)) {
+      map.setPaintProperty(layer.id, property, value);
+    }
+  }
 }
 
 function basemapSignature(basemap: BasemapConfig, mode: MapStyleMode, preference: MapStylePreference) {
@@ -275,6 +355,10 @@ export function TripMapChart({
   const palette = useDocumentPalette();
   const isDark = useDocumentTheme();
   const themeRevision = useThemeRevision();
+  const stockBasemapRef = React.useRef<StockBasemapStyle | null>(null);
+  const rememberStockBasemap = React.useCallback<StockBasemapListener>((stock) => {
+    stockBasemapRef.current = stock;
+  }, []);
 
   React.useEffect(() => {
     accessTokenRef.current = accessToken;
@@ -406,9 +490,18 @@ export function TripMapChart({
         const initialMapStyle = mapStyleRef.current;
         const initialMapStylePreference = mapStylePreferenceRef.current;
         appliedBasemapSignatureRef.current = basemapSignature(initialBasemap, initialMapStyle, initialMapStylePreference);
+        // The constructor cannot transform a fetched style, so a themed
+        // basemap is applied through setStyle() right after construction.
+        const initialStyleOptions = basemapStyleOptions(
+          initialBasemap,
+          initialMapStylePreference,
+          initialMapStyle,
+          rememberStockBasemap,
+        );
+        const initialStyle = buildMapLibreStyle(initialMapStyle, initialBasemap, initialMapStylePreference);
         const map = new maplibregl.Map({
           container: containerRef.current!,
-          style: buildMapLibreStyle(initialMapStyle, initialBasemap, initialMapStylePreference),
+          ...(initialStyleOptions ? {} : { style: initialStyle }),
           center: [firstPoint.lng, firstPoint.lat],
           zoom: routeStart ? 12 : focusZoomRef.current,
           attributionControl: false,
@@ -436,6 +529,7 @@ export function TripMapChart({
         }) as MapApi;
 
         mapRef.current = map;
+        if (initialStyleOptions) map.setStyle(initialStyle, initialStyleOptions);
 
         map.on('error', (event) => {
           const details = mapLibreErrorDetails(event);
@@ -506,12 +600,11 @@ export function TripMapChart({
             };
             map.on('style.load', restoreAfterInitialSwap);
             beginTileLoad();
-            map.setStyle(buildMapLibreStyle(
-              mapStyleRef.current,
-              basemapRef.current,
-              mapStylePreferenceRef.current,
-            ));
+            applyBasemapStyle(map, mapStyleRef.current, basemapRef.current, mapStylePreferenceRef.current, rememberStockBasemap);
             map.triggerRepaint?.();
+          } else {
+            // The theme can change while the first style is still loading.
+            repaintThemedBasemap(map, stockBasemapRef.current, basemapRef.current, mapStylePreferenceRef.current, mapStyleRef.current);
           }
           requestAnimationFrame(() => {
             mapRef.current?.resize();
@@ -619,7 +712,7 @@ export function TripMapChart({
     map.on('style.load', onStyleLoad);
     appliedBasemapSignatureRef.current = basemapSignature(basemap, mapStyle, mapStylePreference);
     beginTileLoad();
-    map.setStyle(buildMapLibreStyle(mapStyle, basemap, mapStylePreference));
+    applyBasemapStyle(map, mapStyle, basemap, mapStylePreference, rememberStockBasemap);
     // An unchanged style diff may not schedule a frame; force one so `idle`
     // always follows and the loading state cannot wait for the timeout.
     map.triggerRepaint?.();
@@ -627,7 +720,13 @@ export function TripMapChart({
     return () => {
       map.off('style.load', onStyleLoad);
     };
-  }, [basemap, beginTileLoad, mapStyle, mapStylePreference]);
+  }, [basemap, beginTileLoad, mapStyle, mapStylePreference, rememberStockBasemap]);
+
+  // Palette and custom-theme changes repaint a themed basemap in place.
+  React.useEffect(() => {
+    if (!isLoadedRef.current || !mapRef.current) return;
+    repaintThemedBasemap(mapRef.current, stockBasemapRef.current, basemapRef.current, mapStylePreferenceRef.current, mapStyleRef.current);
+  }, [palette, themeRevision]);
 
   const retryMap = React.useCallback(() => {
     const map = mapRef.current;
@@ -638,13 +737,9 @@ export function TripMapChart({
     }
     appliedBasemapSignatureRef.current = '';
     beginTileLoad();
-    map.setStyle(buildMapLibreStyle(
-      mapStyleRef.current,
-      basemapRef.current,
-      mapStylePreferenceRef.current,
-    ));
+    applyBasemapStyle(map, mapStyleRef.current, basemapRef.current, mapStylePreferenceRef.current, rememberStockBasemap);
     map.triggerRepaint?.();
-  }, [beginTileLoad]);
+  }, [beginTileLoad, rememberStockBasemap]);
 
   // Sync routes whenever routes or selection changes
   React.useEffect(() => {

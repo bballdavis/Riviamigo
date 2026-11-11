@@ -53,8 +53,12 @@ to use the stable chart slug.
   worker asset alongside the application chunks.
   OpenFreeMap vector styles and CARTO/custom raster styles use the same seam;
   style swaps keep one MapLibre instance and restore route and active-point
-  overlays after `style.load`. Follow appearance tracks the page theme, named
-  styles stay pinned, and 3D is Liberty plus a camera treatment.
+  overlays after `style.load`. Follow appearance tracks the page theme and,
+  on OpenFreeMap, is repainted from theme tokens by the basemap theme transform
+  in `packages/ui/src/lib/basemapTheme.ts` (see the Maps rules in
+  [the visual system](../branding.md)); palette changes repaint it in place
+  without a style reload. Named styles stay pinned to the provider's stock
+  look, and 3D is Liberty plus a camera treatment.
   Map configuration failures and MapLibre resource failures remain distinct;
   both are reported through the shared frontend diagnostics contract described
   in [Frontend error observability](../architecture/frontend-error-observability.md).

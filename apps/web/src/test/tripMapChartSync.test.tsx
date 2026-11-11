@@ -72,6 +72,44 @@ function buildRoutes(count: number): TripMapRoute[] {
   }));
 }
 
+const THEMED_STYLE_OPTIONS = expect.objectContaining({ transformStyle: expect.any(Function) });
+
+const VECTOR_CONFIG = {
+  enabled: true,
+  provider_preference: 'openfreemap' as const,
+  resolved_provider: 'openfreemap' as const,
+  revision: 'vector-2',
+  attributions: [],
+  styles: [
+    { id: 'follow-theme' as const, label: 'Follow appearance', kind: 'style' as const, light_url: '/v1/external/basemap/openfreemap/styles/positron?v=2', dark_url: '/v1/external/basemap/openfreemap/styles/dark?v=2', perspective_3d: false },
+    { id: 'positron' as const, label: 'Positron', kind: 'style' as const, light_url: '/v1/external/basemap/openfreemap/styles/positron?v=2', dark_url: '/v1/external/basemap/openfreemap/styles/positron?v=2', perspective_3d: false },
+  ],
+};
+
+const RASTER_CONFIG = {
+  enabled: true,
+  provider_preference: 'carto' as const,
+  resolved_provider: 'carto' as const,
+  revision: 'raster-1',
+  attributions: [],
+  styles: [{ id: 'follow-theme' as const, label: 'Follow appearance', kind: 'raster' as const, light_url: '/v1/external/basemap/light/{z}/{x}/{y}.png', dark_url: '/v1/external/basemap/dark/{z}/{x}/{y}.png', perspective_3d: false }],
+};
+
+interface StyleFixture { sources: Record<string, unknown>; layers: Array<{ id: string; type: string; source?: string; 'source-layer'?: string; paint?: Record<string, unknown>; layout?: Record<string, unknown> }> }
+
+function stockStyleFixture(): StyleFixture {
+  return {
+    sources: { openmaptiles: { type: 'vector' } },
+    layers: [
+      { id: 'background', type: 'background', paint: { 'background-color': 'rgb(12,12,12)' } },
+      { id: 'water', type: 'fill', source: 'openmaptiles', 'source-layer': 'water', paint: { 'fill-color': 'rgb(27,27,29)' } },
+      { id: 'highway_minor', type: 'line', source: 'openmaptiles', 'source-layer': 'transportation', paint: { 'line-color': '#181818' } },
+      { id: 'label_city', type: 'symbol', source: 'openmaptiles', 'source-layer': 'place', layout: { 'text-field': '{name}' }, paint: { 'text-color': 'rgb(101,101,101)', 'text-halo-width': 1 } },
+      { id: 'trip-routes-line', type: 'line', source: 'trip-routes', paint: { 'line-color': ['get', 'color'] } },
+    ],
+  };
+}
+
 describe('TripMapChart', () => {
   it('shows a loading indicator instead of tile errors while the first tiles load', async () => {
     const mockMap = new MockMap();
@@ -201,8 +239,9 @@ describe('TripMapChart', () => {
     );
     expect(screen.getByText('Map tiles unavailable')).toBeInTheDocument();
 
+    mockMap.setStyle.mockClear();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(mockMap.setStyle).toHaveBeenCalledWith('/v1/external/basemap/openfreemap/styles/positron?v=1');
+    expect(mockMap.setStyle).toHaveBeenCalledWith('/v1/external/basemap/openfreemap/styles/positron?v=1', THEMED_STYLE_OPTIONS);
     consoleError.mockRestore();
   });
 
@@ -318,9 +357,9 @@ describe('TripMapChart', () => {
     );
 
     await waitFor(() => expect(mapConstructor).toHaveBeenCalledTimes(1));
-    expect(mapConstructor.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
-      style: '/v1/external/basemap/openfreemap/styles/positron?v=1',
-    }));
+    // Follow appearance is theme-painted, which the constructor cannot do.
+    expect(mapConstructor.mock.calls[0]?.[0]).not.toHaveProperty('style');
+    expect(mockMap.setStyle).toHaveBeenCalledWith('/v1/external/basemap/openfreemap/styles/positron?v=1', THEMED_STYLE_OPTIONS);
     await act(async () => mockMap.emit('load'));
 
     rerender(
@@ -336,8 +375,44 @@ describe('TripMapChart', () => {
 
     await waitFor(() => expect(mockMap.setStyle).toHaveBeenCalledWith(
       '/v1/external/basemap/openfreemap/styles/dark?v=1',
+      THEMED_STYLE_OPTIONS,
     ));
     expect(mapConstructor).toHaveBeenCalledTimes(1);
+  });
+
+  it('paints Follow appearance from theme tokens and leaves app overlays alone', async () => {
+    const mockMap = new MockMap();
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map(_options: unknown) { return mockMap; }) }));
+    render(<TripMapChart routes={buildRoutes(1)} track={[]} basemapConfig={VECTOR_CONFIG} mapStyle="dark" mapLoader={mapLoader as never} />);
+    await waitFor(() => expect(mockMap.setStyle).toHaveBeenCalledTimes(1));
+
+    const options = mockMap.setStyle.mock.calls[0]?.[1] as { transformStyle: (previous: unknown, next: unknown) => StyleFixture };
+    const stock = stockStyleFixture();
+    const themed = options.transformStyle(undefined, stock);
+    const paint = (id: string) => themed.layers.find((layer) => layer.id === id)?.paint;
+    expect(paint('background')?.['background-color']).not.toBe('rgb(12,12,12)');
+    expect(paint('label_city')?.['text-halo-width']).toBeGreaterThan(1);
+    expect(themed.layers.find((layer) => layer.id === 'trip-routes-line')).toBe(stock.layers.find((layer) => layer.id === 'trip-routes-line'));
+    // The provider JSON itself is not mutated.
+    expect(stock.layers[0]?.paint?.['background-color']).toBe('rgb(12,12,12)');
+  });
+
+  it('keeps explicitly chosen presets and raster providers on their stock look', async () => {
+    const vectorMap = new MockMap();
+    const vectorConstructor = vi.fn(function Map(_options: unknown) { return vectorMap; });
+    render(<TripMapChart routes={buildRoutes(1)} track={[]} basemapConfig={VECTOR_CONFIG} mapStyle="light" mapStylePreference="positron" mapLoader={vi.fn(async () => ({ Map: vectorConstructor })) as never} />);
+    await waitFor(() => expect(vectorConstructor).toHaveBeenCalledTimes(1));
+    expect(vectorConstructor.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ style: '/v1/external/basemap/openfreemap/styles/positron?v=2' }));
+    expect(vectorMap.setStyle).not.toHaveBeenCalled();
+
+    const rasterMap = new MockMap();
+    const rasterConstructor = vi.fn(function Map(_options: unknown) { return rasterMap; });
+    render(<TripMapChart routes={buildRoutes(1)} track={[]} basemapConfig={RASTER_CONFIG} mapStyle="light" mapLoader={vi.fn(async () => ({ Map: rasterConstructor })) as never} />);
+    await waitFor(() => expect(rasterConstructor).toHaveBeenCalledTimes(1));
+    expect(rasterConstructor.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      style: expect.objectContaining({ sources: { 'carto-base': expect.objectContaining({ type: 'raster' }) } }),
+    }));
+    expect(rasterMap.setStyle).not.toHaveBeenCalled();
   });
 
   it('loads OpenFreeMap vector styles and applies then resets the 3D camera', async () => {
