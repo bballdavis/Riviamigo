@@ -9,8 +9,16 @@ import {
 } from '@riviamigo/hooks';
 import type { OwnershipResponse, Vehicle } from '@riviamigo/types';
 import { CHART_COLORS } from '@riviamigo/ui/charts';
-import { Button, Card, CardContent, CardHeader, SelectPicker, Switch } from '@riviamigo/ui/primitives';
-import { MaintenanceSchedulesCard, SettingsCardTitle } from './MaintenanceSchedulesSection';
+import { Card, CardContent, CardHeader, SelectPicker, Switch } from '@riviamigo/ui/primitives';
+import { useSettingsDraft, useSettingsLeaveGuard } from '../settings/drafts/SettingsDraftProvider';
+import { useStagedValue } from '../settings/drafts/useStagedValue';
+import {
+  applyScheduleEdits,
+  MaintenanceSchedulesCard,
+  SettingsCardTitle,
+  type ScheduleEdits,
+  type ScheduleErrors,
+} from './MaintenanceSchedulesSection';
 import {
   formToSettings,
   OwnershipCostsFields,
@@ -18,16 +26,31 @@ import {
   type OwnershipCostsErrors,
   type OwnershipCostsForm,
 } from './OwnershipCostsFields';
-import { normalizeOwnershipResponse } from './model';
+import { normalizeOwnershipResponse, scheduleTargets } from './model';
 
 /**
  * Settings > Ownership: every setting behind the Ownership dashboard in one
  * place. The switch at the top shows or hides the dashboard for the signed-in
- * user; the cards below configure it for the chosen vehicle.
+ * user; the cards below configure it for the chosen vehicle. Edits are staged
+ * and saved with the Settings page's Save bar.
  */
 export function OwnershipSettingsSection({ vehicles }: { vehicles: Vehicle[] }) {
-  const enabled = useOwnershipEnabled();
+  const savedEnabled = useOwnershipEnabled();
   const update = useUpdateOwnershipPreference();
+  const enabled = useStagedValue(savedEnabled);
+  useSettingsDraft('ownership-enabled', {
+    isDirty: enabled.isDirty,
+    save: async () => {
+      try {
+        await update.mutateAsync(enabled.value);
+      } catch {
+        throw new Error('Show Ownership could not be saved. Try again.');
+      }
+      enabled.commit(enabled.value);
+    },
+    discard: enabled.reset,
+  });
+  const requestLeave = useSettingsLeaveGuard();
   const { effectiveVehicleId } = useResolvedVehicleSelection();
   const owned = vehicles.filter((vehicle) => !vehicle.is_demo);
   const choices = owned.length > 0 ? owned : vehicles;
@@ -52,25 +75,20 @@ export function OwnershipSettingsSection({ vehicles }: { vehicles: Vehicle[] }) 
                 to hide it from your navigation. Your saved prices and schedules are kept, and this only affects your
                 own account.
               </p>
-              {update.isError ? (
-                <p role="alert" className="mt-2 text-sm text-status-danger">
-                  The setting could not be saved. Try again.
-                </p>
-              ) : null}
             </div>
             <Switch
               id="ownership-enabled"
-              checked={enabled}
-              disabled={update.isPending}
-              onChange={(checked) => update.mutate(checked)}
+              checked={enabled.value}
+              onChange={(checked) => enabled.setValue(checked)}
               aria-label="Show Ownership"
             />
           </div>
         </CardContent>
       </Card>
 
-      {enabled ? (
-        vehicle ? (
+      {/* Hidden rather than unmounted while switched off, so staged card edits survive the toggle. */}
+      <div hidden={!enabled.value} className="grid gap-6">
+        {vehicle ? (
           <>
             {choices.length > 1 ? (
               <div className="flex flex-wrap items-center gap-3">
@@ -79,7 +97,9 @@ export function OwnershipSettingsSection({ vehicles }: { vehicles: Vehicle[] }) 
                   className="min-w-[11rem]"
                   aria-label="Vehicle whose Ownership settings to edit"
                   value={vehicle.id}
-                  onChange={(id) => setPicked(id)}
+                  onChange={(id) => {
+                    if (id !== vehicle.id) requestLeave(() => setPicked(id));
+                  }}
                   options={choices.map((entry) => ({ value: entry.id, label: entry.display_name || entry.model }))}
                 />
               </div>
@@ -92,8 +112,8 @@ export function OwnershipSettingsSection({ vehicles }: { vehicles: Vehicle[] }) 
           </>
         ) : (
           <p className="text-sm text-fg-secondary">Add a vehicle to set up the Ownership page.</p>
-        )
-      ) : null}
+        )}
+      </div>
     </div>
   );
 }
@@ -106,82 +126,119 @@ function VehicleOwnershipSettings({ vehicleId, ownLabel }: { vehicleId: string; 
   );
   if (ownership.isError) return <p className="text-sm text-status-danger">Ownership settings could not be loaded.</p>;
   if (ownership.isLoading || !data) return <p className="text-sm text-fg-secondary">Loading ownership settings...</p>;
+  return <VehicleOwnershipEditor vehicleId={vehicleId} ownLabel={ownLabel} data={data} />;
+}
+
+/**
+ * One staged draft for the vehicle's whole ownership settings object: the cost
+ * cards and every schedule edit are saved together in a single request, so one
+ * card can never overwrite another's unsaved values.
+ */
+function VehicleOwnershipEditor({
+  vehicleId,
+  ownLabel,
+  data,
+}: {
+  vehicleId: string;
+  ownLabel: string;
+  data: OwnershipResponse;
+}) {
+  const update = useUpdateOwnershipSettings(vehicleId);
+  const savedForm = useMemo(() => settingsToForm(data.settings), [data.settings]);
+  const costs = useStagedValue<OwnershipCostsForm>(savedForm);
+  const [costErrors, setCostErrors] = useState<OwnershipCostsErrors>({});
+  const [scheduleEdits, setScheduleEdits] = useState<ScheduleEdits>({});
+  const [scheduleErrors, setScheduleErrors] = useState<ScheduleErrors>({});
+  const targets = useMemo(() => scheduleTargets(data, ownLabel), [data, ownLabel]);
+
+  useSettingsDraft(`ownership-settings-${vehicleId}`, {
+    isDirty: costs.isDirty || Object.keys(scheduleEdits).length > 0,
+    save: async () => {
+      const result = formToSettings(costs.value, data.settings);
+      const schedules = applyScheduleEdits(data.settings.maintenance, scheduleEdits, targets);
+      setCostErrors(result.errors);
+      setScheduleErrors(schedules.errors);
+      if (!result.settings || !schedules.maintenance) {
+        throw new Error('Some Ownership values need attention. Fix the highlighted fields, then save again.');
+      }
+      const next = { ...result.settings, maintenance: schedules.maintenance };
+      try {
+        await update.mutateAsync(next);
+      } catch {
+        throw new Error('Ownership settings could not be saved. Try again.');
+      }
+      costs.commit(settingsToForm(next));
+      setScheduleEdits({});
+    },
+    discard: () => {
+      costs.reset();
+      setCostErrors({});
+      setScheduleEdits({});
+      setScheduleErrors({});
+    },
+  });
+
+  const card = (props: Omit<CostsCardProps, 'form' | 'errors' | 'onChange' | 'vehicleId' | 'canEdit'>) => (
+    <CostsCard
+      {...props}
+      vehicleId={vehicleId}
+      canEdit={data.can_edit}
+      form={costs.value}
+      errors={costErrors}
+      onChange={(next) => costs.setValue(next)}
+    />
+  );
 
   return (
     <>
-      <CostsCard
-        vehicleId={vehicleId}
+      {card({
+        icon: <Wallet />,
+        color: CHART_COLORS.emerald,
+        title: 'Purchase and value',
+        description: 'What you paid and when. The dashboard starts every vehicle at its purchase price on this date.',
+        fields: ['purchasePrice', 'purchaseDate', 'resaleValue'],
+      })}
+      {card({
+        icon: <Receipt />,
+        color: CHART_COLORS.rose,
+        title: 'Running costs',
+        description: 'Monthly costs and prices that replace the built-in estimates when you set them.',
+        fields: ['insuranceMonthly', 'tireSetCost', 'gasPrice'],
+      })}
+      {card({
+        icon: <CalendarClock />,
+        color: CHART_COLORS.sky,
+        title: 'Projection',
+        description: 'How far ahead the Project view looks.',
+        fields: ['projectionYears'],
+      })}
+      <MaintenanceSchedulesCard
         data={data}
-        icon={<Wallet />}
-        color={CHART_COLORS.emerald}
-        title="Purchase and value"
-        description="What you paid and when. The dashboard starts every vehicle at its purchase price on this date."
-        fields={['purchasePrice', 'purchaseDate', 'resaleValue']}
-        requirePrice
+        ownLabel={ownLabel}
+        edits={scheduleEdits}
+        errors={scheduleErrors}
+        onEditsChange={setScheduleEdits}
       />
-      <CostsCard
-        vehicleId={vehicleId}
-        data={data}
-        icon={<Receipt />}
-        color={CHART_COLORS.rose}
-        title="Running costs"
-        description="Monthly costs and prices that replace the built-in estimates when you set them."
-        fields={['insuranceMonthly', 'tireSetCost', 'gasPrice']}
-      />
-      <CostsCard
-        vehicleId={vehicleId}
-        data={data}
-        icon={<CalendarClock />}
-        color={CHART_COLORS.sky}
-        title="Projection"
-        description="How far ahead the Project view looks."
-        fields={['projectionYears']}
-      />
-      <MaintenanceSchedulesCard vehicleId={vehicleId} ownLabel={ownLabel} />
     </>
   );
 }
 
-/** One section of the cost settings, saved on its own; other fields keep their stored values. */
-function CostsCard({
-  vehicleId,
-  data,
-  icon,
-  color,
-  title,
-  description,
-  fields,
-  requirePrice = false,
-}: {
+interface CostsCardProps {
   vehicleId: string;
-  data: OwnershipResponse;
+  canEdit: boolean;
   icon: React.ReactElement<{ className?: string }>;
   color: string;
   title: string;
   description: string;
   fields: Array<keyof OwnershipCostsForm>;
-  requirePrice?: boolean;
-}) {
-  const update = useUpdateOwnershipSettings(vehicleId);
-  const [form, setForm] = useState<OwnershipCostsForm>(() => settingsToForm(data.settings));
-  const [errors, setErrors] = useState<OwnershipCostsErrors>({});
-  const [saved, setSaved] = useState(false);
+  form: OwnershipCostsForm;
+  errors: OwnershipCostsErrors;
+  onChange: (form: OwnershipCostsForm) => void;
+}
+
+/** One group of the cost fields; the values are staged in the vehicle's single draft. */
+function CostsCard({ vehicleId, canEdit, icon, color, title, description, fields, form, errors, onChange }: CostsCardProps) {
   const idPrefix = `ownership-settings-${vehicleId}`;
-
-  const save = () => {
-    // Only this card's fields come from the edits; the rest stay as stored.
-    const stored = settingsToForm(data.settings);
-    const merged = { ...stored, ...Object.fromEntries(fields.map((key) => [key, form[key]])) } as OwnershipCostsForm;
-    const result = formToSettings(merged, data.settings, new Date(), { requirePrice });
-    const own = Object.fromEntries(
-      Object.entries(result.errors).filter(([key]) => fields.includes(key as keyof OwnershipCostsForm)),
-    ) as OwnershipCostsErrors;
-    setErrors(own);
-    setSaved(false);
-    if (!result.settings) return;
-    update.mutate(result.settings, { onSuccess: () => setSaved(true) });
-  };
-
   return (
     <Card>
       <CardHeader className="mb-3 flex-col items-start gap-1">
@@ -196,22 +253,10 @@ function CostsCard({
           errors={errors}
           fields={fields}
           idPrefix={idPrefix}
-          disabled={!data.can_edit}
-          onChange={(next) => {
-            setForm(next);
-            setSaved(false);
-          }}
+          disabled={!canEdit}
+          onChange={onChange}
         />
-        {data.can_edit ? (
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <Button variant="primary" size="sm" loading={update.isPending} onClick={save}>
-              Save {title.toLowerCase()}
-            </Button>
-            <span className="text-sm text-fg-secondary" role="status">
-              {update.isError ? 'Could not be saved. Try again.' : saved ? 'Saved.' : ''}
-            </span>
-          </div>
-        ) : (
+        {canEdit ? null : (
           <p className="mt-4 text-sm text-fg-secondary">Only the vehicle&apos;s owner or a manager can change these.</p>
         )}
       </CardContent>
