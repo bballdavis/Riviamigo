@@ -135,7 +135,7 @@ export function VehicleBatteryEditor({ vehicle, onDone }: { vehicle: Vehicle; on
     mutationFn: ({ vehicleId, name }: { vehicleId: string; name: string }) =>
       api.updateVehicleName(vehicleId, name),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
     },
   });
 

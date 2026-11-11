@@ -20,6 +20,7 @@ vi.mock('@riviamigo/hooks', () => ({
   queryKeys: {
     appVersion: { current: ['app-version'] },
     updateCheck: { current: ['update-check-settings'] },
+    externalConnections: { all: ['external-connections'] },
   },
   BASEMAP_CONFIG_QUERY_KEY: ['external', 'basemap', 'config', 'v2'],
 }));

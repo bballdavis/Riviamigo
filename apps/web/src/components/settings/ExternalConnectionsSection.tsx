@@ -17,7 +17,7 @@ import { useStagedValue } from '../../features/settings/drafts/useStagedValue';
 import { saveFailure } from '../../features/settings/drafts/saveFailure';
 import { SettingsConfirmationDialog, type SettingsConfirmation } from '../../features/settings/SettingsConfirmationDialog';
 
-const CONNECTION_QUERY_KEY = ['external-connections'] as const;
+const CONNECTION_QUERY_KEY = queryKeys.externalConnections.all;
 const GITHUB_RELEASES_ID = 'github_releases';
 /** Ownership responses carry the fuel-price and vehicle-lookup connection state. */
 const OWNERSHIP_QUERY_KEY = ['vehicles', 'ownership'] as const;

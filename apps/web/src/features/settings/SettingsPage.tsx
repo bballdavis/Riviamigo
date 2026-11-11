@@ -495,14 +495,14 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
     mutationFn: (vehicleId: string) => api.deleteVehicle(vehicleId),
     onSuccess: (result) => {
       setDefaultVehicleId(result.default_vehicle_id ?? null);
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
     },
   });
 
   const refreshVehicleArtwork = useMutation({
     mutationFn: (vehicleId: string) => api.refreshVehicleArtwork(vehicleId),
     onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
       void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.images(result.vehicle_id) });
     },
   });
@@ -511,14 +511,14 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
     mutationFn: ({ vehicleId, paused }: { vehicleId: string; paused: boolean }) =>
       api.updateVehicleCollection(vehicleId, paused),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
     },
   });
 
   const purgeVehicleArtworkCache = useMutation({
     mutationFn: (vehicleId: string) => api.purgeVehicleArtworkCache(vehicleId),
     onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
       void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.images(result.vehicle_id) });
     },
   });
@@ -535,7 +535,7 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
     mutationFn: (vehicleId: string) => api.setDefaultVehicle(vehicleId),
     onSuccess: (result) => {
       setDefaultVehicleId(result.default_vehicle_id);
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
       queryClient.invalidateQueries({ queryKey: queryKeys.me.all });
     },
   });
@@ -549,7 +549,7 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
       setLatestInviteToken(result.invite_created ? (result.invite_token ?? null) : null);
       queryClient.invalidateQueries({ queryKey: queryKeys.vehicleMembers.byVehicle(variables.vehicleId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.vehicleInvites.byVehicle(variables.vehicleId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
     },
   });
 
@@ -558,7 +558,7 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
     onSuccess: (result) => {
       setActiveVehicleId(result.vehicle_id);
       setDemoPickerOpen(false);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
       void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.status(result.vehicle_id) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.health(result.vehicle_id) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.images(result.vehicle_id) });
@@ -571,7 +571,7 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
       api.updateVehicleMember(vehicleId, userId, { role }),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.vehicleMembers.byVehicle(variables.vehicleId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
     },
   });
 
@@ -580,7 +580,7 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
       api.removeVehicleMember(vehicleId, userId),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.vehicleMembers.byVehicle(variables.vehicleId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
       queryClient.invalidateQueries({ queryKey: queryKeys.me.all });
     },
   });
