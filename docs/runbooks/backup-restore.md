@@ -81,6 +81,11 @@ are configuration, not estimates—an archive that exceeds any one is rejected.
 
 Backup creation and restore preflight use UUID workspaces beneath
 `BACKUP_ARTIFACT_DIR/.recovery-work` and remove them when the operation ends.
+Each workspace has a sibling `<uuid>.lock` file that its process holds an
+exclusive lock on while it works. A workspace left behind by a crash has no
+holder, so the API or restore agent removes it before creating its next
+workspace; a workspace still in use by either process is never removed. Do not
+delete `.recovery-work` entries by hand while a backup or restore is running.
 Preflight extraction uses the same configured recovery limits as activation;
 dump inspection streams output with bounded diagnostic memory. Keep free
 space on this volume for the package, extracted dump and safety backup. The
