@@ -176,3 +176,100 @@ fn reference_vehicles_have_unique_ids_and_the_figures_their_powertrain_needs() {
         }
     }
 }
+
+#[test]
+fn fuel_price_refresh_decision_serves_fresh_or_recently_attempted_copies() {
+    use super::fuel_prices::{refresh_decision, RefreshDecision};
+    use chrono::{Duration, TimeZone, Utc};
+
+    let now = Utc.with_ymd_and_hms(2026, 11, 10, 12, 0, 0).unwrap();
+    let ago = |hours| Some(now - Duration::hours(hours));
+
+    // Stored within a day: serve it.
+    assert_eq!(
+        refresh_decision(now, ago(30), ago(30), false, ago(2)),
+        RefreshDecision::Serve {
+            refresh_failed: false
+        }
+    );
+    // Stale, but a failed attempt an hour ago holds the retry back.
+    assert_eq!(
+        refresh_decision(now, ago(1), ago(40), true, ago(40)),
+        RefreshDecision::Serve {
+            refresh_failed: true
+        }
+    );
+    // Stale and the last attempt is old: refresh, remembering the failure.
+    assert_eq!(
+        refresh_decision(now, ago(7), ago(40), true, ago(40)),
+        RefreshDecision::Refresh {
+            previously_failed: true
+        }
+    );
+    // Nothing stored yet and only a connection test recorded an attempt.
+    assert_eq!(
+        refresh_decision(now, ago(1), None, false, None),
+        RefreshDecision::Refresh {
+            previously_failed: false
+        }
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
+async fn fuel_price_refresh_claim_admits_one_refresh_per_observed_attempt() {
+    use super::fuel_prices::claim_fuel_price_refresh;
+
+    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+        .await
+        .expect("test database");
+    let mut tx = pool.begin().await.expect("test transaction");
+    // A private activity row keeps the real fuel-price connection untouched.
+    let connection_id = format!("test-fuel-claim-{}", uuid::Uuid::new_v4());
+    let last_attempt = || {
+        sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+            "SELECT last_attempt_at FROM riviamigo.external_connection_activity
+             WHERE connection_id = $1",
+        )
+        .bind(&connection_id)
+    };
+
+    // No row yet: the first claimant creates it and wins; a second claimant
+    // that read the same empty state loses.
+    assert!(claim_fuel_price_refresh(&mut *tx, &connection_id, None)
+        .await
+        .unwrap());
+    assert!(!claim_fuel_price_refresh(&mut *tx, &connection_id, None)
+        .await
+        .unwrap());
+
+    // A claimant that read the winner's attempt can claim the next refresh;
+    // anyone holding the older observation still loses.
+    let observed = last_attempt().fetch_one(&mut *tx).await.unwrap();
+    assert!(observed.is_some());
+    sqlx::query(
+        "UPDATE riviamigo.external_connection_activity
+         SET last_attempt_at = last_attempt_at - interval '1 day'
+         WHERE connection_id = $1",
+    )
+    .bind(&connection_id)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    assert!(
+        !claim_fuel_price_refresh(&mut *tx, &connection_id, observed)
+            .await
+            .unwrap()
+    );
+    let observed = last_attempt().fetch_one(&mut *tx).await.unwrap();
+    assert!(claim_fuel_price_refresh(&mut *tx, &connection_id, observed)
+        .await
+        .unwrap());
+    assert!(
+        !claim_fuel_price_refresh(&mut *tx, &connection_id, observed)
+            .await
+            .unwrap()
+    );
+
+    tx.rollback().await.expect("rollback test fixtures");
+}
