@@ -1677,6 +1677,116 @@ async fn external_connections_loads_without_rivian_credentials() {
 }
 
 #[tokio::test]
+async fn external_connections_rivian_status_covers_only_the_callers_active_vehicles() {
+    let app = TestApp::new().await;
+    riviamigo_api::services::external_connections::ensure_defaults(&app.pool)
+        .await
+        .expect("seed external connection defaults");
+    let viewer_email = "rivian-status-viewer@example.com";
+    let other_email = "rivian-status-other@example.com";
+    let viewer_token = register_and_login(&app, viewer_email).await;
+    register_and_login(&app, other_email).await;
+    let user_id = |email: &'static str| {
+        let pool = app.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM riviamigo.users WHERE email = $1")
+                .bind(email)
+                .fetch_one(&pool)
+                .await
+                .expect("user id")
+        }
+    };
+    let viewer_id = user_id(viewer_email).await;
+    let other_id = user_id(other_email).await;
+
+    let own = insert_vehicle(&app.pool, viewer_id, "rivian-status-own", "Own").await;
+    let paused = insert_vehicle(&app.pool, viewer_id, "rivian-status-paused", "Paused").await;
+    let foreign = insert_vehicle(&app.pool, other_id, "rivian-status-foreign", "Foreign").await;
+    sqlx::query("UPDATE riviamigo.vehicles SET collection_paused = TRUE WHERE id = $1")
+        .bind(paused)
+        .execute(&app.pool)
+        .await
+        .expect("pause vehicle");
+
+    let own_issued = chrono::Utc::now() - chrono::Duration::days(10);
+    for (vehicle_id, issued_at, health, message, auth_state) in [
+        (own, own_issued, "connected", "own vehicle connected", None),
+        (
+            paused,
+            chrono::Utc::now() - chrono::Duration::days(170),
+            "error",
+            "paused vehicle detail",
+            Some("needs_reauth"),
+        ),
+        (
+            foreign,
+            chrono::Utc::now() - chrono::Duration::days(175),
+            "error",
+            "foreign vehicle detail",
+            Some("needs_reauth"),
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_credentials (vehicle_id, encrypted_tokens, token_created_at)
+             VALUES ($1, '\\x00', $2)",
+        )
+        .bind(vehicle_id)
+        .bind(issued_at)
+        .execute(&app.pool)
+        .await
+        .expect("seed credentials");
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_runtime_state
+                 (vehicle_id, worker_health, worker_health_msg, auth_state)
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(vehicle_id)
+        .bind(health)
+        .bind(message)
+        .bind(auth_state)
+        .execute(&app.pool)
+        .await
+        .expect("seed runtime state");
+    }
+
+    let response = app
+        .request(
+            Method::GET,
+            "/v1/settings/external-connections",
+            None,
+            Some(&viewer_token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        response.status,
+        StatusCode::OK,
+        "response: {}",
+        response.body
+    );
+    let rivian = response.body["connections"]
+        .as_array()
+        .expect("connections array")
+        .iter()
+        .find(|connection| connection["id"] == "rivian_account")
+        .expect("Rivian account connection")
+        .clone();
+    assert_eq!(rivian["renewal_state"], json!("healthy"), "{rivian}");
+    assert_eq!(rivian["observed_health"], json!("connected"), "{rivian}");
+    assert_eq!(
+        rivian["observed_error"],
+        json!("own vehicle connected"),
+        "{rivian}"
+    );
+    let issued_at: chrono::DateTime<chrono::Utc> =
+        serde_json::from_value(rivian["credential_issued_at"].clone()).expect("issued at");
+    assert!((issued_at - own_issued).num_seconds().abs() < 1, "{rivian}");
+    let text = rivian.to_string();
+    assert!(!text.contains("foreign vehicle detail"), "{text}");
+    assert!(!text.contains("paused vehicle detail"), "{text}");
+}
+
+#[tokio::test]
 async fn vehicles_only_returns_current_users_vehicles() {
     let app = TestApp::new().await;
     let owner_token = register_and_login(&app, "owner@example.com").await;
@@ -2303,6 +2413,81 @@ async fn vehicle_status_reports_facing_corrected_after_backing_in() {
         "{}",
         response.body["facing_deg"]
     );
+}
+
+#[tokio::test]
+async fn vehicle_facing_survives_a_drive_shift_without_moving() {
+    let app = TestApp::new().await;
+    let email = "vehicle-facing-still@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id: Uuid = sqlx::query_scalar("SELECT id FROM riviamigo.users WHERE email = $1")
+        .bind(email)
+        .fetch_one(&app.pool)
+        .await
+        .expect("user id");
+    let vehicle_id =
+        insert_vehicle(&app.pool, user_id, "vehicle-facing-still", "Facing Truck").await;
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+         VALUES ($1, $2, 'owner', TRUE)
+         ON CONFLICT (vehicle_id, user_id) DO UPDATE SET role = EXCLUDED.role",
+    )
+    .bind(vehicle_id)
+    .bind(user_id)
+    .execute(&app.pool)
+    .await
+    .expect("seed vehicle membership");
+
+    // Back in (reverse reported in another casing), then shift to drive and
+    // park again without moving: the course still points out of the space.
+    let arrived = chrono::Utc::now() - chrono::Duration::hours(20);
+    for (offset_seconds, heading, gear, speed) in [
+        (0_i64, 103.6, "drive", 12.0),
+        (180, 103.6, "Reverse", 0.0),
+        (600, -88.6, "park", 0.0),
+        (19 * 3600, -88.6, "drive", 0.0),
+        (19 * 3600 + 60, -88.6, "park", 0.0),
+    ] {
+        sqlx::query(
+            "INSERT INTO timeseries.telemetry (ts, vehicle_id, heading_deg, gear_status, speed_mph)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(arrived + chrono::Duration::seconds(offset_seconds))
+        .bind(vehicle_id)
+        .bind(heading)
+        .bind(gear)
+        .bind(speed)
+        .execute(&app.pool)
+        .await
+        .expect("telemetry sample");
+    }
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_latest_status (vehicle_id, ts, heading_deg, gear_status, speed_mph)
+         VALUES ($1, $2, -88.6, 'park', 0)",
+    )
+    .bind(vehicle_id)
+    .bind(arrived + chrono::Duration::hours(19))
+    .execute(&app.pool)
+    .await
+    .expect("seed latest status");
+
+    let response = app
+        .request(
+            Method::GET,
+            &format!("/v1/vehicles/{vehicle_id}/status"),
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        response.status,
+        StatusCode::OK,
+        "response: {}",
+        response.body
+    );
+    let facing = response.body["facing_deg"].as_f64().expect("facing_deg");
+    assert!((facing - 91.4).abs() < 1e-6, "{facing}");
 }
 
 #[tokio::test]
