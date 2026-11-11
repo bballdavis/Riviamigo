@@ -28,7 +28,7 @@ import {
 } from '@riviamigo/ui/lib/dateTime';
 import {
   PageLayout, Card, CardHeader, CardTitle, CardContent,
-  Button, Badge, Input, SelectPicker, Tooltip,
+  Button, Badge, Input, ResponsiveDialog, SelectPicker, Tooltip,
 } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../../components/layout/AppLayout';
 import { useReleaseCheckStatus } from '../../hooks/useGithubReleaseCheck';
@@ -42,6 +42,7 @@ import { JobsSection } from '../../components/settings/JobsSection';
 import { PlacesSection } from '../../components/settings/PlacesSection';
 import { ChargingSection } from '../../components/settings/ChargingSection';
 import { AppearanceSection } from './AppearanceSection';
+import { SettingsConfirmationDialog } from './SettingsConfirmationDialog';
 import { SettingsDraftProvider, useSettingsDraft, useSettingsLeaveGuard } from './drafts/SettingsDraftProvider';
 import { useStagedValue } from './drafts/useStagedValue';
 import { saveFailure } from './drafts/saveFailure';
@@ -824,11 +825,12 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
                   {/* Delete confirmation dialog */}
                   {deleteConfirmId && (() => {
                     const dv = vehicles?.find((v) => v.id === deleteConfirmId);
+                    const closeDelete = () => { setDeleteConfirmId(null); setDeleteConfirmText(''); };
                     return (
-                      <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-page/80 backdrop-blur-sm">
-                        <div className="w-full max-w-sm rounded-xl border border-border bg-bg-surface p-5 shadow-lg">
-                          <h3 className="text-sm font-semibold text-fg">Delete {dv?.display_name}?</h3>
-                          <p className="mt-2 text-xs text-fg-tertiary">
+                      <ResponsiveDialog titleId="settings-delete-vehicle-title" onClose={closeDelete} className="sm:max-w-sm">
+                        <div className="flex flex-1 flex-col gap-2 px-4 pb-4 pt-[max(1.25rem,env(safe-area-inset-top))] sm:p-5">
+                          <h2 id="settings-delete-vehicle-title" className="text-base font-semibold text-fg">Delete {dv?.display_name}?</h2>
+                          <p className="text-sm text-fg-tertiary">
                             This permanently removes all local telemetry, trips, and charging history for this vehicle.
                             Type <strong className="font-semibold text-fg">DELETE</strong> below to confirm.
                           </p>
@@ -836,60 +838,44 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
                             value={deleteConfirmText}
                             onChange={(e) => setDeleteConfirmText(e.target.value)}
                             placeholder="DELETE"
+                            aria-label="Type DELETE to confirm"
                             autoFocus
-                            className="mt-3 h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                            className="mt-1 h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
                           />
-                          <div className="mt-3 flex justify-end gap-2">
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() => { setDeleteConfirmId(null); setDeleteConfirmText(''); }}
-                            >
-                              Cancel
-                            </Button>
-                            <Button
-                              variant="danger"
-                              size="sm"
-                              disabled={deleteConfirmText !== 'DELETE'}
-                              loading={deleteVehicle.isPending}
-                              onClick={() => {
-                                deleteVehicle.mutate(deleteConfirmId);
-                                setDeleteConfirmId(null);
-                                setDeleteConfirmText('');
-                              }}
-                            >
-                              Delete Vehicle
-                            </Button>
-                          </div>
                         </div>
-                      </div>
+                        <footer className="flex flex-col-reverse gap-2 border-t border-border bg-bg-surface px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:flex-row sm:justify-end sm:p-5">
+                          <Button variant="secondary" size="sm" onClick={closeDelete}>
+                            Cancel
+                          </Button>
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            disabled={deleteConfirmText !== 'DELETE'}
+                            loading={deleteVehicle.isPending}
+                            onClick={() => {
+                              deleteVehicle.mutate(deleteConfirmId);
+                              closeDelete();
+                            }}
+                          >
+                            Delete Vehicle
+                          </Button>
+                        </footer>
+                      </ResponsiveDialog>
                     );
                   })()}
 
                   {demoRefreshConfirmId && (() => {
                     const demo = vehicles?.find((vehicle) => vehicle.id === demoRefreshConfirmId);
                     return (
-                      <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-page/80 px-4 backdrop-blur-sm">
-                        <div className="w-full max-w-sm rounded-xl border border-border bg-bg-surface p-5 shadow-lg">
-                          <h3 className="text-sm font-semibold text-fg">Refresh {demo?.display_name ?? 'demo vehicle'}?</h3>
-                          <p className="mt-2 text-xs text-fg-tertiary">
-                            This replaces only the illustrative telemetry, trips, charging, and weather history with a fresh rolling 14-day demo window. Sharing and vehicle settings stay unchanged.
-                          </p>
-                          <div className="mt-4 flex justify-end gap-2">
-                            <Button variant="secondary" size="sm" onClick={() => setDemoRefreshConfirmId(null)}>
-                              Cancel
-                            </Button>
-                            <Button
-                              variant="primary"
-                              size="sm"
-                              loading={refreshDemoVehicle.isPending}
-                              onClick={() => refreshDemoVehicle.mutate(demoRefreshConfirmId)}
-                            >
-                              Refresh Demo Data
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
+                      <SettingsConfirmationDialog
+                        confirmation={{
+                          title: `Refresh ${demo?.display_name ?? 'demo vehicle'}?`,
+                          description: 'This replaces only the illustrative telemetry, trips, charging, and weather history with a fresh rolling 14-day demo window. Sharing and vehicle settings stay unchanged.',
+                          confirmLabel: 'Refresh Demo Data',
+                          run: () => refreshDemoVehicle.mutateAsync(demoRefreshConfirmId),
+                        }}
+                        onClose={() => setDemoRefreshConfirmId(null)}
+                      />
                     );
                   })()}
 
