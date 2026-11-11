@@ -126,6 +126,21 @@ fn sweep_abandoned_workspaces(parent: &Dir) -> usize {
 }
 
 impl RecoveryWorkspace {
+    /// Async callers use this: creating a workspace may first delete large
+    /// abandoned trees, which must not block a runtime worker thread.
+    pub(crate) async fn create(
+        root: &Path,
+        limits: &RecoveryConfig,
+    ) -> Result<Arc<Self>, AppError> {
+        let root = root.to_path_buf();
+        let limits = limits.clone();
+        tokio::task::spawn_blocking(move || Self::new(&root, &limits))
+            .await
+            .map_err(|error| {
+                AppError::Internal(anyhow::anyhow!("recovery workspace task failed: {error}"))
+            })?
+    }
+
     pub(crate) fn new(root: &Path, limits: &RecoveryConfig) -> Result<Arc<Self>, AppError> {
         std::fs::create_dir_all(root)?;
         let root_dir = Dir::open_ambient_dir(root, ambient_authority())?;
