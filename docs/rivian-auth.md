@@ -89,6 +89,14 @@ typed `renewal_state`: `healthy`, `renewal_soon`, `renewal_due`, or
 policy informed by current unofficial-client behavior, not an official Rivian
 expiry guarantee. Observed credential rejection always overrides the timer.
 
+The Rivian account entry in `GET /v1/settings/external-connections` is
+computed per caller: the earliest credential time, the credential-rejection
+override, and the reported worker health and message cover only vehicles the
+caller is a member of (only the key's vehicle for a vehicle-scoped API key),
+and leave out vehicles whose collection is paused. One user's vehicle needing
+reauthorization therefore does not mark the connection `reauth_required` for
+members of other vehicles, and its worker message is not shown to them.
+
 A successful full login or OTP credential refresh resets the creation time.
 Automatic CSRF/app-session renewal preserves it because that rotation does not
 represent a new long-lived Rivian authorization. Do not move the advisory date

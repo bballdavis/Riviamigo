@@ -1677,6 +1677,116 @@ async fn external_connections_loads_without_rivian_credentials() {
 }
 
 #[tokio::test]
+async fn external_connections_rivian_status_covers_only_the_callers_active_vehicles() {
+    let app = TestApp::new().await;
+    riviamigo_api::services::external_connections::ensure_defaults(&app.pool)
+        .await
+        .expect("seed external connection defaults");
+    let viewer_email = "rivian-status-viewer@example.com";
+    let other_email = "rivian-status-other@example.com";
+    let viewer_token = register_and_login(&app, viewer_email).await;
+    register_and_login(&app, other_email).await;
+    let user_id = |email: &'static str| {
+        let pool = app.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM riviamigo.users WHERE email = $1")
+                .bind(email)
+                .fetch_one(&pool)
+                .await
+                .expect("user id")
+        }
+    };
+    let viewer_id = user_id(viewer_email).await;
+    let other_id = user_id(other_email).await;
+
+    let own = insert_vehicle(&app.pool, viewer_id, "rivian-status-own", "Own").await;
+    let paused = insert_vehicle(&app.pool, viewer_id, "rivian-status-paused", "Paused").await;
+    let foreign = insert_vehicle(&app.pool, other_id, "rivian-status-foreign", "Foreign").await;
+    sqlx::query("UPDATE riviamigo.vehicles SET collection_paused = TRUE WHERE id = $1")
+        .bind(paused)
+        .execute(&app.pool)
+        .await
+        .expect("pause vehicle");
+
+    let own_issued = chrono::Utc::now() - chrono::Duration::days(10);
+    for (vehicle_id, issued_at, health, message, auth_state) in [
+        (own, own_issued, "connected", "own vehicle connected", None),
+        (
+            paused,
+            chrono::Utc::now() - chrono::Duration::days(170),
+            "error",
+            "paused vehicle detail",
+            Some("needs_reauth"),
+        ),
+        (
+            foreign,
+            chrono::Utc::now() - chrono::Duration::days(175),
+            "error",
+            "foreign vehicle detail",
+            Some("needs_reauth"),
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_credentials (vehicle_id, encrypted_tokens, token_created_at)
+             VALUES ($1, '\\x00', $2)",
+        )
+        .bind(vehicle_id)
+        .bind(issued_at)
+        .execute(&app.pool)
+        .await
+        .expect("seed credentials");
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_runtime_state
+                 (vehicle_id, worker_health, worker_health_msg, auth_state)
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(vehicle_id)
+        .bind(health)
+        .bind(message)
+        .bind(auth_state)
+        .execute(&app.pool)
+        .await
+        .expect("seed runtime state");
+    }
+
+    let response = app
+        .request(
+            Method::GET,
+            "/v1/settings/external-connections",
+            None,
+            Some(&viewer_token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        response.status,
+        StatusCode::OK,
+        "response: {}",
+        response.body
+    );
+    let rivian = response.body["connections"]
+        .as_array()
+        .expect("connections array")
+        .iter()
+        .find(|connection| connection["id"] == "rivian_account")
+        .expect("Rivian account connection")
+        .clone();
+    assert_eq!(rivian["renewal_state"], json!("healthy"), "{rivian}");
+    assert_eq!(rivian["observed_health"], json!("connected"), "{rivian}");
+    assert_eq!(
+        rivian["observed_error"],
+        json!("own vehicle connected"),
+        "{rivian}"
+    );
+    let issued_at: chrono::DateTime<chrono::Utc> =
+        serde_json::from_value(rivian["credential_issued_at"].clone()).expect("issued at");
+    assert!((issued_at - own_issued).num_seconds().abs() < 1, "{rivian}");
+    let text = rivian.to_string();
+    assert!(!text.contains("foreign vehicle detail"), "{text}");
+    assert!(!text.contains("paused vehicle detail"), "{text}");
+}
+
+#[tokio::test]
 async fn vehicles_only_returns_current_users_vehicles() {
     let app = TestApp::new().await;
     let owner_token = register_and_login(&app, "owner@example.com").await;
