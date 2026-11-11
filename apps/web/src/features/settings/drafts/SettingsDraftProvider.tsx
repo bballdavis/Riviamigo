@@ -54,6 +54,12 @@ export function SettingsDraftProvider({ children }: { children: React.ReactNode 
   const draftsRef = React.useRef(drafts);
   draftsRef.current = drafts;
   const hasUnsavedChanges = drafts.size > 0;
+  // One save at a time: a second Cmd+S or click while saving would repeat
+  // non-idempotent writes such as creating a place.
+  const savingRef = React.useRef(false);
+  // Set while the page itself performs a navigation the user already resolved
+  // (saved or discarded), so the router blocker does not ask again.
+  const bypassBlockRef = React.useRef(false);
 
   const setDraft = React.useCallback((id: string, draft: RegisteredDraft | null) => {
     setDrafts((current) => {
@@ -70,6 +76,8 @@ export function SettingsDraftProvider({ children }: { children: React.ReactNode 
   }, [hasUnsavedChanges]);
 
   const saveAll = React.useCallback(async (): Promise<boolean> => {
+    if (savingRef.current) return false;
+    savingRef.current = true;
     setSaving(true);
     setError(null);
     try {
@@ -81,6 +89,7 @@ export function SettingsDraftProvider({ children }: { children: React.ReactNode 
       setError(errorMessage(caught));
       return false;
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }, []);
@@ -96,16 +105,34 @@ export function SettingsDraftProvider({ children }: { children: React.ReactNode 
   }, []);
 
   const blocker = useBlocker({
-    shouldBlockFn: ({ current, next }) => draftsRef.current.size > 0 && current.pathname !== next.pathname,
+    shouldBlockFn: ({ current, next }) => {
+      if (bypassBlockRef.current) {
+        bypassBlockRef.current = false;
+        return false;
+      }
+      if (draftsRef.current.size === 0) return false;
+      // Signing out ends the session; a save could only fail with 401 there.
+      if (next.pathname.startsWith('/login')) return false;
+      if (current.pathname !== next.pathname) return true;
+      // Back/Forward between Settings sections unmounts the open section.
+      const section = (search: unknown) => (search as { section?: unknown } | undefined)?.section ?? null;
+      return section(current.search) !== section(next.search);
+    },
     enableBeforeUnload: () => draftsRef.current.size > 0,
     withResolver: true,
   });
+
+  const leaveOpen = pendingLeave !== null || blocker.status === 'blocked';
+  const leaveOpenRef = React.useRef(leaveOpen);
+  leaveOpenRef.current = leaveOpen;
 
   React.useEffect(() => {
     if (!hasUnsavedChanges) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 's') {
         event.preventDefault();
+        // The leave dialog has its own Save; key repeat must not queue saves.
+        if (event.repeat || leaveOpenRef.current) return;
         void saveAll();
       }
     };
@@ -113,15 +140,18 @@ export function SettingsDraftProvider({ children }: { children: React.ReactNode 
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [hasUnsavedChanges, saveAll]);
 
-  const leaveOpen = pendingLeave !== null || blocker.status === 'blocked';
   const finishLeave = React.useCallback((proceed: boolean) => {
     const action = pendingLeave;
     setPendingLeave(null);
     if (blocker.status === 'blocked') {
       if (proceed) blocker.proceed?.();
       else blocker.reset?.();
-    } else if (proceed) {
-      action?.();
+    } else if (proceed && action) {
+      bypassBlockRef.current = true;
+      action();
+      // The drafts are already saved or discarded; give their unregistration a
+      // moment, then guard again (the action may not navigate at all).
+      window.setTimeout(() => { bypassBlockRef.current = false; }, 500);
     }
   }, [blocker, pendingLeave]);
 
@@ -146,7 +176,7 @@ export function SettingsDraftProvider({ children }: { children: React.ReactNode 
         </>
       ) : null}
       {leaveOpen ? (
-        <ResponsiveDialog titleId="settings-unsaved-title" onClose={() => finishLeave(false)} className="sm:max-w-md">
+        <ResponsiveDialog titleId="settings-unsaved-title" onClose={() => { if (!savingRef.current) finishLeave(false); }} className="sm:max-w-md">
           <div className="flex flex-1 flex-col gap-2 px-4 pb-4 pt-[max(1.25rem,env(safe-area-inset-top))] sm:p-5">
             <h2 id="settings-unsaved-title" className="text-base font-semibold text-fg">Save your changes?</h2>
             <p className="text-sm text-fg-secondary">You have unsaved changes on this page. Save them before leaving, or discard them.</p>
@@ -212,6 +242,11 @@ export function useSettingsLeaveGuard() {
     },
     [context],
   );
+}
+
+/** True while the Settings page is saving its drafts. */
+export function useSettingsSaving() {
+  return React.useContext(SettingsDraftContext)?.saving ?? false;
 }
 
 export function useSettingsHasUnsavedChanges() {

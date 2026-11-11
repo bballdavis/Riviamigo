@@ -11,6 +11,13 @@ type CostModes = Record<string, CostMode>;
 
 /** Vehicle-scoped charging policy. Only observed vendors are returned by the API. */
 export function ChargingSection() {
+  const { effectiveVehicleId } = useResolvedVehicleSelection();
+  // Staged choices belong to one vehicle; a new selection starts a fresh draft
+  // instead of saving the old vehicle's choices to it.
+  return <VehicleChargingSection key={effectiveVehicleId ?? 'none'} />;
+}
+
+function VehicleChargingSection() {
   const { effectiveVehicleId, authReady, vehicleSelectionReady } = useResolvedVehicleSelection();
   const { data: vehicles = [] } = useVehicles();
   const preferences = useChargingNetworkPreferences(effectiveVehicleId);
@@ -53,7 +60,7 @@ export function ChargingSection() {
         throw new Error(`${detail} Try again.`, { cause: error });
       }
     }
-    staged.commit({ ...savedModes, ...submitted });
+    staged.commit({ ...savedModes, ...submitted }, submitted);
   }
 
   if (!authReady || !vehicleSelectionReady) {

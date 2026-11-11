@@ -41,12 +41,13 @@ export function OwnershipSettingsSection({ vehicles }: { vehicles: Vehicle[] }) 
   useSettingsDraft('ownership-enabled', {
     isDirty: enabled.isDirty,
     save: async () => {
+      const submitted = enabled.value;
       try {
-        await update.mutateAsync(enabled.value);
+        await update.mutateAsync(submitted);
       } catch {
         throw new Error('Show Ownership could not be saved. Try again.');
       }
-      enabled.commit(enabled.value);
+      enabled.commit(submitted, submitted);
     },
     discard: enabled.reset,
   });
@@ -124,7 +125,8 @@ function VehicleOwnershipSettings({ vehicleId, ownLabel }: { vehicleId: string; 
     () => (ownership.data ? normalizeOwnershipResponse(ownership.data) : undefined),
     [ownership.data],
   );
-  if (ownership.isError) return <p className="text-sm text-status-danger">Ownership settings could not be loaded.</p>;
+  // A failed background refetch keeps the loaded data (and any staged edits) on screen.
+  if (ownership.isError && !data) return <p className="text-sm text-status-danger">Ownership settings could not be loaded.</p>;
   if (ownership.isLoading || !data) return <p className="text-sm text-fg-secondary">Loading ownership settings...</p>;
   return <VehicleOwnershipEditor vehicleId={vehicleId} ownLabel={ownLabel} data={data} />;
 }
@@ -154,7 +156,9 @@ function VehicleOwnershipEditor({
   useSettingsDraft(`ownership-settings-${vehicleId}`, {
     isDirty: costs.isDirty || Object.keys(scheduleEdits).length > 0,
     save: async () => {
-      const result = formToSettings(costs.value, data.settings);
+      const submittedForm = costs.value;
+      const submittedEdits = scheduleEdits;
+      const result = formToSettings(submittedForm, data.settings);
       const schedules = applyScheduleEdits(data.settings.maintenance, scheduleEdits, targets);
       setCostErrors(result.errors);
       setScheduleErrors(schedules.errors);
@@ -167,8 +171,9 @@ function VehicleOwnershipEditor({
       } catch {
         throw new Error('Ownership settings could not be saved. Try again.');
       }
-      costs.commit(settingsToForm(next));
-      setScheduleEdits({});
+      costs.commit(settingsToForm(next), submittedForm);
+      // Keep schedule edits made while the save was running.
+      setScheduleEdits((current) => (current === submittedEdits ? {} : current));
     },
     discard: () => {
       costs.reset();
