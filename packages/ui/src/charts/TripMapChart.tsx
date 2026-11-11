@@ -419,18 +419,6 @@ export function TripMapChart({
     focusZoomRef.current = focusZoom;
   }, [focusPoint, focusZoom, markerPoint, selectedRouteIds, visibleRouteSignature, visibleRoutes]);
 
-  React.useEffect(() => {
-    const element = containerRef.current;
-    if (!element || typeof ResizeObserver === 'undefined') return;
-
-    const observer = new ResizeObserver(() => {
-      mapRef.current?.resize();
-    });
-
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-
   const clearTileLoadTimeout = React.useCallback(() => {
     if (tileLoadTimeoutRef.current !== null) {
       clearTimeout(tileLoadTimeoutRef.current);
@@ -522,6 +510,7 @@ export function TripMapChart({
           ...(initialStyleOptions ? {} : { style: initialStyle }),
           center: [firstPoint.lng, firstPoint.lat],
           zoom: routeStart ? 12 : focusZoomRef.current,
+          // trackResize (default on) keeps the canvas in step with its container, even if it is replaced.
           attributionControl: false,
           transformRequest: (url: string) => {
             try {
