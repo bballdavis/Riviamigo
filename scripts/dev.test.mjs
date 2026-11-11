@@ -4,7 +4,9 @@ import {
   allocateDistinctRuntimePorts,
   deriveDevComposeProjectName,
   developmentAuthEnv,
+  buildWindowsProcessQuery,
   matchRepoOwnedProcesses,
+  matchWindowsRepoOwnedProcesses,
   parseComposeIdentityMetadata,
   parseComposePortMetadata,
 } from './dev.mjs';
@@ -188,4 +190,75 @@ test('stop matches only this checkout\'s dev processes', () => {
     [[101, 'api'], [102, 'restore-agent'], [103, 'vite'], [105, 'launcher'], [107, 'launcher']],
   );
   assert.deepEqual(matchRepoOwnedProcesses(ps, { ...options, selfPid: 101 }).map((entry) => entry.pid), [102, 103]);
+});
+
+const WINDOWS_ROOT = 'C:\\work\\Riviamigo';
+const WINDOWS_OPTIONS = {
+  apiBin: `${WINDOWS_ROOT}\\apps\\api\\target\\debug\\riviamigo-api.exe`,
+  restoreAgentBin: `${WINDOWS_ROOT}\\apps\\api\\target\\debug\\riviamigo-restore-agent.exe`,
+  webDir: `${WINDOWS_ROOT}\\apps\\web`,
+  launcherScript: `${WINDOWS_ROOT}\\scripts\\dev.mjs`,
+};
+
+test('the Windows process query asks for launchers only when stop needs them', () => {
+  const withLaunchers = buildWindowsProcessQuery({ ...WINDOWS_OPTIONS, includeLaunchers: true });
+  const withoutLaunchers = buildWindowsProcessQuery({ ...WINDOWS_OPTIONS, includeLaunchers: false });
+
+  assert.match(withLaunchers, /\$includeLaunchers = \$true/);
+  assert.match(withoutLaunchers, /\$includeLaunchers = \$false/);
+  // The PowerShell process running the query has the query text as its own
+  // command line, so the query must not name the launcher script or it could match itself.
+  assert.equal(withLaunchers.includes(WINDOWS_OPTIONS.launcherScript), false);
+  assert.equal(withLaunchers.includes('scripts\\dev.mjs'), false);
+  assert.match(withLaunchers, /\$_\.ProcessId -eq \$PID/);
+});
+
+test('Windows stop matches this checkout\'s launcher by absolute path or by its recorded PID', () => {
+  const { launcherScript, apiBin, restoreAgentBin, webDir } = WINDOWS_OPTIONS;
+  const rows = [
+    { ProcessId: 101, Name: 'riviamigo-api.exe', ExecutablePath: apiBin, CommandLine: `"${apiBin}"` },
+    { ProcessId: 102, Name: 'riviamigo-restore-agent.exe', ExecutablePath: restoreAgentBin, CommandLine: `"${restoreAgentBin}"` },
+    { ProcessId: 103, Name: 'node.exe', ExecutablePath: 'C:\\Program Files\\nodejs\\node.exe', CommandLine: `node ${webDir}\\node_modules\\vite\\bin\\vite.js --host` },
+    { ProcessId: 201, Name: 'node.exe', CommandLine: `"C:\\Program Files\\nodejs\\node.exe" "${launcherScript}"` },
+    { ProcessId: 202, Name: 'node.exe', CommandLine: `"C:\\Program Files\\nodejs\\node.exe" "${launcherScript}" --once` },
+    { ProcessId: 203, Name: 'node.exe', CommandLine: 'node D:\\other\\Riviamigo\\scripts\\dev.mjs' },
+    { ProcessId: 204, Name: 'node.exe', CommandLine: 'node ./scripts/dev.mjs --stop' },
+    { ProcessId: 205, Name: 'node.exe', CommandLine: 'node ./scripts/dev.mjs' },
+    { ProcessId: 206, Name: 'node.exe', CommandLine: 'node ./scripts/dev.mjs' },
+    { ProcessId: 207, Name: 'powershell.exe', CommandLine: `powershell.exe -NoProfile -Command "$webDir = '${webDir}'; ... -match 'dev\\.mjs'"` },
+    { ProcessId: 208, Name: 'node.exe', CommandLine: 'node ./scripts/dev-harness.mjs' },
+  ];
+  const options = { ...WINDOWS_OPTIONS, launcherPid: 205, selfPid: 999 };
+
+  assert.deepEqual(
+    matchWindowsRepoOwnedProcesses(rows, { ...options, includeLaunchers: true })
+      .map((entry) => [entry.pid, entry.kind]),
+    [[101, 'api'], [102, 'restore-agent'], [103, 'vite'], [201, 'launcher'], [202, 'launcher'], [205, 'launcher']],
+  );
+  assert.deepEqual(
+    matchWindowsRepoOwnedProcesses(rows, { ...options, includeLaunchers: false })
+      .map((entry) => [entry.pid, entry.kind]),
+    [[101, 'api'], [102, 'restore-agent'], [103, 'vite']],
+  );
+  assert.deepEqual(
+    matchWindowsRepoOwnedProcesses(rows, { ...options, includeLaunchers: true, launcherPid: null })
+      .map((entry) => entry.pid),
+    [101, 102, 103, 201, 202],
+  );
+});
+
+test('Windows stop never takes a launcher that another checkout owns, even on a recorded PID', () => {
+  const rows = [
+    { ProcessId: 203, Name: 'node.exe', CommandLine: 'node D:\\other\\Riviamigo\\scripts\\dev.mjs' },
+    { ProcessId: 303, Name: 'node.exe', CommandLine: '"C:\\Program Files\\nodejs\\node.exe" "D:\\other\\Riviamigo\\scripts\\dev.mjs"' },
+  ];
+  // A PID file left behind can outlive its launcher and be reused by another checkout's launcher.
+  assert.deepEqual(
+    matchWindowsRepoOwnedProcesses(rows, { ...WINDOWS_OPTIONS, includeLaunchers: true, launcherPid: 203, selfPid: 999 }),
+    [],
+  );
+  assert.deepEqual(
+    matchWindowsRepoOwnedProcesses(rows, { ...WINDOWS_OPTIONS, includeLaunchers: true, launcherPid: 303, selfPid: 999 }),
+    [],
+  );
 });
