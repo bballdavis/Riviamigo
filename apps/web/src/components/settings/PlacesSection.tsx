@@ -399,7 +399,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                   aria-invalid={fieldErrors.name ? true : undefined}
                   className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
                 />
-                {fieldErrors.name ? <span className="text-xs text-danger">{fieldErrors.name}</span> : null}
+                {fieldErrors.name ? <span className="text-xs text-status-danger">{fieldErrors.name}</span> : null}
               </label>
 
               <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,8.5rem)] sm:items-end">
@@ -444,7 +444,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                     aria-invalid={fieldErrors.radius ? true : undefined}
                     className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
                   />
-                  {fieldErrors.radius ? <span className="text-xs text-danger">{fieldErrors.radius}</span> : null}
+                  {fieldErrors.radius ? <span className="text-xs text-status-danger">{fieldErrors.radius}</span> : null}
                 </label>
               </div>
 
@@ -492,7 +492,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                   <div className="mt-1 text-fg-tertiary">{draft.address.display_name}</div>
                 </div>
               )}
-              {fieldErrors.address ? <p className="text-xs text-danger">{fieldErrors.address}</p> : null}
+              {fieldErrors.address ? <p className="text-xs text-status-danger">{fieldErrors.address}</p> : null}
 
               <div className="grid gap-3">
                 <label className="grid gap-1">
@@ -684,7 +684,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                       </div>
 
                       {scheduleValidation && (
-                        <div className="rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+                        <div className="rounded-lg border border-status-danger/40 bg-status-danger/10 p-3 text-sm text-status-danger">
                           {scheduleValidation}
                         </div>
                       )}
@@ -694,12 +694,12 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
               )}
 
               {addressChangedFromSelection && (
-                <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm text-fg">
+                <div className="rounded-lg border border-status-warning/40 bg-status-warning/10 p-3 text-sm text-fg">
                   Pick one of the address suggestions again before saving this place.
                 </div>
               )}
 
-              {fieldErrors.charging ? <p className="text-xs text-danger">{fieldErrors.charging}</p> : null}
+              {fieldErrors.charging ? <p className="text-xs text-status-danger">{fieldErrors.charging}</p> : null}
               <div className="flex flex-wrap items-center gap-3">
                 {editingPlaceId ? (
                   <Button variant="secondary" size="sm" onClick={() => requestLeave(resetEditor)}>Cancel</Button>

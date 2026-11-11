@@ -391,7 +391,7 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
           {saveError ? (
             <div
               role="alert"
-              className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
+              className="mb-4 rounded-lg border border-status-danger/40 bg-status-danger/10 px-3 py-2 text-sm text-status-danger"
             >
               {saveError}
             </div>
@@ -615,7 +615,7 @@ function CurvesSection({
             </p>
           )}
           {mixed ? (
-            <p className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+            <p className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-3 text-xs text-status-warning">
               This chart uses mixed domains. Use Advanced to edit its exact field bindings.
             </p>
           ) : null}
@@ -663,7 +663,7 @@ function CurvesSection({
                         {option.category} · {option.description}
                       </span>
                       {!option.enabled || mixed ? (
-                        <span className="block text-xs text-warning">
+                        <span className="block text-xs text-status-warning">
                           {mixed
                             ? 'Mixed-domain chart; edit in Advanced.'
                             : (option.disabledReason ?? 'Unavailable for this chart.')}
@@ -782,7 +782,7 @@ function CurvesListSection({
                   aria-label="Remove curve"
                   disabled={definition.series.length === 1}
                   onClick={() => onChange((current) => removeCurveAndUnusedSources(current, index))}
-                  className="icon-button text-danger"
+                  className="icon-button text-status-danger"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -905,7 +905,7 @@ function CurvesListSection({
                     ) : null}
                   </>
                 ) : (
-                  <p className="text-xs text-warning">
+                  <p className="text-xs text-status-warning">
                     This curve's data settings are unavailable. Choose another value or repair it in
                     Advanced.
                   </p>
@@ -1139,18 +1139,18 @@ function PreviewPanel({
           {errors.map((error) => (
             <div
               key={`${error.path}-${error.message}`}
-              className="rounded-lg border border-danger/30 bg-danger/10 p-2"
+              className="rounded-lg border border-status-danger/30 bg-status-danger/10 p-2"
             >
-              <strong className="text-danger">{error.path}</strong>
+              <strong className="text-status-danger">{error.path}</strong>
               <p className="mt-1 text-fg-secondary">{error.message}</p>
             </div>
           ))}
           {totalIssues === 0 ? (
             <>
-              <div className="flex items-center gap-2 text-success">
+              <div className="flex items-center gap-2 text-status-positive">
                 <Check className="h-4 w-4" /> Production chart renderer
               </div>
-              <div className="flex items-center gap-2 text-success">
+              <div className="flex items-center gap-2 text-status-positive">
                 <Check className="h-4 w-4" /> {draft.config.series.length} curves
               </div>
             </>
@@ -1301,7 +1301,7 @@ function SearchPicker({
                   <span className="block text-xs text-fg-tertiary">{option.description}</span>
                 ) : null}
                 {option.disabledReason ? (
-                  <span className="block text-xs text-warning">{option.disabledReason}</span>
+                  <span className="block text-xs text-status-warning">{option.disabledReason}</span>
                 ) : null}
               </button>
             ))}
