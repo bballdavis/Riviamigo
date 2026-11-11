@@ -138,6 +138,7 @@ pub async fn vehicles_accepting_unidentified_summaries(
                    WHERE p.vehicle_id = v.id
                      AND p.operation = 'getCompletedSessionSummaries'
                      AND p.rivian_vehicle_id IS NOT NULL
+                     AND btrim(p.rivian_vehicle_id) <> ''
                      AND p.rivian_vehicle_id <> v.rivian_vehicle_id
                ) AS has_foreign_payloads
         FROM riviamigo.vehicles v
