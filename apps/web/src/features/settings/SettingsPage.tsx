@@ -2,15 +2,13 @@ import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, AuthenticatedVehicleArtwork, queryKeys, resolveVehicleArtwork, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
-import { type UnitPreferences, type Vehicle, type VehicleImages, type VehicleMember } from '@riviamigo/types';
+import { type UnitPreferences, type VehicleImages, type VehicleMember } from '@riviamigo/types';
 import {
-  downloadDashboardYaml,
   materializeUserDashboardDraft,
   useCloneDashboard,
   useCreateDashboard,
   useDashboards,
   useDeleteDashboard,
-  getDefaultBySlug,
   useRestoreAdminDashboardDefault,
   useSetAdminDashboardLock,
 } from '@riviamigo/dashboards';
@@ -51,6 +49,8 @@ import { VehicleBatteryEditor } from './VehicleBatteryEditor';
 import { IMPERIAL_UNITS, METRIC_UNITS, sameUnitPreferences } from './unitPreferenceDrafts';
 import { RawTelemetryExplorer } from '../../components/settings/RawTelemetryExplorer';
 import { ChartManagerSection } from './charts/ChartManagerSection';
+import { DashboardSettingsList, dashboardActionId } from './DashboardSettingsList';
+import { IngestionDiagnosticsSection } from './IngestionCaptureSection';
 import { canManageSystemDashboards } from '../../components/dashboard/DashboardPage';
 import { useDashboardEditButtonPreference } from '../../components/dashboard/useDashboardEditButtonPreference';
 import { PASSWORD_MIN_LENGTH, PasswordRequirements } from '../../components/auth/PasswordRequirements';
@@ -59,13 +59,8 @@ import {
   getRivianCredentialRenewalNotice,
 } from '../../lib/rivianCredentialRenewal';
 import {
-  Car, ChartLine, CircleDollarSign, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Ruler, Search, ShieldCheck, Star, Trash2, Unlock, Users, Zap,
+  Car, ChartLine, CircleDollarSign, Clipboard, Database, DatabaseBackup, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Ruler, Search, ShieldCheck, Star, Trash2, Users, Zap,
 } from 'lucide-react';
-
-function dashboardActionId(dashboard: DashboardConfig) {
-  if (!dashboard.isDefault) return dashboard.id;
-  return getDefaultBySlug(dashboard.slug)?.id ?? dashboard.id;
-}
 
 type SettingsSection = 'vehicles' | 'dashboards' | 'charts' | 'units' | 'places' | 'charging' | 'ownership' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account' | 'authentication';
 
@@ -263,311 +258,6 @@ function DashboardEditButtonPreference({
         />
       </button>
     </div>
-  );
-}
-
-function IngestionDiagnosticsSection({ vehicles }: { vehicles: Vehicle[] }) {
-  const manageableVehicles = vehicles.filter((vehicle) => (
-    (vehicle.membership_role === 'owner' || vehicle.membership_role === 'manager')
-    && !(vehicle.is_demo ?? vehicle.rivian_vehicle_id?.startsWith('demo-') ?? false)
-  ));
-  if (manageableVehicles.length === 0) return null;
-
-  return (
-    <Card>
-      <CardHeader><CardTitle>Ingestion capture</CardTitle></CardHeader>
-      <CardContent className="grid gap-3">
-        <p className="text-sm text-fg-secondary">
-          Record what Riviamigo receives from Rivian while you reproduce a problem, then download one file to share.
-          A capture keeps Parallax and legacy frames, decoded values, and ingestion decisions for up to an hour.
-          It never includes coordinates, credentials, the VIN, or vehicle names, and it is deleted 24 hours after it stops.
-        </p>
-        {manageableVehicles.map((vehicle) => (
-          <VehicleIngestionCaptureRow key={vehicle.id} vehicle={vehicle} />
-        ))}
-      </CardContent>
-    </Card>
-  );
-}
-
-function formatCaptureTime(value: string | null | undefined): string {
-  return value ? new Date(value).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—';
-}
-
-function minutesLeft(endsAt: string | null | undefined, now: number): number {
-  if (!endsAt) return 0;
-  return Math.max(0, Math.ceil((new Date(endsAt).getTime() - now) / 60_000));
-}
-
-function VehicleIngestionCaptureRow({ vehicle }: { vehicle: Vehicle }) {
-  const queryClient = useQueryClient();
-  const queryKey = ['vehicle-ingestion-capture', vehicle.id];
-  const query = useQuery({
-    queryKey,
-    queryFn: () => api.getVehicleIngestionCapture(vehicle.id),
-    refetchInterval: (current) => (current.state.data?.state === 'capturing' ? 5_000 : false),
-  });
-  const onChanged = (data: Awaited<ReturnType<typeof api.getVehicleIngestionCapture>>) => {
-    queryClient.setQueryData(queryKey, data);
-  };
-  const start = useMutation({
-    mutationFn: () => api.startVehicleIngestionCapture(vehicle.id),
-    onSuccess: onChanged,
-  });
-  const stop = useMutation({
-    mutationFn: () => api.stopVehicleIngestionCapture(vehicle.id),
-    onSuccess: onChanged,
-  });
-  const download = useMutation({
-    mutationFn: async () => {
-      const { blob, fileName } = await api.downloadVehicleIngestionCapture(vehicle.id);
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = fileName;
-      anchor.rel = 'noopener';
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    },
-  });
-
-  const capture = query.data;
-  const state = capture?.state ?? 'idle';
-  const busy = query.isPending || query.isError || start.isPending || stop.isPending;
-  const events = `${(capture?.event_count ?? 0).toLocaleString()} event${capture?.event_count === 1 ? '' : 's'}`;
-  const startCapture = () => {
-    if (state === 'stopped' && !window.confirm('Start a new capture? This replaces the previous capture and its file.')) return;
-    start.mutate();
-  };
-
-  let status: string;
-  if (query.isPending) status = 'Checking capture status…';
-  else if (query.isError) status = 'Could not check capture status.';
-  else if (state === 'capturing') status = `${events} · ${minutesLeft(capture?.ends_at, Date.now())} min left`;
-  else if (state === 'stopped') {
-    status = `Last capture ${formatCaptureTime(capture?.started_at)}–${formatCaptureTime(capture?.stopped_at)} · ${events}`
-      + (capture?.stop_reason === 'expired' ? ' · stopped after 1 hour' : '')
-      + (capture?.truncated ? ' · event limit reached' : '');
-  } else status = 'No capture yet. Records for up to 1 hour.';
-
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-bg-elevated/35 px-3 py-3">
-      <div className="min-w-0 flex-1 basis-48">
-        <div className="flex items-center gap-2">
-          <p className="truncate text-sm font-medium text-fg">{vehicle.display_name}</p>
-          {state === 'capturing' && <Badge variant="accent">Capturing</Badge>}
-        </div>
-        <p className="mt-0.5 text-xs text-fg-tertiary">{status}</p>
-        {query.isError && (
-          <button type="button" className="mt-1 text-xs text-accent underline" onClick={() => void query.refetch()}>
-            Retry status check
-          </button>
-        )}
-        {(start.isError || stop.isError) && <p className="mt-1 text-xs text-danger">Could not change the capture. Try again.</p>}
-        {download.isError && <p className="mt-1 text-xs text-danger">Could not download the capture. Try again.</p>}
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        {state === 'stopped' && (
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={download.isPending || (capture?.event_count ?? 0) === 0}
-            onClick={() => download.mutate()}
-            aria-label={`Download capture for ${vehicle.display_name}`}
-          >
-            {download.isPending ? 'Preparing…' : 'Download'}
-          </Button>
-        )}
-        {state === 'capturing' ? (
-          <Button
-            size="sm"
-            variant="danger"
-            disabled={busy}
-            onClick={() => stop.mutate()}
-            aria-label={`Stop capture for ${vehicle.display_name}`}
-          >
-            Stop
-          </Button>
-        ) : (
-          <Button
-            size="sm"
-            variant={state === 'stopped' ? 'ghost' : 'primary'}
-            disabled={busy}
-            onClick={startCapture}
-            aria-label={`Start capture for ${vehicle.display_name}`}
-          >
-            {state === 'stopped' ? 'New capture' : 'Start capture'}
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DashboardSettingsList({
-  title,
-  dashboards,
-  canManageDefaults,
-  cloneDashboard,
-  deleteDashboard,
-  setDashboardLock,
-  restoreDefaultDashboard,
-  createDashboard,
-  userBySlug,
-  defaultBySlug,
-  onCustomize,
-  onDuplicate,
-  onEdit,
-}: {
-  title: string;
-  dashboards: DashboardConfig[];
-  canManageDefaults: boolean;
-  cloneDashboard: ReturnType<typeof useCloneDashboard>;
-  deleteDashboard: ReturnType<typeof useDeleteDashboard>;
-  setDashboardLock: ReturnType<typeof useSetAdminDashboardLock>;
-  restoreDefaultDashboard: ReturnType<typeof useRestoreAdminDashboardDefault>;
-  createDashboard: ReturnType<typeof useCreateDashboard>;
-  userBySlug: Map<string, DashboardConfig>;
-  defaultBySlug: Map<string, DashboardConfig>;
-  onCustomize: (dashboard: DashboardConfig) => Promise<void>;
-  onDuplicate: (dashboard: DashboardConfig) => void;
-  onEdit: (dashboard: DashboardConfig, edit: boolean) => void;
-}) {
-  return (
-    <section className="grid gap-2">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-medium uppercase tracking-wider text-fg-tertiary">{title}</h3>
-        <span className="text-xs text-fg-tertiary">{dashboards.length}</span>
-      </div>
-      <div className="overflow-hidden rounded-xl border border-border">
-        {dashboards.length === 0 ? (
-          <div className="p-4 text-sm text-fg-tertiary">No dashboards here yet.</div>
-        ) : (
-          dashboards.map((dashboard) => {
-            const isUserOwned = dashboard.ownerId != null;
-            const canEdit = isUserOwned || (dashboard.isDefault && canManageDefaults);
-            const personalCopy = userBySlug.get(dashboard.slug);
-            const systemDefault = defaultBySlug.get(dashboard.slug);
-            const isActive = isUserOwned || !personalCopy;
-            return (
-              <div
-                key={dashboard.id}
-                className="grid gap-3 border-b border-border bg-bg last:border-0 p-3 md:grid-cols-[minmax(0,1fr)_auto]"
-              >
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="truncate text-sm font-medium text-fg">{dashboard.name}</p>
-                    <Badge variant={dashboard.isDefault ? 'info' : 'default'} size="sm">
-                      {dashboard.isDefault ? 'Default' : 'User'}
-                    </Badge>
-                    {dashboard.isLocked ? <Badge variant="warning" size="sm">Locked</Badge> : null}
-                    {isActive ? <Badge variant="success" size="sm">Active for you</Badge> : null}
-                  </div>
-                  <p className="mt-1 text-xs text-fg-tertiary">
-                    {dashboard.slug} &middot; {dashboard.widgets.length} widgets
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 [&>button]:min-h-11 sm:[&>button]:min-h-8">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    iconLeft={<ExternalLink className="h-3.5 w-3.5" />}
-                    onClick={() => onEdit(dashboard, false)}
-                  >
-                    {dashboard.isDefault ? 'Open default' : 'Open'}
-                  </Button>
-                  {canEdit ? (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      iconLeft={<Pencil className="h-3.5 w-3.5" />}
-                      onClick={() => onEdit(dashboard, true)}
-                    >
-                      {dashboard.isDefault ? 'Edit default' : 'Edit'}
-                    </Button>
-                  ) : null}
-                  {dashboard.isDefault ? (
-                    personalCopy ? null : (
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        loading={createDashboard.isPending}
-                        onClick={() => { void onCustomize(dashboard); }}
-                      >
-                        Customize
-                      </Button>
-                    )
-                  ) : (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      loading={cloneDashboard.isPending && cloneDashboard.variables === dashboard.id}
-                      onClick={() => { void onDuplicate(dashboard); }}
-                    >
-                      Duplicate
-                    </Button>
-                  )}
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    iconLeft={<Download className="h-3.5 w-3.5" />}
-                    onClick={() => downloadDashboardYaml(dashboard)}
-                  >
-                    Export
-                  </Button>
-                  {dashboard.isDefault && canManageDefaults ? (
-                    <>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        iconLeft={dashboard.isLocked ? <Unlock className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
-                        loading={setDashboardLock.isPending && setDashboardLock.variables?.id === dashboardActionId(dashboard)}
-                        onClick={() => setDashboardLock.mutate({ id: dashboardActionId(dashboard), locked: !dashboard.isLocked })}
-                      >
-                        {dashboard.isLocked ? 'Unlock' : 'Lock'}
-                      </Button>
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        iconLeft={<RotateCcw className="h-3.5 w-3.5" />}
-                        loading={restoreDefaultDashboard.isPending && restoreDefaultDashboard.variables === dashboardActionId(dashboard)}
-                        onClick={() => {
-                          if (window.confirm(`Restore "${dashboard.name}" to the bundled default layout?`)) {
-                            restoreDefaultDashboard.mutate(dashboardActionId(dashboard));
-                          }
-                        }}
-                      >
-                        Restore bundled
-                      </Button>
-                    </>
-                  ) : null}
-                  {isUserOwned ? (
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      iconLeft={<Trash2 className="h-3.5 w-3.5" />}
-                      loading={deleteDashboard.isPending && deleteDashboard.variables === dashboard.id}
-                      onClick={() => {
-                        const message = systemDefault
-                          ? `Reset "${dashboard.name}" to the system default? This removes your personal dashboard copy.`
-                          : `Delete "${dashboard.name}"? This removes your saved dashboard.`;
-                        if (window.confirm(message)) {
-                          deleteDashboard.mutate(dashboard.id);
-                        }
-                      }}
-                    >
-                      {systemDefault ? 'Reset to default' : 'Delete'}
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-    </section>
   );
 }
 
