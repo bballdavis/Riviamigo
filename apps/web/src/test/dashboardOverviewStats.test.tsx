@@ -1,6 +1,6 @@
 import React from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // Native <select> stand-in so the editor's pickers can be driven in jsdom.
 vi.mock('@riviamigo/ui/primitives', async (importOriginal) => {
@@ -9,21 +9,13 @@ vi.mock('@riviamigo/ui/primitives', async (importOriginal) => {
   return { ...actual, SelectPicker: mock.SelectPicker };
 });
 
-const catalogEntries = vi.hoisted(() => [
-  { id: 'total_miles', label: 'Total Miles', unit: 'mi', kind: 'distance', source: 'summary', supports_series: true, default_aggregation: 'sum' },
-  { id: 'tire_fl_psi', label: 'Front Left Tire', unit: 'psi', kind: 'pressure', source: 'telemetry', supports_series: true, default_aggregation: 'avg' },
-]);
-
 vi.mock('@riviamigo/hooks', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@riviamigo/hooks')>();
   return {
     ...actual,
     useAuth: () => ({ defaultVehicleId: 'vehicle-1' }),
-    useMetricCatalog: () => ({ data: catalogEntries }),
-    useMetricBatch: () => ({
-      data: { values: [{ metric: 'total_miles', value: 4321, unit: 'mi', label: 'Total Miles', ts: null }], series: [] },
-    }),
-    useBatteryHealth: () => ({ data: { battery_health_pct: 93 } }),
+    useMetricCatalog: () => ({ data: [] }),
+    useBatteryHealth: () => ({ data: { battery_health_pct: 93, usable_now_kwh: 120 } }),
     useCurrentVehicleStatus: () => ({
       data: {
         vehicle_id: 'vehicle-1',
@@ -31,6 +23,10 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         gear_status: 'drive',
         battery_level: 64,
         range_miles: 188,
+        tire_fl_psi: 48,
+        tire_fl_status: 'normal',
+        doors_locked: true,
+        open_closures: [],
         battery_limit: 80,
         power_state: 'ready',
         charger_state: 'Disconnected',
@@ -64,16 +60,14 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
 import { DashboardRenderer } from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 import { WidgetEditForm } from '../../../../packages/dashboards/src/editor/WidgetEditForm';
+import { setUnitSystem } from '@riviamigo/ui/lib/utils';
 import {
   DEFAULT_OVERVIEW_STAT_IDS,
   OVERVIEW_STAT_DEFINITIONS,
   getOverviewStatOptions,
   resolveOverviewStatIds,
 } from '../../../../packages/dashboards/src/widgets/custom/overviewStats';
-import {
-  getOverviewStatNeeds,
-  getOverviewStatRequirements,
-} from '../../../../packages/dashboards/src/widgets/custom/overviewStatDisplay';
+import { getOverviewStatRequirements } from '../../../../packages/dashboards/src/widgets/custom/overviewStatDisplay';
 
 type Widget = DashboardConfig['widgets'][number];
 
@@ -211,74 +205,81 @@ describe('overview stat editor', () => {
   });
 });
 
-describe('overview rows from any sensor or metric', () => {
-  it('shows metric, summary, status and catalog-only sensors beside live state', () => {
+describe('overview rows show current readings from any sensor', () => {
+  afterEach(() => setUnitSystem('imperial'));
+
+  it('shows live state, status sensors and battery health side by side', () => {
     renderOverview({
-      stats: ['total_miles', 'battery_health_pct', 'hv_thermal', 'metric:tire_fl_psi', 'charge_limit'],
+      stats: ['battery_level', 'tire_fl', 'hv_thermal', 'battery_health_pct', 'doors_locked'],
     });
     const rows = Array.from(screen.getByTestId('overview-stats').children).map((row) => ({
       label: row.firstElementChild?.textContent,
       value: row.lastElementChild?.textContent,
     }));
-    expect(rows.map((row) => row.label)).toEqual([
-      'Total Miles',
-      'Battery Health',
-      'HV Thermal',
-      'Front Left Tire',
-      'Charge limit',
+    expect(rows).toEqual([
+      { label: 'Battery', value: '64%' },
+      { label: 'Tire FL', value: '48 psi' },
+      { label: 'HV Thermal', value: 'Unavailable' },
+      { label: 'Battery Health', value: '93%' },
+      { label: 'Doors', value: 'Locked' },
     ]);
-    expect(rows[0]!.value).toMatch(/4,?321/);
-    expect(rows[1]!.value).toBe('93%');
-    expect(rows[2]!.value).toBe('Unavailable');
-    expect(rows[3]!.value).toBe('-');
-    expect(rows[4]!.value).toBe('80%');
   });
 
-  it('keeps sensor and backend metric choices when the saved rows are resolved', () => {
-    expect(resolveOverviewStatIds(['battery_health_pct', 'metric:tire_fl_psi', 'nope', 'metric:'])).toEqual([
+  it('converts distances, speeds, temperatures, pressures and altitude to the chosen units', () => {
+    setUnitSystem('metric');
+    renderOverview({ stats: ['range', 'tire_fl', 'cabin_temp', 'odometer', 'altitude'] });
+    const values = Array.from(screen.getByTestId('overview-stats').children).map((row) => row.lastElementChild?.textContent);
+    expect(values).toEqual(['302.6 km', '331 kPa', '21 C', '19,867.4 km', '100 m']);
+  });
+
+  it('re-formats the rows when the unit settings change', () => {
+    renderOverview({ stats: ['range', 'tire_fl', 'cabin_temp', 'odometer', 'altitude'] });
+    const read = () => Array.from(screen.getByTestId('overview-stats').children).map((row) => row.lastElementChild?.textContent);
+    expect(read()).toEqual(['188 mi', '48 psi', '70 F', '12,345 mi', '328 ft']);
+
+    act(() => setUnitSystem('metric'));
+
+    expect(read()).toEqual(['302.6 km', '331 kPa', '21 C', '19,867.4 km', '100 m']);
+  });
+
+  it('keeps sensor choices when the saved rows are resolved and drops statistics', () => {
+    expect(resolveOverviewStatIds(['battery_health_pct', 'hv_thermal', 'total_miles', 'metric:tire_fl_psi'])).toEqual([
       'battery_health_pct',
-      'metric:tire_fl_psi',
+      'hv_thermal',
       'cabin_temp',
       'speed',
       'software',
     ]);
   });
 
-  it('lists each reading once, grouped, with backend-only metrics added', () => {
-    const options = getOverviewStatOptions(catalogEntries as never);
+  it('lists each reading once, grouped, and only current values', () => {
+    const options = getOverviewStatOptions();
     const ids = options.map((option) => option.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toContain('metric:tire_fl_psi');
-    // total_miles is already a sensor, so the catalog entry is not listed again.
-    expect(ids).toContain('total_miles');
-    expect(ids).not.toContain('metric:total_miles');
-    // Status-backed rows already cover these sensors.
-    expect(ids).not.toContain('speed_mph');
-    expect(ids).toContain('speed');
+    expect(ids).toContain('battery_health_pct');
+    expect(ids).toContain('hv_thermal');
+    // Statistics over a date range stay on sensor chips.
+    for (const statistic of ['total_miles', 'avg_efficiency', 'charging_total_cost', 'trip_miles', 'charging_sessions_summary']) {
+      expect(ids).not.toContain(statistic);
+    }
+    // Status-backed rows already cover these.
+    expect(ids).not.toContain('twelve_volt_health');
     expect(new Set(options.map((option) => option.group))).toEqual(
-      new Set(['Vehicle state', 'Metrics', 'Battery health', 'Charging', 'Efficiency', 'Vehicle systems']),
+      new Set(['Vehicle state', 'Battery health', 'Vehicle systems']),
     );
   });
 
-  it('asks the dashboard only for the data the chosen rows read', () => {
+  it('asks the dashboard for battery health only when a chosen row reads it', () => {
     expect(getOverviewStatRequirements(['speed', 'altitude'])).toEqual({ status: true });
-    expect(getOverviewStatNeeds(['total_miles', 'metric:tire_fl_psi', 'battery_health_pct', 'charging_total_cost', 'avg_efficiency'])).toEqual({
-      metrics: ['avg_efficiency', 'tire_fl_psi', 'total_miles'],
-      batteryHealth: true,
-      chargingSummary: true,
-      efficiencySummary: true,
-    });
-    expect(getOverviewStatRequirements(['total_miles']).metrics).toEqual([
-      { metric: 'total_miles', include_latest: true, include_series: false },
-    ]);
+    expect(getOverviewStatRequirements(['speed', 'battery_health_pct'])).toEqual({ status: true, batteryHealth: true });
   });
 
-  it('offers every sensor and catalog metric in the editor, searchable', () => {
+  it('offers every current reading in the editor, searchable', () => {
     render(<WidgetEditForm widget={overviewWidget()} onChange={() => undefined} onClose={() => undefined} />);
     const row1 = within(screen.getByLabelText('Stat row 1')).getAllByRole('option').map((o) => o.getAttribute('value'));
     expect(row1).toContain('battery_health_pct');
     expect(row1).toContain('hv_thermal');
-    expect(row1).toContain('metric:tire_fl_psi');
-    expect(row1).not.toContain('speed_mph');
+    expect(row1).toContain('tire_fl');
+    expect(row1).not.toContain('total_miles');
   });
 });

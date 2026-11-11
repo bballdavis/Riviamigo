@@ -1,13 +1,6 @@
 import React from 'react';
 import { Icon } from '@iconify/react';
-import { Activity } from 'lucide-react';
-import type {
-  BatteryHealthSummary,
-  ChargingSummary,
-  EfficiencySummary,
-  MetricValueResponse,
-  VehicleStatus,
-} from '@riviamigo/types';
+import type { BatteryHealthSummary, VehicleStatus } from '@riviamigo/types';
 import { getChartColor } from '@riviamigo/ui/charts';
 import { presentVehicleStatusDefinition } from '@riviamigo/ui/lib/vehicleStatus';
 import type { DashboardDataRequirements } from '../../registry';
@@ -18,21 +11,16 @@ import {
   formatMetricValue,
   resolveConfiguredValue,
 } from '../sensor/sensorValueResolution';
-import {
-  getOverviewSensorDefinition,
-  getOverviewStatDefinition,
-  METRIC_STAT_PREFIX,
-} from './overviewStats';
+import { getOverviewSensorDefinition, getOverviewStatDefinition } from './overviewStats';
 
-/** Everything beyond live vehicle status that a row may need to show its value. */
+/**
+ * Overview rows show current values. Live vehicle state comes from the status;
+ * battery-health sensors read the current battery health. Distances, speeds,
+ * temperatures and pressures all pass through the shared formatters, so they
+ * follow the user's unit preferences.
+ */
 export interface OverviewStatData {
-  /** Latest value per metric id. */
-  metrics?: ReadonlyMap<string, MetricValueResponse | undefined> | undefined;
-  /** Display names for backend metrics that no sensor presents. */
-  metricLabels?: ReadonlyMap<string, string> | undefined;
   batteryHealth?: BatteryHealthSummary | undefined;
-  chargingSummary?: ChargingSummary | undefined;
-  efficiencySummary?: EfficiencySummary | undefined;
 }
 
 export interface PresentedOverviewStat {
@@ -41,58 +29,23 @@ export interface PresentedOverviewStat {
   icon: React.ReactElement;
 }
 
-export interface OverviewStatNeeds {
-  metrics: string[];
-  batteryHealth: boolean;
-  chargingSummary: boolean;
-  efficiencySummary: boolean;
-}
-
-function metricIdFor(id: string, sensor: SensorDefinition | undefined): string | null {
-  if (id.startsWith(METRIC_STAT_PREFIX)) return id.slice(METRIC_STAT_PREFIX.length);
-  if (sensor && (sensor.dataSource ?? 'metric') === 'metric' && sensor.metric) return sensor.metric;
-  return null;
-}
-
-/** Which shared data the selected rows read, beyond the live vehicle status. */
-export function getOverviewStatNeeds(ids: readonly string[]): OverviewStatNeeds {
-  const metrics = new Set<string>();
-  const needs: OverviewStatNeeds = { metrics: [], batteryHealth: false, chargingSummary: false, efficiencySummary: false };
-  for (const id of ids) {
-    if (getOverviewStatDefinition(id)) continue;
-    const sensor = getOverviewSensorDefinition(id);
-    const metric = metricIdFor(id, sensor);
-    if (metric) {
-      metrics.add(metric);
-      if (metric === 'avg_efficiency') needs.efficiencySummary = true;
-    }
-    const source = sensor?.dataSource ?? 'metric';
-    if (source === 'batteryHealth') needs.batteryHealth = true;
-    if (source === 'chargingSummary') needs.chargingSummary = true;
-    if (source === 'efficiencySummary') needs.efficiencySummary = true;
-  }
-  needs.metrics = [...metrics].sort();
-  return needs;
+/** Whether any chosen row reads the battery health summary. */
+export function overviewStatsNeedBatteryHealth(ids: readonly string[]) {
+  return ids.some((id) => getOverviewSensorDefinition(id)?.dataSource === 'batteryHealth');
 }
 
 export function getOverviewStatRequirements(ids: readonly string[]): DashboardDataRequirements {
-  const needs = getOverviewStatNeeds(ids);
   return {
     status: true,
-    ...(needs.metrics.length > 0
-      ? { metrics: needs.metrics.map((metric) => ({ metric, include_latest: true, include_series: false })) }
-      : {}),
-    ...(needs.batteryHealth ? { batteryHealth: true } : {}),
-    ...(needs.chargingSummary ? { chargingSummary: true } : {}),
-    ...(needs.efficiencySummary ? { efficiencySummary: true } : {}),
+    ...(overviewStatsNeedBatteryHealth(ids) ? { batteryHealth: true } : {}),
   };
 }
 
-function sensorIcon(sensor: SensorDefinition | undefined) {
-  const accent = getSensorDataAccent(sensor?.metric, sensor);
+function sensorIcon(sensor: SensorDefinition) {
+  const accent = getSensorDataAccent(sensor.metric, sensor);
   return (
     <Icon
-      icon={resolveIconId(sensor?.icon)}
+      icon={resolveIconId(sensor.icon)}
       className="h-3.5 w-3.5"
       style={{ color: accent ? getChartColor(accent) : 'var(--rm-accent)' }}
     />
@@ -104,17 +57,8 @@ function presentSensor(
   status: VehicleStatus | null | undefined,
   data: OverviewStatData,
 ): React.ReactNode {
-  const source = sensor.dataSource ?? 'metric';
-  if (source === 'vehicleStatus') return presentVehicleStatusDefinition(sensor.id, status).label;
-  if (source === 'metric') {
-    const metric = sensor.metric ?? '';
-    const value = data.metrics?.get(metric);
-    const resolved = metric === 'avg_efficiency'
-      ? data.efficiencySummary?.avg ?? value?.value
-      : value?.value;
-    return formatMetricValue(resolved, value?.unit ?? sensor.unit);
-  }
-  const values = buildSourceValues(source, data.batteryHealth, data.chargingSummary, data.efficiencySummary, status);
+  if (sensor.dataSource === 'vehicleStatus') return presentVehicleStatusDefinition(sensor.id, status).label;
+  const values = buildSourceValues('batteryHealth', data.batteryHealth, undefined, undefined, status);
   return formatMetricValue(
     resolveConfiguredValue(
       {
@@ -140,16 +84,6 @@ export function presentOverviewStat(
     return { label: legacy.label, value: legacy.format(status), icon: <StatIcon /> };
   }
 
-  const sensor = getOverviewSensorDefinition(id);
-  if (sensor) {
-    return { label: sensor.title, value: presentSensor(sensor, status, data), icon: sensorIcon(sensor) };
-  }
-
-  const metric = id.slice(METRIC_STAT_PREFIX.length);
-  const value = data.metrics?.get(metric);
-  return {
-    label: value?.label ?? data.metricLabels?.get(metric) ?? metric,
-    value: formatMetricValue(value?.value, value?.unit),
-    icon: <Activity className="h-3.5 w-3.5" style={{ color: 'var(--rm-accent)' }} />,
-  };
+  const sensor = getOverviewSensorDefinition(id)!;
+  return { label: sensor.title, value: presentSensor(sensor, status, data), icon: sensorIcon(sensor) };
 }

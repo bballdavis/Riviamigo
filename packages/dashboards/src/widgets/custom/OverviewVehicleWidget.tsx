@@ -13,7 +13,7 @@ import { isVehiclePluggedIn } from '../../dashboardVisibility';
 import { getDoorOverlayUrls, getOpenDoorStates } from './imageUtils';
 import { resolveOverviewStatIds } from './overviewStats';
 import { getOverviewStatRequirements, presentOverviewStat, type OverviewStatData } from './overviewStatDisplay';
-import { useOverviewStatData } from './useOverviewStatData';
+import { useOverviewStatData, useUnitPreferencesVersion } from './useOverviewStatData';
 
 type AnchorSet = {
   tire: { rl: string; fl: string; rr: string; fr: string };
@@ -63,7 +63,8 @@ function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ct
   const { data: vehicles } = useVehicles();
   const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
   const statIds = resolveOverviewStatIds(instance.options?.stats);
-  const statData = useOverviewStatData(statIds, ctx, vehicleId ?? null);
+  const statData = useOverviewStatData(statIds, vehicleId ?? null);
+  useUnitPreferencesVersion();
 
   return (
     <CurrentVehicleStatePanel

@@ -189,6 +189,48 @@ function addMonths(ms: number, months: number): number {
   return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, date.getUTCDate());
 }
 
+/**
+ * Fill in fields an older server or an older cached copy of the response may
+ * lack, so the page never reads an undefined list. Safe to call repeatedly.
+ * A filled-in empty schedule only lasts until the next fetch replaces it.
+ */
+export function normalizeOwnershipResponse(data: OwnershipResponse): OwnershipResponse {
+  const withSchedule = <T extends { maintenance?: OwnershipMaintenanceItem[] }>(value: T): T => ({
+    ...value,
+    maintenance: Array.isArray(value.maintenance) ? value.maintenance : [],
+  });
+  const comparisons = data.settings?.comparisons;
+  return {
+    ...data,
+    settings: {
+      ...data.settings,
+      projection_years: data.settings?.projection_years ?? null,
+      comparisons: {
+        enabled: comparisons?.enabled ?? null,
+        custom: Array.isArray(comparisons?.custom) ? comparisons.custom : [],
+      },
+      maintenance: data.settings?.maintenance ?? {},
+    },
+    usage: {
+      ...data.usage,
+      months: (data.usage?.months ?? []).map((row) => ({
+        ...row,
+        priced_kwh: row.priced_kwh ?? 0,
+        fast_kwh: row.fast_kwh ?? 0,
+        fast_priced_kwh: row.fast_priced_kwh ?? 0,
+        fast_cost_usd: row.fast_cost_usd ?? 0,
+      })),
+    },
+    reference_vehicles: (data.reference_vehicles ?? []).map(withSchedule),
+    own_defaults: withSchedule(data.own_defaults),
+    class_defaults: {
+      ev: withSchedule(data.class_defaults.ev),
+      hybrid: withSchedule(data.class_defaults.hybrid),
+      gas: withSchedule(data.class_defaults.gas),
+    },
+  };
+}
+
 /** Schedule key of the tracked vehicle in `settings.maintenance`. */
 export const OWN_SCHEDULE_KEY = 'own';
 
@@ -219,7 +261,8 @@ export interface ScheduleTarget {
 }
 
 /** Every vehicle whose maintenance schedule the owner can edit, tracked vehicle first. */
-export function scheduleTargets(data: OwnershipResponse, ownLabel: string): ScheduleTarget[] {
+export function scheduleTargets(input: OwnershipResponse, ownLabel: string): ScheduleTarget[] {
+  const data = normalizeOwnershipResponse(input);
   const target = (
     key: string,
     label: string,
@@ -312,7 +355,8 @@ export function impliedRetention(
   return Math.min(0.99, Math.max(0.5, retention));
 }
 
-export function isComparisonEnabled(data: OwnershipResponse, id: string): boolean {
+export function isComparisonEnabled(input: OwnershipResponse, id: string): boolean {
+  const data = normalizeOwnershipResponse(input);
   const enabled = data.settings.comparisons.enabled;
   if (enabled) return enabled.includes(id);
   const reference = data.reference_vehicles.find((vehicle) => vehicle.id === id);
@@ -321,7 +365,8 @@ export function isComparisonEnabled(data: OwnershipResponse, id: string): boolea
 }
 
 /** Ids currently enabled, in a form ready to store. */
-export function enabledComparisonIds(data: OwnershipResponse): string[] {
+export function enabledComparisonIds(input: OwnershipResponse): string[] {
+  const data = normalizeOwnershipResponse(input);
   return [
     ...data.reference_vehicles.map((vehicle) => vehicle.id),
     ...data.settings.comparisons.custom.map((vehicle) => vehicle.id),
@@ -347,7 +392,8 @@ function customVehicle(
 }
 
 /** Every vehicle that can be compared, in display order, own vehicle excluded. */
-export function comparisonVehicles(data: OwnershipResponse): LedgerVehicle[] {
+export function comparisonVehicles(input: OwnershipResponse): LedgerVehicle[] {
+  const data = normalizeOwnershipResponse(input);
   const references: LedgerVehicle[] = data.reference_vehicles.map((vehicle) => ({
     id: vehicle.id,
     label: vehicle.label,
@@ -384,7 +430,8 @@ export interface BuildLedgerOptions {
   enabledIds?: string[];
 }
 
-export function buildLedger(data: OwnershipResponse, options: BuildLedgerOptions): Ledger {
+export function buildLedger(input: OwnershipResponse, options: BuildLedgerOptions): Ledger {
+  const data = normalizeOwnershipResponse(input);
   const { settings, usage } = data;
   const nowMs = options.now.getTime();
   const trackedFromMs = usage.tracked_from ? Date.parse(usage.tracked_from) : nowMs;

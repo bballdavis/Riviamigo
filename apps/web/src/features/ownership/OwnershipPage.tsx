@@ -50,7 +50,7 @@ import { SensorChipSummary } from '@riviamigo/dashboards';
 import { AppLayout } from '../../components/layout/AppLayout';
 import { NoVehicleState } from '../../components/layout/NoVehicleState';
 import { formatMonth, OwnershipChart, type ValueMode } from './OwnershipChart';
-import { AddVehicleDialog, EditCostsDialog, ExternalConnectionsLink } from './OwnershipDialogs';
+import { AddVehicleDialog, ExternalConnectionsLink } from './OwnershipDialogs';
 import { RivianMark } from './RivianMark';
 import {
   buildLedger,
@@ -59,6 +59,7 @@ import {
   formatUsd,
   horizonSpan,
   insightSentence,
+  normalizeOwnershipResponse,
   ordinal,
   ownRank,
   projectionYearsOf,
@@ -82,6 +83,8 @@ export function OwnershipContent() {
     <AppLayout activeKey="ownership">
       <PageLayout
         title="Ownership"
+        // Like the dashboard pages, the vehicle picker gets its own row under the title on phones.
+        actionsClassName="w-full justify-end sm:w-auto"
         actions={
           vehicles.length > 1 ? (
             <SelectPicker
@@ -137,12 +140,15 @@ const COMPARISON_COLORS = [
   CHART_COLORS.teal,
 ];
 
-function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLabel: string }) {
-  const { data, isLoading, isError } = useOwnership(vehicleId);
+export function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLabel: string }) {
+  const ownership = useOwnership(vehicleId);
+  const { isLoading, isError } = ownership;
+  const data = useMemo(() => (ownership.data ? normalizeOwnershipResponse(ownership.data) : undefined), [ownership.data]);
   const update = useUpdateOwnershipSettings(vehicleId);
   const [horizon, setHorizon] = useState<Horizon>('to_date');
   const [mode, setMode] = useState<ValueMode>('spent');
-  const [dialog, setDialog] = useState<'settings' | 'add' | null>(null);
+  const [dialog, setDialog] = useState<'add' | null>(null);
+  const navigate = useNavigate();
   const [localEnabled, setLocalEnabled] = useState<string[] | null>(null);
   const [cursor, setCursor] = useState<number | null>(null);
   // One clock reading per mount keeps the ledger stable across re-renders.
@@ -216,16 +222,8 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
     );
   };
 
-  const settingsDialog =
-    dialog === 'settings' ? (
-      <EditCostsDialog
-        settings={data.settings}
-        saving={update.isPending}
-        saveFailed={update.isError}
-        onClose={() => setDialog(null)}
-        onSave={(settings) => saveSettings(settings, () => setDialog(null))}
-      />
-    ) : null;
+  // Every Ownership setting lives in Settings > Ownership.
+  const openSettings = () => navigate({ to: '/settings', search: { section: 'ownership' } });
 
   if (data.settings.purchase_price_usd == null) {
     return (
@@ -238,9 +236,8 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
               ? 'Enter the purchase price and date to see what the vehicle has cost and how other cars compare.'
               : 'The vehicle owner has not entered a purchase price yet.'
           }
-          {...(data.can_edit ? { action: { label: 'Edit settings', onClick: () => setDialog('settings') } } : {})}
+          {...(data.can_edit ? { action: { label: 'Open Ownership settings', onClick: openSettings } } : {})}
         />
-        {settingsDialog}
       </>
     );
   }
@@ -278,13 +275,13 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
           <Button
             variant="secondary"
             size="md"
-            aria-label="Edit settings"
-            title={`Edit settings (projection: ${projectionYears} years)`}
+            aria-label="Ownership settings"
+            title="Ownership settings"
             className={`${CONTROL_HEIGHT} w-11 shrink-0 px-0 sm:w-auto sm:px-4`}
-            onClick={() => setDialog('settings')}
+            onClick={openSettings}
           >
             <SlidersHorizontal className="h-4 w-4" />
-            <span className="hidden sm:inline">Edit settings</span>
+            <span className="hidden sm:inline">Settings</span>
           </Button>
         ) : null}
       </div>
@@ -481,7 +478,6 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
       <CostTable ledger={ledger} colors={colors} />
       <SourcesCard data={data} ledger={ledger} />
 
-      {settingsDialog}
       {dialog === 'add' ? (
         <AddVehicleDialog
           lookupEnabled={data.vehicle_lookup_enabled}
@@ -848,7 +844,12 @@ function CursorReadout({
                     </span>
                     <span className="min-w-0 break-words">{entry.vehicle.label}</span>
                   </span>
-                  <span className="mt-0.5 block pl-[1.125rem] text-xs text-fg-secondary">
+                  {/* Always one line tall, even when nothing landed that month, so inspecting
+                      a month with one-time costs never changes the readout's height. */}
+                  <span
+                    className="mt-0.5 block min-h-4 truncate pl-[1.125rem] text-xs leading-4 text-fg-secondary"
+                    title={oneTime.length ? oneTime.flatMap((item) => item.labels).join(', ') : undefined}
+                  >
                     {/* Phones have no Month column, so the month's cost leads this line. */}
                     <span className="sm:hidden">+{formatUsd(month)} this month</span>
                     {oneTime.length ? (
@@ -1202,7 +1203,7 @@ function SourcesCard({ data, ledger }: { data: OwnershipResponse; ledger: Ledger
                     {fuel.refresh_failed ? ' The latest refresh failed, so stored prices are in use.' : ''}
                   </>
                 ) : (
-                  <>Prices could not be fetched, so every month uses a flat price. Set it in Edit settings.</>
+                  <>Prices could not be fetched, so every month uses a flat price. Set it in Settings, under Ownership.</>
                 )
               ) : (
                 <>
@@ -1210,7 +1211,7 @@ function SourcesCard({ data, ledger }: { data: OwnershipResponse; ledger: Ledger
                   <ExternalConnectionsLink>Settings, under External Connections</ExternalConnectionsLink>.{' '}
                   {lastMonth
                     ? `Stored prices through ${formatMonth(Date.parse(lastMonth.month), { long: true })} are still used; later months use a flat price.`
-                    : 'Every month uses a flat price, which you can set in Edit settings.'}
+                    : 'Every month uses a flat price, which you can set in Settings, under Ownership.'}
                 </>
               )}
             </dd>

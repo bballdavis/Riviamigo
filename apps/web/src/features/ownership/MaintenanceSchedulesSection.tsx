@@ -1,10 +1,27 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Disc, Droplet, LifeBuoy, Plus, RotateCcw, Trash2, Wrench } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import {
+  AirVent,
+  ClipboardCheck,
+  Cog,
+  Disc,
+  Droplet,
+  Droplets,
+  LifeBuoy,
+  Plus,
+  RotateCcw,
+  RotateCw,
+  ShieldPlus,
+  ThermometerSnowflake,
+  Trash2,
+  Wind,
+  Wrench,
+  Zap,
+} from 'lucide-react';
 import { useOwnership, useUpdateOwnershipSettings } from '@riviamigo/hooks';
-import type { OwnershipMaintenanceCategory, OwnershipMaintenanceItem, Vehicle } from '@riviamigo/types';
+import type { OwnershipMaintenanceCategory, OwnershipMaintenanceItem } from '@riviamigo/types';
 import { CHART_COLORS } from '@riviamigo/ui/charts';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, SelectPicker } from '@riviamigo/ui/primitives';
-import { buildLedger, formatUsd, scheduleTargets } from './model';
+import { buildLedger, formatUsd, normalizeOwnershipResponse, scheduleTargets } from './model';
 
 const CATEGORY_OPTIONS: Array<{ value: OwnershipMaintenanceCategory; label: string }> = [
   { value: 'oil', label: 'Oil' },
@@ -13,12 +30,42 @@ const CATEGORY_OPTIONS: Array<{ value: OwnershipMaintenanceCategory; label: stri
   { value: 'service', label: 'Service' },
 ];
 
-const CATEGORY_STYLE: Record<OwnershipMaintenanceCategory, { icon: React.ReactElement<{ className?: string }>; color: string }> = {
-  oil: { icon: <Droplet />, color: CHART_COLORS.amber },
-  brakes: { icon: <Disc />, color: CHART_COLORS.rose },
-  tires: { icon: <LifeBuoy />, color: CHART_COLORS.violet },
-  service: { icon: <Wrench />, color: CHART_COLORS.sky },
+const CATEGORY_ICON: Record<OwnershipMaintenanceCategory, React.ReactElement<{ className?: string }>> = {
+  oil: <Droplet />,
+  brakes: <Disc />,
+  tires: <LifeBuoy />,
+  service: <Wrench />,
 };
+
+/** An icon for what the item actually is, matched on its name; the category's icon otherwise. */
+function itemIcon(label: string, category: OwnershipMaintenanceCategory): React.ReactElement<{ className?: string }> {
+  const name = label.toLowerCase();
+  if (/rotat/.test(name)) return <RotateCw />;
+  if (/inspect/.test(name)) return <ClipboardCheck />;
+  if (/brake fluid/.test(name)) return <Droplets />;
+  if (/hepa/.test(name)) return <ShieldPlus />;
+  if (/cabin|microfilter/.test(name)) return <Wind />;
+  if (/engine air|air filter/.test(name)) return <AirVent />;
+  if (/coolant/.test(name)) return <ThermometerSnowflake />;
+  if (/spark/.test(name)) return <Zap />;
+  if (/gear|transfer|transmission|differential/.test(name)) return <Cog />;
+  if (/oil/.test(name)) return <Droplet />;
+  if (/pad|rotor|brake/.test(name)) return <Disc />;
+  if (/tire/.test(name)) return <LifeBuoy />;
+  return CATEGORY_ICON[category];
+}
+
+/** Item colors, cycled down the list so neighbouring items never share one. */
+const ITEM_COLORS = [
+  CHART_COLORS.sky,
+  CHART_COLORS.emerald,
+  CHART_COLORS.violet,
+  CHART_COLORS.rose,
+  CHART_COLORS.yellow,
+  CHART_COLORS.teal,
+  CHART_COLORS.indigo,
+  CHART_COLORS.orange,
+];
 
 const MAX_ITEMS = 30;
 
@@ -85,6 +132,33 @@ export function timesPerYear(item: OwnershipMaintenanceItem, milesPerMonth: numb
   return Math.max(byMiles, byTime);
 }
 
+const MONTH_MS = 30.44 * 86_400_000;
+
+/**
+ * How many times an item has fallen due since the purchase and when it is next
+ * due, at the owner's average monthly mileage. The Ownership page counts only
+ * what has fallen due, so this explains why an edit may not move its totals yet.
+ */
+export function dueSoFarText(
+  item: OwnershipMaintenanceItem,
+  milesPerMonth: number,
+  startMs: number,
+  nowMs: number,
+): string {
+  const byMiles = item.interval_mi && milesPerMonth > 0 ? item.interval_mi / milesPerMonth : Number.POSITIVE_INFINITY;
+  const byTime = item.interval_months ?? Number.POSITIVE_INFINITY;
+  const every = Math.min(byMiles, byTime);
+  if (!Number.isFinite(every) || every <= 0) return 'Not due at your mileage';
+  const elapsed = Math.max(0, (nowMs - startMs) / MONTH_MS);
+  const done = Math.floor(elapsed / every);
+  const next = new Date(startMs + (done + 1) * every * MONTH_MS).toLocaleDateString('en-US', {
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+  return `${done === 0 ? 'Not due yet' : `Due ${done}× so far`}, next around ${next}`;
+}
+
 function describeInterval(item: OwnershipMaintenanceItem): string {
   const miles = item.interval_mi ? `${Math.round(item.interval_mi).toLocaleString('en-US')} mi` : null;
   const months = item.interval_months
@@ -95,59 +169,63 @@ function describeInterval(item: OwnershipMaintenanceItem): string {
   return miles && months ? `${miles} or ${months}` : (miles ?? months ?? '');
 }
 
-/** Settings tab: the maintenance schedule behind every vehicle on the Ownership page. */
-export function MaintenanceSchedulesSection({ vehicles }: { vehicles: Vehicle[] }) {
-  const owned = vehicles.filter((vehicle) => !vehicle.is_demo);
-  const choices = owned.length > 0 ? owned : vehicles;
-  const [vehicleId, setVehicleId] = useState<string | null>(choices[0]?.id ?? null);
-  useEffect(() => {
-    if (!vehicleId && choices[0]) setVehicleId(choices[0].id);
-  }, [choices, vehicleId]);
-  const vehicle = choices.find((entry) => entry.id === vehicleId);
-
+/** The maintenance schedule behind every vehicle on one Rivian's Ownership page. */
+export function MaintenanceSchedulesCard({ vehicleId, ownLabel }: { vehicleId: string; ownLabel: string }) {
   return (
     <Card>
-      <CardHeader className="flex-col items-start gap-2 sm:flex-row sm:items-center">
-        <div>
-          <CardTitle className="text-base font-bold text-fg">Maintenance schedules</CardTitle>
-          <p className="mt-1 text-sm text-fg-secondary">
-            What each vehicle on the Ownership page needs and how often. Each item is due at its mileage or its time
-            interval, whichever comes first. The built-in schedules follow the manufacturers&apos; published intervals
-            and typical U.S. prices; edit any of them to match your own.
-          </p>
-        </div>
-        {choices.length > 1 ? (
-          <SelectPicker
-            className="w-full sm:w-auto sm:min-w-[11rem]"
-            aria-label="Vehicle whose Ownership page to edit"
-            value={vehicleId ?? ''}
-            onChange={(id) => setVehicleId(id)}
-            options={choices.map((entry) => ({ value: entry.id, label: entry.display_name || entry.model }))}
-          />
-        ) : null}
+      <CardHeader className="mb-3 flex-col items-start gap-1">
+        <SettingsCardTitle icon={<Wrench />} color={CHART_COLORS.violet}>
+          Maintenance schedules
+        </SettingsCardTitle>
+        <p className="text-sm text-fg-secondary">
+          What each vehicle on the Ownership page needs and how often. Each item is due at its mileage or its time
+          interval, whichever comes first, counting from the purchase date. The built-in schedules follow the
+          manufacturers&apos; published intervals and typical U.S. prices. Only items that have fallen due count
+          toward To Date; the rest show up in Project.
+        </p>
       </CardHeader>
       <CardContent>
-        {vehicle ? (
-          <VehicleSchedules key={vehicle.id} vehicleId={vehicle.id} ownLabel={vehicle.display_name || vehicle.model} />
-        ) : (
-          <p className="text-sm text-fg-secondary">Add a vehicle to set up its maintenance schedules.</p>
-        )}
+        <VehicleSchedules vehicleId={vehicleId} ownLabel={ownLabel} />
       </CardContent>
     </Card>
   );
 }
 
+/** Card heading used across Settings > Ownership: accent icon and a bold title. */
+export function SettingsCardTitle({
+  icon,
+  color = CHART_COLORS.sky,
+  children,
+}: {
+  icon: React.ReactElement<{ className?: string }>;
+  /** Icon color; each section on a page gets its own. The title stays primary text. */
+  color?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <CardTitle className="flex items-center gap-2 text-base font-bold normal-case tracking-normal text-fg">
+      <span aria-hidden style={{ color }}>
+        {React.cloneElement(icon, { className: 'h-5 w-5' })}
+      </span>
+      {children}
+    </CardTitle>
+  );
+}
+
 function VehicleSchedules({ vehicleId, ownLabel }: { vehicleId: string; ownLabel: string }) {
-  const { data, isLoading, isError } = useOwnership(vehicleId);
+  const ownership = useOwnership(vehicleId);
+  const { isLoading, isError } = ownership;
+  const data = useMemo(() => (ownership.data ? normalizeOwnershipResponse(ownership.data) : undefined), [ownership.data]);
   const update = useUpdateOwnershipSettings(vehicleId);
   const [targetKey, setTargetKey] = useState('own');
   const [now] = useState(() => new Date());
 
   const targets = useMemo(() => (data ? scheduleTargets(data, ownLabel) : []), [data, ownLabel]);
-  const milesPerMonth = useMemo(
-    () => (data ? buildLedger(data, { horizon: 'to_date', now, ownLabel }).avgMonthlyMiles : 0),
+  const ledger = useMemo(
+    () => (data ? buildLedger(data, { horizon: 'to_date', now, ownLabel }) : null),
     [data, now, ownLabel],
   );
+  const milesPerMonth = ledger?.avgMonthlyMiles ?? 0;
 
   if (isError) return <p className="text-sm text-status-danger">Maintenance schedules could not be loaded.</p>;
   if (isLoading || !data) return <p className="text-sm text-fg-secondary">Loading maintenance schedules...</p>;
@@ -185,6 +263,8 @@ function VehicleSchedules({ vehicleId, ownLabel }: { vehicleId: string; ownLabel
         edited={target.edited}
         canEdit={data.can_edit}
         milesPerMonth={milesPerMonth}
+        startMs={ledger?.startMs ?? now.getTime()}
+        nowMs={now.getTime()}
         saving={update.isPending}
         saveFailed={update.isError}
         onSave={save}
@@ -200,6 +280,8 @@ function ScheduleEditor({
   edited,
   canEdit,
   milesPerMonth,
+  startMs,
+  nowMs,
   saving,
   saveFailed,
   onSave,
@@ -210,6 +292,8 @@ function ScheduleEditor({
   edited: boolean;
   canEdit: boolean;
   milesPerMonth: number;
+  startMs: number;
+  nowMs: number;
   saving: boolean;
   saveFailed: boolean;
   /** Saves the schedule, or clears the saved one when given `null`. */
@@ -265,7 +349,10 @@ function ScheduleEditor({
 
       <ul className="grid gap-2">
         {drafts.map((draft, index) => {
-          const style = CATEGORY_STYLE[draft.category];
+          const style = {
+            icon: itemIcon(draft.label, draft.category),
+            color: ITEM_COLORS[index % ITEM_COLORS.length] as string,
+          };
           const itemErrors = errors[index] ?? {};
           const item = preview[index];
           const pace = item ? timesPerYear(item, milesPerMonth) : 0;
@@ -275,33 +362,34 @@ function ScheduleEditor({
             ...(itemErrors[key] ? { error: itemErrors[key] } : {}),
           });
           return (
-            <li
-              key={draft.id}
-              className="@container/item rounded-lg border border-border bg-bg-elevated/40 p-3"
-              style={{ borderLeftColor: style.color, borderLeftWidth: 3 }}
-            >
-              <div className="grid gap-2 @min-[44rem]/item:grid-cols-[minmax(0,2.6fr)_7.5rem_minmax(0,1fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_auto] @min-[44rem]/item:items-start">
-                <div className="flex items-start gap-2 @min-[44rem]/item:order-1">
-                  <span
-                    aria-hidden
-                    className="mt-[1.85rem] inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md"
-                    style={{ color: style.color, backgroundColor: `color-mix(in oklab, ${style.color} 16%, transparent)` }}
-                  >
-                    {React.cloneElement(style.icon, { className: 'h-4 w-4' })}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <Input
-                      label="Item"
-                      value={draft.label}
-                      onChange={(event) => change(index, { label: event.target.value })}
-                      {...field('label')}
-                    />
-                  </div>
+            <li key={draft.id} className="@container/item rounded-lg border border-border bg-bg-elevated/40 p-3">
+              <div className="mb-2 flex items-center gap-2.5">
+                <span
+                  aria-hidden
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md"
+                  style={{ color: style.color, backgroundColor: `color-mix(in oklab, ${style.color} 16%, transparent)` }}
+                >
+                  {React.cloneElement(style.icon, { className: 'h-5 w-5' })}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <input
+                    id={`maintenance-${draft.id}-label`}
+                    aria-label="Item name"
+                    placeholder="Item name"
+                    value={draft.label}
+                    disabled={!canEdit}
+                    onChange={(event) => change(index, { label: event.target.value })}
+                    className="w-full min-w-0 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-base font-bold transition-colors sm:text-lg placeholder:text-fg-tertiary hover:border-border focus:border-accent focus:outline-none"
+                    style={{ color: style.color }}
+                  />
+                  {itemErrors.label ? <p className="px-1.5 text-sm text-status-danger">{itemErrors.label}</p> : null}
                 </div>
+              </div>
+              <div className="grid gap-2 @min-[40rem]/item:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_8rem_minmax(0,1fr)_auto] @min-[40rem]/item:items-start">
                 {/* Phones: intervals on one row, then category, cost and delete on the next.
-                    Wide cards: one row in the order name, category, miles, months, cost. */}
-                <div className="grid grid-cols-2 gap-2 @min-[44rem]/item:contents">
-                  <div className="@min-[44rem]/item:order-3">
+                    Wide cards: one row in the order miles, months, category, cost. */}
+                <div className="grid grid-cols-2 gap-2 @min-[40rem]/item:contents">
+                  <div className="@min-[40rem]/item:order-1">
                     <Input
                       label="Every (miles)"
                       inputMode="numeric"
@@ -311,7 +399,7 @@ function ScheduleEditor({
                       {...field('miles')}
                     />
                   </div>
-                  <div className="@min-[44rem]/item:order-4">
+                  <div className="@min-[40rem]/item:order-2">
                     <Input
                       label="Or (months)"
                       inputMode="numeric"
@@ -322,8 +410,8 @@ function ScheduleEditor({
                     />
                   </div>
                 </div>
-                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-start gap-2 @min-[44rem]/item:contents">
-                  <div className="grid gap-1.5 @min-[44rem]/item:order-2">
+                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-start gap-2 @min-[40rem]/item:contents">
+                  <div className="grid gap-1.5 @min-[40rem]/item:order-3">
                     <span className="text-sm font-medium text-fg-secondary">Counts as</span>
                     <SelectPicker<OwnershipMaintenanceCategory>
                       aria-label={`Cost column for ${draft.label || 'this item'}`}
@@ -334,7 +422,7 @@ function ScheduleEditor({
                       triggerClassName="text-fg"
                     />
                   </div>
-                  <div className="@min-[44rem]/item:order-5">
+                  <div className="@min-[40rem]/item:order-4">
                     <Input
                       label="Cost ($)"
                       inputMode="decimal"
@@ -348,7 +436,7 @@ function ScheduleEditor({
                       type="button"
                       aria-label={`Remove ${draft.label || 'item'}`}
                       onClick={() => remove(index)}
-                      className="mt-[1.6rem] inline-flex h-11 w-11 items-center justify-center rounded-md text-fg-secondary transition-colors hover:text-status-danger focus:outline-none focus-visible:ring-2 focus-visible:ring-accent @min-[44rem]/item:order-6 @min-[44rem]/item:h-9 @min-[44rem]/item:w-9"
+                      className="mt-[1.6rem] inline-flex h-11 w-11 items-center justify-center rounded-md text-fg-secondary transition-colors hover:text-status-danger focus:outline-none focus-visible:ring-2 focus-visible:ring-accent @min-[40rem]/item:order-5 @min-[40rem]/item:h-9 @min-[40rem]/item:w-9"
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
@@ -356,11 +444,13 @@ function ScheduleEditor({
                 </div>
               </div>
               {item ? (
-                <p className="mt-2 text-xs text-fg-secondary">
+                <p className="mt-2 text-sm text-fg-secondary">
                   Every {describeInterval(item)}, whichever comes first: about{' '}
                   {pace >= 1 ? `${pace.toFixed(pace >= 10 ? 0 : 1)}× a year` : `once every ${(1 / Math.max(pace, 1e-6)).toFixed(1)} years`}
                   {' · '}
                   <span className="font-mono tabular-nums">{formatUsd(pace * item.cost_usd)}</span> a year
+                  {' · '}
+                  <span className="font-medium text-fg">{dueSoFarText(item, milesPerMonth, startMs, nowMs)}</span>
                 </p>
               ) : null}
             </li>

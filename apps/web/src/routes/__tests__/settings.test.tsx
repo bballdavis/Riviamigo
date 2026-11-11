@@ -584,6 +584,17 @@ vi.mock('lucide-react', () => ({
   LifeBuoy: () => <svg data-testid="icon-lifebuoy" />,
   Wrench: () => <svg data-testid="icon-wrench" />,
   CircleDollarSign: () => <svg data-testid="icon-circle-dollar" />,
+  AirVent: () => <svg data-testid="icon-airvent" />,
+  ClipboardCheck: () => <svg data-testid="icon-clipboardcheck" />,
+  Cog: () => <svg data-testid="icon-cog" />,
+  Droplets: () => <svg data-testid="icon-droplets" />,
+  RotateCw: () => <svg data-testid="icon-rotatecw" />,
+  ShieldPlus: () => <svg data-testid="icon-shieldplus" />,
+  ThermometerSnowflake: () => <svg data-testid="icon-thermometersnowflake" />,
+  Wind: () => <svg data-testid="icon-wind" />,
+  Wallet: () => <svg data-testid="icon-wallet" />,
+  Receipt: () => <svg data-testid="icon-receipt" />,
+  CalendarClock: () => <svg data-testid="icon-calendarclock" />,
   Pause: () => <svg data-testid="icon-pause" />,
   Pencil: () => <svg data-testid="icon-pencil" />,
   Play: () => <svg data-testid="icon-play" />,
@@ -1177,23 +1188,6 @@ describe('Settings page', () => {
         battery_config: 'R1T / R1S Large (Gen 1)',
         target_tire_pressure_psi: 46,
       });
-    });
-  });
-
-  it('edits ownership costs from the vehicle edit area', async () => {
-    renderSettings();
-    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
-
-    const price = screen.getByLabelText('Purchase price ($)');
-    expect(price).toHaveValue('82000');
-    fireEvent.change(price, { target: { value: '79,500' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save ownership settings' }));
-
-    await waitFor(() => {
-      expect(ownershipMocks.update).toHaveBeenCalledWith(
-        expect.objectContaining({ purchase_price_usd: 79500, purchase_date: '2024-03-15' }),
-        expect.anything(),
-      );
     });
   });
 

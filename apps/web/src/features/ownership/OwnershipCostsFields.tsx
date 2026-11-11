@@ -1,7 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { useOwnershipSettings, useUpdateOwnershipSettings } from '@riviamigo/hooks';
+import React from 'react';
 import type { OwnershipSettings } from '@riviamigo/types';
-import { Button, Input } from '@riviamigo/ui/primitives';
+import { Input } from '@riviamigo/ui/primitives';
 import { DEFAULT_PROJECTION_YEARS, MAX_PROJECTION_YEARS } from './model';
 
 /** The purchase and running-cost inputs, held as text while they are edited. */
@@ -115,12 +114,31 @@ interface OwnershipCostsFieldsProps {
   form: OwnershipCostsForm;
   errors: OwnershipCostsErrors;
   onChange: (form: OwnershipCostsForm) => void;
-  /** Distinguishes the field ids when the form is mounted in two places. */
+  /** Distinguishes the field ids when the form is mounted more than once. */
   idPrefix: string;
+  /** Which fields to show, in this order; all of them when omitted. */
+  fields?: Array<keyof OwnershipCostsForm>;
   disabled?: boolean;
 }
 
-export function OwnershipCostsFields({ form, errors, onChange, idPrefix, disabled }: OwnershipCostsFieldsProps) {
+const ALL_FIELDS: Array<keyof OwnershipCostsForm> = [
+  'purchasePrice',
+  'purchaseDate',
+  'resaleValue',
+  'insuranceMonthly',
+  'tireSetCost',
+  'gasPrice',
+  'projectionYears',
+];
+
+export function OwnershipCostsFields({
+  form,
+  errors,
+  onChange,
+  idPrefix,
+  fields = ALL_FIELDS,
+  disabled,
+}: OwnershipCostsFieldsProps) {
   const field = (key: keyof OwnershipCostsForm) => ({
     id: `${idPrefix}-${key}`,
     value: form[key],
@@ -129,10 +147,12 @@ export function OwnershipCostsFields({ form, errors, onChange, idPrefix, disable
     ...(errors[key] ? { error: errors[key] } : {}),
   });
   const money = { inputMode: 'decimal' as const, autoComplete: 'off' };
-  return (
-    <div className="grid gap-4 sm:grid-cols-2">
+  const inputs: Record<keyof OwnershipCostsForm, React.ReactNode> = {
+    purchasePrice: (
       <Input label="Purchase price ($)" placeholder="e.g. 84000" required {...money} {...field('purchasePrice')} />
-      <Input label="Purchase date" type="date" max={todayIso(new Date())} {...field('purchaseDate')} />
+    ),
+    purchaseDate: <Input label="Purchase date" type="date" max={todayIso(new Date())} {...field('purchaseDate')} />,
+    resaleValue: (
       <Input
         label="Resale value today ($)"
         placeholder="Estimated when blank"
@@ -140,6 +160,8 @@ export function OwnershipCostsFields({ form, errors, onChange, idPrefix, disable
         {...money}
         {...field('resaleValue')}
       />
+    ),
+    insuranceMonthly: (
       <Input
         label="Insurance and other, per month ($)"
         placeholder="Estimated when blank"
@@ -147,7 +169,17 @@ export function OwnershipCostsFields({ form, errors, onChange, idPrefix, disable
         {...money}
         {...field('insuranceMonthly')}
       />
-      <Input label="Tire set cost ($)" placeholder="Estimated when blank" {...money} {...field('tireSetCost')} />
+    ),
+    tireSetCost: (
+      <Input
+        label="Tire set cost ($)"
+        placeholder="Estimated when blank"
+        hint="Sets the tire price in your vehicle's built-in maintenance schedule."
+        {...money}
+        {...field('tireSetCost')}
+      />
+    ),
+    gasPrice: (
       <Input
         label="Gas price for comparisons ($/gal)"
         placeholder="Average when blank"
@@ -155,71 +187,23 @@ export function OwnershipCostsFields({ form, errors, onChange, idPrefix, disable
         {...money}
         {...field('gasPrice')}
       />
+    ),
+    projectionYears: (
       <Input
         label="Projected ownership (years)"
         placeholder={`${DEFAULT_PROJECTION_YEARS} when blank`}
-        hint="How long the Projected view runs from the purchase date."
+        hint="How long the Project view runs from the purchase date."
         inputMode="numeric"
         autoComplete="off"
         {...field('projectionYears')}
       />
-    </div>
-  );
-}
-
-/** Self-contained editor for the vehicle settings area. */
-export function OwnershipCostsSettings({ vehicleId }: { vehicleId: string }) {
-  const { data, isLoading, isError } = useOwnershipSettings(vehicleId);
-  const update = useUpdateOwnershipSettings(vehicleId);
-  const [form, setForm] = useState<OwnershipCostsForm | null>(null);
-  const [errors, setErrors] = useState<OwnershipCostsErrors>({});
-  const [saved, setSaved] = useState(false);
-
-  useEffect(() => {
-    if (data) setForm(settingsToForm(data.settings));
-  }, [data]);
-
-  if (isError) {
-    return <p className="text-xs text-status-danger">Ownership settings could not be loaded.</p>;
-  }
-  if (isLoading || !data || !form) {
-    return <p className="text-xs text-fg-tertiary">Loading ownership costs...</p>;
-  }
-
-  const save = () => {
-    const result = formToSettings(form, data.settings);
-    setErrors(result.errors);
-    setSaved(false);
-    if (!result.settings) return;
-    update.mutate(result.settings, { onSuccess: () => setSaved(true) });
+    ),
   };
-
   return (
-    <div className="grid gap-3 border-t border-border/70 pt-3">
-      <div>
-        <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Ownership settings</p>
-        <p className="mt-1 text-xs text-fg-tertiary">
-          Used by the Ownership dashboard. The same fields open from Edit settings on that page.
-        </p>
-      </div>
-      <OwnershipCostsFields
-        form={form}
-        errors={errors}
-        idPrefix={`settings-ownership-${vehicleId}`}
-        disabled={!data.can_edit}
-        onChange={(next) => {
-          setForm(next);
-          setSaved(false);
-        }}
-      />
-      <div className="flex flex-wrap items-center gap-3">
-        <Button variant="secondary" size="sm" loading={update.isPending} disabled={!data.can_edit} onClick={save}>
-          Save ownership settings
-        </Button>
-        <span className="text-xs text-fg-tertiary" role="status">
-          {update.isError ? 'Ownership settings could not be saved.' : saved ? 'Saved.' : ''}
-        </span>
-      </div>
+    <div className="grid gap-4 sm:grid-cols-2">
+      {fields.map((key) => (
+        <React.Fragment key={key}>{inputs[key]}</React.Fragment>
+      ))}
     </div>
   );
 }

@@ -13,6 +13,9 @@ export function useOwnership(vehicleId: string | null) {
     enabled: authReady && !!vehicleId,
     staleTime: 5 * 60 * 1000,
     placeholderData: (previous) => previous,
+    // Not saved to the browser cache: the response's shape is still changing,
+    // and a copy saved by an older build must never reach the page.
+    meta: { persist: false },
   });
 }
 
@@ -24,6 +27,7 @@ export function useOwnershipSettings(vehicleId: string | null, enabled = true) {
     queryFn: () => api.getOwnershipSettings(vehicleId!),
     enabled: enabled && authReady && !!vehicleId,
     staleTime: 60 * 1000,
+    meta: { persist: false },
   });
 }
 

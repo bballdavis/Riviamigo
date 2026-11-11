@@ -1,9 +1,9 @@
 import React from 'react';
-import { Compass, Cpu, Gauge, MapPin, Power, Route, Thermometer, Car, CircleGauge, BatteryCharging, BatteryFull, Plug, Timer, Lock, DoorOpen } from 'lucide-react';
+import { Compass, Cpu, Gauge, MapPin, Power, Route, Thermometer, Car, CircleGauge, BatteryCharging, BatteryFull, Battery, Plug, Timer, Lock, DoorOpen, Wifi } from 'lucide-react';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import { formatAltitude, formatDuration, formatMiles, formatMph, formatTemp } from '@riviamigo/ui/lib/utils';
 import { formatTireLabel } from '@riviamigo/ui/lib/vehicleTires';
-import type { MetricCatalogEntry, VehicleStatus } from '@riviamigo/types';
+import type { VehicleStatus } from '@riviamigo/types';
 import { SENSOR_DEFINITIONS, type SensorDefinition } from '../sensor/sensorDefinitions';
 
 /** Number of stat rows the Vehicle Overview widget shows beside the vehicle art. */
@@ -42,6 +42,14 @@ export const OVERVIEW_STAT_DEFINITIONS: readonly OverviewStatDefinition[] = [
   { id: 'time_to_full', label: 'Time to full', description: 'Time to end of charge', icon: icon(Timer, 'var(--rm-chart-amber)'), format: (s) => formatDuration(s?.time_to_end_of_charge_min) },
   { id: 'doors_locked', label: 'Doors', description: 'Door lock state', icon: icon(Lock, 'var(--rm-status-positive)'), format: (s) => formatDoorsLocked(s?.doors_locked) },
   { id: 'open_closures', label: 'Open', description: 'Open doors and closures', icon: icon(DoorOpen, 'var(--rm-chart-orange)'), format: (s) => formatOpenClosures(s?.open_closures) },
+  { id: 'battery_level', label: 'Battery', description: 'Battery level', icon: icon(Battery, 'var(--rm-status-positive)'), format: (s) => formatPercentValue(s?.battery_level) },
+  { id: 'range', label: 'Range', description: 'Estimated range', icon: icon(Route, 'var(--rm-chart-teal)'), format: (s) => formatMiles(s?.range_miles) },
+  { id: 'tire_fl', label: 'Tire FL', description: 'Front left tire pressure', icon: icon(CircleGauge, 'var(--rm-chart-amber)'), format: (s) => formatTireLabel(s?.tire_fl_psi, s?.tire_fl_status) },
+  { id: 'tire_fr', label: 'Tire FR', description: 'Front right tire pressure', icon: icon(CircleGauge, 'var(--rm-chart-amber)'), format: (s) => formatTireLabel(s?.tire_fr_psi, s?.tire_fr_status) },
+  { id: 'tire_rl', label: 'Tire RL', description: 'Rear left tire pressure', icon: icon(CircleGauge, 'var(--rm-chart-amber)'), format: (s) => formatTireLabel(s?.tire_rl_psi, s?.tire_rl_status) },
+  { id: 'tire_rr', label: 'Tire RR', description: 'Rear right tire pressure', icon: icon(CircleGauge, 'var(--rm-chart-amber)'), format: (s) => formatTireLabel(s?.tire_rr_psi, s?.tire_rr_status) },
+  { id: 'tire_status', label: 'Tires', description: 'Tire pressure status', icon: icon(CircleGauge, 'var(--rm-chart-amber)'), format: (s) => prettify(s?.tire_pressure_status) },
+  { id: 'connection', label: 'Connection', description: 'Vehicle connection', icon: icon(Wifi, 'var(--rm-chart-sky)'), format: (s) => formatOnline(s?.is_online) },
 ];
 
 export const DEFAULT_OVERVIEW_STAT_IDS: readonly string[] = [
@@ -54,46 +62,34 @@ export const DEFAULT_OVERVIEW_STAT_IDS: readonly string[] = [
 
 const DEFINITIONS_BY_ID = new Map(OVERVIEW_STAT_DEFINITIONS.map((definition) => [definition.id, definition]));
 
-/** Prefix for a stat row backed directly by a backend metric catalog entry. */
-export const METRIC_STAT_PREFIX = 'metric:';
-
 /**
  * Sensors whose reading the live-status rows above already present, so the
  * picker lists each of these once.
  */
-const DUPLICATE_SENSOR_IDS: ReadonlySet<string> = new Set([
-  'odometer_miles',
-  'speed_mph',
-  'outside_temp_c',
-  'twelve_volt_health',
-]);
+const DUPLICATE_SENSOR_IDS: ReadonlySet<string> = new Set(['twelve_volt_health']);
+
+/**
+ * Rows show current values, never statistics over a date range. A sensor
+ * qualifies when it reads the live vehicle status or the current battery health;
+ * totals, averages and session counts (metric, charging and efficiency summaries)
+ * depend on the dashboard's range and belong on a sensor chip instead.
+ */
+function isCurrentValueSensor(definition: SensorDefinition) {
+  const source = definition.dataSource ?? 'metric';
+  return (source === 'vehicleStatus' || source === 'batteryHealth') && !DUPLICATE_SENSOR_IDS.has(definition.id);
+}
 
 const SENSORS_BY_ID = new Map<string, SensorDefinition>(
-  SENSOR_DEFINITIONS.filter((definition) => !DUPLICATE_SENSOR_IDS.has(definition.id)).map((definition) => [definition.id, definition]),
+  SENSOR_DEFINITIONS.filter(isCurrentValueSensor).map((definition) => [definition.id, definition]),
 );
-
-/** Metric ids a sensor definition already presents, so the catalog does not list them twice. */
-const SENSOR_METRIC_IDS: ReadonlySet<string> = new Set(
-  SENSOR_DEFINITIONS.flatMap((definition) => (definition.metric ? [definition.metric] : [])),
-);
-
-export function metricStatId(metric: string) {
-  return `${METRIC_STAT_PREFIX}${metric}`;
-}
 
 export function getOverviewSensorDefinition(id: string): SensorDefinition | undefined {
   return SENSORS_BY_ID.get(id);
 }
 
-/**
- * Whether `id` can fill a row: a live-status stat, any sensor, or a backend metric.
- * Metric ids are accepted by prefix because the metric catalog loads asynchronously;
- * one the backend no longer serves simply shows "-".
- */
+/** Whether `id` can fill a row: a live vehicle-state reading or a current-value sensor. */
 export function isKnownOverviewStatId(id: string) {
-  return DEFINITIONS_BY_ID.has(id)
-    || SENSORS_BY_ID.has(id)
-    || (id.startsWith(METRIC_STAT_PREFIX) && id.length > METRIC_STAT_PREFIX.length);
+  return DEFINITIONS_BY_ID.has(id) || SENSORS_BY_ID.has(id);
 }
 
 export interface OverviewStatOption {
@@ -105,20 +101,17 @@ export interface OverviewStatOption {
   keywords: string;
 }
 
-const SENSOR_GROUP_BY_SOURCE: Record<NonNullable<SensorDefinition['dataSource']>, string> = {
-  metric: 'Metrics',
+const SENSOR_GROUP_BY_SOURCE: Partial<Record<NonNullable<SensorDefinition['dataSource']>, string>> = {
   batteryHealth: 'Battery health',
-  chargingSummary: 'Charging',
-  efficiencySummary: 'Efficiency',
   vehicleStatus: 'Vehicle systems',
 };
 
 /**
- * Every stat that can fill an overview row: live vehicle state, every sensor chip,
- * and any metric the backend catalog serves that no sensor presents yet. New
- * sensors and backend metrics appear here without further wiring.
+ * Every current reading that can fill an overview row: live vehicle state plus each
+ * status and battery-health sensor. A new sensor of either kind appears here without
+ * further wiring.
  */
-export function getOverviewStatOptions(metricCatalog: readonly MetricCatalogEntry[] = []): OverviewStatOption[] {
+export function getOverviewStatOptions(): OverviewStatOption[] {
   const options: OverviewStatOption[] = [];
   for (const definition of OVERVIEW_STAT_DEFINITIONS) {
     options.push({ id: definition.id, label: definition.description, group: 'Vehicle state', keywords: `${definition.label} ${definition.id}`.toLowerCase() });
@@ -127,17 +120,8 @@ export function getOverviewStatOptions(metricCatalog: readonly MetricCatalogEntr
     options.push({
       id: definition.id,
       label: definition.title,
-      group: SENSOR_GROUP_BY_SOURCE[definition.dataSource ?? 'metric'],
-      keywords: `${definition.id} ${definition.metric ?? ''} ${definition.labelSuffix ?? ''}`.toLowerCase(),
-    });
-  }
-  for (const entry of metricCatalog) {
-    if (SENSOR_METRIC_IDS.has(entry.id)) continue;
-    options.push({
-      id: metricStatId(entry.id),
-      label: entry.label,
-      group: 'Metrics',
-      keywords: `${entry.id} ${entry.kind} ${entry.source} ${entry.unit ?? ''}`.toLowerCase(),
+      group: SENSOR_GROUP_BY_SOURCE[definition.dataSource ?? 'metric'] ?? 'Sensors',
+      keywords: `${definition.id} ${definition.labelSuffix ?? ''}`.toLowerCase(),
     });
   }
   return options;
@@ -178,6 +162,11 @@ export function resolveOverviewStatIds(value: unknown): string[] {
     result[slot] = id;
   }
   return result;
+}
+
+function formatOnline(online: boolean | null | undefined) {
+  if (online === null || online === undefined) return '-';
+  return online ? 'Online' : 'Offline';
 }
 
 function formatPercentValue(value: number | null | undefined) {

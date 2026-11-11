@@ -1,82 +1,41 @@
 import React from 'react';
-import {
-  useBatteryHealth,
-  useChargingSummary,
-  useEfficiencySummary,
-  useMetricBatch,
-  useMetricCatalog,
-} from '@riviamigo/hooks';
-import type { MetricValueResponse } from '@riviamigo/types';
-import type { WidgetCtx } from '../../registry';
-import {
-  useDashboardDataAvailable,
-  useDashboardDataSelector,
-} from '../../dashboardData';
-import { getOverviewStatNeeds, type OverviewStatData } from './overviewStatDisplay';
+import { useBatteryHealth } from '@riviamigo/hooks';
+import { getUnitPreferences } from '@riviamigo/ui/lib/utils';
+import { useDashboardDataAvailable, useDashboardDataSelector } from '../../dashboardData';
+import { overviewStatsNeedBatteryHealth, type OverviewStatData } from './overviewStatDisplay';
 
 /**
- * Loads the extra data the selected overview rows read (metric values and the
- * battery, charging and efficiency summaries). Inside a dashboard it reads the
- * shared snapshot the widget declared through `dataRequirements`; on its own it
- * fetches what the rows need and nothing more.
+ * Loads the extra data the selected overview rows read (currently the battery
+ * health summary). Inside a dashboard it reads the shared snapshot the widget
+ * declared through `dataRequirements`; on its own it fetches only what the rows need.
  */
-export function useOverviewStatData(
-  statIds: readonly string[],
-  ctx: WidgetCtx,
-  vehicleId: string | null,
-): OverviewStatData {
-  const idKey = statIds.join('|');
-  const needs = React.useMemo(() => getOverviewStatNeeds(idKey ? idKey.split('|') : []), [idKey]);
-  const metricKey = needs.metrics.join('|');
-  const requests = React.useMemo(
-    () => needs.metrics.map((metric) => ({ metric, include_latest: true, include_series: false })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- metricKey is the stable identity of needs.metrics
-    [metricKey],
-  );
-
+export function useOverviewStatData(statIds: readonly string[], vehicleId: string | null): OverviewStatData {
+  const needsHealth = overviewStatsNeedBatteryHealth(statIds);
   const provided = useDashboardDataAvailable();
-  const snapshotMetrics = useDashboardDataSelector((snapshot) => snapshot.metrics);
   const snapshotHealth = useDashboardDataSelector((snapshot) => snapshot.batteryHealth);
-  const snapshotCharging = useDashboardDataSelector((snapshot) => snapshot.chargingSummary);
-  const snapshotEfficiency = useDashboardDataSelector((snapshot) => snapshot.efficiencySummary);
+  const health = useBatteryHealth(!provided && needsHealth ? vehicleId : null);
+  const batteryHealth = provided ? snapshotHealth : health.data;
+  return React.useMemo(() => ({ batteryHealth }), [batteryHealth]);
+}
 
-  const lifetime = !ctx.from && !ctx.to;
-  const batch = useMetricBatch(provided ? null : vehicleId, requests, ctx.from, ctx.to, lifetime, ctx.tripTagFilter);
-  const health = useBatteryHealth(!provided && needs.batteryHealth ? vehicleId : null);
-  const charging = useChargingSummary(!provided && needs.chargingSummary ? vehicleId : null, ctx.from, ctx.to);
-  const efficiency = useEfficiencySummary(
-    !provided && needs.efficiencySummary ? vehicleId : null,
-    ctx.from,
-    ctx.to,
-    ctx.tripTagFilter,
+function subscribeToUnits(onChange: () => void) {
+  window.addEventListener('rm-units-change', onChange);
+  window.addEventListener('storage', onChange);
+  return () => {
+    window.removeEventListener('rm-units-change', onChange);
+    window.removeEventListener('storage', onChange);
+  };
+}
+
+/**
+ * Re-renders when the user changes their unit preferences (including a custom
+ * mix such as metric distance with Fahrenheit), so every row is re-formatted
+ * and converted to match.
+ */
+export function useUnitPreferencesVersion() {
+  return React.useSyncExternalStore(
+    subscribeToUnits,
+    () => JSON.stringify(getUnitPreferences()),
+    () => '',
   );
-  const catalog = useMetricCatalog();
-
-  return React.useMemo<OverviewStatData>(() => {
-    const metrics = new Map<string, MetricValueResponse | undefined>();
-    if (provided) {
-      for (const metric of needs.metrics) metrics.set(metric, snapshotMetrics?.get(metric)?.value);
-    } else {
-      for (const value of batch.data?.values ?? []) metrics.set(value.metric, value);
-    }
-    return {
-      metrics,
-      metricLabels: new Map((catalog.data ?? []).map((entry) => [entry.id, entry.label])),
-      batteryHealth: provided ? snapshotHealth : health.data,
-      chargingSummary: provided ? snapshotCharging : charging.data,
-      efficiencySummary: provided ? snapshotEfficiency : efficiency.data,
-    };
-  }, [
-    provided,
-    needs.metrics,
-    snapshotMetrics,
-    snapshotHealth,
-    snapshotCharging,
-    snapshotEfficiency,
-    batch.data,
-    health.data,
-    charging.data,
-    efficiency.data,
-    catalog.data,
-  ]);
 }
