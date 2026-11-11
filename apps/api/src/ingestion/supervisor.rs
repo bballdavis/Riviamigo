@@ -5,6 +5,10 @@
 //! for this server, and each launched worker first confirms that a manager
 //! has not paused collection for its vehicle. Callers can therefore send
 //! `StartWorker` freely (vehicle add, credential refresh, resume, boot).
+//!
+//! A stopped worker keeps its slot until its task has ended, so a quick
+//! pause and resume never runs two workers (and two Rivian sockets) for one
+//! vehicle: the resumed worker starts only after the old one is gone.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -19,6 +23,9 @@ use crate::{config::Config, ingestion::worker::run_vehicle_worker};
 
 type WorkerEntry = (JoinHandle<()>, broadcast::Sender<()>);
 type WorkerFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+/// How long a stopping worker may take to finish before it is aborted.
+const WORKER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long a worker waits before re-reading its vehicle's collection setting
 /// after the database could not answer.
@@ -111,14 +118,60 @@ async fn run_unless_paused<C, CF, R, RF>(
     run(shutdown).await
 }
 
-fn prepare_worker_start(workers: &mut HashMap<Uuid, WorkerEntry>, vehicle_id: Uuid) -> bool {
-    match workers.get(&vehicle_id) {
-        Some((handle, _)) if !handle.is_finished() => false,
-        Some(_) => {
-            workers.remove(&vehicle_id);
-            true
+/// One vehicle's worker as the supervisor tracks it.
+enum WorkerSlot {
+    Running(WorkerEntry),
+    /// Told to stop; the previous task may still hold Rivian sockets. A start
+    /// requested meanwhile waits until that task has finished.
+    Stopping {
+        restart: bool,
+    },
+}
+
+/// What a `StartWorker` should do for the vehicle's current slot.
+#[derive(Debug, PartialEq, Eq)]
+enum StartAction {
+    Spawn,
+    AlreadyRunning,
+    /// The previous worker is still stopping; start once it has finished.
+    Deferred,
+}
+
+fn prepare_worker_start(workers: &mut HashMap<Uuid, WorkerSlot>, vehicle_id: Uuid) -> StartAction {
+    match workers.get_mut(&vehicle_id) {
+        Some(WorkerSlot::Running((handle, _))) if !handle.is_finished() => {
+            StartAction::AlreadyRunning
         }
-        None => true,
+        Some(WorkerSlot::Running(_)) => {
+            workers.remove(&vehicle_id);
+            StartAction::Spawn
+        }
+        Some(WorkerSlot::Stopping { restart }) => {
+            *restart = true;
+            StartAction::Deferred
+        }
+        None => StartAction::Spawn,
+    }
+}
+
+/// Signal a worker to stop and wait for its task to end, aborting it after
+/// `timeout`. The abort is awaited too, so the task no longer runs when this
+/// returns.
+async fn stop_worker_task(
+    vehicle_id: Uuid,
+    mut handle: JoinHandle<()>,
+    shutdown_tx: broadcast::Sender<()>,
+    timeout: Duration,
+) {
+    let _ = shutdown_tx.send(());
+    if tokio::time::timeout(timeout, &mut handle).await.is_err() {
+        handle.abort();
+        let _ = handle.await;
+        tracing::warn!(
+            vehicle_id = %vehicle_id,
+            timeout_seconds = timeout.as_secs(),
+            "worker did not stop in time; aborted"
+        );
     }
 }
 
@@ -150,8 +203,12 @@ pub struct WorkerSupervisor {
     launcher: Arc<dyn WorkerLauncher>,
     /// False when the Rivian connection is switched off for this server.
     workers_enabled: bool,
-    workers: HashMap<Uuid, WorkerEntry>,
+    workers: HashMap<Uuid, WorkerSlot>,
     cmd_rx: mpsc::Receiver<SupervisorCommand>,
+    /// Vehicles whose stopping worker task has ended.
+    stopped_tx: mpsc::UnboundedSender<Uuid>,
+    stopped_rx: mpsc::UnboundedReceiver<Uuid>,
+    stop_timeout: Duration,
 }
 
 impl WorkerSupervisor {
@@ -163,77 +220,123 @@ impl WorkerSupervisor {
         workers_enabled: bool,
     ) -> SupervisorHandle {
         let (cmd_tx, cmd_rx) = mpsc::channel(64);
-
-        let mut sup = WorkerSupervisor {
-            launcher: Arc::new(RivianWorkerLauncher {
-                pool,
-                redis,
-                age_key,
-                config,
-            }),
-            workers_enabled,
-            workers: HashMap::new(),
-            cmd_rx,
-        };
+        let launcher = Arc::new(RivianWorkerLauncher {
+            pool,
+            redis,
+            age_key,
+            config,
+        });
+        let mut sup = WorkerSupervisor::new(launcher, workers_enabled, cmd_rx);
 
         tokio::spawn(async move { sup.run().await });
 
         SupervisorHandle { tx: cmd_tx }
     }
 
+    fn new(
+        launcher: Arc<dyn WorkerLauncher>,
+        workers_enabled: bool,
+        cmd_rx: mpsc::Receiver<SupervisorCommand>,
+    ) -> Self {
+        let (stopped_tx, stopped_rx) = mpsc::unbounded_channel();
+        WorkerSupervisor {
+            launcher,
+            workers_enabled,
+            workers: HashMap::new(),
+            cmd_rx,
+            stopped_tx,
+            stopped_rx,
+            stop_timeout: WORKER_STOP_TIMEOUT,
+        }
+    }
+
     async fn run(&mut self) {
-        while let Some(cmd) = self.cmd_rx.recv().await {
-            match cmd {
-                SupervisorCommand::StartWorker { vehicle_id } => {
-                    if !self.workers_enabled {
-                        tracing::info!(
-                            vehicle_id = %vehicle_id,
-                            "worker not started: Rivian connection is off for this server"
-                        );
-                        continue;
-                    }
-                    if !prepare_worker_start(&mut self.workers, vehicle_id) {
-                        continue;
-                    }
-                    let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
-                    let handle = tokio::spawn(self.launcher.launch(vehicle_id, shutdown_rx));
-                    self.workers.insert(vehicle_id, (handle, shutdown_tx));
-                    tracing::info!(vehicle_id = %vehicle_id, "worker started");
-                }
-                SupervisorCommand::StopWorker { vehicle_id } => {
-                    if let Some((handle, shutdown_tx)) = self.workers.remove(&vehicle_id) {
-                        let _ = shutdown_tx.send(());
-                        tokio::spawn(async move {
-                            tokio::pin!(handle);
-                            tokio::select! {
-                                _ = &mut handle => {},
-                                _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                                    handle.abort();
-                                    tracing::warn!(vehicle_id = %vehicle_id, "worker did not stop within 5s; aborted");
-                                }
-                            }
-                        });
-                        tracing::info!(vehicle_id = %vehicle_id, "worker stop requested");
+        loop {
+            tokio::select! {
+                cmd = self.cmd_rx.recv() => {
+                    let Some(cmd) = cmd else { break };
+                    if !self.handle_command(cmd) {
+                        break;
                     }
                 }
-                SupervisorCommand::Shutdown => {
-                    let drain: Vec<_> = self.workers.drain().collect();
-                    for (vid, (handle, shutdown_tx)) in drain {
-                        let _ = shutdown_tx.send(());
-                        tokio::spawn(async move {
-                            tokio::pin!(handle);
-                            tokio::select! {
-                                _ = &mut handle => {},
-                                _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                                    handle.abort();
-                                    tracing::warn!(vehicle_id = %vid, "worker did not stop within 5s on shutdown; aborted");
-                                }
-                            }
-                        });
-                    }
-                    break;
+                Some(vehicle_id) = self.stopped_rx.recv() => self.worker_stopped(vehicle_id),
+            }
+        }
+    }
+
+    /// Apply one command. Returns false when the supervisor should exit.
+    fn handle_command(&mut self, cmd: SupervisorCommand) -> bool {
+        match cmd {
+            SupervisorCommand::StartWorker { vehicle_id } => {
+                if !self.workers_enabled {
+                    tracing::info!(
+                        vehicle_id = %vehicle_id,
+                        "worker not started: Rivian connection is off for this server"
+                    );
+                    return true;
+                }
+                match prepare_worker_start(&mut self.workers, vehicle_id) {
+                    StartAction::Spawn => self.spawn_worker(vehicle_id),
+                    StartAction::AlreadyRunning => {}
+                    StartAction::Deferred => tracing::info!(
+                        vehicle_id = %vehicle_id,
+                        "worker start deferred until the previous worker has stopped"
+                    ),
                 }
             }
+            SupervisorCommand::StopWorker { vehicle_id } => {
+                match self.workers.remove(&vehicle_id) {
+                    Some(WorkerSlot::Running((handle, shutdown_tx))) => {
+                        let stopped_tx = self.stopped_tx.clone();
+                        let timeout = self.stop_timeout;
+                        tokio::spawn(async move {
+                            stop_worker_task(vehicle_id, handle, shutdown_tx, timeout).await;
+                            let _ = stopped_tx.send(vehicle_id);
+                        });
+                        self.workers
+                            .insert(vehicle_id, WorkerSlot::Stopping { restart: false });
+                        tracing::info!(vehicle_id = %vehicle_id, "worker stop requested");
+                    }
+                    Some(WorkerSlot::Stopping { .. }) => {
+                        // Already stopping; a later stop cancels any deferred start.
+                        self.workers
+                            .insert(vehicle_id, WorkerSlot::Stopping { restart: false });
+                    }
+                    None => {}
+                }
+            }
+            SupervisorCommand::Shutdown => {
+                let timeout = self.stop_timeout;
+                for (vehicle_id, slot) in self.workers.drain() {
+                    if let WorkerSlot::Running((handle, shutdown_tx)) = slot {
+                        tokio::spawn(stop_worker_task(vehicle_id, handle, shutdown_tx, timeout));
+                    }
+                }
+                return false;
+            }
+        }
+        true
+    }
+
+    fn spawn_worker(&mut self, vehicle_id: Uuid) {
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let handle = tokio::spawn(self.launcher.launch(vehicle_id, shutdown_rx));
+        self.workers
+            .insert(vehicle_id, WorkerSlot::Running((handle, shutdown_tx)));
+        tracing::info!(vehicle_id = %vehicle_id, "worker started");
+    }
+
+    /// The stopping worker's task has ended: free the slot and run a start
+    /// that arrived meanwhile. The new worker re-checks the collection pause.
+    fn worker_stopped(&mut self, vehicle_id: Uuid) {
+        let Some(WorkerSlot::Stopping { restart }) = self.workers.get(&vehicle_id) else {
+            return;
+        };
+        let restart = *restart;
+        self.workers.remove(&vehicle_id);
+        tracing::info!(vehicle_id = %vehicle_id, "worker stopped");
+        if restart && self.workers_enabled {
+            self.spawn_worker(vehicle_id);
         }
     }
 }
@@ -265,13 +368,19 @@ mod tests {
     fn make_supervisor_with_workers(
         extra_workers: HashMap<Uuid, WorkerEntry>,
     ) -> (SupervisorHandle, WorkerSupervisor) {
+        make_supervisor(Arc::new(ParkedLauncher), extra_workers)
+    }
+
+    fn make_supervisor(
+        launcher: Arc<dyn WorkerLauncher>,
+        extra_workers: HashMap<Uuid, WorkerEntry>,
+    ) -> (SupervisorHandle, WorkerSupervisor) {
         let (cmd_tx, cmd_rx) = mpsc::channel(64);
-        let sup = WorkerSupervisor {
-            launcher: Arc::new(ParkedLauncher),
-            workers_enabled: true,
-            workers: extra_workers,
-            cmd_rx,
-        };
+        let mut sup = WorkerSupervisor::new(launcher, true, cmd_rx);
+        sup.workers = extra_workers
+            .into_iter()
+            .map(|(vehicle_id, entry)| (vehicle_id, WorkerSlot::Running(entry)))
+            .collect();
         (SupervisorHandle { tx: cmd_tx }, sup)
     }
 
@@ -507,10 +616,147 @@ mod tests {
         assert!(completed.is_finished());
 
         let mut workers = HashMap::new();
-        workers.insert(vehicle_id, (completed, shutdown_tx));
+        workers.insert(vehicle_id, WorkerSlot::Running((completed, shutdown_tx)));
 
-        assert!(prepare_worker_start(&mut workers, vehicle_id));
+        assert_eq!(
+            prepare_worker_start(&mut workers, vehicle_id),
+            StartAction::Spawn
+        );
         assert!(!workers.contains_key(&vehicle_id));
+    }
+
+    // ── Stop then start never overlaps two workers ────────────────────────────
+
+    /// Workers that take `stop_delay` to finish after the stop signal, the way
+    /// a real worker closes its sockets. Tracks how many run at once.
+    struct SlowStopLauncher {
+        stop_delay: Duration,
+        launched: AtomicU32,
+        active: Arc<AtomicU32>,
+        max_active: Arc<AtomicU32>,
+    }
+
+    impl SlowStopLauncher {
+        fn new(stop_delay: Duration) -> Arc<Self> {
+            Arc::new(Self {
+                stop_delay,
+                launched: AtomicU32::new(0),
+                active: Arc::new(AtomicU32::new(0)),
+                max_active: Arc::new(AtomicU32::new(0)),
+            })
+        }
+    }
+
+    impl WorkerLauncher for SlowStopLauncher {
+        fn launch(&self, _vehicle_id: Uuid, mut shutdown: broadcast::Receiver<()>) -> WorkerFuture {
+            self.launched.fetch_add(1, Ordering::SeqCst);
+            let active = Arc::clone(&self.active);
+            let max_active = Arc::clone(&self.max_active);
+            let stop_delay = self.stop_delay;
+            Box::pin(async move {
+                let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                max_active.fetch_max(now, Ordering::SeqCst);
+                let _ = shutdown.recv().await;
+                tokio::time::sleep(stop_delay).await;
+                active.fetch_sub(1, Ordering::SeqCst);
+            })
+        }
+    }
+
+    async fn wait_until(condition: impl Fn() -> bool) {
+        timeout(Duration::from_secs(30), async {
+            while !condition() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("condition should hold");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_quick_pause_and_resume_waits_for_the_old_worker_to_stop() {
+        let vehicle_id = Uuid::new_v4();
+        let launcher = SlowStopLauncher::new(Duration::from_secs(2));
+        let (handle, mut sup) = make_supervisor(launcher.clone(), HashMap::new());
+        tokio::spawn(async move { sup.run().await });
+
+        handle
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
+        wait_until(|| launcher.active.load(Ordering::SeqCst) == 1).await;
+        handle
+            .send(SupervisorCommand::StopWorker { vehicle_id })
+            .await;
+        handle
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
+
+        // The resume is held while the first worker is still closing.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(launcher.launched.load(Ordering::SeqCst), 1);
+
+        wait_until(|| launcher.launched.load(Ordering::SeqCst) == 2).await;
+        wait_until(|| launcher.active.load(Ordering::SeqCst) == 1).await;
+        assert_eq!(
+            launcher.max_active.load(Ordering::SeqCst),
+            1,
+            "two workers must never run for one vehicle"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_while_stopping_cancels_the_deferred_start() {
+        let vehicle_id = Uuid::new_v4();
+        let launcher = SlowStopLauncher::new(Duration::from_secs(2));
+        let (handle, mut sup) = make_supervisor(launcher.clone(), HashMap::new());
+        tokio::spawn(async move { sup.run().await });
+
+        handle
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
+        wait_until(|| launcher.active.load(Ordering::SeqCst) == 1).await;
+        for command in [
+            SupervisorCommand::StopWorker { vehicle_id },
+            SupervisorCommand::StartWorker { vehicle_id },
+            SupervisorCommand::StopWorker { vehicle_id },
+        ] {
+            handle.send(command).await;
+        }
+
+        wait_until(|| launcher.active.load(Ordering::SeqCst) == 0).await;
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        assert_eq!(launcher.launched.load(Ordering::SeqCst), 1);
+
+        // The slot is free again once the old worker has gone.
+        handle
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
+        wait_until(|| launcher.launched.load(Ordering::SeqCst) == 2).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_worker_that_ignores_stop_is_aborted_before_the_restart() {
+        let vehicle_id = Uuid::new_v4();
+        // Far longer than the supervisor's stop timeout.
+        let launcher = SlowStopLauncher::new(Duration::from_secs(3600));
+        let (handle, mut sup) = make_supervisor(launcher.clone(), HashMap::new());
+        sup.stop_timeout = Duration::from_secs(5);
+        tokio::spawn(async move { sup.run().await });
+
+        handle
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
+        wait_until(|| launcher.active.load(Ordering::SeqCst) == 1).await;
+        handle
+            .send(SupervisorCommand::StopWorker { vehicle_id })
+            .await;
+        handle
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
+
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        assert_eq!(launcher.launched.load(Ordering::SeqCst), 1);
+        wait_until(|| launcher.launched.load(Ordering::SeqCst) == 2).await;
     }
 
     // ── Shutdown drains all workers ───────────────────────────────────────────
