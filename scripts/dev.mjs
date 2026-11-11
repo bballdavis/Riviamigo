@@ -13,6 +13,8 @@ const composeFile = resolve(rootDir, 'compose/docker-compose.dev.yml');
 const devRestoreAgentKeyFile = resolve(rootDir, 'data/dev-restore-agent-key');
 const devRestoreMarkerFile = resolve(rootDir, 'data/dev-restore-in-progress');
 const devApiPidFile = resolve(rootDir, 'data/dev-api.pid');
+// The launcher's own PID, so `pnpm stop` can find it on Windows, where pnpm starts it with a relative path.
+const devLauncherPidFile = resolve(rootDir, 'data/dev-launcher.pid');
 const isWindows = process.platform === 'win32';
 
 function parsePort(value, fallback) {
@@ -210,6 +212,100 @@ export function matchRepoOwnedProcesses(
   });
 }
 
+const LAUNCHER_SCRIPT_COMMAND = /(?:^|[\s"'\\/])scripts[\\/]dev\.mjs(?=$|[\s"'])/i;
+const ABSOLUTE_LAUNCHER_COMMAND = /(?:^|[\s"'])(?:[a-z]:[\\/]|\\\\|\/)[^\s"']*scripts[\\/]dev\.mjs(?=$|[\s"'])/i;
+const STOP_FLAG_COMMAND = /(?:^|\s)--stop(?:\s|$)/;
+
+/** Windows paths compare case-insensitively with either separator. */
+function normalizeWindowsPath(value) {
+  return String(value ?? '').replace(/\//g, '\\').toLowerCase();
+}
+
+/** True when `path` appears in `command` as a whole argument (bare, or quoted). */
+function commandNamesPath(command, path) {
+  const haystack = normalizeWindowsPath(command);
+  const needle = normalizeWindowsPath(path);
+  for (let index = haystack.indexOf(needle); index !== -1; index = haystack.indexOf(needle, index + 1)) {
+    const before = haystack[index - 1];
+    const after = haystack[index + needle.length];
+    if ((before === undefined || /[\s"']/.test(before)) && (after === undefined || /[\s"']/.test(after))) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a Windows process is this checkout's dev-stack launcher. The launcher
+ * is named either by its absolute path (this checkout's `scripts\dev.mjs`) or,
+ * when pnpm starts it, by the relative `./scripts/dev.mjs`. A relative command
+ * names no checkout, so only the PID this checkout's launcher recorded is trusted
+ * for it. An absolute path to another checkout never matches.
+ */
+function isWindowsLauncherOfCheckout(command, { pid, launcherScript, launcherPid }) {
+  if (!LAUNCHER_SCRIPT_COMMAND.test(command) || STOP_FLAG_COMMAND.test(command)) return false;
+  if (commandNamesPath(command, launcherScript)) return true;
+  return launcherPid !== null && pid === launcherPid && !ABSOLUTE_LAUNCHER_COMMAND.test(command);
+}
+
+/**
+ * The PowerShell query behind the Windows process lookup. It only narrows the
+ * list; matchWindowsRepoOwnedProcesses decides what belongs to this checkout.
+ * The query never names the launcher script, and it skips its own process, so
+ * the PowerShell process running it cannot match itself.
+ */
+export function buildWindowsProcessQuery({ apiBin, restoreAgentBin, webDir: web, includeLaunchers = false }) {
+  return [
+    `$apiBin = ${powerShellLiteral(apiBin)}`,
+    `$restoreAgentBin = ${powerShellLiteral(restoreAgentBin)}`,
+    `$webDir = ${powerShellLiteral(web)}`,
+    `$includeLaunchers = ${includeLaunchers ? '$true' : '$false'}`,
+    'Get-CimInstance Win32_Process -ErrorAction Stop |',
+    'Where-Object {',
+    '  if ($_.ProcessId -eq $PID) { return $false }',
+    "  $isApi = $_.ExecutablePath -and $_.ExecutablePath -ieq $apiBin",
+    "  $isRestoreAgent = $_.ExecutablePath -and $_.ExecutablePath -ieq $restoreAgentBin",
+    "  $isVite = $_.CommandLine -and $_.CommandLine.IndexOf($webDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.CommandLine -match '(?i)\\bvite(?:\\.cmd|\\.js)?\\b'",
+    "  $isLauncher = $includeLaunchers -and $_.CommandLine -and $_.CommandLine -match 'dev\\.mjs'",
+    '  $isApi -or $isRestoreAgent -or $isVite -or $isLauncher',
+    '} |',
+    'Select-Object ProcessId, Name, ExecutablePath, CommandLine |',
+    'ConvertTo-Json -Compress',
+  ].join('\n');
+}
+
+/**
+ * Classifies the rows from buildWindowsProcessQuery into this checkout's dev
+ * processes, in the same shape matchRepoOwnedProcesses returns.
+ */
+export function matchWindowsRepoOwnedProcesses(
+  rows,
+  {
+    apiBin,
+    restoreAgentBin,
+    webDir: web,
+    includeLaunchers = false,
+    launcherScript = null,
+    launcherPid = null,
+    selfPid = process.pid,
+  },
+) {
+  return rows.flatMap((row) => {
+    const pid = row.ProcessId;
+    if (pid === selfPid) return [];
+    const name = row.Name ?? '';
+    const executable = normalizeWindowsPath(row.ExecutablePath);
+    const command = String(row.CommandLine ?? '');
+    if (executable && executable === normalizeWindowsPath(apiBin)) return [{ pid, name, kind: 'api' }];
+    if (executable && executable === normalizeWindowsPath(restoreAgentBin)) return [{ pid, name, kind: 'restore-agent' }];
+    if (normalizeWindowsPath(command).includes(normalizeWindowsPath(web)) && /\bvite(?:\.cmd|\.js)?\b/i.test(command)) {
+      return [{ pid, name, kind: 'vite' }];
+    }
+    if (includeLaunchers && launcherScript && isWindowsLauncherOfCheckout(command, { pid, launcherScript, launcherPid })) {
+      return [{ pid, name, kind: 'launcher' }];
+    }
+    return [];
+  });
+}
+
 /** Resolves the script path a launcher candidate runs, from its working directory. */
 async function launcherScriptPath(candidate) {
   const script = candidate.command.match(/(\S*scripts[/\\]dev\.mjs)/)?.[1];
@@ -221,30 +317,41 @@ async function launcherScriptPath(candidate) {
   return cwd ? resolve(cwd, script) : null;
 }
 
+async function readLauncherPid() {
+  try {
+    const pid = Number.parseInt((await readFile(devLauncherPidFile, 'utf8')).trim(), 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+async function recordLauncherPid() {
+  await mkdir(dirname(devLauncherPidFile), { recursive: true });
+  await writeFile(devLauncherPidFile, `${process.pid}\n`, 'utf8');
+}
+
+/** Removes the PID file only while it still names this launcher; a newer launcher may have replaced it. */
+async function removeOwnLauncherPid() {
+  if ((await readLauncherPid()) === process.pid) {
+    await rm(devLauncherPidFile, { force: true });
+  }
+}
+
 async function listRepoOwnedProcesses({ includeLaunchers = false } = {}) {
   const apiBin = resolve(apiDir, 'target/debug', isWindows ? 'riviamigo-api.exe' : 'riviamigo-api');
   const restoreAgentBin = resolve(apiDir, 'target/debug', isWindows ? 'riviamigo-restore-agent.exe' : 'riviamigo-restore-agent');
 
   if (isWindows) {
-    const command = [
-      `$apiBin = ${powerShellLiteral(apiBin)}`,
-      `$restoreAgentBin = ${powerShellLiteral(restoreAgentBin)}`,
-      `$webDir = ${powerShellLiteral(webDir)}`,
-      'Get-CimInstance Win32_Process -ErrorAction Stop |',
-      'Where-Object {',
-      "  $isApi = $_.ExecutablePath -and $_.ExecutablePath -ieq $apiBin",
-      "  $isRestoreAgent = $_.ExecutablePath -and $_.ExecutablePath -ieq $restoreAgentBin",
-      "  $isVite = $_.CommandLine -and $_.CommandLine.IndexOf($webDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.CommandLine -match '(?i)\\bvite(?:\\.cmd|\\.js)?\\b'",
-      '  $isApi -or $isRestoreAgent -or $isVite',
-      '} |',
-      'Select-Object ProcessId, Name, ExecutablePath, CommandLine |',
-      'ConvertTo-Json -Compress',
-    ].join('\n');
+    // Windows has no `lsof` to read a process's working directory, so the
+    // launcher is identified from its command line and, for pnpm's relative
+    // path, from the PID it recorded at startup.
+    const launcherPid = includeLaunchers ? await readLauncherPid() : null;
     const { code, stdout, stderr } = await capture('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      command,
+      buildWindowsProcessQuery({ apiBin, restoreAgentBin, webDir, includeLaunchers }),
     ]);
     if (code !== 0) {
       log(`[dev] Could not inspect existing Windows processes; leaving occupied ports alone. ${stripAnsi(stderr).trim()}`);
@@ -252,15 +359,14 @@ async function listRepoOwnedProcesses({ includeLaunchers = false } = {}) {
     }
 
     try {
-      return parseProcessList(stdout).map((process) => ({
-        pid: process.ProcessId,
-        name: process.Name,
-        kind: String(process.ExecutablePath ?? '').toLowerCase() === apiBin.toLowerCase()
-          ? 'api'
-          : String(process.ExecutablePath ?? '').toLowerCase() === restoreAgentBin.toLowerCase()
-            ? 'restore-agent'
-            : 'vite',
-      }));
+      return matchWindowsRepoOwnedProcesses(parseProcessList(stdout), {
+        apiBin,
+        restoreAgentBin,
+        webDir,
+        includeLaunchers,
+        launcherScript,
+        launcherPid,
+      });
     } catch (error) {
       log(`[dev] Could not parse existing Windows process details; leaving occupied ports alone. ${error.message}`);
       return [];
@@ -319,6 +425,7 @@ async function clearRepoOwnedDevProcesses({ includeLaunchers = false } = {}) {
 async function stopRepoOwnedDevProcesses() {
   const stopped = await clearRepoOwnedDevProcesses({ includeLaunchers: true });
   if (stopped === 0) {
+    await rm(devLauncherPidFile, { force: true });
     log('[dev] No Riviamigo dev servers from this checkout are running.');
     return;
   }
@@ -332,6 +439,8 @@ async function stopRepoOwnedDevProcesses() {
       await capture('kill', ['-KILL', String(survivor.pid)]);
     }
   }
+  // A launcher ended by taskkill /F never removes its own PID file, so clear it here.
+  await rm(devLauncherPidFile, { force: true });
   log('[dev] Stopped. Docker services (database, Redis, Garage) are still running.');
 }
 
@@ -938,12 +1047,14 @@ async function shutdown(code = 0) {
     }
   }
 
+  await removeOwnLauncherPid().catch(() => {});
   process.exit(code);
 }
 
 async function main() {
   log('Starting Riviamigo development stack...');
   log('');
+  await recordLauncherPid();
 
   await requireTools();
   await clearRepoOwnedDevProcesses();
