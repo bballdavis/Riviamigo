@@ -80,7 +80,8 @@ pause button on its card in **Settings → Vehicles**. While paused, Riviamigo
 stops live data, charge history sync, and artwork repair for that vehicle, and
 the card shows **Paused**. Recorded history stays available. The play button
 resumes collection. The choice is saved, so a paused vehicle stays paused after
-a restart.
+a restart. Refreshing the Rivian login for a paused vehicle saves the new
+credentials but leaves collection paused; resume the vehicle to reconnect.
 
 Pause a vehicle before running a second copy of the same data, such as a
 restored backup on a test machine. Two servers polling one Rivian account

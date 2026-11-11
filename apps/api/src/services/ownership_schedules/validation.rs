@@ -1,6 +1,6 @@
 //! Validation for edited maintenance schedules.
 
-use crate::errors::AppError;
+use crate::{errors::AppError, services::ownership::clean_label};
 
 use super::model::MaintenanceItem;
 
@@ -26,17 +26,17 @@ pub fn validate_schedule(items: &mut [MaintenanceItem]) -> Result<(), AppError> 
     }
     let mut seen = std::collections::HashSet::new();
     for entry in items.iter_mut() {
-        entry.label = entry.label.trim().to_string();
         if !valid_item_id(&entry.id) || !seen.insert(entry.id.clone()) {
             return Err(AppError::Validation(
                 "maintenance item ids must be unique".into(),
             ));
         }
-        if entry.label.is_empty() || entry.label.chars().count() > 60 {
-            return Err(AppError::Validation(
-                "maintenance item names must be 1 to 60 characters".into(),
-            ));
-        }
+        entry.label = clean_label(&entry.label, 60).ok_or_else(|| {
+            AppError::Validation(
+                "maintenance item names must be 1 to 60 characters without line breaks or tabs"
+                    .into(),
+            )
+        })?;
         if entry.interval_mi.is_none() && entry.interval_months.is_none() {
             return Err(AppError::Validation(
                 "each maintenance item needs a mileage or time interval".into(),

@@ -159,6 +159,68 @@ async fn store_fuel_prices(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RefreshDecision {
+    /// Serve the stored months without contacting the provider.
+    Serve { refresh_failed: bool },
+    /// The stored copy is stale and no recent attempt holds a refresh back.
+    Refresh { previously_failed: bool },
+}
+
+pub(super) fn refresh_decision(
+    now: DateTime<Utc>,
+    last_attempt_at: Option<DateTime<Utc>>,
+    last_success_at: Option<DateTime<Utc>>,
+    has_last_error: bool,
+    last_stored_at: Option<DateTime<Utc>>,
+) -> RefreshDecision {
+    let previously_failed = has_last_error
+        && last_attempt_at.is_some()
+        && last_success_at.is_none_or(|success| last_attempt_at > Some(success));
+    let fresh = last_stored_at.is_some_and(|at| now - at < FUEL_PRICE_REFRESH_INTERVAL);
+    // A connection test also records an attempt. Until something is stored,
+    // only a failed attempt may hold the first download back.
+    let recently_attempted = last_attempt_at.is_some_and(|at| now - at < FUEL_PRICE_RETRY_INTERVAL)
+        && (last_stored_at.is_some() || previously_failed);
+    if fresh || recently_attempted {
+        RefreshDecision::Serve {
+            refresh_failed: !fresh && previously_failed,
+        }
+    } else {
+        RefreshDecision::Refresh { previously_failed }
+    }
+}
+
+/// Records a refresh attempt only if no other request has recorded one since
+/// `observed_last_attempt_at` was read: a compare-and-set on the activity
+/// row, so exactly one of several concurrent stale reads wins the refresh.
+/// The row lock taken by `ON CONFLICT DO UPDATE` serializes the contenders,
+/// and each re-checks the condition against the winner's committed value.
+pub(super) async fn claim_fuel_price_refresh<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    connection_id: &str,
+    observed_last_attempt_at: Option<DateTime<Utc>>,
+) -> Result<bool, AppError> {
+    let claimed = sqlx::query_scalar::<_, String>(
+        r#"INSERT INTO riviamigo.external_connection_activity AS activity
+             (connection_id, last_attempt_at, usage_date, request_count)
+           VALUES ($1, now(), CURRENT_DATE, 1)
+           ON CONFLICT (connection_id) DO UPDATE SET
+             last_attempt_at = now(),
+             usage_date = CURRENT_DATE,
+             request_count = CASE
+               WHEN activity.usage_date = CURRENT_DATE THEN activity.request_count + 1
+               ELSE 1 END
+           WHERE activity.last_attempt_at IS NOT DISTINCT FROM $2
+           RETURNING connection_id"#,
+    )
+    .bind(connection_id)
+    .bind(observed_last_attempt_at)
+    .fetch_optional(executor)
+    .await?;
+    Ok(claimed.is_some())
+}
+
 /// Refresh the stored series when the connection is enabled and the stored
 /// copy is stale. Failures are recorded on the connection and never surface
 /// as a request error: the page keeps working from stored months.
@@ -191,20 +253,23 @@ async fn refresh_fuel_prices_if_stale(
     .fetch_one(pool)
     .await?;
 
-    let now = Utc::now();
-    let previously_failed = last_error.is_some()
-        && last_attempt_at.is_some()
-        && last_success_at.is_none_or(|success| last_attempt_at > Some(success));
-    let fresh = last_stored_at.is_some_and(|at| now - at < FUEL_PRICE_REFRESH_INTERVAL);
-    // A connection test also records an attempt. Until something is stored,
-    // only a failed attempt may hold the first download back.
-    let recently_attempted = last_attempt_at.is_some_and(|at| now - at < FUEL_PRICE_RETRY_INTERVAL)
-        && (last_stored_at.is_some() || previously_failed);
-    if fresh || recently_attempted {
-        return Ok((true, !fresh && previously_failed));
-    }
+    let previously_failed = match refresh_decision(
+        Utc::now(),
+        last_attempt_at,
+        last_success_at,
+        last_error.is_some(),
+        last_stored_at,
+    ) {
+        RefreshDecision::Serve { refresh_failed } => return Ok((true, refresh_failed)),
+        RefreshDecision::Refresh { previously_failed } => previously_failed,
+    };
 
-    connections::record_attempt(pool, connections::FUEL_PRICES).await;
+    // Concurrent page loads all see the same stale state. Only the request
+    // that records the attempt contacts the provider; the others serve the
+    // stored months, exactly as if the attempt had just been made.
+    if !claim_fuel_price_refresh(pool, connections::FUEL_PRICES, last_attempt_at).await? {
+        return Ok((true, previously_failed));
+    }
     let api_key = decrypt_api_key(age_key, settings.api_key_encrypted.as_deref());
     let fetched = tokio::time::timeout(
         FUEL_PRICE_FETCH_TIMEOUT,

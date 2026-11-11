@@ -45,3 +45,14 @@ fn rejects_items_without_an_interval_or_with_duplicate_ids() {
     validate_schedule(&mut padded).unwrap();
     assert_eq!(padded[0].label, "Oil");
 }
+
+#[test]
+fn rejects_item_names_with_control_characters() {
+    for label in ["Oil\nchange", "Oil\tchange", "Oil\u{1b}[2J"] {
+        let mut schedule = vec![item("x", label, Oil, Some(5_000.0), None, 90.0)];
+        assert!(validate_schedule(&mut schedule).is_err(), "{label:?}");
+    }
+    let mut trailing = vec![item("x", "Oil change\n", Oil, Some(5_000.0), None, 90.0)];
+    validate_schedule(&mut trailing).unwrap();
+    assert_eq!(trailing[0].label, "Oil change");
+}
