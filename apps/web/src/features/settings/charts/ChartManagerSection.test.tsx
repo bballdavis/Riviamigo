@@ -105,7 +105,27 @@ describe('ChartManagerSection staged draft', () => {
     expect(mocks.setEnabled).not.toHaveBeenCalled();
   });
 
+  it('stages a toggle when the charts arrive after the section mounts (cold cache)', () => {
+    const loaded = mocks.entries;
+    mocks.entries = undefined as unknown as ChartManagerEntry[];
+    const tree = () => (
+      <SettingsDraftProvider>
+        <ChartManagerSection />
+      </SettingsDraftProvider>
+    );
+    const { rerender } = render(tree());
+    mocks.entries = loaded;
+    rerender(tree());
+    fireEvent.click(screen.getByRole('switch', { name: 'Disable Energy' }));
+    expect(bar()).toBeInTheDocument();
+  });
+
   it('Save applies the changed chart with the same payload as before and clears the bar', async () => {
+    // The server reflects the change once it is saved.
+    mocks.setEnabled.mockImplementation(async ({ isEnabled }: { isEnabled: boolean }) => {
+      mocks.entries = [chartEntry({ id: 'chart-1', name: 'Energy', isEnabled })];
+      return {};
+    });
     renderSection();
     fireEvent.click(screen.getByRole('switch', { name: 'Disable Energy' }));
     fireEvent.click(saveButton());

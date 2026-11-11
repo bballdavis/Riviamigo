@@ -22,7 +22,6 @@ import { useDashboards } from '@riviamigo/dashboards';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, ResponsiveDialog, Switch } from '@riviamigo/ui/primitives';
 import { Download, Ellipsis, Pencil, Plus, Upload, Copy, Search, LockKeyhole, RotateCcw, Tag, X } from 'lucide-react';
 import { useSettingsDraft } from '../drafts/SettingsDraftProvider';
-import { useStagedValue } from '../drafts/useStagedValue';
 
 type ChartFilter = 'all' | 'defaults' | 'mine' | 'customized' | 'disabled' | 'unassigned';
 
@@ -60,12 +59,15 @@ function sameEntryDraft(left: ChartDraftEntry, right: ChartDraftEntry) {
   return left.enabled === right.enabled && left.placements.join('\n') === right.placements.join('\n');
 }
 
-/** Compares charts present on both sides, so a chart added or removed mid-edit does not read as a change. */
-function sameChartDraft(left: ChartDraft, right: ChartDraft) {
-  return Object.keys(left).every((id) => {
-    const mine = left[id];
-    const other = right[id];
-    return !mine || !other || sameEntryDraft(mine, other);
+/**
+ * Staged edits are kept sparse (only charts the user touched) and compared with
+ * the current server data, so charts that load, appear, or are replaced by a
+ * saved override later can never hide or invent a change.
+ */
+function hasChartEdits(edits: ChartDraft, saved: ChartDraft) {
+  return Object.entries(edits).some(([id, edit]) => {
+    const current = saved[id];
+    return current !== undefined && !sameEntryDraft(edit, current);
   });
 }
 
@@ -104,18 +106,18 @@ export function ChartManagerSection() {
     () => Object.fromEntries((charts.data ?? []).map((entry) => [entry.effective.id, savedEntryDraft(entry)])),
     [charts.data],
   );
-  const chartDraft = useStagedValue<ChartDraft>(savedDraft, sameChartDraft);
+  const [chartEdits, setChartEdits] = React.useState<ChartDraft>({});
   const { saving } = useSettingsDraft('charts', {
-    isDirty: chartDraft.isDirty,
+    isDirty: hasChartEdits(chartEdits, savedDraft),
     save: saveChartDraft,
-    discard: chartDraft.reset,
+    discard: () => setChartEdits({}),
   });
 
   const entries = React.useMemo(() => {
     const needle = query.trim().toLowerCase();
     return (charts.data ?? []).filter((entry) => {
       const chart = entry.effective;
-      const staged = chartDraft.value[chart.id] ?? savedEntryDraft(entry);
+      const staged = chartEdits[chart.id] ?? savedEntryDraft(entry);
       const assigned = staged.placements.length > 0;
       const matchesFilter = filter === 'all'
         || (filter === 'defaults' && entry.origin === 'system')
@@ -127,11 +129,11 @@ export function ChartManagerSection() {
       if (!needle) return true;
       return `${chart.name} ${chart.slug} ${chart.description ?? ''}`.toLowerCase().includes(needle);
     });
-  }, [chartDraft.value, charts.data, filter, query]);
+  }, [chartEdits, charts.data, filter, query]);
 
   function stageEntry(entry: ChartManagerEntry, update: (draft: ChartDraftEntry) => ChartDraftEntry) {
     const id = entry.effective.id;
-    chartDraft.setValue((current) => ({ ...current, [id]: update(current[id] ?? savedEntryDraft(entry)) }));
+    setChartEdits((current) => ({ ...current, [id]: update(current[id] ?? savedEntryDraft(entry)) }));
   }
 
   async function handleImport(event: React.ChangeEvent<HTMLInputElement>) {
@@ -183,7 +185,7 @@ export function ChartManagerSection() {
 
   /** Settings bar save: applies each changed chart in turn, refreshing between charts so a retry after a failure only repeats what is still unsaved. */
   async function saveChartDraft() {
-    const staged = chartDraft.value;
+    const staged = chartEdits;
     for (const entry of charts.data ?? []) {
       const next = staged[entry.effective.id];
       if (!next) continue;
@@ -201,7 +203,8 @@ export function ChartManagerSection() {
       }
       await charts.refetch();
     }
-    chartDraft.commit(staged);
+    // Keep edits made while the save was running.
+    setChartEdits((current) => (current === staged ? {} : current));
   }
 
   async function handleDelete(entry: ChartManagerEntry) {
@@ -290,7 +293,7 @@ export function ChartManagerSection() {
           ) : (
             <div className="grid gap-2">
               {entries.map((entry) => {
-                const staged = chartDraft.value[entry.effective.id] ?? savedEntryDraft(entry);
+                const staged = chartEdits[entry.effective.id] ?? savedEntryDraft(entry);
                 return (
                   <ChartManagerRow
                     key={entry.effective.id}
