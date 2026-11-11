@@ -52,7 +52,7 @@ export function useOwnershipVehicleLookupMenu(
 ) {
   const authReady = useAuthReady();
   return useQuery({
-    queryKey: ['ownership', 'vehicle-lookup', menu, params.year ?? '', params.make ?? '', params.model ?? ''],
+    queryKey: queryKeys.ownership.vehicleLookup(menu, params),
     queryFn: async () => (await api.lookupOwnershipVehicleMenu(menu, params)).items,
     enabled: enabled && authReady,
     staleTime: 24 * 60 * 60 * 1000,
