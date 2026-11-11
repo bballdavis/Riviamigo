@@ -287,7 +287,7 @@ export function ChartManagerSection() {
               <option value="unassigned">Unassigned</option>
             </select>
           </div>
-          {mutationError ? <p role="alert" className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{mutationError}</p> : null}
+          {mutationError ? <p role="alert" className="rounded-lg border border-status-danger/40 bg-status-danger/10 px-3 py-2 text-sm text-status-danger">{mutationError}</p> : null}
           {entries.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-fg-tertiary">No charts match this filter.</div>
           ) : (
