@@ -443,6 +443,7 @@ vi.mock('@riviamigo/hooks', () => ({
     createDemoVehicle: vi
       .fn()
       .mockResolvedValue({ ok: true, vehicle_id: 'demo-v1', created: true }),
+    deleteVehicle: vi.fn().mockResolvedValue({ ok: true, default_vehicle_id: 'v1' }),
     refreshDemoVehicle: vi.fn().mockResolvedValue({
       ok: true,
       vehicle_id: 'demo-v1',
@@ -1321,6 +1322,37 @@ describe('Settings page', () => {
         target_tire_pressure_psi: 46,
       });
     });
+  });
+
+  it('deletes a vehicle only after DELETE is typed in a labelled dialog', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    renderSettings();
+
+    fireEvent.click(screen.getByLabelText('Delete Adventure Truck'));
+    const dialog = screen.getByRole('dialog', { name: 'Delete Adventure Truck?' });
+    const deleteButton = within(dialog).getByRole('button', { name: 'Delete Vehicle' });
+    expect(deleteButton).toBeDisabled();
+
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Type DELETE to confirm' }), { target: { value: 'DELETE' } });
+    expect(deleteButton).toBeEnabled();
+    fireEvent.click(deleteButton);
+
+    await waitFor(() => expect(hooks.api.deleteVehicle).toHaveBeenCalledWith('v1'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('cancels the vehicle delete dialog without deleting, even after DELETE is typed', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    renderSettings();
+
+    fireEvent.click(screen.getByLabelText('Delete Adventure Truck'));
+    const dialog = screen.getByRole('dialog', { name: 'Delete Adventure Truck?' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Type DELETE to confirm' }), { target: { value: 'DELETE' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(hooks.api.deleteVehicle).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Delete Adventure Truck')).toBeInTheDocument();
   });
 
   it('opens and edits every dashboard via links the /d/$slug route accepts', () => {
