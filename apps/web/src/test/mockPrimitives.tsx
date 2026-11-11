@@ -235,3 +235,20 @@ export const FrunkIcon = ({ className }: { className?: string }) => (
 export const LiftgateIcon = ({ className }: { className?: string }) => (
   <svg className={className} data-testid="liftgate-icon" />
 );
+
+export const UnsavedChangesBar = ({ message, error, saving, onSave, onDiscard, saveLabel = 'Save', discardLabel = 'Discard' }: {
+  message: React.ReactNode; error?: string | null; saving?: boolean; onSave: () => void; onDiscard: () => void; saveLabel?: string; discardLabel?: string;
+}) => (
+  <div role="region" aria-label="Unsaved changes">
+    <p>{message}</p>
+    {error ? <p role="alert">{error}</p> : null}
+    <button type="button" onClick={onDiscard} disabled={saving}>{discardLabel}</button>
+    <button type="button" onClick={onSave} disabled={saving}>{saveLabel}</button>
+  </div>
+);
+
+export const UnsavedChangesBarSpacer = () => <div />;
+
+export const ResponsiveDialog = ({ titleId, children }: { titleId: string; onClose: () => void; children: React.ReactNode; className?: string }) => (
+  <div role="dialog" aria-modal="true" aria-labelledby={titleId}>{children}</div>
+);

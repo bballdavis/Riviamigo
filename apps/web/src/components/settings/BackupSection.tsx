@@ -4,10 +4,8 @@ import { api, queryKeys } from '@riviamigo/hooks';
 import type {
   BackupFrequency,
   BackupOverview,
-  BackupTargetType,
   RestoreJob,
   RestorePlan,
-  UpdateBackupSettingsBody,
 } from '@riviamigo/types';
 import {
   Badge,
@@ -31,13 +29,20 @@ import {
   History,
   Play,
   RotateCcw,
-  Save,
   Timer,
   Trash2,
   Upload,
   X,
 } from 'lucide-react';
 import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
+import { useSettingsDraft } from '../../features/settings/drafts/SettingsDraftProvider';
+import { useStagedValue } from '../../features/settings/drafts/useStagedValue';
+import {
+  backupValidationError,
+  buildDraft,
+  buildPayload,
+  type BackupDraft,
+} from './backupSettingsDraft';
 
 const WEEKDAYS = [
   { value: 0, label: 'Sunday' },
@@ -64,80 +69,12 @@ function estimateRestoreRange(sizeBytes: number | null): string {
   return `${formatRestoreDuration(minimum)}–${formatRestoreDuration(maximum)}`;
 }
 
-interface BackupDraft {
-  enabled: boolean;
-  frequency: BackupFrequency;
-  run_at: string;
-  timezone: string;
-  day_of_week: number | null;
-  day_of_month: number | null;
-  retention_count: string;
-  local_enabled: boolean;
-  s3_enabled: boolean;
-  target_type: BackupTargetType;
-  endpoint: string;
-  region: string;
-  bucket: string;
-  prefix: string;
-  access_key: string;
-}
-
 function emitToast(title: string, message: string) {
   window.dispatchEvent(
     new CustomEvent('riviamigo:toast', {
       detail: { title, message, variant: 'error' },
     })
   );
-}
-
-function buildDraft(overview: BackupOverview): BackupDraft {
-  const s = overview.settings;
-  return {
-    enabled: s.enabled,
-    frequency: s.frequency,
-    run_at: s.run_at,
-    timezone: s.timezone || 'UTC',
-    day_of_week: s.day_of_week,
-    day_of_month: s.day_of_month,
-    retention_count: String(s.retention_count),
-    local_enabled: s.local_enabled ?? true,
-    s3_enabled: s.s3_enabled ?? false,
-    target_type: s.target_type,
-    endpoint: s.endpoint,
-    region: s.region ?? '',
-    bucket: s.bucket,
-    prefix: s.prefix,
-    access_key: s.access_key ?? '',
-  };
-}
-
-function buildPayload(
-  draft: BackupDraft,
-  secretKey: string,
-  clearSecretKey: boolean
-): UpdateBackupSettingsBody | null {
-  const retention = Number.parseInt(draft.retention_count, 10);
-  if (!Number.isFinite(retention) || retention < 1) return null;
-
-  return {
-    enabled: draft.enabled,
-    frequency: draft.frequency,
-    run_at: draft.run_at,
-    timezone: draft.timezone.trim(),
-    day_of_week: draft.frequency === 'weekly' ? draft.day_of_week : null,
-    day_of_month: draft.frequency === 'monthly' ? draft.day_of_month : null,
-    retention_count: retention,
-    local_enabled: draft.local_enabled,
-    s3_enabled: draft.s3_enabled,
-    target_type: draft.target_type,
-    endpoint: draft.s3_enabled ? draft.endpoint.trim() : '',
-    region: draft.s3_enabled ? draft.region.trim() || null : null,
-    bucket: draft.s3_enabled ? draft.bucket.trim() : '',
-    prefix: draft.s3_enabled ? draft.prefix.trim() : '',
-    access_key: draft.s3_enabled ? draft.access_key.trim() || null : null,
-    ...(secretKey.trim() ? { secret_key: secretKey.trim() } : {}),
-    ...(clearSecretKey ? { clear_secret_key: true } : {}),
-  };
 }
 
 function describeSchedule(overview: BackupOverview) {
@@ -339,7 +276,11 @@ export function BackupSection() {
         : false;
     },
   });
-  const [draft, setDraft] = React.useState<BackupDraft | null>(null);
+  const savedDraft = React.useMemo(() => (overview.data ? buildDraft(overview.data) : null), [overview.data]);
+  const staged = useStagedValue(savedDraft);
+  const draft = staged.value;
+  const draftRef = React.useRef(draft);
+  draftRef.current = draft;
   const [secretKey, setSecretKey] = React.useState('');
   const [clearSecretKey, setClearSecretKey] = React.useState(false);
   const [expandedArtifactId, setExpandedArtifactId] = React.useState<string | null>(null);
@@ -361,13 +302,6 @@ export function BackupSection() {
 
   React.useEffect(() => {
     if (!overview.data) return;
-    setDraft(buildDraft(overview.data));
-    setSecretKey('');
-    setClearSecretKey(false);
-  }, [overview.data?.settings.updated_at]);
-
-  React.useEffect(() => {
-    if (!overview.data) return;
     setExpandedArtifactId((current) => {
       if (current && overview.data.artifacts.some((artifact) => artifact.id === current)) {
         return current;
@@ -385,19 +319,29 @@ export function BackupSection() {
     );
   }, [overview.data?.artifacts]);
 
-  const saveSettings = useMutation({
-    mutationFn: async () => {
-      if (!draft) throw new Error('Backup settings are not ready yet.');
-      const payload = buildPayload(draft, secretKey, clearSecretKey);
-      if (!payload) throw new Error('Retention must be a whole number greater than zero.');
-      return api.updateBackupSettings(payload);
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.backups.all }),
-    onError: (error) => {
-      emitToast(
-        'Backup settings',
-        error instanceof Error ? error.message : 'Backup settings could not be saved.'
-      );
+  const saveSettings = async () => {
+    const submitted = draft;
+    const submittedSecret = secretKey;
+    const submittedClear = clearSecretKey;
+    if (!submitted) throw new Error('Backup settings are not ready yet.');
+    const payload = buildPayload(submitted, submittedSecret, submittedClear);
+    const problem = backupValidationError(submitted, overview.data?.settings.has_secret_key ?? false, submittedSecret);
+    if (!payload || problem) throw new Error(problem ?? 'Backup settings are invalid.');
+    await api.updateBackupSettings(payload);
+    staged.commit(submitted);
+    // Keep edits typed while the request was in flight.
+    if (draftRef.current !== submitted) staged.setValue(draftRef.current);
+    setSecretKey((current) => (current === submittedSecret ? '' : current));
+    setClearSecretKey((current) => (current === submittedClear ? false : current));
+    void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all });
+  };
+  useSettingsDraft('backup', {
+    isDirty: staged.isDirty || secretKey.trim().length > 0 || clearSecretKey,
+    save: saveSettings,
+    discard: () => {
+      staged.reset();
+      setSecretKey('');
+      setClearSecretKey(false);
     },
   });
 
@@ -561,7 +505,7 @@ export function BackupSection() {
   }, [activeRestore?.job.id, activeRestore?.job.phase, activeRestore?.token]);
 
   function updateDraft<K extends keyof BackupDraft>(key: K, value: BackupDraft[K]) {
-    setDraft((cur) => (cur ? { ...cur, [key]: value } : cur));
+    staged.setValue((cur) => (cur ? { ...cur, [key]: value } : cur));
   }
 
   const activeRestoreEstimate = estimateRestoreRange(activeRestoreSizeBytes);
@@ -585,12 +529,6 @@ export function BackupSection() {
     (draft.bucket.trim().length > 0 &&
       draft.access_key.trim().length > 0 &&
       (currentSettings.has_secret_key || secretKey.trim().length > 0));
-  const canSave =
-    draft.run_at.trim().length === 5 &&
-    draft.timezone.trim().length > 0 &&
-    Number.parseInt(draft.retention_count, 10) >= 1 &&
-    (draft.local_enabled || draft.s3_enabled) &&
-    s3Valid;
   const recentRunsTotal = overview.data.recent_runs_total;
   const recentRunsPageCount = Math.max(1, Math.ceil(recentRunsTotal / recentRunsPerPage));
   const runNowAllowed = overview.data.runtime_readiness?.run_now_allowed ?? true;
@@ -659,15 +597,6 @@ export function BackupSection() {
               onClick={() => runBackupNow.mutate()}
             >
               {activeBackupRun ? 'Backup running' : 'Run now'}
-            </Button>
-            <Button
-              size="sm"
-              iconLeft={<Save className="h-3.5 w-3.5" />}
-              loading={saveSettings.isPending}
-              disabled={!canSave}
-              onClick={() => saveSettings.mutate()}
-            >
-              Save settings
             </Button>
           </div>
         </CardHeader>

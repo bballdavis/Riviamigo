@@ -6,6 +6,8 @@ import type { UnitSystem } from '@riviamigo/ui/lib/utils';
 import { getAppTimezone } from '@riviamigo/ui/lib/dateTime';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker } from '@riviamigo/ui/primitives';
 import { HelpCircle, Home, Loader2, Pencil, Plus, Search, Zap, Trash2 } from 'lucide-react';
+import { useSettingsDraft, useSettingsLeaveGuard } from '../../features/settings/drafts/SettingsDraftProvider';
+import { useStagedValue } from '../../features/settings/drafts/useStagedValue';
 
 type PlanType = 'per_kwh' | 'tou';
 type PlaceType = 'home' | 'work' | 'poi';
@@ -27,6 +29,18 @@ interface PlaceDraft {
   sessionFee: string;
   timezone: string;
   schedule: ScheduleDraft[];
+  /** Address picked from the search suggestions; null until one is chosen. */
+  address: PlaceAddress | null;
+  /** Text in the address search box. */
+  addressQuery: string;
+}
+
+/** Inline errors from the last failed save attempt. */
+interface PlaceFieldErrors {
+  name?: string;
+  radius?: string;
+  address?: string;
+  charging?: string;
 }
 
 const METERS_TO_FEET = 3.28084;
@@ -42,6 +56,8 @@ function emptyDraft(unitSystem: UnitSystem): PlaceDraft {
     sessionFee: '0',
     timezone: getAppTimezone(),
     schedule: [{ label: 'All day', start: '00:00', end: '24:00', rate: '0.13' }],
+    address: null,
+    addressQuery: '',
   };
 }
 
@@ -51,6 +67,41 @@ function radiusDraftToMeters(value: number, unitSystem: UnitSystem) {
 
 function radiusInputLabel(unitSystem: UnitSystem) {
   return unitSystem === 'metric' ? 'Radius (m)' : 'Radius (ft)';
+}
+
+function convertRadiusDraft(current: PlaceDraft, from: UnitSystem, to: UnitSystem): PlaceDraft {
+  const currentRadius = Number(current.radius_m);
+  if (!Number.isFinite(currentRadius) || currentRadius <= 0) {
+    return current;
+  }
+  const meters = radiusDraftToMeters(currentRadius, from);
+  return {
+    ...current,
+    radius_m: String(Math.round(to === 'metric' ? meters : meters * METERS_TO_FEET)),
+  };
+}
+
+function placeToDraft(place: Place, unitSystem: UnitSystem): PlaceDraft {
+  return {
+    name: place.name,
+    radius_m: String(Math.round(unitSystem === 'metric' ? place.radius_m : place.radius_m * METERS_TO_FEET)),
+    placeType: place.is_home ? 'home' : place.is_work ? 'work' : 'poi',
+    chargingEnabled: !!place.charging,
+    planType: place.charging?.billing_type === 'tou' ? 'tou' : 'per_kwh',
+    energyRate: String(place.charging?.rate ?? 0.13),
+    sessionFee: String(place.charging?.session_fee ?? 0),
+    timezone: place.charging?.timezone ?? getAppTimezone(),
+    schedule: normalizeScheduleEdges(place.charging?.billing_type === 'tou' && place.charging.tou_periods.length > 0
+      ? place.charging.tou_periods.map((period) => ({
+          label: period.label,
+          start: minutesToTime(period.start_minute),
+          end: minutesToTime(period.end_minute),
+          rate: String(period.rate),
+        }))
+      : [{ label: 'All day', start: '00:00', end: '24:00', rate: String(place.charging?.rate ?? 0.13) }]),
+    address: place.address,
+    addressQuery: place.address?.display_name ?? '',
+  };
 }
 
 function buildNextSchedule(schedule: ScheduleDraft[]) {
@@ -104,13 +155,17 @@ function normalizeScheduleEdges(schedule: ScheduleDraft[]): ScheduleDraft[] {
 
 export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
   const queryClient = useQueryClient();
-  const [draft, setDraft] = React.useState<PlaceDraft>(() => emptyDraft(unitSystem));
+  const requestLeave = useSettingsLeaveGuard();
   const [editingPlaceId, setEditingPlaceId] = React.useState<string | null>(null);
-  const [addressQuery, setAddressQuery] = React.useState('');
+  /** Saved baseline of the editor: a blank new place, or the place being edited. */
+  const [savedDraft, setSavedDraft] = React.useState<PlaceDraft>(() => emptyDraft(unitSystem));
+  const editor = useStagedValue<PlaceDraft>(savedDraft);
+  const draft = editor.value;
+  const setDraft = editor.setValue;
+  const [fieldErrors, setFieldErrors] = React.useState<PlaceFieldErrors>({});
   const [submittedAddressQuery, setSubmittedAddressQuery] = React.useState('');
   const [autocompleteAddressQuery, setAutocompleteAddressQuery] = React.useState('');
   const [savedPlacesQuery, setSavedPlacesQuery] = React.useState('');
-  const [selectedAddress, setSelectedAddress] = React.useState<PlaceAddress | null>(null);
   const connectionPolicy = useQuery({
     queryKey: ['external-connections'],
     queryFn: () => api.getExternalConnections(),
@@ -136,18 +191,13 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
   });
 
   const savePlace = useMutation({
-    mutationFn: async (body: UpsertPlaceBody) => {
-      if (editingPlaceId) {
-        return api.updatePlace(editingPlaceId, body);
+    mutationFn: async ({ id, body }: { id: string | null; body: UpsertPlaceBody }) => {
+      if (id) {
+        return api.updatePlace(id, body);
       }
       return api.createPlace(body);
     },
     onSuccess: () => {
-      setEditingPlaceId(null);
-      setDraft(emptyDraft(unitSystem));
-      setSelectedAddress(null);
-      setAddressQuery('');
-      setSubmittedAddressQuery('');
       queryClient.invalidateQueries({ queryKey: ['places'] });
       invalidateChargingData(queryClient);
     },
@@ -161,33 +211,38 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
     },
   });
 
+  const { saving } = useSettingsDraft('places-editor', {
+    isDirty: editor.isDirty,
+    save: handleSave,
+    discard: discardEditor,
+  });
+
   React.useEffect(() => {
     if (!customAutocomplete) {
       setAutocompleteAddressQuery('');
       return;
     }
-    const handle = window.setTimeout(() => setAutocompleteAddressQuery(addressQuery.trim()), 350);
+    const handle = window.setTimeout(() => setAutocompleteAddressQuery(draft.addressQuery.trim()), 350);
     return () => window.clearTimeout(handle);
-  }, [addressQuery, customAutocomplete]);
+  }, [draft.addressQuery, customAutocomplete]);
+
+  const editorIsDirty = editor.isDirty;
+  React.useEffect(() => {
+    const previous = previousUnitSystem.current;
+    if (previous === unitSystem) return;
+    previousUnitSystem.current = unitSystem;
+
+    // Radius is held in the display unit. Convert the saved baseline too, so a
+    // unit switch alone never makes the editor look dirty.
+    const convert = (current: PlaceDraft) => convertRadiusDraft(current, previous, unitSystem);
+    setSavedDraft(convert);
+    if (editorIsDirty) setDraft(convert);
+  }, [unitSystem, editorIsDirty, setDraft]);
 
   React.useEffect(() => {
-    if (previousUnitSystem.current === unitSystem) return;
-
-    setDraft((current) => {
-      const currentRadius = Number(current.radius_m);
-      if (!Number.isFinite(currentRadius) || currentRadius <= 0) {
-        return current;
-      }
-
-      const meters = radiusDraftToMeters(currentRadius, previousUnitSystem.current);
-      return {
-        ...current,
-        radius_m: String(Math.round(unitSystem === 'metric' ? meters : meters * METERS_TO_FEET)),
-      };
-    });
-
-    previousUnitSystem.current = unitSystem;
-  }, [unitSystem]);
+    // Field errors describe the last save attempt; any edit clears them.
+    setFieldErrors((current) => (Object.keys(current).length === 0 ? current : {}));
+  }, [draft]);
 
   const scheduleValidation = React.useMemo(() => {
     if (!draft.chargingEnabled || draft.planType !== 'tou') {
@@ -196,25 +251,11 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
     return validateScheduleDraft(draft.schedule);
   }, [draft.chargingEnabled, draft.planType, draft.schedule]);
 
-  const addressChangedFromSelection = Boolean(selectedAddress && addressQuery.trim() !== selectedAddress.display_name);
-  const chargeRateValid = () => {
-    if (!draft.chargingEnabled) return true;
-    if (draft.planType === 'per_kwh') {
-      return Number.isFinite(Number(draft.energyRate));
-    }
-    return !scheduleValidation;
-  };
-
-  const canSave = selectedAddress
-    && draft.name.trim().length > 0
-    && Number.isFinite(Number(draft.radius_m))
-    && Number(draft.radius_m) > 0
-    && !addressChangedFromSelection
-    && chargeRateValid();
+  const addressChangedFromSelection = Boolean(draft.address && draft.addressQuery.trim() !== draft.address.display_name);
 
   const shouldSearchSuggestions = deferredAddressQuery.length >= 3
-    && addressQuery.trim() === deferredAddressQuery
-    && (!selectedAddress || addressChangedFromSelection);
+    && draft.addressQuery.trim() === deferredAddressQuery
+    && (!draft.address || addressChangedFromSelection);
   const placeSuggestions = shouldSearchSuggestions
     ? (addressSearch.data ?? [])
     : [];
@@ -261,62 +302,80 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
     });
   }
 
-  function resetEditor() {
-    setEditingPlaceId(null);
-    setDraft(emptyDraft(unitSystem));
-    setSelectedAddress(null);
-    setAddressQuery('');
+  /** Opens the editor on `next` as a clean draft: `placeId` null means a new place. */
+  function openEditor(next: PlaceDraft, placeId: string | null) {
+    setEditingPlaceId(placeId);
+    setSavedDraft(next);
+    editor.commit(next);
     setSubmittedAddressQuery('');
+    setFieldErrors({});
+  }
+
+  function resetEditor() {
+    openEditor(emptyDraft(unitSystem), null);
+  }
+
+  function discardEditor() {
+    editor.reset();
+    setSubmittedAddressQuery('');
+    setFieldErrors({});
   }
 
   function startEditing(place: Place) {
-    setEditingPlaceId(place.id);
-    setSelectedAddress(place.address);
-    setAddressQuery(place.address?.display_name ?? '');
-    setSubmittedAddressQuery('');
-    const placeType = place.is_home ? 'home' : place.is_work ? 'work' : 'poi';
-    setDraft({
-      name: place.name,
-      radius_m: String(Math.round(unitSystem === 'metric' ? place.radius_m : place.radius_m * METERS_TO_FEET)),
-      placeType,
-      chargingEnabled: !!place.charging,
-      planType: place.charging?.billing_type === 'tou' ? 'tou' : 'per_kwh',
-      energyRate: String(place.charging?.rate ?? 0.13),
-      sessionFee: String(place.charging?.session_fee ?? 0),
-      timezone: place.charging?.timezone ?? getAppTimezone(),
-      schedule: normalizeScheduleEdges(place.charging?.billing_type === 'tou' && place.charging.tou_periods.length > 0
-        ? place.charging.tou_periods.map((period) => ({
-            label: period.label,
-            start: minutesToTime(period.start_minute),
-            end: minutesToTime(period.end_minute),
-            rate: String(period.rate),
-          }))
-        : [{ label: 'All day', start: '00:00', end: '24:00', rate: String(place.charging?.rate ?? 0.13) }]),
-    });
+    openEditor(placeToDraft(place, unitSystem), place.id);
   }
 
   function handleAddressSelect(address: PlaceSearchSuggestion) {
-    setSelectedAddress(address);
-    setAddressQuery(address.display_name);
+    setDraft((current) => ({ ...current, address, addressQuery: address.display_name }));
     setSubmittedAddressQuery('');
   }
 
+  /** Save for the page bar. Validation failures throw the message the bar shows. */
   async function handleSave() {
-    if (!selectedAddress) return;
+    const address = draft.address;
+    const errors: PlaceFieldErrors = {};
+    if (draft.name.trim().length === 0) errors.name = 'Enter a place name.';
+    if (!Number.isFinite(Number(draft.radius_m)) || Number(draft.radius_m) <= 0) {
+      errors.radius = 'Enter a radius greater than zero.';
+    }
+    if (!address) errors.address = 'Search for an address and pick one of the suggestions.';
+    else if (addressChangedFromSelection) errors.address = 'Pick one of the address suggestions again before saving this place.';
+    if (draft.chargingEnabled && draft.planType === 'per_kwh' && !Number.isFinite(Number(draft.energyRate))) {
+      errors.charging = 'Enter a valid per-kWh rate.';
+    }
+    if (draft.chargingEnabled && draft.planType === 'tou' && scheduleValidation) {
+      errors.charging = scheduleValidation;
+    }
+    const firstError = errors.name ?? errors.radius ?? errors.address ?? errors.charging;
+    if (firstError !== undefined || !address) {
+      setFieldErrors(errors);
+      throw new Error(firstError ?? 'Search for an address and pick one of the suggestions.');
+    }
 
     const charging = buildChargingPayload(draft);
     if (draft.chargingEnabled && draft.planType === 'tou' && !charging) {
-      return;
+      const message = 'Each TOU period needs a valid start, end, and rate.';
+      setFieldErrors({ charging: message });
+      throw new Error(message);
     }
 
-    await savePlace.mutateAsync({
-      name: draft.name.trim(),
-      radius_m: radiusDraftToMeters(Number(draft.radius_m || '0'), unitSystem),
-      is_home: draft.placeType === 'home',
-      is_work: draft.placeType === 'work',
-      address: selectedAddress,
-      charging,
-    });
+    try {
+      await savePlace.mutateAsync({
+        id: editingPlaceId,
+        body: {
+          name: draft.name.trim(),
+          radius_m: radiusDraftToMeters(Number(draft.radius_m || '0'), unitSystem),
+          is_home: draft.placeType === 'home',
+          is_work: draft.placeType === 'work',
+          address,
+          charging,
+        },
+      });
+    } catch (error) {
+      throw error instanceof Error ? error : new Error('This place could not be saved. Try again.');
+    }
+    // The saved place is out of the editor; a new blank place is ready for input.
+    resetEditor();
   }
 
   return (
@@ -324,11 +383,12 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
       <Card>
         <CardHeader>
           <CardTitle>{editingPlaceId ? 'Edit Place' : 'Places'}</CardTitle>
-          <Button variant="secondary" size="sm" onClick={resetEditor}>
+          <Button variant="secondary" size="sm" disabled={saving} onClick={() => requestLeave(resetEditor)}>
             {editingPlaceId ? 'New Place' : 'Reset'}
           </Button>
         </CardHeader>
         <CardContent className="min-w-0">
+          <fieldset disabled={saving} className="contents">
           <div className="grid min-w-0 gap-4">
               <label className="grid gap-1">
                 <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Place Name</span>
@@ -336,25 +396,29 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                   value={draft.name}
                   onChange={(event) => updateDraft('name', event.target.value)}
                   placeholder="Home garage"
+                  aria-invalid={fieldErrors.name ? true : undefined}
                   className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
                 />
+                {fieldErrors.name ? <span className="text-xs text-danger">{fieldErrors.name}</span> : null}
               </label>
 
               <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,8.5rem)] sm:items-end">
                 <label className="grid min-w-0 gap-1">
                   <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Address Search</span>
                   <input
-                    value={addressQuery}
+                    value={draft.addressQuery}
                     onChange={(event) => {
-                      setAddressQuery(event.target.value);
-                      if (selectedAddress?.display_name !== event.target.value) {
-                        setSelectedAddress(null);
-                      }
+                      const nextQuery = event.target.value;
+                      setDraft((current) => ({
+                        ...current,
+                        addressQuery: nextQuery,
+                        address: current.address?.display_name === nextQuery ? current.address : null,
+                      }));
                     }}
                     onKeyDown={(event) => {
-                      if (event.key === 'Enter' && addressQuery.trim().length >= 3) {
+                      if (event.key === 'Enter' && draft.addressQuery.trim().length >= 3) {
                         event.preventDefault();
-                        setSubmittedAddressQuery(addressQuery.trim());
+                        setSubmittedAddressQuery(draft.addressQuery.trim());
                       }
                     }}
                     placeholder="Enter an address"
@@ -365,8 +429,8 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                   variant="secondary"
                   size="sm"
                   className="h-9"
-                  disabled={addressQuery.trim().length < 3}
-                  onClick={() => setSubmittedAddressQuery(addressQuery.trim())}
+                  disabled={draft.addressQuery.trim().length < 3}
+                  onClick={() => setSubmittedAddressQuery(draft.addressQuery.trim())}
                 >
                   <Search className="h-4 w-4" />
                   Search
@@ -377,8 +441,10 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                     value={draft.radius_m}
                     onChange={(event) => updateDraft('radius_m', event.target.value)}
                     inputMode="numeric"
+                    aria-invalid={fieldErrors.radius ? true : undefined}
                     className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
                   />
+                  {fieldErrors.radius ? <span className="text-xs text-danger">{fieldErrors.radius}</span> : null}
                 </label>
               </div>
 
@@ -420,12 +486,13 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                 </div>
               )}
 
-              {selectedAddress && (
+              {draft.address && (
                 <div className="rounded-lg border border-accent/30 bg-accent/10 p-3 text-sm text-fg">
                   <div className="font-medium">Selected Address</div>
-                  <div className="mt-1 text-fg-tertiary">{selectedAddress.display_name}</div>
+                  <div className="mt-1 text-fg-tertiary">{draft.address.display_name}</div>
                 </div>
               )}
+              {fieldErrors.address ? <p className="text-xs text-danger">{fieldErrors.address}</p> : null}
 
               <div className="grid gap-3">
                 <label className="grid gap-1">
@@ -632,15 +699,16 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                 </div>
               )}
 
-              <div className="flex gap-3">
-                <Button size="sm" loading={savePlace.isPending} disabled={!canSave} onClick={() => void handleSave()}>
-                  {editingPlaceId ? 'Save Place' : 'Create Place'}
-                </Button>
-                {editingPlaceId && (
-                  <Button variant="secondary" size="sm" onClick={resetEditor}>Cancel</Button>
+              {fieldErrors.charging ? <p className="text-xs text-danger">{fieldErrors.charging}</p> : null}
+              <div className="flex flex-wrap items-center gap-3">
+                {editingPlaceId ? (
+                  <Button variant="secondary" size="sm" onClick={() => requestLeave(resetEditor)}>Cancel</Button>
+                ) : (
+                  <p className="text-xs text-fg-tertiary">Save at the bottom of the page creates this place.</p>
                 )}
               </div>
           </div>
+          </fieldset>
         </CardContent>
       </Card>
 
@@ -684,7 +752,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                   </div>
                 </div>
                 <div className="flex gap-2 sm:justify-end">
-                  <Button variant="secondary" size="sm" iconLeft={<Pencil className="h-3.5 w-3.5" />} onClick={() => startEditing(place)}>
+                  <Button variant="secondary" size="sm" iconLeft={<Pencil className="h-3.5 w-3.5" />} disabled={saving} onClick={() => requestLeave(() => startEditing(place))}>
                     Edit
                   </Button>
                   <Button variant="danger" size="sm" iconLeft={<Trash2 className="h-3.5 w-3.5" />} loading={deletePlace.isPending} onClick={() => deletePlace.mutate(place.id)}>

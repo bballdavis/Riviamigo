@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, AuthenticatedVehicleArtwork, invalidateVehicleCapacityData, queryKeys, resolveVehicleArtwork, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
+import { api, AuthenticatedVehicleArtwork, queryKeys, resolveVehicleArtwork, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
 import { type UnitPreferences, type Vehicle, type VehicleImages, type VehicleMember } from '@riviamigo/types';
 import {
   downloadDashboardYaml,
@@ -28,7 +28,6 @@ import {
   getAppTimezone,
   setAppTimezone,
 } from '@riviamigo/ui/lib/dateTime';
-import { DEFAULT_TARGET_TIRE_PRESSURE_PSI } from '@riviamigo/ui/lib/vehicleTires';
 import {
   PageLayout, Card, CardHeader, CardTitle, CardContent,
   Button, Badge, Input, SelectPicker, Tooltip,
@@ -45,6 +44,11 @@ import { JobsSection } from '../../components/settings/JobsSection';
 import { PlacesSection } from '../../components/settings/PlacesSection';
 import { ChargingSection } from '../../components/settings/ChargingSection';
 import { AppearanceSection } from './AppearanceSection';
+import { SettingsDraftProvider, useSettingsDraft, useSettingsLeaveGuard } from './drafts/SettingsDraftProvider';
+import { useStagedValue } from './drafts/useStagedValue';
+import { saveFailure } from './drafts/saveFailure';
+import { VehicleBatteryEditor } from './VehicleBatteryEditor';
+import { IMPERIAL_UNITS, METRIC_UNITS, sameUnitPreferences } from './unitPreferenceDrafts';
 import { RawTelemetryExplorer } from '../../components/settings/RawTelemetryExplorer';
 import { ChartManagerSection } from './charts/ChartManagerSection';
 import { canManageSystemDashboards } from '../../components/dashboard/DashboardPage';
@@ -55,62 +59,12 @@ import {
   getRivianCredentialRenewalNotice,
 } from '../../lib/rivianCredentialRenewal';
 import {
-  Car, ChartLine, CircleDollarSign, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Ruler, Save, Search, ShieldCheck, Star, Trash2, Unlock, Users, X, Zap,
+  Car, ChartLine, CircleDollarSign, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Ruler, Search, ShieldCheck, Star, Trash2, Unlock, Users, Zap,
 } from 'lucide-react';
 
 function dashboardActionId(dashboard: DashboardConfig) {
   if (!dashboard.isDefault) return dashboard.id;
   return getDefaultBySlug(dashboard.slug)?.id ?? dashboard.id;
-}
-
-type BatteryGen = 'gen1' | 'gen2';
-
-const RIVIAN_BATTERY_PRESETS: Record<BatteryGen, Array<{ key: string; label: string; kwh: number | null }>> = {
-  gen1: [
-    { key: 'r1_standard_g1', label: 'R1T / R1S Standard (Gen 1)', kwh: 105 },
-    { key: 'r1_large_g1',    label: 'R1T / R1S Large (Gen 1)',    kwh: 135 },
-    { key: 'r1_max_g1',      label: 'R1T / R1S Max (Gen 1)',      kwh: 180 },
-    { key: 'custom',         label: 'Custom',                     kwh: null },
-  ],
-  gen2: [
-    { key: 'r1_standard_g2', label: 'R1T / R1S Standard (Gen 2)', kwh: 92.5 },
-    { key: 'r1_large_g2',    label: 'R1T / R1S Large (Gen 2)',    kwh: 109 },
-    { key: 'r1_max_g2',      label: 'R1T / R1S Max (Gen 2)',      kwh: 140 },
-    { key: 'custom',         label: 'Custom',                     kwh: null },
-  ],
-};
-
-const R2_PRESET = { key: 'r2', label: 'R2', kwh: 82 };
-const ALL_PRESETS = [...RIVIAN_BATTERY_PRESETS.gen1, ...RIVIAN_BATTERY_PRESETS.gen2, R2_PRESET];
-const R2_PACK_OPTIONS = [R2_PRESET, { key: 'custom', label: 'Custom', kwh: null }];
-const BATTERY_GEN_LABELS: Record<BatteryGen, string> = { gen1: 'Gen 1', gen2: 'Gen 2' };
-
-type BatteryVehicle = Pick<Vehicle, 'model' | 'year' | 'battery_capacity_kwh'>;
-
-const isR1Model = (model: string | null | undefined) => /r1/i.test(model ?? '');
-const isR2Model = (model: string | null | undefined) => /r2/i.test(model ?? '');
-
-/** R1 generation from the VIN-derived model year (2025 onward is Gen 2). Non-R1 models have none. */
-function r1GenerationFromYear(vehicle: BatteryVehicle | undefined): BatteryGen | null {
-  if (!vehicle || !isR1Model(vehicle.model) || vehicle.year == null) return null;
-  return vehicle.year >= 2025 ? 'gen2' : 'gen1';
-}
-
-function detectR1BatteryGen(vehicle: BatteryVehicle | undefined): BatteryGen | null {
-  if (!vehicle || !isR1Model(vehicle.model)) return null;
-  const fromYear = r1GenerationFromYear(vehicle);
-  if (fromYear) return fromYear;
-  const modelLower = vehicle.model.toLowerCase();
-  return modelLower.includes('gen 2') || modelLower.includes('2nd') ? 'gen2' : null;
-}
-
-/** When an R1's saved capacity matches only the other generation's presets, return both generations. */
-function savedCapacityGenerationMismatch(vehicle: BatteryVehicle | undefined): { saved: BatteryGen; detected: BatteryGen } | null {
-  const detected = r1GenerationFromYear(vehicle);
-  const kwh = vehicle?.battery_capacity_kwh;
-  if (!detected || kwh == null) return null;
-  const saved: BatteryGen = detected === 'gen2' ? 'gen1' : 'gen2';
-  return RIVIAN_BATTERY_PRESETS[saved].some((p) => p.key !== 'custom' && p.kwh === kwh) ? { saved, detected } : null;
 }
 
 type SettingsSection = 'vehicles' | 'dashboards' | 'charts' | 'units' | 'places' | 'charging' | 'ownership' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account' | 'authentication';
@@ -130,28 +84,6 @@ const baseSections: Array<{ id: SettingsSection; label: string; icon: React.Elem
   { id: 'appearance', label: 'Appearance', icon: ShieldCheck },
   { id: 'account', label: 'Account', icon: LogOut },
 ];
-
-const IMPERIAL_UNITS: UnitPreferences = {
-  mode: 'imperial',
-  distance_unit: 'miles',
-  speed_unit: 'mph',
-  temperature_unit: 'fahrenheit',
-  pressure_unit: 'psi',
-  altitude_unit: 'feet',
-  place_radius_unit: 'feet',
-  efficiency_display: 'distance_per_energy',
-};
-
-const METRIC_UNITS: UnitPreferences = {
-  mode: 'metric',
-  distance_unit: 'kilometers',
-  speed_unit: 'kmh',
-  temperature_unit: 'celsius',
-  pressure_unit: 'kpa',
-  altitude_unit: 'meters',
-  place_radius_unit: 'meters',
-  efficiency_display: 'distance_per_energy',
-};
 
 function formatMembershipRole(role: VehicleMember['role'] | undefined) {
   if (role === 'owner') return 'Owner';
@@ -639,28 +571,35 @@ function DashboardSettingsList({
   );
 }
 
-export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind }: { initialSection?: SettingsSection; oidcFeedback?: string; oidcFeedbackKind?: 'success' | 'error' } = {}) {
+type SettingsContentProps = { initialSection?: SettingsSection; oidcFeedback?: string; oidcFeedbackKind?: 'success' | 'error' };
+
+export function SettingsContent(props: SettingsContentProps = {}) {
+  return (
+    <SettingsDraftProvider>
+      <SettingsContentInner {...props} />
+    </SettingsDraftProvider>
+  );
+}
+
+function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }: SettingsContentProps) {
+  const requestLeave = useSettingsLeaveGuard();
   const { accessToken, clearSession, logout, defaultVehicleId, setDefaultVehicleId, setActiveVehicleId } = useAuth();
   const authReady = useAuthReady();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: vehicles } = useVehicles();
   const me = useMe();
-  const [showEditButton, setShowEditButton] = useDashboardEditButtonPreference(me.data?.user_id);
+  // Applied (saved) edit-button preference; the section stages edits in `editButtonDraft`.
+  const [savedShowEditButton, setShowEditButton] = useDashboardEditButtonPreference(me.data?.user_id);
   const [activeSection, setActiveSection] = React.useState<SettingsSection>(initialSection ?? 'vehicles');
   const [apiKeyName, setApiKeyName] = React.useState('Local troubleshooting');
   const [apiKeyVehicleId, setApiKeyVehicleId] = React.useState('');
   const [createdKey, setCreatedKey] = React.useState<string | null>(null);
   const [apiCatalogSearch, setApiCatalogSearch] = React.useState('');
-  const [unitPreferences, setUnitPreferencesState] = React.useState<UnitPreferences>(() => getUnitPreferences());
-  const [appTimezone, setAppTimezoneState] = React.useState(() => getAppTimezone());
-  const placesUnitSystem: UnitSystem = unitPreferences.place_radius_unit === 'meters' ? 'metric' : 'imperial';
+  // Device-local copies of the applied unit and time zone preferences, used until the server answers.
+  const [localUnitPreferences, setLocalUnitPreferences] = React.useState<UnitPreferences>(() => getUnitPreferences());
+  const [localAppTimezone, setLocalAppTimezone] = React.useState(() => getAppTimezone());
   const [editingBatteryVehicleId, setEditingBatteryVehicleId] = React.useState<string | null>(null);
-  const [batteryGen, setBatteryGen] = React.useState<BatteryGen>('gen1');
-  const [batteryPreset, setBatteryPreset] = React.useState('r1_large_g1');
-  const [customKwh, setCustomKwh] = React.useState('');
-  const [editTargetTirePressure, setEditTargetTirePressure] = React.useState(String(DEFAULT_TARGET_TIRE_PRESSURE_PSI));
-  const [editNameValue, setEditNameValue] = React.useState('');
   const [deleteConfirmId, setDeleteConfirmId] = React.useState<string | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = React.useState('');
   const [demoRefreshConfirmId, setDemoRefreshConfirmId] = React.useState<string | null>(null);
@@ -696,8 +635,12 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
   }, [activeSection, initialSection]);
 
   function selectSettingsSection(next: SettingsSection) {
-    setActiveSection(next);
-    navigate({ to: '/settings', search: next === 'vehicles' ? {} : { section: next } });
+    if (next === activeSection) return;
+    // Staged edits belong to the open section; save or discard them first.
+    requestLeave(() => {
+      setActiveSection(next);
+      navigate({ to: '/settings', search: next === 'vehicles' ? {} : { section: next } });
+    });
   }
 
   const appVersion = useQuery({
@@ -808,14 +751,14 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
   React.useEffect(() => {
     const next = unitPreferencesQuery.data?.units;
     if (!next) return;
-    setUnitPreferencesState(next);
+    setLocalUnitPreferences(next);
     setUnitPreferences(next);
   }, [unitPreferencesQuery.data]);
 
   React.useEffect(() => {
     const next = appTimezoneQuery.data?.timezone;
     if (!next) return;
-    setAppTimezoneState(next);
+    setLocalAppTimezone(next);
     setAppTimezone(next);
   }, [appTimezoneQuery.data]);
 
@@ -857,26 +800,6 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
   const revokeApiKey = useMutation({
     mutationFn: (id: string) => api.revokeApiKey(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.apiKeys.all }),
-  });
-
-  const updateVehicleSettings = useMutation({
-    mutationFn: ({ vehicleId, kwh, config, targetTirePressurePsi }: { vehicleId: string; kwh: number; config: string; targetTirePressurePsi: number }) =>
-      api.updateVehicleSettings(vehicleId, {
-        battery_capacity_kwh: kwh,
-        battery_config: config,
-        target_tire_pressure_psi: targetTirePressurePsi,
-      }),
-    onSuccess: () => {
-      invalidateVehicleCapacityData(queryClient);
-    },
-  });
-
-  const updateVehicleName = useMutation({
-    mutationFn: ({ vehicleId, name }: { vehicleId: string; name: string }) =>
-      api.updateVehicleName(vehicleId, name),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
-    },
   });
 
   const deleteVehicle = useMutation({
@@ -985,7 +908,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
     mutationFn: (units: UnitPreferences) => api.updateUnitPreferences(units),
     scope: { id: 'settings-unit-preferences' },
     onSuccess: (result) => {
-      setUnitPreferencesState(result.units);
+      setLocalUnitPreferences(result.units);
       setUnitPreferences(result.units);
       queryClient.invalidateQueries({ queryKey: queryKeys.unitPreferences.current });
     },
@@ -994,70 +917,59 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
   const updateAppTimezone = useMutation({
     mutationFn: (timezone: string) => api.updateAppTimezone(timezone),
     onSuccess: (result) => {
-      setAppTimezoneState(result.timezone);
+      setLocalAppTimezone(result.timezone);
       setAppTimezone(result.timezone);
       queryClient.invalidateQueries({ queryKey: queryKeys.appTimezone.current });
       queryClient.invalidateQueries({ queryKey: queryKeys.backups.all });
     },
   });
 
-  function startEditVehicle(vehicleId: string, currentKwh: number | null | undefined) {
-    setEditingBatteryVehicleId(vehicleId);
-    const vehicle = vehicles?.find((v) => v.id === vehicleId);
-    setEditNameValue(vehicle?.display_name ?? '');
-    setEditTargetTirePressure(String(vehicle?.target_tire_pressure_psi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI));
-
-    // Generation detection applies only to R1 models.
-    const detectedGen = detectR1BatteryGen(vehicle);
-    setBatteryGen(detectedGen ?? 'gen1');
-
-    if (isR2Model(vehicle?.model)) {
-      // R2 offers only its own pack or a custom capacity.
-      const usesR2Pack = currentKwh == null || currentKwh === R2_PRESET.kwh;
-      setBatteryPreset(usesR2Pack ? R2_PRESET.key : 'custom');
-      setCustomKwh(usesR2Pack ? '' : String(currentKwh));
-      return;
+  // Units, time zone, and the edit-button preference are staged until the page bar saves them.
+  // Each applies its device-local copy only after the server accepts the change.
+  const savedUnitPreferences = unitPreferencesQuery.data?.units ?? localUnitPreferences;
+  const unitsDraft = useStagedValue<UnitPreferences>(savedUnitPreferences, sameUnitPreferences);
+  const unitPreferences = unitsDraft.value;
+  const placesUnitSystem: UnitSystem = savedUnitPreferences.place_radius_unit === 'meters' ? 'metric' : 'imperial';
+  const saveUnitsDraft = async () => {
+    const next = unitsDraft.value;
+    let result: Awaited<ReturnType<typeof api.updateUnitPreferences>>;
+    try {
+      result = await updateUnitPreferences.mutateAsync(next);
+    } catch (error) {
+      throw saveFailure(error, 'Units could not be saved. Try again.');
     }
+    unitsDraft.commit(result.units, next);
+  };
+  useSettingsDraft('units-preferences', { isDirty: unitsDraft.isDirty, save: saveUnitsDraft, discard: unitsDraft.reset });
 
-    if (currentKwh != null) {
-      // Model year wins over an older saved preset, without changing its capacity.
-      const generations: BatteryGen[] = detectedGen ? [detectedGen] : ['gen1', 'gen2'];
-      for (const g of generations) {
-        const match = RIVIAN_BATTERY_PRESETS[g].find((p) => p.kwh === currentKwh && p.key !== 'custom');
-        if (match) {
-          setBatteryGen(g);
-          setBatteryPreset(match.key);
-          setCustomKwh('');
-          return;
-        }
-      }
-      setBatteryPreset('custom');
-      setCustomKwh(String(currentKwh));
-    } else {
-      const gen = detectedGen ?? 'gen1';
-      setBatteryPreset(gen === 'gen2' ? 'r1_large_g2' : 'r1_large_g1');
-      setCustomKwh('');
+  const savedAppTimezone = appTimezoneQuery.data?.timezone ?? localAppTimezone;
+  const timezoneDraft = useStagedValue<string>(savedAppTimezone);
+  const appTimezone = timezoneDraft.value;
+  const saveTimezoneDraft = async () => {
+    const next = timezoneDraft.value;
+    let result: Awaited<ReturnType<typeof api.updateAppTimezone>>;
+    try {
+      result = await updateAppTimezone.mutateAsync(next);
+    } catch (error) {
+      throw saveFailure(error, 'The application time zone could not be saved. Try again.');
     }
-  }
+    timezoneDraft.commit(result.timezone, next);
+  };
+  useSettingsDraft('app-timezone', { isDirty: timezoneDraft.isDirty, save: saveTimezoneDraft, discard: timezoneDraft.reset });
 
-  async function handleSaveVehicle(vehicleId: string) {
-    const vehicle = vehicles?.find((v) => v.id === vehicleId);
-    const trimmedName = editNameValue.trim();
-    const preset = RIVIAN_BATTERY_PRESETS[batteryGen].find((p) => p.key === batteryPreset) || ALL_PRESETS.find((p) => p.key === batteryPreset);
-    if (!preset) return;
-    const kwh = preset.key === 'custom' ? parseFloat(customKwh) : preset.kwh!;
-    if (!isFinite(kwh) || kwh <= 0) return;
-    const targetTirePressurePsi = parseFloat(editTargetTirePressure);
-    if (!isFinite(targetTirePressurePsi) || targetTirePressurePsi < 20 || targetTirePressurePsi > 80) return;
-    const config = preset.key === 'custom' ? `Custom (${kwh} kWh)` : preset.label;
-    const saves: Promise<unknown>[] = [
-      updateVehicleSettings.mutateAsync({ vehicleId, kwh, config, targetTirePressurePsi }),
-    ];
-    if (trimmedName && trimmedName !== vehicle?.display_name) {
-      saves.push(updateVehicleName.mutateAsync({ vehicleId, name: trimmedName }));
-    }
-    await Promise.all(saves);
-    setEditingBatteryVehicleId(null);
+  const editButtonDraft = useStagedValue<boolean>(savedShowEditButton);
+  useSettingsDraft('dashboard-edit-button', {
+    isDirty: editButtonDraft.isDirty,
+    save: async () => {
+      setShowEditButton(editButtonDraft.value);
+      editButtonDraft.commit(editButtonDraft.value);
+    },
+    discard: editButtonDraft.reset,
+  });
+
+  function startEditVehicle(vehicleId: string) {
+    if (editingBatteryVehicleId === vehicleId) return;
+    requestLeave(() => setEditingBatteryVehicleId(vehicleId));
   }
 
   async function handleLogout() {
@@ -1090,22 +1002,16 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
   }
 
   function handleUnitModeChange(nextMode: UnitMode) {
-    const next =
+    unitsDraft.setValue((current): UnitPreferences =>
       nextMode === 'imperial'
         ? { ...IMPERIAL_UNITS }
         : nextMode === 'metric'
           ? { ...METRIC_UNITS }
-          : { ...unitPreferences, mode: 'custom' as const };
-    setUnitPreferencesState(next);
-    setUnitPreferences(next);
-    updateUnitPreferences.mutate(next);
+          : { ...current, mode: 'custom' });
   }
 
   function handleCustomUnitChange<K extends keyof UnitPreferences>(key: K, value: UnitPreferences[K]) {
-    const next: UnitPreferences = { ...unitPreferences, mode: 'custom', [key]: value };
-    setUnitPreferencesState(next);
-    setUnitPreferences(next);
-    updateUnitPreferences.mutate(next);
+    unitsDraft.setValue((current): UnitPreferences => ({ ...current, mode: 'custom', [key]: value }));
   }
 
   return (
@@ -1303,7 +1209,6 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                     {vehicles?.map((v) => {
                       const isActive = defaultVehicleId === v.id || (!defaultVehicleId && vehicles[0]?.id === v.id);
                       const isEditingBattery = editingBatteryVehicleId === v.id;
-                      const capacityGenerationMismatch = isEditingBattery ? savedCapacityGenerationMismatch(v) : null;
                       const isSharingExpanded = sharingVehicleId === v.id;
                       const membershipRole = v.membership_role ?? 'viewer';
                       const canManageVehicle = membershipRole === 'owner' || membershipRole === 'manager';
@@ -1555,7 +1460,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                                     variant="secondary"
                                     size="sm"
                                     className="h-8 w-8 px-0"
-                                    onClick={() => startEditVehicle(v.id, v.battery_capacity_kwh)}
+                                    onClick={() => startEditVehicle(v.id)}
                                   >
                                     <Pencil className="h-3.5 w-3.5" />
                                   </Button>
@@ -1577,117 +1482,13 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                             </div>
                           </div>
 
-                          {/* Battery capacity edit — only when open */}
+                          {/* Battery capacity edit — only when open. Staged; the page bar saves it. */}
                           {isEditingBattery && (
-                            <div className="mt-3 border-t border-border/70 pt-3">
-                              <div className="grid gap-3">
-                                <div className="flex items-end gap-2">
-                                  <label className="grid gap-1 flex-1">
-                                    <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Vehicle Name</span>
-                                    <input
-                                      value={editNameValue}
-                                      onChange={(e) => setEditNameValue(e.target.value)}
-                                      onKeyDown={(e) => { if (e.key === 'Escape') setEditingBatteryVehicleId(null); }}
-                                      className="h-9 w-40 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                                      placeholder="Vehicle name"
-                                    />
-                                  </label>
-                                  <Button
-                                    className="h-9 w-9 shrink-0 px-0"
-                                    iconLeft={<Save className="h-5 w-5" />}
-                                    loading={updateVehicleSettings.isPending || updateVehicleName.isPending}
-                                    disabled={
-                                      !editNameValue.trim()
-                                      || (batteryPreset === 'custom' && (!customKwh || isNaN(parseFloat(customKwh))))
-                                      || !editTargetTirePressure
-                                      || isNaN(parseFloat(editTargetTirePressure))
-                                      || parseFloat(editTargetTirePressure) < 20
-                                      || parseFloat(editTargetTirePressure) > 80
-                                    }
-                                    onClick={() => { handleSaveVehicle(v.id).catch(() => {}); }}
-                                    title="Save vehicle"
-                                    aria-label="Save vehicle"
-                                  />
-                                  <Button
-                                    variant="secondary"
-                                    className="h-9 w-9 shrink-0 px-0"
-                                    iconLeft={<X className="h-5 w-5" />}
-                                    onClick={() => setEditingBatteryVehicleId(null)}
-                                    title="Cancel"
-                                    aria-label="Cancel edit"
-                                  />
-                                </div>
-                                <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Factory Battery Capacity</p>
-                                <div className="flex flex-wrap items-end gap-2">
-                                  {isR1Model(v.model) && (
-                                    <label className="grid gap-1">
-                                      <span className="text-xs text-fg-tertiary">Generation</span>
-                                      <SelectPicker
-                                        className="min-w-[6rem]"
-                                        value={batteryGen}
-                                        onChange={(value) => {
-                                          setBatteryGen(value as BatteryGen);
-                                          setBatteryPreset(value === 'gen2' ? 'r1_large_g2' : 'r1_large_g1');
-                                          setCustomKwh('');
-                                        }}
-                                        aria-label="Battery generation"
-                                        options={[{ value: 'gen1', label: 'Gen 1' }, { value: 'gen2', label: 'Gen 2' }]}
-                                      />
-                                    </label>
-                                  )}
-                                  <label className="grid gap-1">
-                                    <span className="text-xs text-fg-tertiary">Pack</span>
-                                    <SelectPicker
-                                      className="min-w-[14rem]"
-                                      value={batteryPreset}
-                                      onChange={setBatteryPreset}
-                                      aria-label="Battery pack"
-                                      options={(isR2Model(v.model) ? R2_PACK_OPTIONS : RIVIAN_BATTERY_PRESETS[batteryGen]).map((preset) => ({
-                                        value: preset.key,
-                                        label: `${preset.label}${preset.kwh != null ? ` (${preset.kwh} kWh)` : ''}`,
-                                      }))}
-                                    />
-                                  </label>
-                                  {batteryPreset === 'custom' && (
-                                    <label className="grid gap-1">
-                                      <span className="text-xs text-fg-tertiary">kWh</span>
-                                      <input
-                                        type="number"
-                                        value={customKwh}
-                                        onChange={(e) => setCustomKwh(e.target.value)}
-                                        placeholder="e.g. 135"
-                                        min="1"
-                                        max="500"
-                                        step="1"
-                                        className="h-9 w-28 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                                      />
-                                    </label>
-                                  )}
-                                  <label className="grid gap-1">
-                                    <span className="text-xs text-fg-tertiary">Target Tire Pressure</span>
-                                    <input
-                                      type="number"
-                                      value={editTargetTirePressure}
-                                      onChange={(e) => setEditTargetTirePressure(e.target.value)}
-                                      placeholder="40"
-                                      min="20"
-                                      max="80"
-                                      step="1"
-                                      className="h-9 w-32 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                                    />
-                                  </label>
-                                </div>
-                                {capacityGenerationMismatch && (
-                                  <p role="note" className="text-xs text-warning">
-                                    Your saved capacity ({v.battery_capacity_kwh} kWh) matches a {BATTERY_GEN_LABELS[capacityGenerationMismatch.saved]} pack; your vehicle&apos;s VIN indicates {BATTERY_GEN_LABELS[capacityGenerationMismatch.detected]}.
-                                  </p>
-                                )}
-                                <p className="text-xs text-fg-tertiary">
-                                  This value is used as the baseline for battery health % and degradation charts.
-                                  Defaults can be overridden if your vehicle came with a different pack. Target tire pressure is the recommended cold PSI; confirm it against the driver-door placard.
-                                </p>
-                              </div>
-                            </div>
+                            <VehicleBatteryEditor
+                              key={v.id}
+                              vehicle={v}
+                              onDone={() => setEditingBatteryVehicleId((current) => (current === v.id ? null : current))}
+                            />
                           )}
                           {isSharingExpanded && (
                             <div className="mt-3 border-t border-border/70 pt-3">
@@ -1860,8 +1661,8 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                 setDashboardLock={setDashboardLock}
                 restoreDefaultDashboard={restoreDefaultDashboard}
                 createDashboard={createDashboard}
-                showEditButton={showEditButton}
-                onShowEditButtonChange={setShowEditButton}
+                showEditButton={editButtonDraft.value}
+                onShowEditButtonChange={editButtonDraft.setValue}
                 onCustomize={customizeDashboard}
                 onEdit={openDashboard}
               />
@@ -2117,7 +1918,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                     <SelectPicker
                       className="w-full"
                       value={appTimezone}
-                      onChange={(value) => updateAppTimezone.mutate(value)}
+                      onChange={(value) => timezoneDraft.setValue(value)}
                       aria-label="Application time zone"
                       disabled={!canManageBackups || updateAppTimezone.isPending || appTimezoneQuery.isLoading}
                       options={appTimezoneOptions(appTimezone)}

@@ -60,3 +60,6 @@ export { ColorPicker } from './ColorPicker';
 export type { ColorPickerProps, ColorPickerSwatch } from './ColorPicker';
 
 export { FrunkIcon, LiftgateIcon } from './ClosureIcons';
+
+export { UnsavedChangesBar, UnsavedChangesBarSpacer } from './UnsavedChangesBar';
+export type { UnsavedChangesBarProps } from './UnsavedChangesBar';
