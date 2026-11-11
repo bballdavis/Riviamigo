@@ -280,8 +280,6 @@ export function BackupSection() {
   const savedDraft = React.useMemo(() => (overview.data ? buildDraft(overview.data) : null), [overview.data]);
   const staged = useStagedValue(savedDraft);
   const draft = staged.value;
-  const draftRef = React.useRef(draft);
-  draftRef.current = draft;
   const [secretKey, setSecretKey] = React.useState('');
   const [clearSecretKey, setClearSecretKey] = React.useState(false);
   const [expandedArtifactId, setExpandedArtifactId] = React.useState<string | null>(null);
@@ -333,9 +331,8 @@ export function BackupSection() {
     } catch (error) {
       throw saveFailure(error, 'Backup settings could not be saved. Try again.');
     }
-    staged.commit(submitted);
-    // Keep edits typed while the request was in flight.
-    if (draftRef.current !== submitted) staged.setValue(draftRef.current);
+    // Edits typed while the request was in flight stay staged; only the submitted part is adopted.
+    staged.commit(submitted, submitted);
     setSecretKey((current) => (current === submittedSecret ? '' : current));
     setClearSecretKey((current) => (current === submittedClear ? false : current));
     void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all });

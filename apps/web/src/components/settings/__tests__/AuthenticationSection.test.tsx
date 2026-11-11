@@ -49,6 +49,23 @@ describe('AuthenticationSection', () => {
     await waitFor(() => expect(screen.queryByText(UNSAVED)).not.toBeInTheDocument());
   });
 
+  it('keeps an edit typed while the save is in flight staged after the save completes', async () => {
+    let finish!: (value: typeof response) => void;
+    updateSettings.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const user = userEvent.setup(); renderSection();
+    await user.type(await screen.findByRole('textbox', { name: /button label/i }), ' updated');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+
+    await user.type(screen.getByRole('textbox', { name: /button label/i }), '!');
+    const saved = { ...response, button_label: { value: 'Continue with SSO updated', source: 'database' } };
+    await act(async () => finish(saved));
+
+    expect(updateSettings.mock.calls[0]?.[0]).toEqual({ button_label: 'Continue with SSO updated' });
+    expect(screen.getByRole('textbox', { name: /button label/i })).toHaveValue('Continue with SSO updated!');
+    expect(screen.getByText(UNSAVED)).toBeInTheDocument();
+  });
+
   it('keeps the bar open and shows the server validation reason when save is rejected', async () => {
     updateSettings.mockRejectedValueOnce({
       detail: { message: 'OIDC required claim name and value must be configured together.' },
