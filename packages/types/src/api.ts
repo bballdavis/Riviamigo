@@ -1332,6 +1332,8 @@ export interface UserPreferencesResponse {
   ownership_enabled?: boolean;
   /** Vehicle Overview view last chosen; missing on older servers means the cluster. */
   overview_view?: OverviewViewPreference;
+  /** Whether the Vehicle Overview's location map is expanded; missing on older servers means collapsed. */
+  overview_map_expanded?: boolean;
 }
 
 export type OverviewViewPreference = 'cluster' | 'map';

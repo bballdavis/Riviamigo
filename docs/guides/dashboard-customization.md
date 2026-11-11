@@ -46,8 +46,10 @@ faces.
 
 The expand button in the map's top-right corner gives the map more room: the
 battery panel shrinks to its charge bar, the vehicle image slides over, and the
-map takes the space. Press it again, or switch back to the cluster view, to
-restore the normal layout. On a phone it makes the map taller instead.
+map takes the space. Press it again to restore the normal layout. On a phone it
+makes the map taller instead. Whether the map is expanded is also saved to your
+account, so the map reopens at the size you left it. The cluster view always
+uses the normal layout.
 
 In edit mode, select the Vehicle Overview widget and open **Location map** in
 the editor drawer:

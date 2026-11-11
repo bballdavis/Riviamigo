@@ -68,6 +68,7 @@ export type { BasemapConfigPayload } from './useBasemapConfig';
 export {
   useOwnershipEnabled,
   useUpdateMapStyle,
+  useUpdateOverviewMapExpanded,
   useUpdateOverviewView,
   useUpdateOwnershipPreference,
   useUserPreferences,

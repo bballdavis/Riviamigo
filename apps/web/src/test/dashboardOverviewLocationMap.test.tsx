@@ -39,6 +39,8 @@ const vehicleStatus = vi.hoisted(() => ({
 const savedPreferences = vi.hoisted(() => ({
   overviewView: undefined as string | undefined,
   updateOverviewView: { mutate: (() => undefined) as (view: string) => void },
+  mapExpanded: undefined as boolean | undefined,
+  updateOverviewMapExpanded: { mutate: (() => undefined) as (expanded: boolean) => void },
 }));
 
 vi.mock('@riviamigo/hooks', async (importOriginal) => {
@@ -50,8 +52,15 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     useMetricCatalog: () => ({ data: [] }),
     useBatteryHealth: () => ({ data: undefined }),
     useBasemapConfig: () => ({ data: { enabled: true, revision: 'r1', styles: [] }, isError: false, refetch: vi.fn() }),
-    useUserPreferences: () => ({ data: { map_style: 'liberty', overview_view: savedPreferences.overviewView } }),
+    useUserPreferences: () => ({
+      data: {
+        map_style: 'liberty',
+        overview_view: savedPreferences.overviewView,
+        overview_map_expanded: savedPreferences.mapExpanded,
+      },
+    }),
     useUpdateOverviewView: () => savedPreferences.updateOverviewView,
+    useUpdateOverviewMapExpanded: () => savedPreferences.updateOverviewMapExpanded,
     useCurrentVehicleStatus: () => ({ data: vehicleStatus.current }),
     useVehicles: () => ({ data: [{ id: 'vehicle-1', model: 'R1S', images: null }] }),
   };
@@ -102,6 +111,8 @@ function renderOverview(options?: Record<string, unknown>) {
 beforeEach(() => {
   savedPreferences.overviewView = undefined;
   savedPreferences.updateOverviewView = { mutate: vi.fn() };
+  savedPreferences.mapExpanded = undefined;
+  savedPreferences.updateOverviewMapExpanded = { mutate: vi.fn() };
   vehicleStatus.current = {
     vehicle_id: 'vehicle-1',
     battery_level: 64,
@@ -256,6 +267,36 @@ describe('vehicle overview map expansion', () => {
     expect(screen.getByTestId('overview-layout')).not.toHaveAttribute('data-map-expanded');
     expect(screen.getByTestId('overview-soc-panel')).not.toHaveAttribute('data-collapsed');
     expect(screen.getByTestId('overview-stats').children).toHaveLength(5);
+  });
+
+  it('saves each expand and collapse to the account and applies it immediately', () => {
+    savedPreferences.overviewView = 'map';
+    renderOverview();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand map' }));
+    expect(savedPreferences.updateOverviewMapExpanded.mutate).toHaveBeenLastCalledWith(true);
+    expect(screen.getByTestId('overview-layout')).toHaveAttribute('data-map-expanded', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse map' }));
+    expect(savedPreferences.updateOverviewMapExpanded.mutate).toHaveBeenLastCalledWith(false);
+    expect(screen.getByTestId('overview-layout')).not.toHaveAttribute('data-map-expanded');
+  });
+
+  it('opens the map at the size the user last chose', () => {
+    savedPreferences.overviewView = 'map';
+    savedPreferences.mapExpanded = true;
+    renderOverview();
+    expect(screen.getByTestId('overview-layout')).toHaveAttribute('data-map-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Collapse map' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('keeps the saved expansion off the cluster view', () => {
+    savedPreferences.mapExpanded = true;
+    renderOverview();
+    expect(screen.getByTestId('overview-layout')).not.toHaveAttribute('data-map-expanded');
+    expect(screen.getByTestId('overview-soc-panel')).not.toHaveAttribute('data-collapsed');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));
+    expect(screen.getByTestId('overview-layout')).toHaveAttribute('data-map-expanded', 'true');
   });
 });
 
