@@ -197,12 +197,16 @@ describe('ExternalConnectionsSection', () => {
     const disabled = { ...initial, connections: initial.connections.map((item) => ({ ...item, enabled: false, mode: 'disabled' })) };
     apiMocks.getExternalConnections.mockResolvedValue(initial);
     apiMocks.disableOptionalExternalConnections.mockResolvedValue(disabled);
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     const { client } = renderSection();
     const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
 
     fireEvent.click(await screen.findByRole('button', { name: 'Disable optional' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Disable every optional external connection?' })).toBeInTheDocument();
+    expect(apiMocks.disableOptionalExternalConnections).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Disable optional' }));
     await waitFor(() => expect(apiMocks.disableOptionalExternalConnections).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['external', 'basemap', 'config', 'v2'] });
   });
 
@@ -213,11 +217,14 @@ describe('ExternalConnectionsSection', () => {
     connection.name = 'OpenStreetMap Nominatim';
     apiMocks.getExternalConnections.mockResolvedValue(data);
     apiMocks.purgeExternalConnectionCache.mockResolvedValue({ purged_entries: 24, message: 'Persistent cache purged.' });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderSection();
 
     expect(await screen.findByText(/24 entries/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Purge cache' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Purge the OpenStreetMap Nominatim cache?' })).toBeInTheDocument();
+    expect(apiMocks.purgeExternalConnectionCache).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Purge cache' }));
     await waitFor(() => expect(apiMocks.purgeExternalConnectionCache).toHaveBeenCalledWith('nominatim'));
   });
 
@@ -557,19 +564,41 @@ describe('ExternalConnectionsSection', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('confirms a disable on save and keeps the change staged when the user cancels', async () => {
+  it('asks before staging a disable of a live connection and stages nothing when the user cancels', async () => {
     apiMocks.getExternalConnections.mockResolvedValue(response(true));
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderSection();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open-Meteo weather mode' }));
     fireEvent.click(screen.getByRole('option', { name: 'Disabled' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Disable Open-Meteo weather?' })).toBeInTheDocument();
+    expect(within(dialog).getByText('No new estimated exterior temperatures; stored history remains.')).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Unsaved changes' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open-Meteo weather mode' })).toHaveTextContent('Remote Open-Meteo');
+    expect(apiMocks.updateExternalConnection).not.toHaveBeenCalled();
+  });
+
+  it('stages a confirmed disable and saves it without a second prompt', async () => {
+    apiMocks.getExternalConnections.mockResolvedValue(response(true));
+    const disabled = response(true);
+    disabled.connections[0] = { ...disabled.connections[0]!, enabled: false, mode: 'disabled' };
+    apiMocks.updateExternalConnection.mockResolvedValue(disabled);
+    renderSection();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open-Meteo weather mode' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Disabled' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Disable' }));
+    expect(screen.getByRole('region', { name: 'Unsaved changes' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Save cancelled.');
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Disable Open-Meteo weather?'));
-    expect(apiMocks.updateExternalConnection).not.toHaveBeenCalled();
-    expect(screen.getByRole('region', { name: 'Unsaved changes' })).toBeInTheDocument();
-    confirm.mockRestore();
+    await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('open_meteo', expect.objectContaining({
+      enabled: false,
+      mode: 'disabled',
+    })));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });
