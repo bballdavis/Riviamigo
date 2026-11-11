@@ -34,8 +34,9 @@ Mileage**.
 
 The Vehicle Overview header has two icons on the right: a telemetry indicator
 (hover or focus it for the last update time) and a toggle between the
-**cluster** view and the **current location** map. The cluster view is the
-default and shows the vehicle as before. The map view replaces the stat rows
+**cluster** view and the **current location** map. Your choice is saved to your
+account, so the overview opens on the view you used last, on any device. The
+cluster view is the default until you pick the map. The map view replaces the stat rows
 on the right with a map centered on the vehicle's last reported location; the
 battery panel and vehicle image stay in place. The vehicle appears on the map
 as a small overhead image outlined in the accent color, pointed the way its

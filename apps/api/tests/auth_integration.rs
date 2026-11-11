@@ -2306,6 +2306,98 @@ async fn vehicle_status_reports_facing_corrected_after_backing_in() {
 }
 
 #[tokio::test]
+async fn overview_view_preference_is_saved_per_user() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "overview-view@example.com").await;
+    // Registration closes after the first account; add the second directly.
+    let other = insert_user_and_login(
+        &app,
+        "overview-view-other@example.com",
+        "correctpassword123",
+    )
+    .await;
+    let view = |body: &Value| body["overview_view"].as_str().map(str::to_owned);
+
+    let defaults = app
+        .request(
+            Method::GET,
+            "/v1/auth/preferences",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        defaults.status,
+        StatusCode::OK,
+        "response: {}",
+        defaults.body
+    );
+    assert_eq!(view(&defaults.body).as_deref(), Some("cluster"));
+
+    let saved = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences/overview-view",
+            Some(json!({ "overview_view": "map" })),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "response: {}", saved.body);
+    assert_eq!(view(&saved.body).as_deref(), Some("map"));
+
+    let reread = app
+        .request(
+            Method::GET,
+            "/v1/auth/preferences",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(view(&reread.body).as_deref(), Some("map"));
+
+    // Another user's choice is untouched.
+    let others = app
+        .request(
+            Method::GET,
+            "/v1/auth/preferences",
+            None,
+            Some(&other),
+            None,
+        )
+        .await;
+    assert_eq!(view(&others.body).as_deref(), Some("cluster"));
+
+    let invalid = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences/overview-view",
+            Some(json!({ "overview_view": "satellite" })),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        invalid.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "response: {}",
+        invalid.body
+    );
+    let unchanged = app
+        .request(
+            Method::GET,
+            "/v1/auth/preferences",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(view(&unchanged.body).as_deref(), Some("map"));
+}
+
+#[tokio::test]
 async fn trip_track_omits_zero_zero_coordinates() {
     let app = TestApp::new().await;
     let token = register_and_login(&app, "trip-track-zero@example.com").await;

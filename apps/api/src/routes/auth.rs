@@ -63,6 +63,10 @@ pub fn metadata_router() -> Router<AppState> {
             axum::routing::put(update_ownership_preference),
         )
         .route(
+            "/auth/preferences/overview-view",
+            axum::routing::put(update_overview_view),
+        )
+        .route(
             "/auth/preferences/chart-favorites",
             axum::routing::get(get_chart_favorites).put(update_chart_favorite),
         )
@@ -1029,6 +1033,8 @@ struct PreferencesResponse {
     map_style: String,
     /// Whether the user shows the Ownership dashboard; on unless turned off.
     ownership_enabled: bool,
+    /// The Vehicle Overview view last chosen: `cluster` (default) or `map`.
+    overview_view: String,
 }
 
 #[derive(Deserialize)]
@@ -1050,6 +1056,15 @@ struct MapStyleResponse {
 #[derive(Deserialize, Serialize)]
 struct OwnershipPreferenceBody {
     ownership_enabled: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+struct OverviewViewBody {
+    overview_view: String,
+}
+
+fn is_valid_overview_view(value: &str) -> bool {
+    matches!(value, "cluster" | "map")
 }
 
 #[derive(Serialize)]
@@ -1678,7 +1693,7 @@ async fn get_preferences(
                 custom_distance_unit, custom_speed_unit, custom_temperature_unit, \
                 custom_pressure_unit, custom_altitude_unit, custom_place_radius_unit, \
                 custom_efficiency_display, theme_mode, theme_palette, map_style, \
-                ownership_enabled \
+                ownership_enabled, overview_view \
          FROM riviamigo.user_preferences WHERE user_id = $1",
     )
     .bind(auth.user_id)
@@ -1694,6 +1709,11 @@ async fn get_preferences(
         .as_ref()
         .and_then(|row| row.try_get::<bool, _>("ownership_enabled").ok())
         .unwrap_or(true);
+    let overview_view = row
+        .as_ref()
+        .and_then(|row| row.try_get::<String, _>("overview_view").ok())
+        .filter(|value| is_valid_overview_view(value))
+        .unwrap_or_else(|| "cluster".to_string());
 
     let theme = row
         .as_ref()
@@ -1771,6 +1791,7 @@ async fn get_preferences(
         theme,
         map_style,
         ownership_enabled,
+        overview_view,
     }))
 }
 
@@ -1913,6 +1934,26 @@ async fn update_ownership_preference(
     )
     .bind(auth.user_id)
     .bind(body.ownership_enabled)
+    .execute(&state.pool)
+    .await?;
+    Ok(Json(body))
+}
+
+async fn update_overview_view(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<OverviewViewBody>,
+) -> Result<Json<OverviewViewBody>, AppError> {
+    if !is_valid_overview_view(&body.overview_view) {
+        return Err(AppError::Validation("invalid overview view".into()));
+    }
+    sqlx::query(
+        "INSERT INTO riviamigo.user_preferences (user_id, overview_view, updated_at) \
+         VALUES ($1, $2, now()) \
+         ON CONFLICT (user_id) DO UPDATE SET overview_view = EXCLUDED.overview_view, updated_at = now()",
+    )
+    .bind(auth.user_id)
+    .bind(&body.overview_view)
     .execute(&state.pool)
     .await?;
     Ok(Json(body))
