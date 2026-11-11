@@ -116,7 +116,14 @@ Catch CI failures before they reach GitHub:
   metadata, Clippy, and the database-backed API tests. It starts a separate
   `riviamigo-ci-local` Compose project on ports 55432 (TimescaleDB) and 56379
   (Redis), never your development database, and removes it, volumes included,
-  when it finishes. Rust builds go to `apps/api/target-ci-local`.
+  when it finishes. Rust builds go to `apps/api/target-ci-local`. The backup
+  integration tests need PostgreSQL 18 client tools (`pg_dump`,
+  `pg_restore`), as CI installs them: on macOS run `brew install libpq` (the
+  gate finds Homebrew's keg-only install without changing your `PATH`); on
+  Debian or Ubuntu install `postgresql-client-18`. The gate runs database tests
+  four at a time (`RUST_TEST_THREADS`, overridable), because every test creates
+  and migrates its own database and unbounded parallelism exhausts connection
+  pools on a local Docker database.
 - `pnpm pr:create -- <gh pr create arguments>` runs `pnpm verify:ci` and opens
   the pull request only if it passes. Use it instead of `gh pr create`.
 - `pnpm hooks:install` points Git at `.githooks/`. Every commit and push runs

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { colorTokenViolations } from './check-color-tokens.mjs';
@@ -16,7 +16,21 @@ const ciEnv = {
   DATABASE_URL: 'postgresql://riviamigo:devpassword@127.0.0.1:55432/riviamigo',
   REDIS_URL: 'redis://127.0.0.1:56379',
   RIVIAMIGO_ENV: 'development',
+  // Each API integration test creates and migrates its own database. Unbounded
+  // parallelism exhausts connection pools against the local Docker database
+  // (PoolTimedOut during setup) even though the same tests pass on CI runners.
+  RUST_TEST_THREADS: process.env.RUST_TEST_THREADS ?? '4',
 };
+
+/** Minimum `pg_dump` major version; Backend checks installs postgresql-client-18. */
+const PG_CLIENT_MAJOR = 18;
+/** Keg-only installs Homebrew does not link onto PATH. */
+const PG_CLIENT_FALLBACK_DIRS = [
+  '/opt/homebrew/opt/libpq/bin',
+  '/opt/homebrew/opt/postgresql@18/bin',
+  '/usr/local/opt/libpq/bin',
+  '/usr/local/opt/postgresql@18/bin',
+];
 
 function commandName(command) {
   return process.platform === 'win32' && command === 'pnpm' ? 'pnpm.cmd' : command;
@@ -106,6 +120,41 @@ function compose(args, env = {}) {
   run('docker', ['compose', ...ciCompose, ...args], { env: { ...ciEnv, ...env }, label: `Docker Compose ${args.join(' ')}` });
 }
 
+function pgDumpMajor(pathValue) {
+  const probe = spawnSync('pg_dump', ['--version'], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: pathValue },
+    shell: process.platform === 'win32',
+    windowsHide: true,
+  });
+  const major = probe.status === 0 ? Number.parseInt(/(\d+)(?:\.\d+)*/.exec(probe.stdout)?.[1] ?? '', 10) : Number.NaN;
+  return Number.isInteger(major) ? major : null;
+}
+
+/**
+ * The backup integration tests shell out to `pg_dump`/`pg_restore`; without them
+ * backup readiness reports "pg_dump unavailable" and most backup tests fail.
+ * Use a keg-only Homebrew client when one is installed, else stop with a clear
+ * install hint instead of a wall of unrelated-looking test failures.
+ */
+function ensurePostgresClient() {
+  const current = process.env.PATH ?? '';
+  if ((pgDumpMajor(current) ?? 0) >= PG_CLIENT_MAJOR) return;
+  for (const dir of PG_CLIENT_FALLBACK_DIRS) {
+    if (!existsSync(join(dir, 'pg_dump'))) continue;
+    const candidate = `${dir}${delimiter}${current}`;
+    if ((pgDumpMajor(candidate) ?? 0) >= PG_CLIENT_MAJOR) {
+      process.env.PATH = candidate;
+      console.log(`Using PostgreSQL client tools from ${dir}`);
+      return;
+    }
+  }
+  throw new Error(
+    `PostgreSQL ${PG_CLIENT_MAJOR}+ client tools (pg_dump, pg_restore) are required for the backup integration tests. `
+      + 'On macOS: brew install libpq (Homebrew leaves it off PATH; this gate finds it). On Debian/Ubuntu: install postgresql-client-18.',
+  );
+}
+
 function ensureSqlxCli() {
   const probe = spawnSync('cargo', ['sqlx', '--version'], { cwd: join(root, 'apps/api'), stdio: 'ignore', shell: process.platform === 'win32', windowsHide: true });
   if (probe.status === 0) return;
@@ -127,6 +176,7 @@ function withCiDatabase(body) {
   process.once('exit', cleanup);
   try {
     Object.assign(process.env, ciEnv);
+    ensurePostgresClient();
     ensureSqlxCli();
     compose(['up', '-d', '--wait', 'timescaledb', 'redis']);
     runWithRetries('cargo', ['sqlx', 'migrate', 'run'], {
