@@ -847,7 +847,6 @@ mod tests {
         assert_eq!(requests[3].operation_name, "getUserInfo");
         let query = requests[3].body["query"].as_str().unwrap();
         assert!(query.contains("vin"));
-        assert!(!query.contains("modelYear"));
         assert_eq!(requests[3].headers["csrf-token"], "csrf-token");
         assert_eq!(requests[3].headers["a-sess"], "app-session-token");
         assert_eq!(requests[3].headers["u-sess"], "user-session-token");

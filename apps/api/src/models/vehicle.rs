@@ -2,6 +2,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Trims a VIN reported by Rivian and drops blank values so callers never
+/// overwrite a stored VIN with an empty string.
+pub(crate) fn normalized_vin(vin: Option<&str>) -> Option<&str> {
+    vin.map(str::trim).filter(|vin| !vin.is_empty())
+}
+
+/// Decodes the model year from a VIN. The year is a pure function of the
+/// stored VIN, so it is derived at read time rather than persisted.
 pub(crate) fn model_year_from_vin(vin: &str) -> Option<i32> {
     let vin = vin.trim().to_ascii_uppercase();
     if vin.len() != 17
@@ -27,7 +35,6 @@ pub struct Vehicle {
     pub rivian_vehicle_id: String,
     pub vin: Option<String>,
     pub model: String,
-    pub model_year: Option<i32>,
     pub trim: Option<String>,
     pub color: Option<String>,
     pub battery_config: Option<String>,

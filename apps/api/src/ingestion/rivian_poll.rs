@@ -395,7 +395,7 @@ struct SupportedFeature {
     status: Option<String>,
 }
 
-/// Fetch model year and static configuration fields and upsert into `vehicles`.
+/// Fetch the VIN and static configuration fields and upsert into `vehicles`.
 pub async fn fetch_vehicle_enrichment(
     rivian_vehicle_id: &str,
     vehicle_id: Uuid,
@@ -465,8 +465,7 @@ async fn save_vehicle_enrichment(
     details: Option<VehicleEnrichmentDetails>,
     vin: Option<&str>,
 ) -> Result<()> {
-    let vin = vin.map(str::trim).filter(|vin| !vin.is_empty());
-    let model_year = vin.and_then(crate::models::vehicle::model_year_from_vin);
+    let vin = crate::models::vehicle::normalized_vin(vin);
     let mobile_config = details
         .as_ref()
         .and_then(|d| d.mobile_configuration.as_ref());
@@ -490,28 +489,35 @@ async fn save_vehicle_enrichment(
             )
         });
 
-    let saved_year: Option<i32> = sqlx::query_scalar(
+    // `None` means the vehicle row was removed while enrichment was in flight.
+    let saved_vin: Option<Option<String>> = sqlx::query_scalar(
         "UPDATE riviamigo.vehicles
          SET interior_color     = COALESCE($2, interior_color),
              trim               = COALESCE($3, trim),
              supported_features = COALESCE($4, supported_features),
-             model_year         = COALESCE($5, model_year),
-             vin                = COALESCE($6, vin),
+             vin                = COALESCE($5, vin),
              updated_at         = now()
          WHERE id = $1
-         RETURNING model_year",
+         RETURNING vin",
     )
     .bind(vehicle_id)
     .bind(interior_color)
     .bind(trim)
     .bind(features_json)
-    .bind(model_year)
     .bind(vin)
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await?;
 
-    if saved_year.is_none() {
-        tracing::warn!(vehicle_id=%vehicle_id, "vehicle model year unavailable: Rivian did not return a usable VIN");
+    // Model year is derived from the stored VIN at read time; report only
+    // whether one is decodable, never the VIN itself.
+    if let Some(saved_vin) = saved_vin {
+        if saved_vin
+            .as_deref()
+            .and_then(crate::models::vehicle::model_year_from_vin)
+            .is_none()
+        {
+            tracing::warn!(vehicle_id=%vehicle_id, "vehicle model year unavailable: no usable VIN on record");
+        }
     }
     Ok(())
 }
@@ -2888,16 +2894,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vehicle_model_year_enrichment_requests_supported_vin_field() {
+    async fn vehicle_enrichment_requests_account_vin() {
         let app = Router::new().route(
             "/graphql",
             post(|Json(body): Json<serde_json::Value>| async move {
                 let query = body["query"].as_str().unwrap();
-                if query.contains("modelYear") {
-                    return Json(json!({ "errors": [{
-                        "message": "Cannot query field modelYear on type Vehicle"
-                    }] }));
-                }
                 assert!(query.contains("vin"));
                 Json(json!({ "data": { "currentUser": { "vehicles": [
                     { "id": "other", "vin": "7FCTGAAL0RN000001", "vehicle": {} },
@@ -2936,7 +2937,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
-    async fn vehicle_model_year_enrichment_backfills_without_overwriting_capacity() {
+    async fn vehicle_enrichment_backfills_vin_without_overwriting_capacity() {
         let db = DisposableDatabase::new().await;
         let vehicle_id = seed_vehicle(&db.pool).await;
         sqlx::query(
@@ -2950,8 +2951,9 @@ mod tests {
         .unwrap();
 
         for (details, vin) in [
-            (Some(json!({})), Some("7FCTGAAL0SN000001")),
+            (Some(json!({})), Some(" 7FCTGAAL0SN000001 ")),
             (Some(json!({})), None),
+            (Some(json!({})), Some("   ")),
             (None, None),
         ] {
             super::save_vehicle_enrichment(
@@ -2963,8 +2965,8 @@ mod tests {
             .await
             .unwrap();
 
-            let saved: (Option<i32>, Option<f64>, Option<String>, Option<String>) = sqlx::query_as(
-                "SELECT model_year, battery_capacity_wh, battery_config, vin
+            let saved: (Option<f64>, Option<String>, Option<String>) = sqlx::query_as(
+                "SELECT battery_capacity_wh, battery_config, vin
                  FROM riviamigo.vehicles WHERE id = $1",
             )
             .bind(vehicle_id)
@@ -2974,13 +2976,22 @@ mod tests {
             assert_eq!(
                 saved,
                 (
-                    Some(2025),
                     Some(135000.0),
                     Some("R1T / R1S Large (Gen 1)".into()),
                     Some("7FCTGAAL0SN000001".into())
                 )
             );
         }
+
+        // A vehicle deleted while enrichment was in flight is not an error.
+        super::save_vehicle_enrichment(
+            &db.pool,
+            uuid::Uuid::new_v4(),
+            None,
+            Some("7FCTGAAL0SN000001"),
+        )
+        .await
+        .expect("enrichment for a removed vehicle is a no-op");
         db.cleanup().await;
     }
 
