@@ -146,6 +146,8 @@ export interface VehicleStatus {
   driver_temp_c?: number | null;
   outside_temp_c?: number | null;
   heading_deg?: number | null;
+  /** Direction the nose points; corrects `heading_deg` (the GNSS course) after reversing into a space. */
+  facing_deg?: number | null;
   odometer_miles?: number | null;
   hv_thermal_event?: string | null;
   twelve_volt_health?: string | null;

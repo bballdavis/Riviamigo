@@ -38,8 +38,15 @@ The Vehicle Overview header has two icons on the right: a telemetry indicator
 default and shows the vehicle as before. The map view replaces the stat rows
 on the right with a map centered on the vehicle's last reported location; the
 battery panel and vehicle image stay in place. The vehicle appears on the map
-as a small overhead image outlined in the accent color, pointed the way it is
-facing.
+as a small overhead image outlined in the accent color, pointed the way its
+nose faces. Rivian reports the direction of travel, so after backing into a
+space Riviamigo turns that reading around to show the way the vehicle actually
+faces.
+
+The expand button in the map's top-right corner gives the map more room: the
+battery panel shrinks to its charge bar, the vehicle image slides over, and the
+map takes the space. Press it again, or switch back to the cluster view, to
+restore the normal layout. On a phone it makes the map taller instead.
 
 In edit mode, select the Vehicle Overview widget and open **Location map** in
 the editor drawer:
