@@ -8,7 +8,10 @@
 //! Recording is fire-and-forget. Hot paths check an in-memory registry and
 //! hand records to one batch writer through a bounded channel, so ingestion
 //! never waits on capture storage. Records never contain coordinates,
-//! credentials, VINs, or the vehicle id.
+//! credentials, VINs, or the vehicle id. [`sanitize`] strips keys, not
+//! values, so call sites must not record free text that can carry an
+//! identifier: error strings and provider messages are recorded as coarse
+//! classes or codes instead.
 
 mod export;
 mod lifecycle;

@@ -24,34 +24,33 @@ use uuid::Uuid;
 use crate::ingestion::rivian_auth::rivian_refresh_csrf;
 use crate::ingestion::session_store::{decrypt_tokens, encrypt_tokens, RivianTokenBundle};
 use crate::services::charge_backfill::{self, ChargeBackfillError};
-use crate::services::ingestion_capture::{self, Kind as CaptureKind};
-
-/// Record one GraphQL acquisition in a running ingestion capture.
-fn capture_poll<T>(
-    vehicle_id: Uuid,
-    operation: &str,
-    result: &Result<T>,
-    detail: serde_json::Value,
-) {
-    let fields = match result {
-        Ok(_) => serde_json::json!({ "operation": operation, "outcome": "ok", "detail": detail }),
-        Err(error) => serde_json::json!({
-            "operation": operation,
-            "outcome": if is_auth_error(error) { "auth_required" } else { "error" },
-            "error": error.to_string(),
-        }),
-    };
-    ingestion_capture::record(vehicle_id, CaptureKind::Poll, fields);
-}
 use crate::services::charge_sessions::{
     self, ChargeSessionPayloadRef, ChargeSessionSummaryPayload, UnmatchedInsertPolicy,
 };
 
+mod capture;
 mod transport;
+
+use capture::capture_poll;
 
 static BASELINE_FORWARD_DROP_LOG_COUNT: AtomicU64 = AtomicU64::new(0);
 
 pub use transport::{gql_request, AuthError};
+
+/// The vehicle has no stored Rivian credentials (never connected, or a
+/// sanitized restore removed them).
+#[derive(Debug, thiserror::Error)]
+#[error("vehicle {vehicle_id} has no Rivian credentials")]
+pub struct CredentialsMissing {
+    vehicle_id: Uuid,
+}
+
+/// The Rivian account no longer lists this vehicle.
+#[derive(Debug, thiserror::Error)]
+#[error("vehicle {rivian_vehicle_id} not found in getUserInfo")]
+pub struct VehicleNotListed {
+    rivian_vehicle_id: String,
+}
 
 // ── URL constants ────────────────────────────────────────────────────────────
 
@@ -159,7 +158,7 @@ pub(crate) async fn load_vehicle_tokens(
     .bind(vehicle_id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| anyhow!("vehicle {vehicle_id} has no Rivian credentials"))?;
+    .ok_or(CredentialsMissing { vehicle_id })?;
 
     let (rivian_vehicle_id, encrypted_tokens) = row;
     let tokens = decrypt_tokens(&encrypted_tokens, &identity)
@@ -456,7 +455,12 @@ async fn request_vehicle_enrichment(
         .unwrap_or_default()
         .into_iter()
         .find(|v| v.id == rivian_vehicle_id)
-        .ok_or_else(|| anyhow!("vehicle {rivian_vehicle_id} not found in getUserInfo"))
+        .ok_or_else(|| {
+            VehicleNotListed {
+                rivian_vehicle_id: rivian_vehicle_id.to_owned(),
+            }
+            .into()
+        })
 }
 
 async fn save_vehicle_enrichment(
