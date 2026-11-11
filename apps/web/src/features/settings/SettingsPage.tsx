@@ -281,7 +281,9 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
   const me = useMe();
   // Applied (saved) edit-button preference; the section stages edits in `editButtonDraft`.
   const [savedShowEditButton, setShowEditButton] = useDashboardEditButtonPreference(me.data?.user_id);
-  const [activeSection, setActiveSection] = React.useState<SettingsSection>(initialSection ?? 'vehicles');
+  // The URL is the only source of the open section, so any navigation to /settings (sidebar links,
+  // back/forward, the renewal notice) shows the section it names, and a plain /settings shows Vehicles.
+  const activeSection: SettingsSection = initialSection ?? 'vehicles';
   const [apiKeyName, setApiKeyName] = React.useState('Local troubleshooting');
   const [apiKeyVehicleId, setApiKeyVehicleId] = React.useState('');
   const [createdKey, setCreatedKey] = React.useState<string | null>(null);
@@ -320,15 +322,11 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
     [canManageAuthentication, canManageBackups],
   );
 
-  React.useEffect(() => {
-    if (initialSection && initialSection !== activeSection) setActiveSection(initialSection);
-  }, [activeSection, initialSection]);
-
   function selectSettingsSection(next: SettingsSection) {
     if (next === activeSection) return;
-    // Staged edits belong to the open section; save or discard them first.
+    // Staged edits belong to the open section; save or discard them first. The navigation
+    // itself changes the open section, through `initialSection`.
     requestLeave(() => {
-      setActiveSection(next);
       navigate({ to: '/settings', search: next === 'vehicles' ? {} : { section: next } });
     });
   }
