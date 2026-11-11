@@ -447,6 +447,12 @@ vi.mock('@riviamigo/hooks', () => ({
       .mockResolvedValue({ ok: true, vehicle_id: 'demo-v1', created: true }),
     deleteVehicle: vi.fn().mockResolvedValue({ ok: true, default_vehicle_id: 'v1' }),
     setDefaultVehicle: vi.fn().mockResolvedValue({ default_vehicle_id: 'v2' }),
+    listVehicleMembers: vi.fn().mockResolvedValue([]),
+    listVehicleInvites: vi.fn().mockResolvedValue([]),
+    addVehicleMember: vi.fn().mockResolvedValue({ invite_created: false, invite_token: null }),
+    updateVehicleMember: vi.fn().mockResolvedValue(undefined),
+    removeVehicleMember: vi.fn().mockResolvedValue(undefined),
+    revokeVehicleInvite: vi.fn().mockResolvedValue(undefined),
     refreshDemoVehicle: vi.fn().mockResolvedValue({
       ok: true,
       vehicle_id: 'demo-v1',
@@ -1344,6 +1350,37 @@ describe('Settings page', () => {
     const prefixMatches = invalidateSpy.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["vehicles"]' && !filters?.exact);
     expect(prefixMatches).toHaveLength(0);
     invalidateSpy.mockRestore();
+  });
+
+  it('adds a member from the sharing panel and keeps the invite token on the page', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.auth.accessToken = 'session-token';
+    vi.mocked(hooks.api.addVehicleMember).mockResolvedValueOnce({ invite_created: true, invite_token: 'invite-token-123' } as never);
+    renderSettings();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage sharing for Adventure Truck' }));
+    fireEvent.change(screen.getByPlaceholderText('user@example.com'), { target: { value: 'friend@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Member' }));
+
+    await waitFor(() => expect(hooks.api.addVehicleMember).toHaveBeenCalledWith('v1', { email: 'friend@example.com', role: 'viewer' }));
+    expect(await screen.findByText('invite-token-123')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('user@example.com')).toHaveValue('');
+  });
+
+  it('lists the members of an expanded vehicle and removes one from the sharing panel', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.auth.accessToken = 'session-token';
+    vi.mocked(hooks.api.listVehicleMembers).mockResolvedValueOnce([
+      { user_id: 'u2', email: 'friend@example.com', role: 'viewer', is_default: false, created_at: '2026-05-04T12:00:00Z' },
+    ] as never);
+    renderSettings();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage sharing for Adventure Truck' }));
+    expect(await screen.findByText('friend@example.com')).toBeInTheDocument();
+    expect(hooks.api.listVehicleMembers).toHaveBeenCalledWith('v1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(hooks.api.removeVehicleMember).toHaveBeenCalledWith('v1', 'u2'));
   });
 
   it('deletes a vehicle only after DELETE is typed in a labelled dialog', async () => {
