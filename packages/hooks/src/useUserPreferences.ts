@@ -36,3 +36,33 @@ export function useUpdateMapStyle() {
     },
   });
 }
+
+/** Show or hide the Ownership dashboard for the signed-in user. */
+export function useUpdateOwnershipPreference() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      api.apiFetch<{ ownership_enabled: boolean }>('PUT', '/v1/auth/preferences/ownership', {
+        ownership_enabled: enabled,
+      }),
+    onMutate: async (enabled) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.unitPreferences.current });
+      const previous = queryClient.getQueryData<UserPreferencesResponse>(queryKeys.unitPreferences.current);
+      if (previous) {
+        queryClient.setQueryData(queryKeys.unitPreferences.current, { ...previous, ownership_enabled: enabled });
+      }
+      return { previous };
+    },
+    onError: (_error, _enabled, context) => {
+      if (context?.previous) queryClient.setQueryData(queryKeys.unitPreferences.current, context.previous);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.unitPreferences.current });
+    },
+  });
+}
+
+/** Whether the signed-in user shows the Ownership dashboard. On until they turn it off. */
+export function useOwnershipEnabled(): boolean {
+  return useUserPreferences().data?.ownership_enabled !== false;
+}

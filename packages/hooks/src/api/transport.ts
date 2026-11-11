@@ -51,6 +51,11 @@ import type {
   PlaceSearchSuggestion,
   UpsertPlaceBody,
   VehicleHealth,
+  OwnershipLookupOption,
+  OwnershipLookupVehicle,
+  OwnershipResponse,
+  OwnershipSettings,
+  OwnershipSettingsResponse,
   BatteryHealthSummary,
   BatteryMileagePoint,
   RivianStewardshipResponse,
@@ -887,6 +892,13 @@ export class AuthenticatedTransport {
 
   async updateVehicleName(vehicleId: string, name: string): Promise<void> {
     return this.request('PUT', `/v1/vehicles/${vehicleId}/name`, { name });
+  }
+
+  async updateVehicleCollection(
+    vehicleId: string,
+    paused: boolean,
+  ): Promise<{ ok: boolean; collection_paused: boolean; worker_command_queued: boolean }> {
+    return this.request('PUT', `/v1/vehicles/${vehicleId}/collection`, { paused });
   }
 
   async setDefaultVehicle(vehicleId: string): Promise<{ ok: boolean; default_vehicle_id: string }> {
@@ -1777,6 +1789,32 @@ export class AuthenticatedTransport {
 
   async getVehicleHealth(vehicleId: string): Promise<VehicleHealth> {
     return this.request('GET', `/v1/vehicles/${vehicleId}/health`);
+  }
+
+  async getOwnership(vehicleId: string): Promise<OwnershipResponse> {
+    return this.request('GET', `/v1/vehicles/${vehicleId}/ownership`);
+  }
+
+  async getOwnershipSettings(vehicleId: string): Promise<OwnershipSettingsResponse> {
+    return this.request('GET', `/v1/vehicles/${vehicleId}/ownership/settings`);
+  }
+
+  async updateOwnershipSettings(
+    vehicleId: string,
+    body: OwnershipSettings,
+  ): Promise<OwnershipSettingsResponse> {
+    return this.request('PUT', `/v1/vehicles/${vehicleId}/ownership`, body);
+  }
+
+  async lookupOwnershipVehicleMenu(
+    menu: 'years' | 'makes' | 'models' | 'options',
+    params: { year?: string; make?: string; model?: string } = {},
+  ): Promise<{ items: OwnershipLookupOption[] }> {
+    return this.request('GET', `/v1/ownership/vehicle-lookup/${menu}`, undefined, params);
+  }
+
+  async lookupOwnershipVehicle(epaId: string): Promise<OwnershipLookupVehicle> {
+    return this.request('GET', `/v1/ownership/vehicle-lookup/vehicles/${encodeURIComponent(epaId)}`);
   }
 
   async getChargingSchedule(vehicleId: string): Promise<ChargingSchedule | null> {

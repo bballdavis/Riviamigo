@@ -9,6 +9,9 @@ export const queryKeys = {
   vehicle: {
     health: (vehicleId: string | null) => ['vehicles', 'health', vehicleId] as const,
     images: (vehicleId: string | null) => ['vehicles', 'images', vehicleId] as const,
+    ownership: (vehicleId: string | null) => ['vehicles', 'ownership', vehicleId] as const,
+    ownershipSettings: (vehicleId: string | null) =>
+      ['vehicles', 'ownership', vehicleId, 'settings'] as const,
   },
   apiKeys: { all: ['api-keys'] as const },
   apiCatalog: { all: ['api-catalog'] as const },

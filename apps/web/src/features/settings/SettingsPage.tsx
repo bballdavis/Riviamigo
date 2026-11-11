@@ -40,6 +40,7 @@ import { AccountIdentitySection } from '../../components/settings/AccountIdentit
 import { AuthenticationSection } from '../../components/settings/AuthenticationSection';
 import { BackupSection } from '../../components/settings/BackupSection';
 import { ExternalConnectionsSection } from '../../components/settings/ExternalConnectionsSection';
+import { OwnershipSettingsSection } from '../ownership/OwnershipSettingsSection';
 import { JobsSection } from '../../components/settings/JobsSection';
 import { PlacesSection } from '../../components/settings/PlacesSection';
 import { ChargingSection } from '../../components/settings/ChargingSection';
@@ -54,7 +55,7 @@ import {
   getRivianCredentialRenewalNotice,
 } from '../../lib/rivianCredentialRenewal';
 import {
-  Car, ChartLine, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, Search, ShieldCheck, Star, Trash2, Unlock, Users, X, Zap,
+  Car, ChartLine, CircleDollarSign, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Ruler, Save, Search, ShieldCheck, Star, Trash2, Unlock, Users, X, Zap,
 } from 'lucide-react';
 
 function dashboardActionId(dashboard: DashboardConfig) {
@@ -112,7 +113,7 @@ function savedCapacityGenerationMismatch(vehicle: BatteryVehicle | undefined): {
   return RIVIAN_BATTERY_PRESETS[saved].some((p) => p.key !== 'custom' && p.kwh === kwh) ? { saved, detected } : null;
 }
 
-type SettingsSection = 'vehicles' | 'dashboards' | 'charts' | 'units' | 'places' | 'charging' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account' | 'authentication';
+type SettingsSection = 'vehicles' | 'dashboards' | 'charts' | 'units' | 'places' | 'charging' | 'ownership' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account' | 'authentication';
 
 const baseSections: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
   { id: 'vehicles', label: 'Vehicles', icon: Car },
@@ -121,6 +122,7 @@ const baseSections: Array<{ id: SettingsSection; label: string; icon: React.Elem
   { id: 'units', label: 'Units', icon: Ruler },
   { id: 'places', label: 'Places', icon: MapPin },
   { id: 'charging', label: 'Charging', icon: Zap },
+  { id: 'ownership', label: 'Ownership', icon: CircleDollarSign },
   { id: 'external', label: 'External Connections', icon: Globe2 },
   { id: 'api', label: 'API Access', icon: KeyRound },
   { id: 'jobs', label: 'Jobs', icon: ListChecks },
@@ -893,6 +895,14 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
     },
   });
 
+  const updateVehicleCollection = useMutation({
+    mutationFn: ({ vehicleId, paused }: { vehicleId: string; paused: boolean }) =>
+      api.updateVehicleCollection(vehicleId, paused),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+    },
+  });
+
   const purgeVehicleArtworkCache = useMutation({
     mutationFn: (vehicleId: string) => api.purgeVehicleArtworkCache(vehicleId),
     onSuccess: (result) => {
@@ -1307,10 +1317,13 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                       const expectedRenewalDate = !isDemo
                         ? formatRivianRenewalDate(v.expected_renewal_at)
                         : null;
+                      const collectionPaused = !isDemo && v.collection_paused === true;
                       const collectorHealthy = v.worker_health === 'ok' || v.worker_health === 'connected';
                       const collectorPassive = v.worker_health === 'passive';
                       const healthColor = isDemo
                         ? 'var(--rm-status-info)'
+                        : collectionPaused
+                        ? 'var(--rm-status-warning)'
                         : needsReauth
                         ? 'var(--rm-status-warning)'
                         : collectorHealthy
@@ -1322,6 +1335,8 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                             : 'var(--rm-border-default)';
                       const healthText = isDemo
                         ? 'Demo data'
+                        : collectionPaused
+                        ? 'Paused'
                         : needsReauth
                         ? 'Login required'
                         : collectorHealthy
@@ -1331,18 +1346,21 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                           : v.worker_health != null
                             ? 'Error'
                             : (isActive ? 'Active' : 'Offline');
-                      const hasGlow = isDemo || needsReauth || v.worker_health != null;
+                      const hasGlow = isDemo || collectionPaused || needsReauth || v.worker_health != null;
 
                       const modelLine = [v.model, v.year, v.trim].filter(Boolean).join(' · ') || 'Vehicle details pending';
                       const batteryLabel = v.battery_capacity_kwh != null ? ` · ${v.battery_capacity_kwh} kWh` : '';
 
                       return (
                       <div key={v.id} className="py-2">
-                        <div className="rounded-lg border border-border bg-bg-elevated/35 p-3">
-                          <div className="flex flex-col gap-3 sm:flex-row">
+                        <div className="@container/vehicle rounded-lg border border-border bg-bg-elevated/35 p-3">
+                          {/* Sized by the card, not the window: image and details sit side by side once
+                              the card is wide enough, and the actions join that row only when the
+                              details still have room, so nothing overlaps at in-between widths. */}
+                          <div className="grid gap-3 @min-[30rem]/vehicle:grid-cols-[10rem_minmax(0,1fr)] @min-[56rem]/vehicle:grid-cols-[10rem_minmax(0,1fr)_auto]">
                             {/* Status chip */}
                             <div
-                              className="flex w-full shrink-0 flex-col items-center gap-1 rounded-xl border bg-bg-elevated/70 px-1.5 py-2 transition-shadow sm:w-40"
+                              className="flex w-full flex-col items-center justify-center gap-1 rounded-xl border bg-bg-elevated/70 px-1.5 py-2 transition-shadow"
                               style={{
                                 borderColor: healthColor,
                                 boxShadow: hasGlow
@@ -1375,6 +1393,9 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                                 {isActive && (
                                   <Badge variant="success" size="sm" dot>Default vehicle</Badge>
                                 )}
+                                {collectionPaused && (
+                                  <Badge variant="warning" size="sm" dot>Collection paused</Badge>
+                                )}
                                 {needsReauth && (
                                   <Badge variant="warning" size="sm" dot>Refresh Rivian login required</Badge>
                                 )}
@@ -1395,12 +1416,12 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                                 <span className="text-fg-tertiary">Model</span>
                                 <span className="text-fg">{modelLine}{!isEditingBattery && batteryLabel}</span>
                                 <span className="text-fg-tertiary">VIN</span>
-                                <span className="font-mono text-fg">{v.vin ?? 'Not reported'}</span>
-                                <span className="text-fg-tertiary">Rivian ID</span>
-                                <span className="font-mono text-fg">{v.rivian_vehicle_id}</span>
+                                <span className="break-all font-mono text-fg">{v.vin ?? 'Not reported'}</span>
+                                <span className="whitespace-nowrap text-fg-tertiary">Rivian ID</span>
+                                <span className="break-all font-mono text-fg">{v.rivian_vehicle_id}</span>
                                 {!isDemo && (
                                   <>
-                                    <span className="text-fg-tertiary">Rivian renewal</span>
+                                    <span className="whitespace-nowrap text-fg-tertiary">Rivian renewal</span>
                                     <span className="text-fg">
                                       {expectedRenewalDate ? `${expectedRenewalDate} (estimated)` : 'Estimate unavailable'}
                                     </span>
@@ -1415,7 +1436,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                             </div>
 
                             {/* Action buttons */}
-                            <div className="flex shrink-0 flex-wrap items-center justify-start gap-1.5 self-center sm:justify-end">
+                            <div className="flex flex-wrap items-center justify-start gap-1.5 border-t border-border/60 pt-3 @min-[30rem]/vehicle:col-span-2 @min-[30rem]/vehicle:justify-end @min-[56rem]/vehicle:col-span-1 @min-[56rem]/vehicle:self-center @min-[56rem]/vehicle:border-t-0 @min-[56rem]/vehicle:pt-0">
                               {!isActive && (
                                 <Tooltip content="Set as default vehicle">
                                   <Button
@@ -1444,6 +1465,26 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                                     }}
                                   >
                                     <Users className="h-3.5 w-3.5" />
+                                  </Button>
+                                </Tooltip>
+                              )}
+                              {canManageVehicle && !isDemo && (
+                                <Tooltip content={collectionPaused ? 'Resume data collection from Rivian' : 'Pause data collection from Rivian'}>
+                                  <Button
+                                    aria-label={`${collectionPaused ? 'Resume' : 'Pause'} data collection for ${v.display_name}`}
+                                    aria-pressed={collectionPaused}
+                                    variant="secondary"
+                                    size="sm"
+                                    className={[
+                                      'h-8 w-8 px-0',
+                                      collectionPaused
+                                        ? 'border-[var(--rm-status-warning)] text-[var(--rm-status-warning)] hover:border-[var(--rm-status-warning)] hover:text-[var(--rm-status-warning)]'
+                                        : '',
+                                    ].join(' ')}
+                                    loading={updateVehicleCollection.isPending && updateVehicleCollection.variables?.vehicleId === v.id}
+                                    onClick={() => updateVehicleCollection.mutate({ vehicleId: v.id, paused: !collectionPaused })}
+                                  >
+                                    {collectionPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
                                   </Button>
                                 </Tooltip>
                               )}
@@ -2089,6 +2130,8 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
             {activeSection === 'places' && <PlacesSection unitSystem={placesUnitSystem} />}
 
             {activeSection === 'charging' && <ChargingSection />}
+
+            {activeSection === 'ownership' && <OwnershipSettingsSection vehicles={vehicles ?? []} />}
 
             {activeSection === 'external' && <ExternalConnectionsSection />}
 

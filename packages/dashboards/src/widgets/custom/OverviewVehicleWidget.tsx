@@ -1,9 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Battery, Car, CheckCircle2, CircleAlert, Cpu, Gauge, Lock, MapPin, Package, PackageOpen, Thermometer, TriangleAlert, Unlock } from 'lucide-react';
+import { Battery, Car, CheckCircle2, CircleAlert, Lock, Package, PackageOpen, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
 import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
-import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
-import { formatAltitude, formatMiles, formatMph, formatTemp } from '@riviamigo/ui/lib/utils';
+import { formatMiles } from '@riviamigo/ui/lib/utils';
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI, formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
 import { FrunkIcon, LiftgateIcon, Tooltip } from '@riviamigo/ui/primitives';
 import { isVehicleCharging } from '@riviamigo/types';
@@ -12,6 +11,9 @@ import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { isVehiclePluggedIn } from '../../dashboardVisibility';
 import { getDoorOverlayUrls, getOpenDoorStates } from './imageUtils';
+import { resolveOverviewStatIds } from './overviewStats';
+import { getOverviewStatRequirements, presentOverviewStat, type OverviewStatData } from './overviewStatDisplay';
+import { useOverviewStatData, useUnitPreferencesVersion } from './useOverviewStatData';
 
 type AnchorSet = {
   tire: { rl: string; fl: string; rr: string; fr: string };
@@ -54,12 +56,15 @@ const OVERVIEW_ANCHORS: Record<string, AnchorSet> = {
   R2S: SHARED_OVERVIEW_ANCHORS,
 };
 
-function OverviewVehicleWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
+function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { defaultVehicleId } = useAuth();
   const vehicleId = ctx.vehicleId ?? defaultVehicleId;
   const { data: status } = useCurrentVehicleStatus(vehicleId);
   const { data: vehicles } = useVehicles();
   const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
+  const statIds = resolveOverviewStatIds(instance.options?.stats);
+  const statData = useOverviewStatData(statIds, vehicleId ?? null);
+  useUnitPreferencesVersion();
 
   return (
     <CurrentVehicleStatePanel
@@ -69,6 +74,8 @@ function OverviewVehicleWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
       vehicleModel={activeVehicle?.model}
       isDemoVehicle={activeVehicle?.is_demo ?? activeVehicle?.rivian_vehicle_id?.startsWith('demo-') ?? false}
       targetTirePressurePsi={activeVehicle?.target_tire_pressure_psi}
+      statIds={statIds}
+      statData={statData}
     />
   );
 }
@@ -80,6 +87,8 @@ export function CurrentVehicleStatePanel({
   vehicleModel,
   isDemoVehicle = false,
   targetTirePressurePsi,
+  statIds,
+  statData,
 }: {
   status: VehicleStatus | null | undefined;
   images?: VehicleImages | null | undefined;
@@ -87,6 +96,10 @@ export function CurrentVehicleStatePanel({
   vehicleModel?: string | undefined;
   isDemoVehicle?: boolean;
   targetTirePressurePsi?: number | null | undefined;
+  /** Saved `stats` option: which sensors fill the five stat rows. Defaults apply when absent. */
+  statIds?: unknown;
+  /** Metric and summary values for rows that read more than live vehicle status. */
+  statData?: OverviewStatData;
 }) {
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const resolvedOverhead = resolveVehicleArtwork(images, vehicleModel, 'overview');
@@ -117,13 +130,7 @@ export function CurrentVehicleStatePanel({
     rl: makeTireDisplay(status?.tire_rl_psi, status?.tire_rl_status, targetTirePressurePsi),
     rr: makeTireDisplay(status?.tire_rr_psi, status?.tire_rr_status, targetTirePressurePsi),
   };
-  const stats = [
-    { label: 'Driver mode', value: renderDriverMode(status?.drive_mode, status?.gear_status), icon: <Car className="h-3.5 w-3.5" style={{ color: 'var(--rm-dm-everyday)' }} /> },
-    { label: 'Altitude', value: formatAltitude(status?.altitude_m), icon: <MapPin className="h-3.5 w-3.5" style={{ color: 'var(--rm-chart-teal)' }} /> },
-    { label: 'Cabin', value: formatTemp(status?.cabin_temp_c), icon: <Thermometer className="h-3.5 w-3.5" style={{ color: 'var(--rm-chart-sky)' }} /> },
-    { label: 'Speed', value: formatMph(status?.speed_mph), icon: <Gauge className="h-3.5 w-3.5" style={{ color: 'var(--rm-chart-sky)' }} /> },
-    { label: 'Software', value: formatSoftware(status), icon: <Cpu className="h-3.5 w-3.5" style={{ color: 'var(--rm-status-positive)' }} /> },
-  ];
+  const stats = resolveOverviewStatIds(statIds).map((id) => ({ id, ...presentOverviewStat(id, status, statData) }));
   const freshnessLabel = status?.telemetry_stale
     ? 'Telemetry stale'
     : status?.last_updated
@@ -247,7 +254,7 @@ export function CurrentVehicleStatePanel({
         <div data-testid="overview-stats" className="grid auto-rows-fr gap-2 @min-[34rem]/overview:gap-1.5 @min-[58rem]/overview:gap-2">
           {stats.map((stat) => (
             <div
-              key={stat.label}
+              key={stat.id}
               className="flex min-h-10 min-w-0 items-center justify-between gap-3 rounded-xl border border-border bg-bg-surface px-3 py-2 text-sm @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:flex-col @min-[34rem]/overview:items-start @min-[34rem]/overview:justify-center @min-[34rem]/overview:gap-0.5 @min-[34rem]/overview:px-2.5 @min-[34rem]/overview:py-1.5 @min-[58rem]/overview:min-h-10 @min-[58rem]/overview:flex-row @min-[58rem]/overview:items-center @min-[58rem]/overview:justify-between @min-[58rem]/overview:gap-3 @min-[58rem]/overview:px-3 @min-[58rem]/overview:py-2"
             >
               <span className="inline-flex min-w-0 max-w-full items-center gap-2 truncate text-fg-tertiary @min-[34rem]/overview:gap-1.5 @min-[34rem]/overview:text-[11px] @min-[58rem]/overview:gap-2 @min-[58rem]/overview:text-sm">
@@ -540,30 +547,8 @@ function isCharging(status: VehicleStatus | null | undefined) {
   return isVehicleCharging(status);
 }
 
-function renderDriverMode(driveMode: string | null | undefined, gearStatus: string | null | undefined) {
-  const rawValue = driveMode ?? gearStatus;
-  if (!rawValue) return '-';
-
-  return formatDriveMode(rawValue);
-}
-
-function formatSoftware(status: VehicleStatus | null | undefined) {
-  const otaStatus = status?.ota_status ?? status?.software_update_status ?? status?.ota_current_status;
-  const available = status?.ota_available_version;
-  const current = status?.ota_current_version;
-  if (!otaStatus && !available && !current) return '-';
-  if (!available || available === '0.0.0' || available === current) return 'Up to date';
-  if (otaStatus && !['idle', 'unknown'].includes(otaStatus.toLowerCase())) return prettify(otaStatus);
-  return `Available ${available}`;
-}
-
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
-}
-
-function prettify(value: string | null | undefined) {
-  if (!value) return '-';
-  return value.replace(/^chrgr_sts_/, '').replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function makeTireDisplay(psi: number | null | undefined, status: string | null | undefined, targetTirePressurePsi?: number | null) {
@@ -612,6 +597,6 @@ registerWidget({
   defaultSize: { w: 12, h: 7 },
   minSize: { w: 8, h: 6 },
   defaultOptions: {},
-  dataRequirements: () => ({ status: true }),
+  dataRequirements: (instance) => getOverviewStatRequirements(resolveOverviewStatIds(instance.options?.stats)),
   component: OverviewVehicleWidget,
 });

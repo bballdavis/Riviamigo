@@ -372,7 +372,15 @@ export interface ExternalConnectionCacheSummary {
 }
 
 export interface ExternalConnectionRecord {
-  id: 'rivian_account' | 'open_meteo' | 'nominatim' | 'basemap' | 'iconify' | 's3_backup';
+  id:
+    | 'rivian_account'
+    | 'open_meteo'
+    | 'nominatim'
+    | 'basemap'
+    | 'iconify'
+    | 'fuel_prices'
+    | 'vehicle_lookup'
+    | 's3_backup';
   name: string;
   purpose: string;
   data_shared: string[];
@@ -1320,6 +1328,8 @@ export interface UserPreferencesResponse {
   units: UnitPreferences;
   theme: ThemePreferences;
   map_style: MapStylePreference;
+  /** Whether the user shows the Ownership dashboard; missing on older servers means shown. */
+  ownership_enabled?: boolean;
 }
 
 export type DashboardChartFavorites = Record<string, string>;
@@ -1688,4 +1698,139 @@ export interface RivianStewardshipResponse {
   raw_events_retained: number;
   totals_24h: RivianStewardshipTotals;
   vehicles: RivianStewardshipVehicle[];
+}
+
+// ── Ownership ───────────────────────────────────────────────────────────────
+
+export type OwnershipPowertrain = 'ev' | 'hybrid' | 'gas';
+
+/** Maintenance and running-cost assumptions. Intervals are miles. */
+/** Which cost-breakdown column a maintenance item counts toward. */
+export type OwnershipMaintenanceCategory = 'oil' | 'brakes' | 'tires' | 'service';
+
+/** One scheduled maintenance item, due by mileage, time, or whichever comes first. */
+export interface OwnershipMaintenanceItem {
+  id: string;
+  label: string;
+  category: OwnershipMaintenanceCategory;
+  interval_mi: number | null;
+  interval_months: number | null;
+  cost_usd: number;
+}
+
+export interface OwnershipCostAssumptions {
+  /** Share of value kept each year, compounded. */
+  annual_retention: number;
+  insurance_monthly_usd: number;
+  maintenance: OwnershipMaintenanceItem[];
+}
+
+export interface OwnershipReferenceVehicle extends OwnershipCostAssumptions {
+  id: string;
+  label: string;
+  powertrain: OwnershipPowertrain;
+  price_usd: number;
+  mpg: number | null;
+  kwh_per_mi: number | null;
+  premium_fuel: boolean;
+  default_enabled: boolean;
+}
+
+export interface OwnershipCustomVehicle {
+  id: string;
+  label: string;
+  powertrain: OwnershipPowertrain;
+  price_usd: number;
+  mpg: number | null;
+  kwh_per_mi: number | null;
+  premium_fuel: boolean;
+}
+
+export interface OwnershipComparisons {
+  /** Null until the selection is changed: each reference vehicle's default applies. */
+  enabled: string[] | null;
+  custom: OwnershipCustomVehicle[];
+}
+
+export interface OwnershipSettings {
+  purchase_price_usd: number | null;
+  /** Calendar date, YYYY-MM-DD. */
+  purchase_date: string | null;
+  resale_value_usd: number | null;
+  insurance_monthly_usd: number | null;
+  tire_set_cost_usd: number | null;
+  gas_price_usd_per_gallon: number | null;
+  /** Years of ownership the Projected view covers, from the purchase date; null uses 5. */
+  projection_years: number | null;
+  comparisons: OwnershipComparisons;
+  /**
+   * Edited maintenance schedules keyed by vehicle: 'own' for the tracked
+   * vehicle, otherwise a comparison vehicle's id. Missing means built-in.
+   */
+  maintenance?: Record<string, OwnershipMaintenanceItem[]>;
+}
+
+export interface OwnershipUsageMonth {
+  /** First day of the UTC calendar month, YYYY-MM-DD. */
+  month: string;
+  miles: number;
+  drive_energy_kwh: number;
+  charged_kwh: number;
+  /** The part of `charged_kwh` from sessions that have a cost. */
+  priced_kwh: number;
+  /** DC fast charging, a subset of the totals; priced apart from home charging. */
+  fast_kwh: number;
+  fast_priced_kwh: number;
+  fast_cost_usd: number;
+  charging_cost_usd: number;
+}
+
+export interface OwnershipUsage {
+  months: OwnershipUsageMonth[];
+  tracked_from: string | null;
+  tracked_to: string | null;
+  odometer_mi: number | null;
+}
+
+export interface OwnershipFuelPriceMonth {
+  month: string;
+  regular_usd: number | null;
+  premium_usd: number | null;
+}
+
+export interface OwnershipFuelPrices {
+  connection_enabled: boolean;
+  months: OwnershipFuelPriceMonth[];
+  last_updated_at: string | null;
+  refresh_failed: boolean;
+}
+
+export interface OwnershipSettingsResponse {
+  vehicle_id: string;
+  can_edit: boolean;
+  settings: OwnershipSettings;
+}
+
+export interface OwnershipResponse extends OwnershipSettingsResponse {
+  usage: OwnershipUsage;
+  fuel_prices: OwnershipFuelPrices;
+  vehicle_lookup_enabled: boolean;
+  reference_vehicles: OwnershipReferenceVehicle[];
+  class_defaults: Record<OwnershipPowertrain, OwnershipCostAssumptions>;
+  own_defaults: OwnershipCostAssumptions;
+}
+
+export interface OwnershipLookupOption {
+  text: string;
+  value: string;
+}
+
+export interface OwnershipLookupVehicle {
+  epa_id: string;
+  label: string;
+  powertrain: OwnershipPowertrain;
+  mpg: number | null;
+  kwh_per_mi: number | null;
+  premium_fuel: boolean;
+  fuel_description: string;
 }

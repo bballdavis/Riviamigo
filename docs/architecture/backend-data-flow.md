@@ -48,7 +48,7 @@ running a refresh every five minutes. Do not stretch this policy to 12 hours or
 daily: doing so makes dashboard reads carry an increasingly large raw-data
 tail. `odometer_daily` has a separate hourly, materialized-only policy.
 
-Optional outbound services are governed by `external_connection_settings`, not environment variables. Weather and Nominatim execute on the server. Basemap and Iconify browser requests terminate at authenticated same-origin proxy routes. Custom endpoints are validated before storage, secrets are age-encrypted and write-only, and disabling a provider is enforced at the shared service seam.
+Optional outbound services are governed by `external_connection_settings`, not environment variables. Weather and Nominatim execute on the server. Basemap and Iconify browser requests terminate at authenticated same-origin proxy routes. Ownership fuel prices are fetched by the server into `fuel_price_months` when the Ownership endpoint is read and the stored series is more than a day old; vehicle lookup is an authenticated proxy to fueleconomy.gov. The Ownership endpoint returns monthly usage, stored prices, and cost assumptions, and the web client builds the cost ledger from them. Custom endpoints are validated before storage, secrets are age-encrypted and write-only, and disabling a provider is enforced at the shared service seam.
 
 Parallax collection runs as an integrated, isolated Tokio acquisition subsystem inside each production
 vehicle worker. It opens its own allowlisted GraphQL WebSocket and writes normalized,

@@ -16,6 +16,7 @@ export const settingsRoute = createRoute({
         'units',
         'places',
         'charging',
+        'ownership',
         'external',
         'api',
         'jobs',
