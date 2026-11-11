@@ -38,6 +38,7 @@ import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
 import { useSettingsDraft } from '../../features/settings/drafts/SettingsDraftProvider';
 import { useStagedValue } from '../../features/settings/drafts/useStagedValue';
 import { saveFailure } from '../../features/settings/drafts/saveFailure';
+import { SettingsConfirmationDialog, type SettingsConfirmation } from '../../features/settings/SettingsConfirmationDialog';
 import {
   backupValidationError,
   buildDraft,
@@ -289,6 +290,7 @@ export function BackupSection() {
     BackupOverview['artifacts'][number] | null
   >(null);
   const [pendingRestorePlan, setPendingRestorePlan] = React.useState<RestorePlan | null>(null);
+  const [deleteImportConfirmation, setDeleteImportConfirmation] = React.useState<SettingsConfirmation | null>(null);
   const [restoreConfirmation, setRestoreConfirmation] = React.useState('');
   const [uploadProgress, setUploadProgress] = React.useState<number | null>(null);
   const [activeRestore, setActiveRestore] = React.useState<{
@@ -1124,13 +1126,12 @@ export function BackupSection() {
                             }
                             onClick={(event) => {
                               event.stopPropagation();
-                              if (
-                                window.confirm(
-                                  `Delete imported recovery package "${artifact.file_name}"?`
-                                )
-                              ) {
-                                deleteUploadedArtifact.mutate(artifact.id);
-                              }
+                              setDeleteImportConfirmation({
+                                title: `Delete imported recovery package "${artifact.file_name}"?`,
+                                description: 'The uploaded file is removed from this server.',
+                                confirmLabel: 'Delete package',
+                                run: () => deleteUploadedArtifact.mutateAsync(artifact.id),
+                              });
                             }}
                           />
                         )}
@@ -1253,6 +1254,13 @@ export function BackupSection() {
           )}
         </CardContent>
       </Card>
+
+      {deleteImportConfirmation ? (
+        <SettingsConfirmationDialog
+          confirmation={deleteImportConfirmation}
+          onClose={() => setDeleteImportConfirmation(null)}
+        />
+      ) : null}
 
       {pendingRestoreArtifact && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-page/80 px-4 backdrop-blur-sm">
