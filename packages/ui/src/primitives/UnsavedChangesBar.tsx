@@ -38,7 +38,10 @@ export function UnsavedChangesBar({
       role="region"
       aria-label="Unsaved changes"
       className={cn(
-        'fixed inset-x-3 bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-40 mx-auto max-w-xl',
+        // Centered in the content area: layouts with a side navigation publish
+        // its width as --rm-content-inset-left so the bar never covers it.
+        'fixed left-3 right-3 bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-40 mx-auto max-w-xl',
+        'lg:left-[calc(var(--rm-content-inset-left,0px)+0.75rem)]',
         'rounded-xl border border-accent/40 bg-bg-surface/95 px-4 py-3 shadow-lg backdrop-blur-md',
         className,
       )}

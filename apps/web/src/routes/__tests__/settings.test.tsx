@@ -1203,7 +1203,7 @@ describe('Settings page', () => {
     renderSettings();
     fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
     fireEvent.change(screen.getByDisplayValue('48'), { target: { value: '46' } });
-    expect(screen.getByText('You have unsaved changes')).toBeInTheDocument();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
     expect(hooks.api.updateVehicleSettings).not.toHaveBeenCalled();
     saveUnsavedChanges();
 
@@ -1331,7 +1331,7 @@ describe('Settings page', () => {
     expect(screen.getByLabelText('Battery pack')).toHaveValue('r2');
     expect(screen.queryByText(/matches a Gen \d pack/)).not.toBeInTheDocument();
     // The displayed default is not persisted until the editor has an edit to save.
-    expect(screen.queryByText('You have unsaved changes')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Target Tire Pressure'), { target: { value: '47' } });
     saveUnsavedChanges();
 
@@ -1425,12 +1425,12 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
     fireEvent.change(screen.getByLabelText('Vehicle Name'), { target: { value: 'Renamed Truck' } });
 
-    expect(screen.getByText('You have unsaved changes')).toBeInTheDocument();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
     expect(hooks.api.updateVehicleName).not.toHaveBeenCalled();
 
     discardUnsavedChanges();
 
-    expect(screen.queryByText('You have unsaved changes')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Vehicle Name')).toHaveValue('Adventure Truck');
     expect(hooks.api.updateVehicleName).not.toHaveBeenCalled();
     expect(hooks.api.updateVehicleSettings).not.toHaveBeenCalled();
@@ -1458,7 +1458,7 @@ describe('Settings page', () => {
     await waitFor(() => {
       expect(screen.queryByLabelText('Vehicle Name')).not.toBeInTheDocument();
     });
-    expect(screen.queryByText('You have unsaved changes')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
   });
 
   it('shows an inline error and keeps the bar open when the vehicle name is blank', async () => {
@@ -1473,7 +1473,7 @@ describe('Settings page', () => {
     expect(screen.getByPlaceholderText('Vehicle name').closest('label')).toHaveTextContent('Enter a vehicle name.');
     expect(hooks.api.updateVehicleSettings).not.toHaveBeenCalled();
     expect(hooks.api.updateVehicleName).not.toHaveBeenCalled();
-    expect(screen.getByText('You have unsaved changes')).toBeInTheDocument();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
   });
 
   it('keeps the editor open with the API message when the battery save is rejected', async () => {
@@ -1491,7 +1491,7 @@ describe('Settings page', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Battery capacity is outside the supported range.');
     expect(screen.getByLabelText('Target Tire Pressure')).toHaveValue(46);
-    expect(screen.getByText('You have unsaved changes')).toBeInTheDocument();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
     expect(hooks.api.updateVehicleName).not.toHaveBeenCalled();
   });
 
@@ -1512,7 +1512,7 @@ describe('Settings page', () => {
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Discard' }));
 
     expect(screen.queryByLabelText('Target Tire Pressure')).not.toBeInTheDocument();
-    expect(screen.queryByText('You have unsaved changes')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
     expect(hooks.api.updateVehicleSettings).not.toHaveBeenCalled();
   });
 
@@ -1556,7 +1556,7 @@ describe('Settings page', () => {
     clickSettingsSection('Units');
     fireEvent.click(screen.getByRole('button', { name: /^Metric/ }));
 
-    expect(screen.getByText('You have unsaved changes')).toBeInTheDocument();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Metric/ })).toHaveTextContent('Selected');
     expect(hooks.api.updateUnitPreferences).not.toHaveBeenCalled();
 
@@ -1575,7 +1575,7 @@ describe('Settings page', () => {
       });
     });
     await waitFor(() => {
-      expect(screen.queryByText('You have unsaved changes')).not.toBeInTheDocument();
+      expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
     });
   });
 
@@ -1587,7 +1587,7 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Metric/ }));
     discardUnsavedChanges();
 
-    expect(screen.queryByText('You have unsaved changes')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Imperial/ })).toHaveTextContent('Selected');
     expect(hooks.api.updateUnitPreferences).not.toHaveBeenCalled();
   });
@@ -1605,7 +1605,7 @@ describe('Settings page', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Units could not be saved. Try again.');
     expect(hooks.api.updateUnitPreferences).toHaveBeenCalledWith(expect.objectContaining({ mode: 'custom', speed_unit: 'kmh' }));
     expect(screen.getByLabelText('Speed unit')).toHaveValue('kmh');
-    expect(screen.getByText('You have unsaved changes')).toBeInTheDocument();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
   });
 
   it('asks before leaving the Units section with unsaved changes', async () => {
@@ -1643,7 +1643,7 @@ describe('Settings page', () => {
     });
     fireEvent.change(screen.getByLabelText('Application time zone'), { target: { value: 'America/Denver' } });
 
-    expect(screen.getByText('You have unsaved changes')).toBeInTheDocument();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
     expect(hooks.api.updateAppTimezone).not.toHaveBeenCalled();
 
     saveUnsavedChanges();

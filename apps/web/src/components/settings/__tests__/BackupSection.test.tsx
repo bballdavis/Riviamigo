@@ -30,7 +30,7 @@ vi.mock('@riviamigo/hooks', () => ({
 import { SettingsDraftProvider } from '../../../features/settings/drafts/SettingsDraftProvider';
 import { BackupSection } from '../BackupSection';
 
-const UNSAVED = 'You have unsaved changes';
+const UNSAVED = 'Unsaved changes';
 
 function buildOverview(settingsPatch: Partial<BackupOverview['settings']> = {}): BackupOverview {
   return {
