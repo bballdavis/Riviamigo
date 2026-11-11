@@ -28,6 +28,11 @@ While artwork is loading, unavailable, or being repaired, supported models show
 a packaged model-specific image. These fallback images have a fixed paint color,
 so they may not match your vehicle's actual color.
 
+Newly delivered vehicles and preorders may not have vehicle-specific artwork in
+Rivian yet. In that case the vehicle keeps the packaged image, its artwork
+status explains that Rivian has no artwork for it yet, and Riviamigo checks
+again about every 12 hours without reporting a Rivian account error.
+
 ## Exploring demo vehicles
 
 Open **Settings > Vehicles**, choose **Demo Vehicle**, and select a model. Creating a model that already exists returns the same vehicle without changing its name, sharing, preferences, or dashboards. Demo vehicles are marked **Demo data** and use the same dashboards as connected vehicles, but remote commands, schedules, Rivian login repair, and remote artwork repair are not simulated.
