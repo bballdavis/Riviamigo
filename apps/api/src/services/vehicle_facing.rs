@@ -97,14 +97,15 @@ fn normalize(degrees: f64) -> Option<f64> {
     degrees.is_finite().then(|| degrees.rem_euclid(360.0))
 }
 
-/// Loads the evidence for [`facing_deg`] from the last 30 days of telemetry:
-/// up to [`MAX_SHIFTS`] recent motion-gear shifts, and for each the bearing
-/// at the shift, whether the course later turned before the next shift, and
-/// (for drive) whether a moving speed followed within 15 minutes. Gear values
-/// are compared case-insensitively, as everywhere else in ingestion.
-pub async fn load_facing_evidence(pool: &PgPool, vehicle_id: Uuid) -> sqlx::Result<FacingEvidence> {
-    let shifts = sqlx::query_as::<_, GearShift>(
-        r#"WITH shifts AS (
+/// The evidence query. `$1` vehicle, `$2` shift limit, `$3` course turn in
+/// degrees, `$4` moving speed in mph. The shift list and every bearing probe
+/// are index range scans on the `(vehicle_id, ts DESC)` partial indexes from
+/// migration 0040, whose predicates these filters repeat exactly (a test
+/// keeps them in step); the turn
+/// probe stops at the first turned bearing but reads every bearing up to the
+/// next shift when none turned, and the speed probe reads at most 15 minutes
+/// of rows after a drive shift.
+const FACING_EVIDENCE_SQL: &str = r#"WITH shifts AS (
                SELECT ts, lower(gear_status) AS gear
                FROM timeseries.telemetry
                WHERE vehicle_id = $1
@@ -158,14 +159,21 @@ pub async fn load_facing_evidence(pool: &PgPool, vehicle_id: Uuid) -> sqlx::Resu
                  AND t.speed_mph >= $4
                LIMIT 1
            ) moving ON TRUE
-           ORDER BY p.ts DESC"#,
-    )
-    .bind(vehicle_id)
-    .bind(MAX_SHIFTS)
-    .bind(COURSE_TURN_DEG)
-    .bind(MOVING_SPEED_MPH)
-    .fetch_all(pool)
-    .await?;
+           ORDER BY p.ts DESC"#;
+
+/// Loads the evidence for [`facing_deg`] from the last 30 days of telemetry:
+/// up to [`MAX_SHIFTS`] recent motion-gear shifts, and for each the bearing
+/// at the shift, whether the course later turned before the next shift, and
+/// (for drive) whether a moving speed followed within 15 minutes. Gear values
+/// are compared case-insensitively, as everywhere else in ingestion.
+pub async fn load_facing_evidence(pool: &PgPool, vehicle_id: Uuid) -> sqlx::Result<FacingEvidence> {
+    let shifts = sqlx::query_as::<_, GearShift>(FACING_EVIDENCE_SQL)
+        .bind(vehicle_id)
+        .bind(MAX_SHIFTS)
+        .bind(COURSE_TURN_DEG)
+        .bind(MOVING_SPEED_MPH)
+        .fetch_all(pool)
+        .await?;
     Ok(FacingEvidence { shifts })
 }
 
@@ -280,6 +288,26 @@ mod tests {
             shift("REVERSE", 41, true, false),
         ]);
         assert_eq!(facing_deg(Some(0.0), &backed_in), Some(180.0));
+    }
+
+    #[test]
+    fn the_query_uses_the_exact_partial_index_predicates() {
+        const MIGRATION: &str = include_str!("../../migrations/0040_telemetry_facing_indexes.sql");
+        for predicate in [
+            "lower(gear_status) IN ('drive', 'reverse')",
+            "heading_deg IS NOT NULL",
+        ] {
+            assert!(
+                FACING_EVIDENCE_SQL.contains(predicate),
+                "query lacks `{predicate}`"
+            );
+            assert!(
+                MIGRATION.contains(&format!("WHERE {predicate};")),
+                "migration 0040 lacks the `{predicate}` index"
+            );
+        }
+        // Gear matching is case-insensitive in SQL as it is in Rust.
+        assert!(!FACING_EVIDENCE_SQL.contains("AND gear_status IN"));
     }
 
     #[test]
