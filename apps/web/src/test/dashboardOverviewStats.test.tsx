@@ -14,6 +14,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
   return {
     ...actual,
     useUpdateOverviewView: () => ({ mutate: vi.fn() }),
+    useUpdateOverviewMapExpanded: () => ({ mutate: vi.fn() }),
     useAuth: () => ({ defaultVehicleId: 'vehicle-1' }),
     useMetricCatalog: () => ({ data: [] }),
     useBatteryHealth: () => ({ data: { battery_health_pct: 93, usable_now_kwh: 120 } }),

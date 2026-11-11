@@ -2398,6 +2398,108 @@ async fn overview_view_preference_is_saved_per_user() {
 }
 
 #[tokio::test]
+async fn overview_map_expansion_is_saved_per_user() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "overview-expanded@example.com").await;
+    // Registration closes after the first account; add the second directly.
+    let other = insert_user_and_login(
+        &app,
+        "overview-expanded-other@example.com",
+        "correctpassword123",
+    )
+    .await;
+    let expanded = |body: &Value| body["overview_map_expanded"].as_bool();
+    let preferences = |token: String| {
+        let app = &app;
+        async move {
+            app.request(
+                Method::GET,
+                "/v1/auth/preferences",
+                None,
+                Some(&token),
+                None,
+            )
+            .await
+        }
+    };
+
+    let defaults = preferences(token.clone()).await;
+    assert_eq!(
+        defaults.status,
+        StatusCode::OK,
+        "response: {}",
+        defaults.body
+    );
+    assert_eq!(expanded(&defaults.body), Some(false));
+
+    // Saving the view first proves the two overview choices are independent.
+    let view = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences/overview-view",
+            Some(json!({ "overview_view": "map" })),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(view.status, StatusCode::OK, "response: {}", view.body);
+
+    let saved = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences/overview-map-expanded",
+            Some(json!({ "overview_map_expanded": true })),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "response: {}", saved.body);
+    assert_eq!(expanded(&saved.body), Some(true));
+
+    let reread = preferences(token.clone()).await;
+    assert_eq!(expanded(&reread.body), Some(true));
+    assert_eq!(reread.body["overview_view"].as_str(), Some("map"));
+
+    // Another user's choice is untouched.
+    let others = preferences(other).await;
+    assert_eq!(expanded(&others.body), Some(false));
+
+    let invalid = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences/overview-map-expanded",
+            Some(json!({ "overview_map_expanded": "yes" })),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        invalid.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "response: {}",
+        invalid.body
+    );
+    assert_eq!(expanded(&preferences(token.clone()).await.body), Some(true));
+
+    let collapsed = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences/overview-map-expanded",
+            Some(json!({ "overview_map_expanded": false })),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        collapsed.status,
+        StatusCode::OK,
+        "response: {}",
+        collapsed.body
+    );
+    assert_eq!(expanded(&preferences(token).await.body), Some(false));
+}
+
+#[tokio::test]
 async fn trip_track_omits_zero_zero_coordinates() {
     let app = TestApp::new().await;
     let token = register_and_login(&app, "trip-track-zero@example.com").await;

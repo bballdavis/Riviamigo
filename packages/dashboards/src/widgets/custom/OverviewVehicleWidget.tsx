@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Battery, Car, CheckCircle2, CircleAlert, Gauge, LocateFixed, Lock, Maximize2, Minimize2, Package, PackageOpen, RadioTower, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
-import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useUpdateOverviewView, useUserPreferences, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
+import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useUpdateOverviewMapExpanded, useUpdateOverviewView, useUserPreferences, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
 import { formatMiles } from '@riviamigo/ui/lib/utils';
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI, formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
 import { FrunkIcon, LiftgateIcon, Tooltip } from '@riviamigo/ui/primitives';
@@ -76,15 +76,23 @@ function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ct
   const statIds = resolveOverviewStatIds(instance.options?.stats);
   const statData = useOverviewStatData(statIds, vehicleId ?? null);
   useUnitPreferencesVersion();
-  // The cluster/map choice is saved to the account so it follows the user
-  // across sessions and devices. A local copy keeps the toggle instant while
-  // the save is in flight or if it fails.
-  const savedView = useUserPreferences().data?.overview_view === 'map' ? 'map' : 'cluster';
+  // The cluster/map choice and the map's expansion are saved to the account so
+  // they follow the user across sessions and devices. Local copies keep the
+  // controls instant while a save is in flight or if it fails.
+  const preferences = useUserPreferences().data;
+  const savedView = preferences?.overview_view === 'map' ? 'map' : 'cluster';
+  const savedMapExpanded = preferences?.overview_map_expanded === true;
   const updateOverviewView = useUpdateOverviewView();
+  const updateOverviewMapExpanded = useUpdateOverviewMapExpanded();
   const [chosenView, setChosenView] = useState<OverviewView | null>(null);
+  const [chosenMapExpanded, setChosenMapExpanded] = useState<boolean | null>(null);
   const changeView = (next: OverviewView) => {
     setChosenView(next);
     updateOverviewView.mutate(next);
+  };
+  const changeMapExpanded = (next: boolean) => {
+    setChosenMapExpanded(next);
+    updateOverviewMapExpanded.mutate(next);
   };
 
   return (
@@ -100,6 +108,8 @@ function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ct
       mapOptions={resolveOverviewMapOptions(instance.options)}
       view={chosenView ?? savedView}
       onViewChange={changeView}
+      mapExpanded={chosenMapExpanded ?? savedMapExpanded}
+      onMapExpandedChange={changeMapExpanded}
     />
   );
 }
@@ -116,6 +126,8 @@ export function CurrentVehicleStatePanel({
   mapOptions,
   view: controlledView,
   onViewChange,
+  mapExpanded: controlledMapExpanded,
+  onMapExpandedChange,
 }: {
   status: VehicleStatus | null | undefined;
   images?: VehicleImages | null | undefined;
@@ -132,6 +144,9 @@ export function CurrentVehicleStatePanel({
   /** Controlled cluster/map view (the widget saves it per user); uncontrolled starts on the cluster. */
   view?: OverviewView | undefined;
   onViewChange?: ((view: OverviewView) => void) | undefined;
+  /** Controlled map expansion (the widget saves it per user); uncontrolled starts collapsed. */
+  mapExpanded?: boolean | undefined;
+  onMapExpandedChange?: ((expanded: boolean) => void) | undefined;
 }) {
   const [uncontrolledView, setUncontrolledView] = useState<OverviewView>('cluster');
   const view = controlledView ?? uncontrolledView;
@@ -141,9 +156,14 @@ export function CurrentVehicleStatePanel({
   };
   const mapAvailable = mapOptions?.enabled === true;
   const showMap = mapAvailable && view === 'map';
-  const [mapExpandedPreference, setMapExpanded] = useState(false);
-  // Expansion only applies while the map is showing; switching back to the
-  // cluster restores the normal three-column layout.
+  const [uncontrolledMapExpanded, setUncontrolledMapExpanded] = useState(false);
+  const mapExpandedPreference = controlledMapExpanded ?? uncontrolledMapExpanded;
+  const setMapExpanded = (next: boolean) => {
+    if (onMapExpandedChange) onMapExpandedChange(next);
+    else setUncontrolledMapExpanded(next);
+  };
+  // Expansion only applies while the map is showing; the cluster always uses
+  // the normal three-column layout, and the map reopens at the saved size.
   const mapExpanded = showMap && mapExpandedPreference;
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const resolvedOverhead = resolveVehicleArtwork(images, vehicleModel, 'overview');
@@ -321,7 +341,7 @@ export function CurrentVehicleStatePanel({
               aria-label={mapExpanded ? 'Collapse map' : 'Expand map'}
               aria-pressed={mapExpanded}
               title={mapExpanded ? 'Collapse map' : 'Expand map'}
-              onClick={() => setMapExpanded((expanded) => !expanded)}
+              onClick={() => setMapExpanded(!mapExpanded)}
               className="absolute right-0 top-0 z-20 inline-flex h-11 w-11 items-center justify-center rounded-bl-xl border-b border-l border-border/60 bg-bg-elevated/50 text-fg-secondary backdrop-blur-sm transition-colors hover:bg-bg-elevated/85 hover:text-accent focus-visible:bg-bg-elevated/85 focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent @min-[34rem]/overview:h-8 @min-[34rem]/overview:w-8 @min-[34rem]/overview:rounded-bl-lg"
             >
               {mapExpanded ? <Minimize2 className="h-4 w-4" aria-hidden="true" /> : <Maximize2 className="h-4 w-4" aria-hidden="true" />}

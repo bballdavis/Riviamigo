@@ -27,12 +27,25 @@ import {
   resolveVehicleArtwork,
 } from '@riviamigo/hooks';
 
-afterEach(cleanup);
+const queryClients: QueryClient[] = [];
+
+function createQueryClient() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  queryClients.push(queryClient);
+  return queryClient;
+}
+
+// The protected-artwork queries reject asynchronously, and React Query
+// delivers results on a timer. Unmount, drop the queries, and let that timer
+// run while the DOM still exists, so no update lands after teardown.
+afterEach(async () => {
+  cleanup();
+  for (const queryClient of queryClients.splice(0)) queryClient.clear();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
 
 function renderArtwork(node: React.ReactNode) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  const queryClient = createQueryClient();
   return render(
     <QueryClientProvider client={queryClient}>{node}</QueryClientProvider>,
   );
@@ -137,7 +150,7 @@ describe('vehicle artwork fallback contract', () => {
       fallbackSource: '/vehicle-images/fallbacks/r1s/overview.webp',
       alt: 'Recovering Rivian',
     };
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryClient = createQueryClient();
     const { rerender } = render(
       <QueryClientProvider client={queryClient}>
         <AuthenticatedVehicleArtwork {...props} source="/first-api-artwork.webp" />
