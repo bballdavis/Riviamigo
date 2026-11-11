@@ -25,7 +25,7 @@ function renderSection() {
     ),
   };
 }
-const UNSAVED = 'You have unsaved changes';
+const UNSAVED = 'Unsaved changes';
 beforeEach(() => { vi.clearAllMocks(); getSettings.mockResolvedValue(response); updateSettings.mockResolvedValue(response); testSettings.mockResolvedValue({ valid: true }); });
 
 describe('AuthenticationSection', () => {

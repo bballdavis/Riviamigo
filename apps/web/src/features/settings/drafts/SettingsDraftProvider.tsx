@@ -137,7 +137,7 @@ export function SettingsDraftProvider({ children }: { children: React.ReactNode 
         <>
           <UnsavedChangesBarSpacer />
           <UnsavedChangesBar
-            message="You have unsaved changes"
+            message="Unsaved changes"
             error={error}
             saving={saving}
             onSave={() => { void saveAll(); }}
