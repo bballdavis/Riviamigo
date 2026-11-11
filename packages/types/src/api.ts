@@ -1330,7 +1330,11 @@ export interface UserPreferencesResponse {
   map_style: MapStylePreference;
   /** Whether the user shows the Ownership dashboard; missing on older servers means shown. */
   ownership_enabled?: boolean;
+  /** Vehicle Overview view last chosen; missing on older servers means the cluster. */
+  overview_view?: OverviewViewPreference;
 }
+
+export type OverviewViewPreference = 'cluster' | 'map';
 
 export type DashboardChartFavorites = Record<string, string>;
 
