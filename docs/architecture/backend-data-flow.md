@@ -25,21 +25,19 @@ feed unhealthy. Older battery, range, or charging timestamps are reported as
 field freshness diagnostics instead; parked vehicles are not expected to emit
 continuous trip or charging telemetry.
 
-Vehicle enrollment derives model year from Rivian's supported account `vin`
-field and persists it in `riviamigo.vehicles.model_year`; `GET /v1/vehicles`
-exposes it as `year`, falling back locally to the saved VIN for older records.
+Model year is a pure function of the VIN, so Riviamigo does not store it.
+`GET /v1/vehicles` decodes `year` from `riviamigo.vehicles.vin` on every read.
 The decoder validates the 17-character VIN alphabet and uses its alphabetic
-seventh position to disambiguate the 2010-2039 tenth-position model-year codes.
-Discovery and enrichment request the supported account `vin` field rather than
-depending on `vehicle.modelYear`; an unsupported GraphQL selection can reject
-the entire account query. Credential renewal and
-startup enrichment refresh the VIN and year without clearing known values when
-Rivian omits them. Missing usable VIN metadata is logged without including VINs.
-The forward-only model-year migration adds storage only and never rewrites saved
-battery capacity. Settings uses the year before battery-capacity
-presets when selecting R1 generation (2025 onward is Gen 2), preserving an
-incompatible saved capacity as a custom value rather than silently changing the
-battery-health baseline.
+seventh position to disambiguate the 2010-2039 tenth-position model-year codes;
+a missing or undecodable VIN yields `year: null`. Enrollment saves the VIN from
+Rivian's account `vin` field. Adding an already-enrolled vehicle, credential
+renewal, and startup enrichment refresh the saved VIN when Rivian reports a
+non-blank one and never clear a known VIN when Rivian omits it. Enrichment logs
+`vehicle model year unavailable` without the VIN when no decodable VIN is on
+record. Settings uses the year before battery-capacity presets when selecting
+R1 generation (2025 onward is Gen 2); generation detection does not apply to
+R2. An incompatible saved R1 capacity is preserved as a custom value with a
+non-blocking hint rather than silently changing the battery-health baseline.
 
 Telemetry is written to the `timeseries.telemetry` hypertable. The
 `telemetry_1min` continuous aggregate incrementally materializes the prior

@@ -26,19 +26,20 @@ require a project update.
 ## Vehicle generation and battery capacity
 
 In **Settings > Vehicles**, the R1 battery generation uses the vehicle's model
-year: 2025 and newer are Gen 2; earlier model years are Gen 1. Riviamigo derives
-the year from the VIN returned by Rivian's account query, rather than depending
-on a `vehicle.modelYear` GraphQL field. It saves the year when adding
-a vehicle and refreshes the VIN and year during collector startup, including
-for vehicles added before model-year storage was introduced.
+year: 2025 and newer are Gen 2; earlier model years are Gen 1. Riviamigo
+decodes the year from the vehicle's saved VIN each time Settings loads, so a
+vehicle with a valid VIN shows its year immediately after upgrading, without
+another Rivian request. R2 vehicles default to the R2 pack; model year does not
+select an R1 generation for them.
 
-After upgrading, a vehicle with an existing valid VIN can show its corrected
-year immediately when Settings loads, without another Rivian request. If the
-VIN is missing, let the collector connect successfully, then reload Settings.
-Removing and re-adding the vehicle is not necessary. If the year remains
-unavailable, check the app logs for `fetch_vehicle_enrichment failed` or
-`vehicle model year unavailable`; a connected telemetry stream alone does not
-prove that account metadata was fetched successfully.
+Riviamigo saves the VIN when you add a vehicle and refreshes it when you renew
+the Rivian connection or the collector starts, including for vehicles added
+before the VIN was captured. If the year is missing, let the collector connect
+successfully, then reload Settings. Removing and re-adding the vehicle is not
+necessary. If the year remains unavailable, check the app logs for
+`fetch_vehicle_enrichment failed` or `vehicle model year unavailable`; a
+connected telemetry stream alone does not prove that account metadata was
+fetched successfully.
 
 If the model year is unavailable, Riviamigo uses a generation hint in the model
 name or a matching saved battery-capacity preset, falling back to Gen 1 when
@@ -46,9 +47,10 @@ neither is available.
 
 A corrected generation does not overwrite your saved factory battery capacity.
 If that capacity matches only the other generation's presets, it appears as
-**Custom** under the corrected generation. Select the appropriate pack and save
-to correct a previously saved default. Model year identifies the generation,
-not whether the vehicle has a Standard, Large, or Max pack.
+**Custom** under the corrected generation, with a note that the saved capacity
+matches the other generation's pack. Select the appropriate pack and save to
+correct a previously saved default. Model year identifies the generation, not
+whether the vehicle has a Standard, Large, or Max pack.
 
 ## Estimated connection renewal
 
