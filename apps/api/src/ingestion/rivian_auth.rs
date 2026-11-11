@@ -485,6 +485,12 @@ pub async fn rivian_vehicle_images(
     let mut seen = std::collections::HashSet::new();
     let mut app_session_token = tokens.app_session_token.clone();
     let mut refreshed_app_session = false;
+    // An empty result is only authoritative when Rivian answered at least one
+    // style without GraphQL errors; otherwise report the failure so callers do
+    // not mistake a rejected session for "no artwork for this vehicle".
+    let mut answered_styles = 0usize;
+    let mut unauthenticated = false;
+    let mut last_error: Option<String> = None;
     // Matches home-assistant-rivian: cel art uses version 3, photo art uses version 2.
     for (style, version) in [("photo", "2"), ("cel", "3")] {
         let mut attempt = 0;
@@ -545,11 +551,14 @@ pub async fn rivian_vehicle_images(
                     error = %format_gql_error(&errors),
                     "rivian.vehicle_images.graphql_error"
                 );
+                unauthenticated |= has_unauthenticated_error(&errors);
+                last_error = Some(format_gql_error(&errors));
                 continue;
             }
         }
 
         if let Some(data) = status.data {
+            answered_styles += 1;
             let order = data.get_vehicle_order_mobile_images.unwrap_or_default();
             let vehicle = data.get_vehicle_mobile_images.unwrap_or_default();
             for (source, entries) in [("order", order), ("vehicle", vehicle)] {
@@ -576,6 +585,15 @@ pub async fn rivian_vehicle_images(
                 }
             }
         }
+    }
+
+    if answered_styles == 0 {
+        if unauthenticated {
+            return Err(RivianAuthError::InvalidCredentials);
+        }
+        return Err(RivianAuthError::UnexpectedResponse(
+            last_error.unwrap_or_else(|| "Rivian returned no vehicle image data".to_string()),
+        ));
     }
 
     tracing::info!(image_count = images.len(), "rivian.vehicle_images.fetched");
@@ -879,6 +897,24 @@ mod tests {
             .unwrap()
             .is_empty());
 
+        // GraphQL errors on every style are a failure, never "no artwork".
+        let broken = RivianTokenBundle {
+            user_session_token: "broken-user-session".into(),
+            ..tokens.clone()
+        };
+        assert!(matches!(
+            rivian_vehicle_images(&client, &broken, "vehicle-123").await,
+            Err(RivianAuthError::UnexpectedResponse(_))
+        ));
+        let expired = RivianTokenBundle {
+            user_session_token: "expired-user-session".into(),
+            ..tokens.clone()
+        };
+        assert!(matches!(
+            rivian_vehicle_images(&client, &expired, "vehicle-123").await,
+            Err(RivianAuthError::InvalidCredentials)
+        ));
+
         std::env::remove_var("RIVIAN_GRAPHQL_GATEWAY_URL");
     }
 
@@ -892,11 +928,31 @@ mod tests {
             .as_str()
             .unwrap_or("")
             .to_string();
+        let user_session = headers
+            .get("u-sess")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
         recorded.lock().unwrap().push(RecordedRequest {
             operation_name: operation_name.clone(),
             headers,
             body,
         });
+        if operation_name == "getVehicleImages" && user_session == "broken-user-session" {
+            return (
+                StatusCode::OK,
+                Json(json!({ "errors": [{ "message": "internal error" }] })),
+            );
+        }
+        if operation_name == "getVehicleImages" && user_session == "expired-user-session" {
+            return (
+                StatusCode::OK,
+                Json(json!({ "errors": [{
+                    "message": "Unauthenticated",
+                    "extensions": { "code": "UNAUTHENTICATED" }
+                }] })),
+            );
+        }
 
         let response = match operation_name.as_str() {
             "CreateCSRFToken" => json!({

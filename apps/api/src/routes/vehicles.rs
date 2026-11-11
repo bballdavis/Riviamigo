@@ -4145,6 +4145,17 @@ async fn mirror_vehicle_images(
         if !needs_mirror && !(force_remirror && is_remote) {
             continue;
         }
+        // Each download can take up to the client timeout, so keep an active
+        // repair's lease fresh; otherwise a long mirror pass could be taken
+        // over as stale and run twice.
+        let _ = sqlx::query(
+            "UPDATE riviamigo.vehicle_artwork_cache_state
+             SET last_repair_attempt_at = now()
+             WHERE vehicle_id = $1 AND status = 'repairing'",
+        )
+        .bind(vehicle_id)
+        .execute(pool)
+        .await;
         let overlays = overlay_entries_from_value(&row.overlays);
         match mirror_vehicle_image_assets(&client, config, vehicle_id, &row.url, &overlays).await {
             Ok(mirror_metadata) => {
@@ -4318,7 +4329,7 @@ async fn write_vehicle_artwork_cache_state<'e>(
               (vehicle_id, status, asset_count, ready_asset_count, attempts, next_attempt_at,
                last_repair_success_at, last_error, updated_at)
            VALUES ($1, $2, $3, $4,
-                   CASE WHEN $6::text IS NULL THEN 0 ELSE 1 END,
+                   CASE WHEN $6::text = 'repair_failed' THEN 1 ELSE 0 END,
                    now() + make_interval(secs => CASE $6::text
                      WHEN 'no_provider_artwork' THEN $8::double precision
                      WHEN 'repair_failed' THEN $7::double precision
@@ -4333,7 +4344,7 @@ async fn write_vehicle_artwork_cache_state<'e>(
              ready_asset_count = EXCLUDED.ready_asset_count,
              attempts = CASE
                WHEN EXCLUDED.status = 'ready' THEN 0
-               WHEN $6::text IS NOT NULL THEN s.attempts + 1
+               WHEN $6::text = 'repair_failed' THEN s.attempts + 1
                ELSE s.attempts
              END,
              next_attempt_at = CASE
@@ -6132,7 +6143,7 @@ mod tests {
             .await
             .unwrap();
         let (status, attempts, delay, last_error) = state(&mut tx, vehicle_id).await;
-        assert_eq!((status.as_str(), attempts, delay), ("failed", 1, 43_200));
+        assert_eq!((status.as_str(), attempts, delay), ("failed", 0, 43_200));
         assert_eq!(
             last_error.as_deref(),
             Some(super::ARTWORK_NO_PROVIDER_ARTWORK_ERROR)
