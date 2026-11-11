@@ -10,8 +10,8 @@ use openidconnect::{
         CoreTokenType,
     },
     AdditionalClaims, AsyncHttpClient, AuthType, AuthorizationCode, Client, ClientId, ClientSecret,
-    DiscoveryError, EmptyExtraTokenFields, HttpRequest, HttpResponse, IdTokenFields, IssuerUrl, Nonce,
-    OAuth2TokenResponse, PkceCodeVerifier, RedirectUrl, StandardErrorResponse,
+    DiscoveryError, EmptyExtraTokenFields, HttpRequest, HttpResponse, IdTokenFields, IssuerUrl,
+    Nonce, OAuth2TokenResponse, PkceCodeVerifier, RedirectUrl, StandardErrorResponse,
     StandardTokenResponse, SubjectIdentifier, UserInfoClaims,
 };
 use rand::{distributions::Alphanumeric, Rng};
@@ -344,6 +344,7 @@ async fn discover_with_issuer_variants(
 ) -> Result<CoreProviderMetadata, AppError> {
     let discovery_failed =
         || AppError::Validation("OIDC provider discovery or JWKS retrieval failed".into());
+    let mut last_mismatch = None;
     for candidate in issuer_variants(issuer) {
         let issuer_url = IssuerUrl::new(candidate)
             .map_err(|_| AppError::Validation("OIDC issuer is invalid".into()))?;
@@ -359,6 +360,7 @@ async fn discover_with_issuer_variants(
                     %reason,
                     "OIDC discovery issuer did not match this form; trying the next"
                 );
+                last_mismatch = Some(reason);
             }
             Err(error) => {
                 tracing::warn!(
@@ -375,6 +377,8 @@ async fn discover_with_issuer_variants(
         target = "auth.oidc",
         stage = "discovery",
         reason = "issuer_mismatch",
+        configured_issuer = %issuer,
+        detail = last_mismatch.as_deref().unwrap_or("unknown"),
         "OIDC provider discovery failed: the published issuer matches neither form of the configured issuer"
     );
     Err(discovery_failed())
@@ -613,8 +617,14 @@ mod tests {
             "https://auth.example/application/o/app".to_owned(),
             "https://auth.example/application/o/app/".to_owned(),
         ];
-        assert_eq!(issuer_variants("https://auth.example/application/o/app"), expected);
-        assert_eq!(issuer_variants(" https://auth.example/application/o/app/ "), expected);
+        assert_eq!(
+            issuer_variants("https://auth.example/application/o/app"),
+            expected
+        );
+        assert_eq!(
+            issuer_variants(" https://auth.example/application/o/app/ "),
+            expected
+        );
     }
 
     /// Authentik-shaped discovery: the published issuer ends in `/`. The
