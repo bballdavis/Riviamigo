@@ -2,6 +2,12 @@ import React from 'react';
 import { useChargingNetworkPreferences, useResolvedVehicleSelection, useUpdateChargingNetworkPreference, useVehicles } from '@riviamigo/hooks';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, EmptyState } from '@riviamigo/ui/primitives';
 import { AlertCircle, Zap } from 'lucide-react';
+import { useSettingsDraft } from '../../features/settings/drafts/SettingsDraftProvider';
+import { useStagedValue } from '../../features/settings/drafts/useStagedValue';
+
+type CostMode = 'automatic' | 'free';
+/** Staged cost mode keyed by network vendor. */
+type CostModes = Record<string, CostMode>;
 
 /** Vehicle-scoped charging policy. Only observed vendors are returned by the API. */
 export function ChargingSection() {
@@ -9,9 +15,46 @@ export function ChargingSection() {
   const { data: vehicles = [] } = useVehicles();
   const preferences = useChargingNetworkPreferences(effectiveVehicleId);
   const updatePreference = useUpdateChargingNetworkPreference(effectiveVehicleId);
-  const [savedNetwork, setSavedNetwork] = React.useState<string | null>(null);
   const role = vehicles.find((vehicle) => vehicle.id === effectiveVehicleId)?.membership_role ?? 'viewer';
   const canManage = role === 'owner' || role === 'manager';
+
+  const savedModes = React.useMemo<CostModes>(() => Object.fromEntries(
+    (preferences.data ?? []).map((preference) => [preference.network_vendor, preference.cost_mode]),
+  ), [preferences.data]);
+  const staged = useStagedValue<CostModes>(savedModes);
+  const setStagedModes = staged.setValue;
+  React.useEffect(() => {
+    // A vendor observed while the user is editing joins the staged map at its saved mode.
+    setStagedModes((current) => (
+      Object.keys(savedModes).every((vendor) => vendor in current) ? current : { ...savedModes, ...current }
+    ));
+  }, [savedModes, setStagedModes]);
+
+  const { saving } = useSettingsDraft('charging-network-policies', {
+    isDirty: staged.isDirty,
+    save: saveCostModes,
+    discard: staged.reset,
+  });
+
+  async function saveCostModes() {
+    const submitted = staged.value;
+    // Sent one vendor at a time, in the order the vendors are listed.
+    const changes = (preferences.data ?? []).flatMap((preference) => {
+      const next = submitted[preference.network_vendor];
+      return next !== undefined && next !== preference.cost_mode
+        ? [{ networkVendor: preference.network_vendor, costMode: next }]
+        : [];
+    });
+    for (const change of changes) {
+      try {
+        await updatePreference.mutateAsync(change);
+      } catch (error) {
+        const detail = error instanceof Error && error.message ? error.message : 'Charging policy could not be saved.';
+        throw new Error(`${detail} Try again.`, { cause: error });
+      }
+    }
+    staged.commit({ ...savedModes, ...submitted });
+  }
 
   if (!authReady || !vehicleSelectionReady) {
     return <Card><CardContent className="py-8 text-sm text-fg-tertiary">Loading charging preferences…</CardContent></Card>;
@@ -60,6 +103,7 @@ export function ChargingSection() {
           <div className="grid gap-3">
             {preferences.data?.map((preference) => {
               const pending = updatePreference.isPending && updatePreference.variables?.networkVendor === preference.network_vendor;
+              const selectedMode = staged.value[preference.network_vendor] ?? preference.cost_mode;
               return (
                 <article key={preference.network_vendor} className="grid gap-3 rounded-xl border border-border bg-bg-elevated/35 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
                   <div className="min-w-0">
@@ -72,16 +116,12 @@ export function ChargingSection() {
                         <button
                           key={costMode}
                           type="button"
-                          aria-pressed={preference.cost_mode === costMode}
-                          disabled={pending}
+                          aria-pressed={selectedMode === costMode}
+                          disabled={pending || saving}
                           onClick={() => {
-                            setSavedNetwork(null);
-                            updatePreference.mutate(
-                              { networkVendor: preference.network_vendor, costMode },
-                              { onSuccess: () => setSavedNetwork(preference.network_vendor) },
-                            );
+                            staged.setValue((current) => ({ ...current, [preference.network_vendor]: costMode }));
                           }}
-                          className={`min-h-11 rounded-lg px-3 text-xs font-medium transition-colors focus:outline-none focus:ring-1 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-60 ${preference.cost_mode === costMode ? 'bg-bg-elevated text-fg shadow-sm' : 'text-fg-secondary hover:bg-bg-elevated/70 hover:text-fg'}`}
+                          className={`min-h-11 rounded-lg px-3 text-xs font-medium transition-colors focus:outline-none focus:ring-1 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-60 ${selectedMode === costMode ? 'bg-bg-elevated text-fg shadow-sm' : 'text-fg-secondary hover:bg-bg-elevated/70 hover:text-fg'}`}
                         >
                           {pending ? 'Saving…' : costMode === 'automatic' ? 'Automatic' : 'Free'}
                         </button>
@@ -96,12 +136,6 @@ export function ChargingSection() {
           </div>
         )}
 
-        {updatePreference.isError ? (
-          <p role="alert" className="rounded-lg border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-sm text-status-danger">
-            {updatePreference.error.message} Try again.
-          </p>
-        ) : null}
-        {savedNetwork ? <p role="status" className="rounded-lg border border-status-positive/30 bg-status-positive/10 px-3 py-2 text-sm text-status-positive">{savedNetwork} policy saved.</p> : null}
         {!canManage ? <p className="text-sm text-fg-tertiary">Only the vehicle owner or a manager can change charging network policies.</p> : null}
       </CardContent>
     </Card>
