@@ -270,6 +270,25 @@ describe('ExternalConnectionsSection', () => {
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['external', 'basemap', 'config', 'v2'] });
   });
 
+  it('stages and saves an EIA API key typed for fuel prices', async () => {
+    const data = response(true);
+    const connection = data.connections[0]!;
+    connection.id = 'fuel_prices';
+    connection.name = 'Fuel prices';
+    connection.mode = 'remote';
+    apiMocks.getExternalConnections.mockResolvedValue(data);
+    apiMocks.updateExternalConnection.mockResolvedValue(data);
+    renderSection();
+
+    const apiKey = await screen.findByLabelText('EIA API key');
+    fireEvent.change(apiKey, { target: { value: 'eia-secret' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('fuel_prices', expect.objectContaining({
+      api_key: 'eia-secret',
+    })));
+  });
+
   it('lets administrators pin OpenFreeMap without exposing CARTO key controls', async () => {
     const data = basemapResponse({ has_api_key: true, basemap_provider: 'auto' });
     const updated = basemapResponse({

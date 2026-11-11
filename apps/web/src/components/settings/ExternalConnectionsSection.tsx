@@ -339,7 +339,8 @@ function ConnectionCard({
   // the mode or provider away from it must not save a hidden key.
   const draftActive = draft.enabled && draft.mode !== 'disabled';
   const apiKeyShown = draft.mode === 'custom'
-    || (connection.id === 'basemap' && draftActive && (draft.basemap_provider ?? 'auto') !== 'openfreemap');
+    || (connection.id === 'basemap' && draftActive && (draft.basemap_provider ?? 'auto') !== 'openfreemap')
+    || (connection.id === 'fuel_prices' && draftActive);
   const bearerShown = draft.mode === 'custom';
   const pendingApiKey = apiKeyShown ? apiKey.trim() : '';
   const pendingBearerToken = bearerShown ? bearerToken.trim() : '';
