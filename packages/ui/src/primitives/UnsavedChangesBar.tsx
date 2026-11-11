@@ -42,11 +42,11 @@ export function UnsavedChangesBar({
         // its width as --rm-content-inset-left so the bar never covers it.
         'fixed left-3 right-3 bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-40 mx-auto max-w-xl',
         'lg:left-[calc(var(--rm-content-inset-left,0px)+0.75rem)]',
-        'rounded-xl border border-accent/40 bg-bg-surface/95 px-4 py-3 shadow-lg backdrop-blur-md',
+        'rounded-xl border border-accent/40 bg-bg-surface/95 px-3 py-3 shadow-lg backdrop-blur-md sm:px-4',
         className,
       )}
     >
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 sm:gap-x-4">
         <div className="min-w-0 flex-1" aria-live="polite">
           <p className="text-sm font-semibold text-fg">{message}</p>
           {error ? (
