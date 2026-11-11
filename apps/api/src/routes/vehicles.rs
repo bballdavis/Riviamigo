@@ -2330,16 +2330,15 @@ async fn list_vehicles(
         let renewal_state = credential_issued_at.map(|issued| {
             rivian_renewal_state_for_auth(issued, Utc::now(), r.auth_state.as_deref())
         });
-        if !is_demo {
-            queue_vehicle_artwork_repair(&state, r.id).await;
-        }
+        // Listing vehicles must stay a local read: it never queues an artwork
+        // repair or contacts Rivian. Artwork is mirrored at vehicle add time,
+        // by the startup repair worker, by a vehicle status read, or by the
+        // explicit administrator action, each subject to the vehicle's pause
+        // and the server's Rivian connection switch. A browser render reads
+        // only local cache files and falls back to the local placeholder.
         let images = fetch_vehicle_images_json(&state.pool, &state.config, r.id)
             .await
             .unwrap_or_else(|_| serde_json::json!({ "all": [] }));
-        // Listing vehicles must never become a hidden Rivian-image fetch.
-        // Artwork is downloaded and mirrored at vehicle add time (or by the
-        // explicit administrator repair action), so a browser render reads
-        // only local cache files and falls back to the local placeholder.
         vehicles.push(serde_json::json!({
             "id":                       r.id,
             "user_id":                  auth.user_id,

@@ -34,8 +34,8 @@ use images::find_mirrored_asset;
 pub(super) use mirror::mirror_file_path;
 use mirror::{image_cache_root, sanitize_image_key};
 pub(super) use repair::queue_vehicle_artwork_repair;
-use repair::queue_vehicle_artwork_repair_with_mode;
 pub use repair::start_vehicle_artwork_repair_worker;
+pub(super) use repair::{queue_vehicle_artwork_repair_with_mode, ArtworkRepairBlocked};
 #[cfg(test)]
 pub(super) use {
     cache_state::{
@@ -44,7 +44,7 @@ pub(super) use {
     },
     images::{fetch_vehicle_image_rows, resolved_image_url},
     manifest::store_vehicle_image_manifest,
-    repair::try_claim_vehicle_artwork_repair,
+    repair::{artwork_repair_blocked, try_claim_vehicle_artwork_repair},
 };
 
 #[derive(Debug, sqlx::FromRow)]
@@ -192,7 +192,22 @@ pub(super) async fn admin_remirror_vehicle_images(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
     require_remote_backed_vehicle(&state.pool, vehicle_id).await?;
-    queue_vehicle_artwork_repair_with_mode(&state, vehicle_id, true).await;
+    match queue_vehicle_artwork_repair_with_mode(&state, vehicle_id, true).await {
+        Ok(_) => {}
+        Err(ArtworkRepairBlocked::Paused) => {
+            return Err(AppError::Validation(
+                "data collection is paused for this vehicle; resume it to refresh artwork".into(),
+            ))
+        }
+        Err(ArtworkRepairBlocked::RivianConnectionOff) => {
+            return Err(AppError::Validation(
+                "the Rivian connection is off for this server".into(),
+            ))
+        }
+        Err(ArtworkRepairBlocked::Demo | ArtworkRepairBlocked::Missing) => {
+            return Err(AppError::NotFound)
+        }
+    }
     Ok(Json(
         serde_json::json!({ "ok": true, "queued": true, "vehicle_id": vehicle_id }),
     ))
