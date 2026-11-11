@@ -174,7 +174,6 @@ struct UserVehicle {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UserVehicleDetails {
-    model_year: Option<i32>,
     model: Option<String>,
 }
 
@@ -384,7 +383,6 @@ pub async fn rivian_user_vehicles(
             vin
             name
             vehicle {
-              modelYear
               model
             }
           }
@@ -437,12 +435,18 @@ pub async fn rivian_user_vehicles(
         .and_then(|u| u.vehicles)
         .unwrap_or_default()
         .into_iter()
-        .map(|v| RivianVehicleSummary {
-            id: v.id,
-            name: v.name,
-            vin: v.vin,
-            model: v.vehicle.as_ref().and_then(|details| details.model.clone()),
-            model_year: v.vehicle.and_then(|details| details.model_year),
+        .map(|v| {
+            let model_year = v
+                .vin
+                .as_deref()
+                .and_then(crate::models::vehicle::model_year_from_vin);
+            RivianVehicleSummary {
+                id: v.id,
+                name: v.name,
+                vin: v.vin,
+                model: v.vehicle.as_ref().and_then(|details| details.model.clone()),
+                model_year,
+            }
         })
         .collect();
 
@@ -864,6 +868,8 @@ mod tests {
             assert_eq!(requests[2].body["variables"]["otpToken"], "otp-token");
 
             assert_eq!(requests[3].operation_name, "getUserInfo");
+            let query = requests[3].body["query"].as_str().unwrap();
+            assert!(query.contains("vin"));
             assert_eq!(requests[3].headers["csrf-token"], "csrf-token");
             assert_eq!(requests[3].headers["a-sess"], "app-session-token");
             assert_eq!(requests[3].headers["u-sess"], "user-session-token");
@@ -990,7 +996,6 @@ mod tests {
                             "vin": "7FCTGAAL0NN000001",
                             "name": "Compass Yellow",
                             "vehicle": {
-                                "modelYear": 2022,
                                 "model": "R1T"
                             }
                         }]

@@ -79,8 +79,38 @@ const RIVIAN_BATTERY_PRESETS: Record<BatteryGen, Array<{ key: string; label: str
   ],
 };
 
-const ALL_PRESETS = [...RIVIAN_BATTERY_PRESETS.gen1, ...RIVIAN_BATTERY_PRESETS.gen2];
 const R2_PRESET = { key: 'r2', label: 'R2', kwh: 82 };
+const ALL_PRESETS = [...RIVIAN_BATTERY_PRESETS.gen1, ...RIVIAN_BATTERY_PRESETS.gen2, R2_PRESET];
+const R2_PACK_OPTIONS = [R2_PRESET, { key: 'custom', label: 'Custom', kwh: null }];
+const BATTERY_GEN_LABELS: Record<BatteryGen, string> = { gen1: 'Gen 1', gen2: 'Gen 2' };
+
+type BatteryVehicle = Pick<Vehicle, 'model' | 'year' | 'battery_capacity_kwh'>;
+
+const isR1Model = (model: string | null | undefined) => /r1/i.test(model ?? '');
+const isR2Model = (model: string | null | undefined) => /r2/i.test(model ?? '');
+
+/** R1 generation from the VIN-derived model year (2025 onward is Gen 2). Non-R1 models have none. */
+function r1GenerationFromYear(vehicle: BatteryVehicle | undefined): BatteryGen | null {
+  if (!vehicle || !isR1Model(vehicle.model) || vehicle.year == null) return null;
+  return vehicle.year >= 2025 ? 'gen2' : 'gen1';
+}
+
+function detectR1BatteryGen(vehicle: BatteryVehicle | undefined): BatteryGen | null {
+  if (!vehicle || !isR1Model(vehicle.model)) return null;
+  const fromYear = r1GenerationFromYear(vehicle);
+  if (fromYear) return fromYear;
+  const modelLower = vehicle.model.toLowerCase();
+  return modelLower.includes('gen 2') || modelLower.includes('2nd') ? 'gen2' : null;
+}
+
+/** When an R1's saved capacity matches only the other generation's presets, return both generations. */
+function savedCapacityGenerationMismatch(vehicle: BatteryVehicle | undefined): { saved: BatteryGen; detected: BatteryGen } | null {
+  const detected = r1GenerationFromYear(vehicle);
+  const kwh = vehicle?.battery_capacity_kwh;
+  if (!detected || kwh == null) return null;
+  const saved: BatteryGen = detected === 'gen2' ? 'gen1' : 'gen2';
+  return RIVIAN_BATTERY_PRESETS[saved].some((p) => p.key !== 'custom' && p.kwh === kwh) ? { saved, detected } : null;
+}
 
 type SettingsSection = 'vehicles' | 'dashboards' | 'charts' | 'units' | 'places' | 'charging' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account' | 'authentication';
 
@@ -967,9 +997,22 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
     setEditNameValue(vehicle?.display_name ?? '');
     setEditTargetTirePressure(String(vehicle?.target_tire_pressure_psi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI));
 
+    // Generation detection applies only to R1 models.
+    const detectedGen = detectR1BatteryGen(vehicle);
+    setBatteryGen(detectedGen ?? 'gen1');
+
+    if (isR2Model(vehicle?.model)) {
+      // R2 offers only its own pack or a custom capacity.
+      const usesR2Pack = currentKwh == null || currentKwh === R2_PRESET.kwh;
+      setBatteryPreset(usesR2Pack ? R2_PRESET.key : 'custom');
+      setCustomKwh(usesR2Pack ? '' : String(currentKwh));
+      return;
+    }
+
     if (currentKwh != null) {
-      // Search all gens so a Gen 2 pack saved while gen was auto-detected as Gen 1 still resolves correctly
-      for (const g of ['gen1', 'gen2'] as BatteryGen[]) {
+      // Model year wins over an older saved preset, without changing its capacity.
+      const generations: BatteryGen[] = detectedGen ? [detectedGen] : ['gen1', 'gen2'];
+      for (const g of generations) {
         const match = RIVIAN_BATTERY_PRESETS[g].find((p) => p.kwh === currentKwh && p.key !== 'custom');
         if (match) {
           setBatteryGen(g);
@@ -978,18 +1021,10 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
           return;
         }
       }
-      if (R2_PRESET.kwh === currentKwh) {
-        setBatteryPreset(R2_PRESET.key);
-        setCustomKwh('');
-        return;
-      }
       setBatteryPreset('custom');
       setCustomKwh(String(currentKwh));
     } else {
-      const modelLower = vehicle?.model?.toLowerCase() ?? '';
-      const isGen2 = modelLower.includes('gen 2') || modelLower.includes('2nd') || (vehicle?.year && vehicle.year >= 2025);
-      const gen: BatteryGen = isGen2 ? 'gen2' : 'gen1';
-      setBatteryGen(gen);
+      const gen = detectedGen ?? 'gen1';
       setBatteryPreset(gen === 'gen2' ? 'r1_large_g2' : 'r1_large_g1');
       setCustomKwh('');
     }
@@ -1258,6 +1293,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                     {vehicles?.map((v) => {
                       const isActive = defaultVehicleId === v.id || (!defaultVehicleId && vehicles[0]?.id === v.id);
                       const isEditingBattery = editingBatteryVehicleId === v.id;
+                      const capacityGenerationMismatch = isEditingBattery ? savedCapacityGenerationMismatch(v) : null;
                       const isSharingExpanded = sharingVehicleId === v.id;
                       const membershipRole = v.membership_role ?? 'viewer';
                       const canManageVehicle = membershipRole === 'owner' || membershipRole === 'manager';
@@ -1542,7 +1578,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                                 </div>
                                 <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Factory Battery Capacity</p>
                                 <div className="flex flex-wrap items-end gap-2">
-                                  {(v.model?.includes('R1') || v.model?.includes('r1')) && (
+                                  {isR1Model(v.model) && (
                                     <label className="grid gap-1">
                                       <span className="text-xs text-fg-tertiary">Generation</span>
                                       <SelectPicker
@@ -1565,7 +1601,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                                       value={batteryPreset}
                                       onChange={setBatteryPreset}
                                       aria-label="Battery pack"
-                                      options={(v.model?.includes('R2') || v.model?.includes('r2') ? [R2_PRESET, { key: 'custom', label: 'Custom', kwh: null }] : RIVIAN_BATTERY_PRESETS[batteryGen]).map((preset) => ({
+                                      options={(isR2Model(v.model) ? R2_PACK_OPTIONS : RIVIAN_BATTERY_PRESETS[batteryGen]).map((preset) => ({
                                         value: preset.key,
                                         label: `${preset.label}${preset.kwh != null ? ` (${preset.kwh} kWh)` : ''}`,
                                       }))}
@@ -1600,6 +1636,11 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                                     />
                                   </label>
                                 </div>
+                                {capacityGenerationMismatch && (
+                                  <p role="note" className="text-xs text-warning">
+                                    Your saved capacity ({v.battery_capacity_kwh} kWh) matches a {BATTERY_GEN_LABELS[capacityGenerationMismatch.saved]} pack; your vehicle&apos;s VIN indicates {BATTERY_GEN_LABELS[capacityGenerationMismatch.detected]}.
+                                  </p>
+                                )}
                                 <p className="text-xs text-fg-tertiary">
                                   This value is used as the baseline for battery health % and degradation charts.
                                   Defaults can be overridden if your vehicle came with a different pack. Target tire pressure is the recommended cold PSI; confirm it against the driver-door placard.
