@@ -15,6 +15,9 @@ import { RELEASES_URL } from '../../lib/releaseCheck';
 
 const CONNECTION_QUERY_KEY = ['external-connections'] as const;
 const GITHUB_RELEASES_ID = 'github_releases';
+/** Ownership responses carry the fuel-price and vehicle-lookup connection state. */
+const OWNERSHIP_QUERY_KEY = ['vehicles', 'ownership'] as const;
+const OWNERSHIP_CONNECTION_IDS = new Set(['fuel_prices', 'vehicle_lookup']);
 
 export function ExternalConnectionsSection() {
   const queryClient = useQueryClient();
@@ -29,6 +32,7 @@ export function ExternalConnectionsSection() {
     onSuccess: (data) => {
       queryClient.setQueryData(CONNECTION_QUERY_KEY, data);
       void queryClient.invalidateQueries({ queryKey: BASEMAP_CONFIG_QUERY_KEY });
+      void queryClient.invalidateQueries({ queryKey: OWNERSHIP_QUERY_KEY });
     },
   });
 
@@ -67,7 +71,7 @@ export function ExternalConnectionsSection() {
                 loading={disableOptional.isPending}
                 className="shrink-0"
                 onClick={() => {
-                  if (window.confirm('Disable every optional external connection? Rivian vehicle connectivity remains configured, but weather, geocoding, basemaps, and Iconify will stop.')) {
+                  if (window.confirm('Disable every optional external connection? Rivian vehicle connectivity remains configured, but weather, geocoding, basemaps, Iconify, fuel prices, and vehicle lookup will stop.')) {
                     disableOptional.mutate();
                   }
                 }}
@@ -322,6 +326,9 @@ function ConnectionCard({
       if (connection.id === 'basemap') {
         await queryClient.invalidateQueries({ queryKey: BASEMAP_CONFIG_QUERY_KEY });
       }
+      if (OWNERSHIP_CONNECTION_IDS.has(connection.id)) {
+        void queryClient.invalidateQueries({ queryKey: OWNERSHIP_QUERY_KEY });
+      }
       setApiKey('');
       setIsReplacingApiKey(false);
       setIsClearingApiKey(false);
@@ -547,6 +554,18 @@ function ConnectionCard({
                   />
                 </Field>
               )
+            ) : null}
+            {connection.id === 'fuel_prices' && active && !custom ? (
+              <Field label={`EIA API key${connection.has_api_key ? ' (stored)' : ''}`}>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  placeholder={connection.has_api_key ? 'Leave blank to keep stored key' : 'Optional. The shared demo key is used when blank'}
+                  className="h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                />
+              </Field>
             ) : null}
 
             <div className="flex flex-wrap items-center gap-2">

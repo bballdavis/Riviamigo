@@ -29,9 +29,11 @@ export const vehicleClient = client(
   'downloadVehicleIngestionCapture',
   'deleteVehicle', 'refreshVehicleCredentials', 'connectRivian', 'connectRivianOtp',
   'updateVehicleBatteryConfig', 'updateVehicleSettings', 'updateVehicleName',
-  'setDefaultVehicle', 'listVehicleMembers', 'addVehicleMember', 'updateVehicleMember',
+  'updateVehicleCollection', 'setDefaultVehicle', 'listVehicleMembers', 'addVehicleMember', 'updateVehicleMember',
   'removeVehicleMember', 'listVehicleInvites', 'createVehicleInvite', 'revokeVehicleInvite',
   'acceptVehicleInvite', 'previewVehicleInvite', 'getVehicleHealth',
+  'getOwnership', 'getOwnershipSettings', 'updateOwnershipSettings',
+  'lookupOwnershipVehicleMenu', 'lookupOwnershipVehicle',
 );
 
 export const tripClient = client(

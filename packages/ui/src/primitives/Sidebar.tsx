@@ -1,7 +1,7 @@
 import * as React from 'react';
 import {
   BatteryFull, TrendingUp,
-  Heart, Menu, X, MoreVertical,
+  Heart, Menu, X, MoreVertical, CircleDollarSign,
 } from 'lucide-react';
 import { TbCarSuv } from 'react-icons/tb';
 import { FaChargingStation } from 'react-icons/fa6';
@@ -27,6 +27,7 @@ const DEFAULT_NAV_ITEMS: NavItem[] = [
   { key: 'trips',      label: 'Trips',      href: '/trips',     icon: <BiTrip className={NAV_ICON_CLASS} /> },
   { key: 'efficiency', label: 'Efficiency', href: '/efficiency',icon: <TrendingUp className={NAV_ICON_CLASS} /> },
   { key: 'health',     label: 'Health',     href: '/vehicle-health', icon: <Heart className={NAV_ICON_CLASS} /> },
+  { key: 'ownership',  label: 'Ownership',  href: '/ownership', icon: <CircleDollarSign className={NAV_ICON_CLASS} /> },
 ];
 
 export interface SidebarProps {

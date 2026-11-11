@@ -10,7 +10,7 @@ permissions:
   packages: read
 
 env:
-  NODE_VERSION: '24.18.0'
+  NODE_VERSION: '26.13.0'
   RUST_VERSION: '1.97.1'
 
 jobs:

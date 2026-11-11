@@ -20,6 +20,8 @@ vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigate,
 }));
 
+const appLayoutOwnership = vi.hoisted(() => ({ enabled: true }));
+
 vi.mock('@riviamigo/hooks', () => ({
   themeClient: {
     getPreferences: vi.fn(async () => ({
@@ -47,6 +49,7 @@ vi.mock('@riviamigo/hooks', () => ({
     vehicleSelectionReady: true,
     vehicles: [{ id: 'vehicle-1', model: 'R1S' }],
   }),
+  useOwnershipEnabled: () => appLayoutOwnership.enabled,
   useMe: () => ({
     data: { role: 'user' },
   }),
@@ -73,6 +76,7 @@ vi.mock('../hooks/useGithubReleaseCheck', () => ({
 
 describe('AppLayout sidebar collapse', () => {
   beforeEach(() => {
+    appLayoutOwnership.enabled = true;
     localStorage.clear();
     navigate.mockClear();
     logout.mockClear();
@@ -203,6 +207,25 @@ describe('AppLayout sidebar collapse', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Health' }));
 
     expect(navigate).toHaveBeenCalledWith({ to: '/vehicle-health' });
+  });
+
+  it('lists Ownership only while the user has it turned on', () => {
+    const { unmount } = render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>
+    );
+    expect(screen.getByRole('button', { name: 'Ownership' })).toBeInTheDocument();
+    unmount();
+
+    appLayoutOwnership.enabled = false;
+    render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>
+    );
+    expect(screen.queryByRole('button', { name: 'Ownership' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Health' })).toBeInTheDocument();
   });
 
   it('centers the collapsed vehicle status when the battery indicator is unavailable', () => {

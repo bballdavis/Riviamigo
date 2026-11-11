@@ -51,6 +51,8 @@ export interface Vehicle {
   history_backfill_status?: string | null;
   history_backfilled_at?: string | null;
   history_session_count?: number | null;
+  /** True while a manager has paused the background Rivian connection. */
+  collection_paused?: boolean;
   worker_health?: string | null;
   worker_health_msg?: string | null;
   auth_state?: string | null;

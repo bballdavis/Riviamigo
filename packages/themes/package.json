@@ -3,13 +3,21 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "generate": "node src/generate.mjs",
     "check": "node src/check.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": { "@riviamigo/types": "workspace:*" },
-  "devDependencies": { "typescript": "catalog:", "vitest": "catalog:" }
+  "dependencies": {
+    "@riviamigo/types": "workspace:*"
+  },
+  "devDependencies": {
+    "@riviamigo/config": "workspace:*",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
 }

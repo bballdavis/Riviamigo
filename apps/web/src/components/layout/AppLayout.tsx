@@ -16,6 +16,7 @@ import {
   useAuth,
   useCurrentVehicleStatus,
   useMe,
+  useOwnershipEnabled,
   useResolvedVehicleSelection,
   useVehicleStatus,
 } from '@riviamigo/hooks';
@@ -186,6 +187,8 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
   const { effectiveVehicleId, vehicleSelectionReady, vehicles } = useResolvedVehicleSelection();
   const me = useMe();
   const canAccessUsers = me.data?.role === 'admin' || me.data?.role === 'super_user';
+  // A user who turned Ownership off in Settings no longer sees it in the navigation.
+  const ownershipEnabled = useOwnershipEnabled();
   const liveVehicleId = vehicleSelectionReady ? effectiveVehicleId : null;
   const liveAccessToken = vehicleSelectionReady ? accessToken : null;
   const {
@@ -281,7 +284,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
       <TbCarSuv className="h-[1.125rem] w-[1.125rem]" />
     );
     const inBatterySection = activeKey === 'battery' || activeKey.startsWith('battery.');
-    return DEFAULT_NAV_ITEMS.map((item) => {
+    return DEFAULT_NAV_ITEMS.filter((item) => item.key !== 'ownership' || ownershipEnabled).map((item) => {
       if (item.key === 'dashboard') {
         return {
           ...item,
@@ -313,7 +316,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
           ]
         : []
     );
-  }, [activeKey, vehicles, canAccessUsers]);
+  }, [activeKey, vehicles, canAccessUsers, ownershipEnabled]);
 
   async function handleLogout() {
     await logout();

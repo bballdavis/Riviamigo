@@ -22,6 +22,7 @@ The usual local entrypoints are:
 
 ```bash
 pnpm run dev:stack
+pnpm stop
 pnpm typecheck
 pnpm lint
 pnpm test
@@ -49,6 +50,23 @@ mixed, or production Compose identity metadata fails closed; set
 `DEV_COMPOSE_PROJECT_NAME` to a unique isolated name to avoid a same-named
 production project.
 
+A development database is often a copy of production, including the
+production Rivian sign-in. Two servers polling one Rivian account interfere
+with each other, and Rivian requests start failing with
+`User is unauthenticated`. Before connecting a copy, pause collection for each
+copied vehicle in **Settings > Vehicles** (the pause button on the vehicle
+card), or start the API with `RIVIAMIGO_RIVIAN_WORKERS_ENABLED=false` to keep
+every vehicle offline. A paused vehicle stays paused across restarts.
+
+`pnpm stop` ends this checkout's host-run dev servers: any `dev:stack`
+launcher, the Vite web server, the API, and the restore agent. It matches
+processes by this checkout's paths, so Vite servers from other repositories
+or other worktrees are left alone. Docker services keep running and keep their
+data. `pnpm dev:stack` runs the same cleanup (without the launcher step) before
+it allocates ports. If two stacks run at once, the second one moves to fallback
+ports, and signing in to the wrong one fails because each Compose project has
+its own users.
+
 `pnpm dev:stack` also starts the local restore supervisor alongside the
 host-run API. Its capability key is generated under the ignored `data/`
 directory, while backup artifacts continue to use the local `/backups` path.
@@ -56,6 +74,17 @@ This keeps the in-app restore path testable without putting development
 credentials or restore data in Git.
 Vite proxies restore-runtime status requests directly to that supervisor so
 the status poll can survive the API process restart.
+
+`pnpm dev:stack` always starts the host-run API with password login enabled and
+SSO disabled (`RIVIAMIGO_PASSWORD_LOGIN_ENABLED=true`,
+`RIVIAMIGO_OIDC_ENABLED=false`, `RIVIAMIGO_OIDC_AUTO_LOGIN=false`), and blanks
+every other `RIVIAMIGO_OIDC_*` variable inherited from the shell. SSO needs a
+public HTTPS callback and a reachable provider, so it cannot work on a
+development stack, and a restored production backup that had SSO enabled would
+otherwise leave you unable to sign in. Environment values win over the database
+per field, so the saved SSO settings are left untouched and the Authentication
+settings page shows these fields as environment-managed while the stack runs.
+Sign in with the account's local password.
 
 Before allocating ports, the launcher reads the selected Compose project's
 existing service metadata. Sharing a project still makes migration and

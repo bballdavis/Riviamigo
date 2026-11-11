@@ -135,6 +135,7 @@ If implementation must land before final docs:
 
 ```bash
 pnpm run dev:stack
+pnpm stop
 pnpm typecheck
 pnpm lint
 pnpm test

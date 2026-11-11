@@ -162,7 +162,7 @@ jobs:
           ref: ${{ needs.validate.outputs.source_sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: '24.18.0'
+          node-version: '26.13.0'
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ${{ env.REGISTRY }}
