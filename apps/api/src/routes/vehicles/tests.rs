@@ -23,11 +23,13 @@ use super::artwork::{
 };
 use super::{
     canonical_battery_config, canonical_vehicle_model, canonical_vehicle_name, capture_export_body,
-    connect_otp, is_demo_vehicle_key, list_vehicles, load_encrypted_redis, map_rivian_login_error,
-    map_rivian_otp_error, parse_raw_fields, parse_telemetry_lanes, raw_field_coverage_query,
-    raw_telemetry_where_clause, refresh_vehicle_vin, resolve_telemetry_resolution,
-    store_encrypted_redis, validate_raw_time_bounds, vehicle_data_ready, OtpBody,
-    PendingOtpChallenge, RAW_TELEMETRY_FIELDS, TELEMETRY_LANES_QUERY,
+    connect_otp, credential_refresh_response, is_demo_vehicle_key, list_vehicles,
+    load_encrypted_redis, map_rivian_login_error, map_rivian_otp_error, parse_raw_fields,
+    parse_telemetry_lanes, raw_field_coverage_query, raw_telemetry_where_clause,
+    refresh_vehicle_vin, resolve_telemetry_resolution, start_refreshed_vehicle_telemetry,
+    store_encrypted_redis, validate_raw_time_bounds, vehicle_data_ready,
+    CredentialRefreshTelemetry, OtpBody, PendingOtpChallenge, CREDENTIAL_REFRESH_PAUSED_MESSAGE,
+    RAW_TELEMETRY_FIELDS, TELEMETRY_LANES_QUERY,
 };
 
 // Run with: cargo test -- --ignored
