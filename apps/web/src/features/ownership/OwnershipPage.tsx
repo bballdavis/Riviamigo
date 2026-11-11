@@ -8,7 +8,7 @@ import {
   useResolvedVehicleSelection,
   useUpdateOwnershipSettings,
 } from '@riviamigo/hooks';
-import type { OwnershipCustomVehicle, OwnershipSettings } from '@riviamigo/types';
+import type { OwnershipCustomVehicle, OwnershipResponse } from '@riviamigo/types';
 import { CHART_COLORS } from '@riviamigo/ui/charts';
 import { Button, EmptyState, PageLayout, SelectPicker, Skeleton } from '@riviamigo/ui/primitives';
 import { SensorChipSummary } from '@riviamigo/dashboards';
@@ -106,6 +106,12 @@ const COMPARISON_COLORS = [
   CHART_COLORS.muted,
   CHART_COLORS.teal,
 ];
+/** The comparison selection one save writes. The enabled ids are always resolved, never null. */
+interface ComparisonChange {
+  enabled: string[];
+  custom: OwnershipCustomVehicle[];
+}
+
 export function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLabel: string }) {
   const ownership = useOwnership(vehicleId);
   const { isLoading, isError } = ownership;
@@ -158,35 +164,48 @@ export function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string;
     );
   }
 
-  const saveSettings = (settings: OwnershipSettings, onSuccess?: () => void) => {
-    update.mutate(settings, { onSuccess: () => onSuccess?.() });
-  };
-  const saveEnabled = (ids: string[], custom = data.settings.comparisons.custom) => {
-    setLocalEnabled(ids);
+  // Each change is built from the latest cached response, including saves still
+  // in flight, so a second change never re-saves what the first one removed.
+  const enabledFrom = (latest: OwnershipResponse) =>
+    data.can_edit ? enabledComparisonIds(latest) : localEnabled ?? enabledComparisonIds(latest);
+  const saveComparisons = (
+    change: (latest: OwnershipResponse) => ComparisonChange,
+    onSaved?: () => void,
+  ) => {
+    const latest = normalizeOwnershipResponse(update.readLatest() ?? data);
+    const comparisons = change(latest);
     // Members without edit rights can still explore; their selection is not stored.
-    if (data.can_edit) {
-      saveSettings({ ...data.settings, comparisons: { enabled: ids, custom } });
+    if (!data.can_edit) {
+      setLocalEnabled(comparisons.enabled);
+      return;
     }
-  };
-  const toggleVehicle = (id: string) => {
-    saveEnabled(enabledIds.includes(id) ? enabledIds.filter((entry) => entry !== id) : [...enabledIds, id]);
-  };
-  const removeCustom = (id: string) => {
-    saveEnabled(
-      enabledIds.filter((entry) => entry !== id),
-      data.settings.comparisons.custom.filter((vehicle) => vehicle.id !== id),
+    update.reset();
+    update.mutate(
+      { ...latest.settings, comparisons },
+      { onSuccess: () => onSaved?.() },
     );
   };
-  const addCustom = (vehicle: OwnershipCustomVehicle) => {
-    const ids = [...enabledIds, vehicle.id];
-    saveSettings(
-      { ...data.settings, comparisons: { enabled: ids, custom: [...data.settings.comparisons.custom, vehicle] } },
-      () => {
-        setLocalEnabled(ids);
-        setDialog(null);
-      },
+  const toggleVehicle = (id: string) =>
+    saveComparisons((latest) => {
+      const ids = enabledFrom(latest);
+      return {
+        enabled: ids.includes(id) ? ids.filter((entry) => entry !== id) : [...ids, id],
+        custom: latest.settings.comparisons.custom,
+      };
+    });
+  const removeCustom = (id: string) =>
+    saveComparisons((latest) => ({
+      enabled: enabledFrom(latest).filter((entry) => entry !== id),
+      custom: latest.settings.comparisons.custom.filter((vehicle) => vehicle.id !== id),
+    }));
+  const addCustom = (vehicle: OwnershipCustomVehicle) =>
+    saveComparisons(
+      (latest) => ({
+        enabled: [...enabledFrom(latest), vehicle.id],
+        custom: [...latest.settings.comparisons.custom, vehicle],
+      }),
+      () => setDialog(null),
     );
-  };
 
   // Every Ownership setting lives in Settings > Ownership.
   const openSettings = () => navigate({ to: '/settings', search: { section: 'ownership' } });
@@ -297,6 +316,11 @@ export function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string;
           setDialog('add');
         }}
       />
+      {update.isError && dialog !== 'add' ? (
+        <p className="text-sm text-status-danger" role="alert">
+          That change could not be saved. Try again.
+        </p>
+      ) : null}
 
       <OwnershipChartCard
         ledger={ledger}
