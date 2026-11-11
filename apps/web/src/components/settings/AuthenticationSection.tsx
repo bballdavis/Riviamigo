@@ -118,8 +118,6 @@ export function AuthenticationSection() {
   );
   const staged = useStagedValue(savedForm);
   const form = staged.value;
-  const formRef = React.useRef(form);
-  formRef.current = form;
   const [secret, setSecret] = React.useState('');
   const [removeSecret, setRemoveSecret] = React.useState(false);
   const [showAdvancedAccess, setShowAdvancedAccess] = React.useState(false);
@@ -153,9 +151,8 @@ export function AuthenticationSection() {
     }
     client.setQueryData(queryKeys.auth.authenticationSettings, saved);
     void client.invalidateQueries({ queryKey: queryKeys.auth.config });
-    staged.commit(formFromSettings(saved));
-    // Keep edits typed while the request was in flight.
-    if (formRef.current !== submitted) staged.setValue(formRef.current);
+    // Edits typed while the request was in flight stay staged; only the submitted part is adopted.
+    staged.commit(formFromSettings(saved), submitted);
     setSecret((current) => (current === submittedSecret ? '' : current));
     setRemoveSecret((current) => (current === submittedRemoveSecret ? false : current));
   };

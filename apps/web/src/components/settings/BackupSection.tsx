@@ -37,6 +37,8 @@ import {
 import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
 import { useSettingsDraft } from '../../features/settings/drafts/SettingsDraftProvider';
 import { useStagedValue } from '../../features/settings/drafts/useStagedValue';
+import { saveFailure } from '../../features/settings/drafts/saveFailure';
+import { SettingsConfirmationDialog, type SettingsConfirmation } from '../../features/settings/SettingsConfirmationDialog';
 import {
   backupValidationError,
   buildDraft,
@@ -279,8 +281,6 @@ export function BackupSection() {
   const savedDraft = React.useMemo(() => (overview.data ? buildDraft(overview.data) : null), [overview.data]);
   const staged = useStagedValue(savedDraft);
   const draft = staged.value;
-  const draftRef = React.useRef(draft);
-  draftRef.current = draft;
   const [secretKey, setSecretKey] = React.useState('');
   const [clearSecretKey, setClearSecretKey] = React.useState(false);
   const [expandedArtifactId, setExpandedArtifactId] = React.useState<string | null>(null);
@@ -290,6 +290,7 @@ export function BackupSection() {
     BackupOverview['artifacts'][number] | null
   >(null);
   const [pendingRestorePlan, setPendingRestorePlan] = React.useState<RestorePlan | null>(null);
+  const [deleteImportConfirmation, setDeleteImportConfirmation] = React.useState<SettingsConfirmation | null>(null);
   const [restoreConfirmation, setRestoreConfirmation] = React.useState('');
   const [uploadProgress, setUploadProgress] = React.useState<number | null>(null);
   const [activeRestore, setActiveRestore] = React.useState<{
@@ -327,10 +328,13 @@ export function BackupSection() {
     const payload = buildPayload(submitted, submittedSecret, submittedClear);
     const problem = backupValidationError(submitted, overview.data?.settings.has_secret_key ?? false, submittedSecret);
     if (!payload || problem) throw new Error(problem ?? 'Backup settings are invalid.');
-    await api.updateBackupSettings(payload);
-    staged.commit(submitted);
-    // Keep edits typed while the request was in flight.
-    if (draftRef.current !== submitted) staged.setValue(draftRef.current);
+    try {
+      await api.updateBackupSettings(payload);
+    } catch (error) {
+      throw saveFailure(error, 'Backup settings could not be saved. Try again.');
+    }
+    // Edits typed while the request was in flight stay staged; only the submitted part is adopted.
+    staged.commit(submitted, submitted);
     setSecretKey((current) => (current === submittedSecret ? '' : current));
     setClearSecretKey((current) => (current === submittedClear ? false : current));
     void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all });
@@ -1122,13 +1126,12 @@ export function BackupSection() {
                             }
                             onClick={(event) => {
                               event.stopPropagation();
-                              if (
-                                window.confirm(
-                                  `Delete imported recovery package "${artifact.file_name}"?`
-                                )
-                              ) {
-                                deleteUploadedArtifact.mutate(artifact.id);
-                              }
+                              setDeleteImportConfirmation({
+                                title: `Delete imported recovery package "${artifact.file_name}"?`,
+                                description: 'The uploaded file is removed from this server.',
+                                confirmLabel: 'Delete package',
+                                run: () => deleteUploadedArtifact.mutateAsync(artifact.id),
+                              });
                             }}
                           />
                         )}
@@ -1251,6 +1254,13 @@ export function BackupSection() {
           )}
         </CardContent>
       </Card>
+
+      {deleteImportConfirmation ? (
+        <SettingsConfirmationDialog
+          confirmation={deleteImportConfirmation}
+          onClose={() => setDeleteImportConfirmation(null)}
+        />
+      ) : null}
 
       {pendingRestoreArtifact && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-page/80 px-4 backdrop-blur-sm">
