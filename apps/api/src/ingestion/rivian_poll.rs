@@ -351,6 +351,7 @@ struct CurrentUserEnrichment {
 #[serde(rename_all = "camelCase")]
 struct VehicleEnrichmentItem {
     id: String,
+    vin: Option<String>,
     vehicle: Option<VehicleEnrichmentDetails>,
 }
 
@@ -394,7 +395,7 @@ struct SupportedFeature {
     status: Option<String>,
 }
 
-/// Fetch trim/interior/wheel/charger-port static fields and upsert into `vehicles`.
+/// Fetch the VIN and static configuration fields and upsert into `vehicles`.
 pub async fn fetch_vehicle_enrichment(
     rivian_vehicle_id: &str,
     vehicle_id: Uuid,
@@ -402,11 +403,26 @@ pub async fn fetch_vehicle_enrichment(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<()> {
+    let item = request_vehicle_enrichment(rivian_vehicle_id, client, tokens, GATEWAY_URL).await?;
+    save_vehicle_enrichment(pool, vehicle_id, item.vehicle, item.vin.as_deref()).await?;
+
+    increment_poll_counter(pool, vehicle_id).await;
+    tracing::debug!(vehicle_id=%vehicle_id, "vehicle enrichment upserted");
+    Ok(())
+}
+
+async fn request_vehicle_enrichment(
+    rivian_vehicle_id: &str,
+    client: &reqwest::Client,
+    tokens: &RivianTokenBundle,
+    gateway_url: &str,
+) -> Result<VehicleEnrichmentItem> {
     const Q: &str = r#"
         query getUserInfo {
           currentUser {
             vehicles {
               id
+              vin
               vehicle {
                 mobileConfiguration {
                   trimOption          { optionId optionName }
@@ -427,7 +443,7 @@ pub async fn fetch_vehicle_enrichment(
 
     let data: UserInfoEnrichmentData = gql_request(
         client,
-        GATEWAY_URL,
+        gateway_url,
         tokens,
         "getUserInfo",
         Q,
@@ -435,20 +451,21 @@ pub async fn fetch_vehicle_enrichment(
     )
     .await?;
 
-    let item = data
-        .current_user
+    data.current_user
         .and_then(|u| u.vehicles)
         .unwrap_or_default()
         .into_iter()
-        .find(|v| v.id == rivian_vehicle_id);
+        .find(|v| v.id == rivian_vehicle_id)
+        .ok_or_else(|| anyhow!("vehicle {rivian_vehicle_id} not found in getUserInfo"))
+}
 
-    let Some(item) = item else {
-        return Err(anyhow!(
-            "vehicle {rivian_vehicle_id} not found in getUserInfo"
-        ));
-    };
-
-    let details = item.vehicle;
+async fn save_vehicle_enrichment(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    details: Option<VehicleEnrichmentDetails>,
+    vin: Option<&str>,
+) -> Result<()> {
+    let vin = crate::models::vehicle::normalized_vin(vin);
     let mobile_config = details
         .as_ref()
         .and_then(|d| d.mobile_configuration.as_ref());
@@ -472,23 +489,36 @@ pub async fn fetch_vehicle_enrichment(
             )
         });
 
-    sqlx::query(
+    // `None` means the vehicle row was removed while enrichment was in flight.
+    let saved_vin: Option<Option<String>> = sqlx::query_scalar(
         "UPDATE riviamigo.vehicles
          SET interior_color     = COALESCE($2, interior_color),
              trim               = COALESCE($3, trim),
              supported_features = COALESCE($4, supported_features),
+             vin                = COALESCE($5, vin),
              updated_at         = now()
-         WHERE id = $1",
+         WHERE id = $1
+         RETURNING vin",
     )
     .bind(vehicle_id)
     .bind(interior_color)
     .bind(trim)
     .bind(features_json)
-    .execute(pool)
+    .bind(vin)
+    .fetch_optional(pool)
     .await?;
 
-    increment_poll_counter(pool, vehicle_id).await;
-    tracing::debug!(vehicle_id=%vehicle_id, "vehicle enrichment upserted");
+    // Model year is derived from the stored VIN at read time; report only
+    // whether one is decodable, never the VIN itself.
+    if let Some(saved_vin) = saved_vin {
+        if saved_vin
+            .as_deref()
+            .and_then(crate::models::vehicle::model_year_from_vin)
+            .is_none()
+        {
+            tracing::warn!(vehicle_id=%vehicle_id, "vehicle model year unavailable: no usable VIN on record");
+        }
+    }
     Ok(())
 }
 
@@ -2862,6 +2892,134 @@ mod tests {
         .fetch_one(pool)
         .await
         .expect("seed test vehicle")
+    }
+
+    #[test]
+    fn vehicle_model_year_is_read_from_enrichment_vin() {
+        for (vin, year) in [
+            (Some("7FCTGAAL0RN000001"), Some(2024)),
+            (Some("7FCTGAAL0SN000001"), Some(2025)),
+            (Some("7FCTGAAL0TN000001"), Some(2026)),
+            (None, None),
+        ] {
+            let data: super::UserInfoEnrichmentData = serde_json::from_value(json!({
+                "currentUser": { "vehicles": [{
+                    "id": "test-vehicle",
+                    "vin": vin,
+                    "vehicle": {}
+                }] }
+            }))
+            .unwrap();
+            let item = data.current_user.unwrap().vehicles.unwrap().remove(0);
+            assert_eq!(
+                item.vin
+                    .as_deref()
+                    .and_then(crate::models::vehicle::model_year_from_vin),
+                year
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn vehicle_enrichment_requests_account_vin() {
+        let app = Router::new().route(
+            "/graphql",
+            post(|Json(body): Json<serde_json::Value>| async move {
+                let query = body["query"].as_str().unwrap();
+                assert!(query.contains("vin"));
+                Json(json!({ "data": { "currentUser": { "vehicles": [
+                    { "id": "other", "vin": "7FCTGAAL0RN000001", "vehicle": {} },
+                    { "id": "target", "vin": "7FCTGAAL0SN000001", "vehicle": {} }
+                ] } } }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let tokens = RivianTokenBundle {
+            access_token: "test-access".into(),
+            refresh_token: "test-refresh".into(),
+            app_session_token: "test-app".into(),
+            user_session_token: "test-user".into(),
+            csrf_token: "test-csrf".into(),
+            created_at: Utc::now(),
+        };
+        let item = super::request_vehicle_enrichment(
+            "target",
+            &reqwest::Client::new(),
+            &tokens,
+            &format!("http://{address}/graphql"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(item.id, "target");
+        assert_eq!(
+            item.vin
+                .as_deref()
+                .and_then(crate::models::vehicle::model_year_from_vin),
+            Some(2025)
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn vehicle_enrichment_backfills_vin_without_overwriting_capacity() {
+        let db = DisposableDatabase::new().await;
+        let vehicle_id = seed_vehicle(&db.pool).await;
+        sqlx::query(
+            "UPDATE riviamigo.vehicles
+             SET battery_capacity_wh = 135000, battery_config = 'R1T / R1S Large (Gen 1)'
+             WHERE id = $1",
+        )
+        .bind(vehicle_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        for (details, vin) in [
+            (Some(json!({})), Some(" 7FCTGAAL0SN000001 ")),
+            (Some(json!({})), None),
+            (Some(json!({})), Some("   ")),
+            (None, None),
+        ] {
+            super::save_vehicle_enrichment(
+                &db.pool,
+                vehicle_id,
+                details.map(|value| serde_json::from_value(value).unwrap()),
+                vin,
+            )
+            .await
+            .unwrap();
+
+            let saved: (Option<f64>, Option<String>, Option<String>) = sqlx::query_as(
+                "SELECT battery_capacity_wh, battery_config, vin
+                 FROM riviamigo.vehicles WHERE id = $1",
+            )
+            .bind(vehicle_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                saved,
+                (
+                    Some(135000.0),
+                    Some("R1T / R1S Large (Gen 1)".into()),
+                    Some("7FCTGAAL0SN000001".into())
+                )
+            );
+        }
+
+        // A vehicle deleted while enrichment was in flight is not an error.
+        super::save_vehicle_enrichment(
+            &db.pool,
+            uuid::Uuid::new_v4(),
+            None,
+            Some("7FCTGAAL0SN000001"),
+        )
+        .await
+        .expect("enrichment for a removed vehicle is a no-op");
+        db.cleanup().await;
     }
 
     async fn payload_count(pool: &PgPool, vehicle_id: uuid::Uuid) -> i64 {
