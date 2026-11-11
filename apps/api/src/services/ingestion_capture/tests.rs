@@ -32,6 +32,21 @@ fn cap_admits_up_to_the_limit_then_one_truncation_marker() {
 }
 
 #[test]
+fn ledger_forgets_idle_captures_and_reseeds_them_later() {
+    let mut ledger = CapLedger::default();
+    let finished = Uuid::new_v4();
+    ledger.seed(finished, 2);
+    let idle = std::time::Duration::from_secs(60);
+    ledger.prune(std::time::Instant::now() + idle / 2, idle);
+    assert_eq!(ledger.len(), 1, "a recently touched capture is kept");
+    ledger.prune(std::time::Instant::now() + idle * 2, idle);
+    assert_eq!(ledger.len(), 0, "an idle capture is forgotten");
+    // A late record for a forgotten capture starts from the reseeded count.
+    ledger.seed(finished, 3);
+    assert!(matches!(ledger.admit(finished, 3), Admit::Truncate));
+}
+
+#[test]
 fn sanitize_strips_identity_location_and_credentials_at_any_depth() {
     let cleaned = sanitize(json!({
         "vehicle_id": "x",
