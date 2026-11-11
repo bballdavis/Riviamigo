@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Battery, Car, CheckCircle2, CircleAlert, Lock, Package, PackageOpen, TriangleAlert, Unlock } from 'lucide-react';
+import { Battery, Car, CheckCircle2, CircleAlert, Gauge, LocateFixed, Lock, Package, PackageOpen, RadioTower, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
 import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
 import { formatMiles } from '@riviamigo/ui/lib/utils';
@@ -14,6 +14,8 @@ import { getDoorOverlayUrls, getOpenDoorStates } from './imageUtils';
 import { resolveOverviewStatIds } from './overviewStats';
 import { getOverviewStatRequirements, presentOverviewStat, type OverviewStatData } from './overviewStatDisplay';
 import { useOverviewStatData, useUnitPreferencesVersion } from './useOverviewStatData';
+import { resolveOverviewMapOptions, type OverviewMapOptions, type OverviewView } from './overviewMap';
+import { OverviewLocationMap } from './OverviewLocationMap';
 
 type AnchorSet = {
   tire: { rl: string; fl: string; rr: string; fr: string };
@@ -76,6 +78,7 @@ function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ct
       targetTirePressurePsi={activeVehicle?.target_tire_pressure_psi}
       statIds={statIds}
       statData={statData}
+      mapOptions={resolveOverviewMapOptions(instance.options)}
     />
   );
 }
@@ -89,6 +92,7 @@ export function CurrentVehicleStatePanel({
   targetTirePressurePsi,
   statIds,
   statData,
+  mapOptions,
 }: {
   status: VehicleStatus | null | undefined;
   images?: VehicleImages | null | undefined;
@@ -100,7 +104,12 @@ export function CurrentVehicleStatePanel({
   statIds?: unknown;
   /** Metric and summary values for rows that read more than live vehicle status. */
   statData?: OverviewStatData;
+  /** Location map settings. Omitted or disabled, the panel offers no cluster/map toggle. */
+  mapOptions?: OverviewMapOptions | undefined;
 }) {
+  const [view, setView] = useState<OverviewView>('cluster');
+  const mapAvailable = mapOptions?.enabled === true;
+  const showMap = mapAvailable && view === 'map';
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const resolvedOverhead = resolveVehicleArtwork(images, vehicleModel, 'overview');
   const baseOverheadLight = resolvedOverhead.light;
@@ -131,11 +140,11 @@ export function CurrentVehicleStatePanel({
     rr: makeTireDisplay(status?.tire_rr_psi, status?.tire_rr_status, targetTirePressurePsi),
   };
   const stats = resolveOverviewStatIds(statIds).map((id) => ({ id, ...presentOverviewStat(id, status, statData) }));
-  const freshnessLabel = status?.telemetry_stale
-    ? 'Telemetry stale'
+  const freshness: TelemetryFreshness = status?.telemetry_stale
+    ? { tone: 'stale', label: 'Telemetry stale' }
     : status?.last_updated
-      ? `Updated ${new Date(status.last_updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
-      : 'Awaiting telemetry';
+      ? { tone: 'fresh', label: `Updated ${new Date(status.last_updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` }
+      : { tone: 'pending', label: 'Awaiting telemetry' };
   const rearGateLock = vehicleModel === 'R1T'
     ? status?.closure_tailgate_locked
     : status?.closure_liftgate_locked ?? status?.closure_tailgate_locked;
@@ -161,9 +170,10 @@ export function CurrentVehicleStatePanel({
     >
       <div className="mb-4 flex shrink-0 items-center justify-between gap-3">
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-fg-tertiary">Vehicle overview</p>
-        <span className="rounded-lg border border-border bg-bg-elevated px-2 py-1 text-[11px] text-fg-tertiary">
-          {freshnessLabel}
-        </span>
+        <div className="flex items-center gap-2">
+          <TelemetryFreshnessIndicator freshness={freshness} />
+          {mapAvailable ? <OverviewViewToggle view={view} onChange={setView} /> : null}
+        </div>
       </div>
       {/* Tiers follow the widget's own width, not the viewport: the dashboard
           gives this widget a fixed-height cell from 640px up, so every tier
@@ -173,10 +183,11 @@ export function CurrentVehicleStatePanel({
           rather than silently clipped. */}
       <div
         data-testid="overview-layout"
-        className="grid flex-1 min-h-0 content-stretch gap-4 overflow-y-auto @min-[34rem]/overview:grid-cols-[11.25rem_minmax(0,1fr)_8.75rem] @min-[34rem]/overview:gap-3 @min-[58rem]/overview:grid-cols-[16rem_minmax(22rem,1fr)_18rem] @min-[58rem]/overview:gap-4"
+        className="grid flex-1 min-h-0 content-stretch gap-4 overflow-y-auto @min-[34rem]/overview:-mx-4 @min-[34rem]/overview:grid-cols-[11.25rem_minmax(0,1fr)_8.75rem] @min-[34rem]/overview:gap-3 @min-[58rem]/overview:grid-cols-[16rem_minmax(22rem,1fr)_18rem] @min-[58rem]/overview:gap-4"
       >
         <div
-          className="grid min-h-60 grid-cols-[3.75rem_minmax(0,1fr)] gap-4 rounded-2xl border p-4 @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:grid-cols-[2.25rem_minmax(0,1fr)] @min-[34rem]/overview:gap-3 @min-[34rem]/overview:p-3 @min-[58rem]/overview:min-h-60 @min-[58rem]/overview:grid-cols-[3.75rem_minmax(0,1fr)] @min-[58rem]/overview:gap-4 @min-[58rem]/overview:p-4"
+          data-testid="overview-soc-panel"
+          className="grid min-h-60 grid-cols-[3.75rem_minmax(0,1fr)] gap-4 rounded-2xl border p-4 @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-l-none @min-[34rem]/overview:border-l-0 @min-[34rem]/overview:grid-cols-[2.25rem_minmax(0,1fr)] @min-[34rem]/overview:gap-3 @min-[34rem]/overview:p-3 @min-[58rem]/overview:min-h-60 @min-[58rem]/overview:grid-cols-[3.75rem_minmax(0,1fr)] @min-[58rem]/overview:gap-4 @min-[58rem]/overview:p-4"
           style={{
             backgroundColor: 'color-mix(in srgb, var(--rm-accent) 8%, var(--rm-bg-surface))',
             borderColor: 'color-mix(in srgb, var(--rm-accent) 28%, var(--rm-border-default))',
@@ -213,12 +224,22 @@ export function CurrentVehicleStatePanel({
             </div>
           </div>
         </div>
-        <div ref={imageStageRef} data-testid="overview-image-stage" className="relative min-h-60 overflow-hidden rounded-2xl border border-border bg-bg-surface/70 p-1 @min-[34rem]/overview:min-h-0 @min-[58rem]/overview:min-h-60">
-          <div className="absolute right-3 top-3 z-30 inline-flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 px-2 py-1 text-[11px] text-fg-tertiary shadow-sm backdrop-blur">
+        <div ref={imageStageRef} data-testid="overview-image-stage" data-view={showMap ? 'map' : 'cluster'} className="relative min-h-60 overflow-hidden rounded-2xl border border-border bg-bg-surface/70 p-1 @min-[34rem]/overview:min-h-0 @min-[58rem]/overview:min-h-60">
+          {showMap && mapOptions ? (
+            <div className="absolute inset-0 z-10">
+              <OverviewLocationMap
+                latitude={status?.latitude}
+                longitude={status?.longitude}
+                options={mapOptions}
+                heightPx={imageStageHeight - 2}
+              />
+            </div>
+          ) : null}
+          <div className={`absolute right-3 top-3 z-30 items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 px-2 py-1 text-[11px] text-fg-tertiary shadow-sm backdrop-blur ${showMap ? 'hidden' : 'inline-flex'}`}>
             {status?.doors_locked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3 text-accent" />}
             {locksKnown ? (status?.doors_locked ? 'Locked' : 'Unlocked') : 'Locks pending'}
           </div>
-          <div className="absolute inset-1 z-10 flex items-center justify-center">
+          <div className={`absolute inset-1 z-10 items-center justify-center ${showMap ? 'hidden' : 'flex'}`}>
             {overheadArtworkAvailable ? (
               <VehicleArtFrame source={apiOverheadFallback} fallbackSource={localOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth}>
                 <VehicleOverheadLayers base={baseOverheadLight ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} isR1tFallback={vehicleModel === 'R1T'} />
@@ -255,7 +276,7 @@ export function CurrentVehicleStatePanel({
           {stats.map((stat) => (
             <div
               key={stat.id}
-              className="flex min-h-10 min-w-0 items-center justify-between gap-3 rounded-xl border border-border bg-bg-surface px-3 py-2 text-sm @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:flex-col @min-[34rem]/overview:items-start @min-[34rem]/overview:justify-center @min-[34rem]/overview:gap-0.5 @min-[34rem]/overview:px-2.5 @min-[34rem]/overview:py-1.5 @min-[58rem]/overview:min-h-10 @min-[58rem]/overview:flex-row @min-[58rem]/overview:items-center @min-[58rem]/overview:justify-between @min-[58rem]/overview:gap-3 @min-[58rem]/overview:px-3 @min-[58rem]/overview:py-2"
+              className="flex min-h-10 min-w-0 items-center justify-between gap-3 rounded-xl border border-border bg-bg-surface px-3 py-2 text-sm @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-r-none @min-[34rem]/overview:border-r-0 @min-[34rem]/overview:flex-col @min-[34rem]/overview:items-start @min-[34rem]/overview:justify-center @min-[34rem]/overview:gap-0.5 @min-[34rem]/overview:px-2.5 @min-[34rem]/overview:py-1.5 @min-[58rem]/overview:min-h-10 @min-[58rem]/overview:flex-row @min-[58rem]/overview:items-center @min-[58rem]/overview:justify-between @min-[58rem]/overview:gap-3 @min-[58rem]/overview:px-3 @min-[58rem]/overview:py-2"
             >
               <span className="inline-flex min-w-0 max-w-full items-center gap-2 truncate text-fg-tertiary @min-[34rem]/overview:gap-1.5 @min-[34rem]/overview:text-[11px] @min-[58rem]/overview:gap-2 @min-[58rem]/overview:text-sm">
                 {stat.icon}
@@ -272,6 +293,66 @@ export function CurrentVehicleStatePanel({
         </div>
       </div>
     </section>
+  );
+}
+
+type TelemetryFreshness = { tone: 'fresh' | 'stale' | 'pending'; label: string };
+
+const FRESHNESS_TONE_CLASS: Record<TelemetryFreshness['tone'], string> = {
+  fresh: 'text-status-positive',
+  stale: 'text-status-warning',
+  pending: 'text-fg-tertiary',
+};
+
+function TelemetryFreshnessIndicator({ freshness }: { freshness: TelemetryFreshness }) {
+  return (
+    <Tooltip
+      align="end"
+      side="bottom"
+      content={<span className="text-xs text-fg">{freshness.label}</span>}
+      contentClassName="whitespace-nowrap rounded-lg px-2 py-1"
+    >
+      <span
+        role="img"
+        tabIndex={0}
+        aria-label={freshness.label}
+        data-testid="overview-telemetry-freshness"
+        data-tone={freshness.tone}
+        className={`inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border bg-bg-elevated focus:outline-none @min-[34rem]/overview:h-8 @min-[34rem]/overview:w-8 focus-visible:ring-1 focus-visible:ring-accent ${FRESHNESS_TONE_CLASS[freshness.tone]}`}
+      >
+        <RadioTower className="h-4 w-4" aria-hidden="true" />
+      </span>
+    </Tooltip>
+  );
+}
+
+const OVERVIEW_VIEW_CHOICES: ReadonlyArray<{ value: OverviewView; label: string; icon: React.ComponentType<{ className?: string }> }> = [
+  { value: 'cluster', label: 'Vehicle cluster', icon: Gauge },
+  { value: 'map', label: 'Current location map', icon: LocateFixed },
+];
+
+function OverviewViewToggle({ view, onChange }: { view: OverviewView; onChange: (view: OverviewView) => void }) {
+  return (
+    <div role="group" aria-label="Overview view" className="inline-flex h-11 items-center gap-0.5 rounded-lg border border-border bg-bg-elevated p-0.5 @min-[34rem]/overview:h-8">
+      {OVERVIEW_VIEW_CHOICES.map(({ value, label, icon: Icon }) => {
+        const selected = view === value;
+        return (
+          <button
+            key={value}
+            type="button"
+            aria-label={label}
+            aria-pressed={selected}
+            title={label}
+            onClick={() => onChange(value)}
+            className={`inline-flex h-full w-10 items-center @min-[34rem]/overview:w-7 justify-center rounded-md border transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
+              selected ? 'border-accent/60 bg-accent/10 text-accent' : 'border-transparent text-fg-tertiary hover:text-fg'
+            }`}
+          >
+            <Icon className="h-4 w-4" />
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

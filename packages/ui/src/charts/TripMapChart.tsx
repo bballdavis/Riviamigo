@@ -40,6 +40,16 @@ export interface TripMapChartProps {
   selectedRouteIds?: string[];
   onRouteClick?: (routeId: string) => void;
   activePoint?: LatLng | null;
+  /**
+   * Keeps the map centered on one marked point, such as the vehicle's current
+   * location. With a focus point the map renders even when there are no
+   * routes; routes, when present, still decide the initial fit.
+   */
+  focusPoint?: LatLng | null;
+  /** Zoom used when centering on `focusPoint` without routes. */
+  focusZoom?: number;
+  /** Copy shown when there is neither a route nor a focus point. */
+  emptyLabel?: string;
   startPoint?: LatLng;
   endPoint?: LatLng;
   height?: number;
@@ -68,6 +78,7 @@ interface MapApi {
   off(event: string, cb: (event?: unknown) => void): void;
   resize(): void;
   fitBounds(bounds: [[number, number], [number, number]], options?: { padding?: number; animate?: boolean }): void;
+  jumpTo?(options: { center: [number, number]; zoom?: number }): void;
   addSource(id: string, source: unknown): void;
   getSource(id: string): MapSourceApi | undefined;
   removeSource(id: string): void;
@@ -107,6 +118,7 @@ const MAP_TILES_UNAVAILABLE = 'Map tiles unavailable';
 export const MAP_TILE_LOAD_TIMEOUT_MS = 20_000;
 /** Avoid flashing the loading indicator for fast loads and cached style swaps. */
 export const MAP_TILE_LOADING_INDICATOR_DELAY_MS = 250;
+const DEFAULT_FOCUS_ZOOM = 14;
 
 export const NEUTRAL_BASEMAP_CONFIG: BasemapConfig = {
   enabled: false,
@@ -175,6 +187,9 @@ export function TripMapChart({
   selectedRouteIds = [],
   onRouteClick,
   activePoint,
+  focusPoint = null,
+  focusZoom = DEFAULT_FOCUS_ZOOM,
+  emptyLabel = 'No route points in this period',
   height = 320,
   className,
   mapStyle = 'dark',
@@ -192,7 +207,11 @@ export function TripMapChart({
   const onRouteClickRef = React.useRef(onRouteClick);
   const latestRoutesRef = React.useRef<TripMapRoute[]>([]);
   const latestSelectedRouteIdsRef = React.useRef<string[]>([]);
-  const latestActivePointRef = React.useRef<LatLng | null | undefined>(activePoint);
+  // A focus point is drawn with the same marker as a scrubbed active point.
+  const markerPoint = activePoint ?? focusPoint;
+  const latestActivePointRef = React.useRef<LatLng | null | undefined>(markerPoint);
+  const focusPointRef = React.useRef<LatLng | null>(focusPoint);
+  const focusZoomRef = React.useRef(focusZoom);
   const latestVisibleRouteSignatureRef = React.useRef<string>('');
   const activePointFrameRef = React.useRef<number | null>(null);
   const lastActivePointRef = React.useRef<LatLng | null>(null);
@@ -231,6 +250,7 @@ export function TripMapChart({
     () => (routes?.length ? routes : [{ id: 'trip', track }]).filter((route) => route.track.length > 1),
     [routes, track],
   );
+  const hasMapContent = routeList.length > 0 || focusPoint !== null;
   const selectedRouteIdSet = React.useMemo(() => new Set(selectedRouteIds), [selectedRouteIds]);
   const visibleRoutes = React.useMemo(
     () => (selectedRouteIds.length > 0
@@ -250,9 +270,11 @@ export function TripMapChart({
   React.useEffect(() => {
     latestRoutesRef.current = visibleRoutes;
     latestSelectedRouteIdsRef.current = selectedRouteIds;
-    latestActivePointRef.current = activePoint;
+    latestActivePointRef.current = markerPoint;
     latestVisibleRouteSignatureRef.current = visibleRouteSignature;
-  }, [activePoint, selectedRouteIds, visibleRouteSignature, visibleRoutes]);
+    focusPointRef.current = focusPoint;
+    focusZoomRef.current = focusZoom;
+  }, [focusPoint, focusZoom, markerPoint, selectedRouteIds, visibleRouteSignature, visibleRoutes]);
 
   React.useEffect(() => {
     const element = containerRef.current;
@@ -321,7 +343,7 @@ export function TripMapChart({
   // rather than destroying and recreating the map, which avoids losing the
   // in-GPU tile cache and triggering a "WebGL context was lost" error.
   React.useEffect(() => {
-    if (!containerRef.current || routeList.length === 0 || mapRef.current) return;
+    if (!containerRef.current || !hasMapContent || mapRef.current) return;
 
     let cancelled = false;
     beginTileLoad();
@@ -332,7 +354,8 @@ export function TripMapChart({
 
         if (cancelled || !containerRef.current) return;
 
-        const firstPoint = routeList[0]?.track[0];
+        const routeStart = routeList[0]?.track[0];
+        const firstPoint = routeStart ?? focusPointRef.current;
         if (!firstPoint) return;
 
         const initialBasemap = basemapRef.current;
@@ -343,7 +366,7 @@ export function TripMapChart({
           container: containerRef.current!,
           style: buildMapLibreStyle(initialMapStyle, initialBasemap, initialMapStylePreference),
           center: [firstPoint.lng, firstPoint.lat],
-          zoom: 12,
+          zoom: routeStart ? 12 : focusZoomRef.current,
           attributionControl: false,
           transformRequest: (url: string) => {
             try {
@@ -473,10 +496,19 @@ export function TripMapChart({
         mapRef.current = null;
       }
     };
-    // Only run when the first routes arrive — NOT on mapStyle change so that
-    // toggling dark/light doesn't destroy the map instance.
+    // Only run when the first routes (or focus point) arrive — NOT on mapStyle
+    // change so that toggling dark/light doesn't destroy the map instance.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapLoader, mapRetryVersion, routeList.length === 0]);
+  }, [mapLoader, mapRetryVersion, !hasMapContent]);
+
+  // Follow the focus point when there are no routes to frame instead.
+  const focusLat = focusPoint?.lat;
+  const focusLng = focusPoint?.lng;
+  React.useEffect(() => {
+    if (!isLoadedRef.current || !mapRef.current) return;
+    if (focusLat === undefined || focusLng === undefined || routeList.length > 0) return;
+    mapRef.current.jumpTo?.({ center: [focusLng, focusLat] });
+  }, [focusLat, focusLng, routeList.length]);
 
   // ── Style swap — update tiles in place without destroying the map ─────────
   // setStyle() clears all sources/layers, so we re-sync routes once the new
@@ -554,7 +586,7 @@ export function TripMapChart({
       activePointFrameRef.current = null;
       const map = mapRef.current;
       if (!map) return;
-      syncActivePoint(map, activePoint, lastActivePointRef);
+      syncActivePoint(map, markerPoint, lastActivePointRef);
     });
 
     return () => {
@@ -562,7 +594,7 @@ export function TripMapChart({
         cancelAnimationFrame(activePointFrameRef.current);
       }
     };
-  }, [activePoint, isDark, palette, themeRevision]);
+  }, [markerPoint, isDark, palette, themeRevision]);
 
   function syncRoutes(
     map: MapApi,
@@ -648,12 +680,12 @@ export function TripMapChart({
   }
 
   return (
-    routeList.length === 0 ? (
+    !hasMapContent ? (
       <div
         style={{ height }}
         className={className ?? 'w-full rounded-xl border border-border bg-bg-elevated flex items-center justify-center text-sm text-fg-tertiary'}
       >
-        No route points in this period
+        {emptyLabel}
       </div>
     ) : (
       <div className="relative">
