@@ -45,6 +45,7 @@ import { JobsSection } from '../../components/settings/JobsSection';
 import { PlacesSection } from '../../components/settings/PlacesSection';
 import { ChargingSection } from '../../components/settings/ChargingSection';
 import { AppearanceSection } from './AppearanceSection';
+import { SettingsDraftProvider, useSettingsLeaveGuard } from './drafts/SettingsDraftProvider';
 import { RawTelemetryExplorer } from '../../components/settings/RawTelemetryExplorer';
 import { ChartManagerSection } from './charts/ChartManagerSection';
 import { canManageSystemDashboards } from '../../components/dashboard/DashboardPage';
@@ -639,7 +640,18 @@ function DashboardSettingsList({
   );
 }
 
-export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind }: { initialSection?: SettingsSection; oidcFeedback?: string; oidcFeedbackKind?: 'success' | 'error' } = {}) {
+type SettingsContentProps = { initialSection?: SettingsSection; oidcFeedback?: string; oidcFeedbackKind?: 'success' | 'error' };
+
+export function SettingsContent(props: SettingsContentProps = {}) {
+  return (
+    <SettingsDraftProvider>
+      <SettingsContentInner {...props} />
+    </SettingsDraftProvider>
+  );
+}
+
+function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }: SettingsContentProps) {
+  const requestLeave = useSettingsLeaveGuard();
   const { accessToken, clearSession, logout, defaultVehicleId, setDefaultVehicleId, setActiveVehicleId } = useAuth();
   const authReady = useAuthReady();
   const navigate = useNavigate();
@@ -696,8 +708,12 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
   }, [activeSection, initialSection]);
 
   function selectSettingsSection(next: SettingsSection) {
-    setActiveSection(next);
-    navigate({ to: '/settings', search: next === 'vehicles' ? {} : { section: next } });
+    if (next === activeSection) return;
+    // Staged edits belong to the open section; save or discard them first.
+    requestLeave(() => {
+      setActiveSection(next);
+      navigate({ to: '/settings', search: next === 'vehicles' ? {} : { section: next } });
+    });
   }
 
   const appVersion = useQuery({
