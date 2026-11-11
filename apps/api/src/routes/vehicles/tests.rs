@@ -16,16 +16,18 @@ use http::{Request, StatusCode};
 use tower::ServiceExt;
 use uuid::Uuid;
 
+use super::artwork::{
+    fetch_vehicle_image_rows, mirror_file_path, resolved_image_url, store_vehicle_image_manifest,
+    try_claim_vehicle_artwork_repair, write_vehicle_artwork_cache_state, ArtworkCacheStateUpdate,
+    ARTWORK_NO_PROVIDER_ARTWORK_ERROR, ARTWORK_REPAIR_FAILED_ERROR,
+};
 use super::{
     canonical_battery_config, canonical_vehicle_model, canonical_vehicle_name, capture_export_body,
-    connect_otp, fetch_vehicle_image_rows, is_demo_vehicle_key, list_vehicles,
-    load_encrypted_redis, map_rivian_login_error, map_rivian_otp_error, mirror_file_path,
-    parse_raw_fields, parse_telemetry_lanes, raw_field_coverage_query, raw_telemetry_where_clause,
-    refresh_vehicle_vin, resolve_telemetry_resolution, resolved_image_url, store_encrypted_redis,
-    store_vehicle_image_manifest, try_claim_vehicle_artwork_repair, validate_raw_time_bounds,
-    vehicle_data_ready, write_vehicle_artwork_cache_state, ArtworkCacheStateUpdate, OtpBody,
-    PendingOtpChallenge, ARTWORK_NO_PROVIDER_ARTWORK_ERROR, ARTWORK_REPAIR_FAILED_ERROR,
-    RAW_TELEMETRY_FIELDS, TELEMETRY_LANES_QUERY,
+    connect_otp, is_demo_vehicle_key, list_vehicles, load_encrypted_redis, map_rivian_login_error,
+    map_rivian_otp_error, parse_raw_fields, parse_telemetry_lanes, raw_field_coverage_query,
+    raw_telemetry_where_clause, refresh_vehicle_vin, resolve_telemetry_resolution,
+    store_encrypted_redis, validate_raw_time_bounds, vehicle_data_ready, OtpBody,
+    PendingOtpChallenge, RAW_TELEMETRY_FIELDS, TELEMETRY_LANES_QUERY,
 };
 
 // Run with: cargo test -- --ignored
