@@ -882,7 +882,13 @@ async fn fetch_charge_history_locked(
     let mut payload_audit_failures = 0usize;
     let mut payload_audit_error_sample: Option<String> = None;
     let summaries = data.get_completed_session_summaries.unwrap_or_default();
+    // A foreign summary in this response proves the Rivian account has other
+    // vehicles, so an unidentified summary cannot be attributed safely.
+    let response_has_foreign = summaries.iter().any(|summary| {
+        summary.vehicle_match(rivian_vehicle_id) == charge_sessions::SummaryVehicleMatch::Foreign
+    });
     let allow_unidentified = !summaries.is_empty()
+        && !response_has_foreign
         && charge_sessions::vehicles_accepting_unidentified_summaries(pool, Some(vehicle_id))
             .await?
             .contains(&vehicle_id);
@@ -2964,9 +2970,12 @@ mod tests {
     #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
     async fn charge_history_replay_filters_account_wide_payloads_by_vehicle() {
         let db = DisposableDatabase::new().await;
-        let mut single_vehicle = None;
-        let mut multi_vehicle = None;
-        for has_sibling in [false, true] {
+        let mut accepted_vehicles = Vec::new();
+        let mut refused_vehicles = Vec::new();
+        // (has_sibling, stores_foreign_summary): a foreign summary proves the
+        // Rivian account has other vehicles even when the owner has one.
+        for (has_sibling, stores_foreign) in [(false, false), (false, true), (true, true)] {
+            let accepts_unidentified = !has_sibling && !stores_foreign;
             let vehicle_id = seed_vehicle(&db.pool).await;
             // Demo vehicles never count toward the single-vehicle rule.
             seed_sibling_vehicle(
@@ -2982,9 +2991,11 @@ mod tests {
                     &format!("charge-test-sibling-{}", uuid::Uuid::new_v4()),
                 )
                 .await;
-                multi_vehicle = Some(vehicle_id);
+            }
+            if accepts_unidentified {
+                accepted_vehicles.push(vehicle_id);
             } else {
-                single_vehicle = Some(vehicle_id);
+                refused_vehicles.push(vehicle_id);
             }
             let rivian_vehicle_id = vehicle_rivian_id(&db.pool, vehicle_id).await;
 
@@ -2997,7 +3008,10 @@ mod tests {
                 ),
                 ("foreign", Some("another-vehicle"), "2026-06-21T10:00:00Z"),
                 ("unidentified", None, "2026-06-22T10:00:00Z"),
-            ] {
+            ]
+            .into_iter()
+            .filter(|(label, _, _)| stores_foreign || *label != "foreign")
+            {
                 let transaction_id = format!("{label}-{vehicle_id}");
                 let payload = json!({
                     "transactionId": transaction_id,
@@ -3026,12 +3040,14 @@ mod tests {
             )
             .await
             .unwrap();
-            let expected = if has_sibling {
-                vec![transaction_ids[0].clone()]
+            let case = format!("has_sibling={has_sibling} stores_foreign={stores_foreign}");
+            let unidentified = transaction_ids.last().unwrap().clone();
+            let expected = if accepts_unidentified {
+                vec![transaction_ids[0].clone(), unidentified]
             } else {
-                vec![transaction_ids[0].clone(), transaction_ids[2].clone()]
+                vec![transaction_ids[0].clone()]
             };
-            assert_eq!(linked, expected.len() as u64, "has_sibling={has_sibling}");
+            assert_eq!(linked, expected.len() as u64, "{case}");
             let sessions: Vec<String> = sqlx::query_scalar(
                 "SELECT rivian_session_id FROM riviamigo.charge_sessions
                  WHERE vehicle_id = $1 ORDER BY started_at",
@@ -3040,7 +3056,7 @@ mod tests {
             .fetch_all(&db.pool)
             .await
             .unwrap();
-            assert_eq!(sessions, expected, "has_sibling={has_sibling}");
+            assert_eq!(sessions, expected, "{case}");
             let linked_transactions: Vec<String> = sqlx::query_scalar(
                 "SELECT rivian_transaction_id FROM riviamigo.rivian_charge_payloads
                  WHERE vehicle_id = $1 AND charge_session_id IS NOT NULL
@@ -3053,7 +3069,10 @@ mod tests {
             let mut expected_links = expected.clone();
             expected_links.sort();
             assert_eq!(linked_transactions, expected_links);
-            assert_eq!(payload_count(&db.pool, vehicle_id).await, 3);
+            assert_eq!(
+                payload_count(&db.pool, vehicle_id).await,
+                transaction_ids.len() as i64
+            );
             // Sessions built from unidentified summaries carry no upstream
             // vehicle ID, so they are never reported as misattributed.
             let diagnostics = charge_sessions::diagnose_charge_sessions(&db.pool, Some(vehicle_id))
@@ -3065,8 +3084,12 @@ mod tests {
         let accepting = charge_sessions::vehicles_accepting_unidentified_summaries(&db.pool, None)
             .await
             .unwrap();
-        assert!(accepting.contains(&single_vehicle.unwrap()));
-        assert!(!accepting.contains(&multi_vehicle.unwrap()));
+        for vehicle_id in accepted_vehicles {
+            assert!(accepting.contains(&vehicle_id));
+        }
+        for vehicle_id in refused_vehicles {
+            assert!(!accepting.contains(&vehicle_id));
+        }
         db.cleanup().await;
     }
 

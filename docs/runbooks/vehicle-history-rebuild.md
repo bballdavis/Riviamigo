@@ -69,9 +69,14 @@ upstream `vehicleId` before storing or matching it:
 - A summary that names a different vehicle is always skipped.
 - A summary with a null or empty `vehicleId` is attributed to the target vehicle
   only when the target is the sole non-demo vehicle of its owner
-  (`vehicles.user_id`). Otherwise it is skipped, because its vehicle cannot be
-  determined. Adding a second vehicle to an account therefore stops later
-  replays from attributing unidentified summaries.
+  (`vehicles.user_id`) and nothing shows that its Rivian account covers other
+  vehicles: the current response and the vehicle's retained summaries must not
+  name any other upstream vehicle. Otherwise it is skipped, because its vehicle
+  cannot be determined. Adding a second vehicle to an account, or sharing one
+  Rivian login between users, therefore stops later syncs and replays from
+  attributing unidentified summaries. If every summary on a shared account is
+  unidentified there is no evidence to detect the sharing, and those sessions
+  are attributed to the polling vehicle.
 
 Each sync or replay run logs one aggregated `info` line with
 `skipped_foreign`, `skipped_unidentified`, and `accepted_unidentified` counts

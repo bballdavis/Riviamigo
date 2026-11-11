@@ -114,11 +114,17 @@ struct VehicleOwnershipRow {
     id: Uuid,
     user_id: Uuid,
     rivian_vehicle_id: String,
+    has_foreign_payloads: bool,
 }
 
 /// Returns the local vehicles that may receive completed-session summaries
 /// whose upstream `vehicleId` is missing: a vehicle qualifies only when it is
-/// the sole non-demo vehicle owned (`vehicles.user_id`) by its user. When
+/// the sole non-demo vehicle owned (`vehicles.user_id`) by its user and none
+/// of its retained summaries names another upstream vehicle. Credentials are
+/// stored per vehicle, so a sole local vehicle can still share its Rivian
+/// account with vehicles that are untracked or owned by another user; any
+/// foreign summary proves that and disables the fallback. Live sync also
+/// refuses when the current response contains a foreign summary. When
 /// `vehicle_id` is set, only that vehicle's owner is considered.
 pub async fn vehicles_accepting_unidentified_summaries(
     pool: &PgPool,
@@ -126,7 +132,14 @@ pub async fn vehicles_accepting_unidentified_summaries(
 ) -> Result<std::collections::HashSet<Uuid>> {
     let rows = sqlx::query_as::<_, VehicleOwnershipRow>(
         r#"
-        SELECT v.id, v.user_id, v.rivian_vehicle_id
+        SELECT v.id, v.user_id, v.rivian_vehicle_id,
+               EXISTS (
+                   SELECT 1 FROM riviamigo.rivian_charge_payloads p
+                   WHERE p.vehicle_id = v.id
+                     AND p.operation = 'getCompletedSessionSummaries'
+                     AND p.rivian_vehicle_id IS NOT NULL
+                     AND p.rivian_vehicle_id <> v.rivian_vehicle_id
+               ) AS has_foreign_payloads
         FROM riviamigo.vehicles v
         WHERE $1::uuid IS NULL
            OR v.user_id = (SELECT target.user_id FROM riviamigo.vehicles target WHERE target.id = $1)
@@ -136,20 +149,20 @@ pub async fn vehicles_accepting_unidentified_summaries(
     .fetch_all(pool)
     .await?;
 
-    let mut real_vehicles_by_user = std::collections::HashMap::<Uuid, Vec<Uuid>>::new();
+    let mut real_vehicles_by_user = std::collections::HashMap::<Uuid, Vec<(Uuid, bool)>>::new();
     for row in rows {
         if !crate::db::vehicles::is_demo_vehicle_key(&row.rivian_vehicle_id) {
             real_vehicles_by_user
                 .entry(row.user_id)
                 .or_default()
-                .push(row.id);
+                .push((row.id, row.has_foreign_payloads));
         }
     }
 
     Ok(real_vehicles_by_user
         .into_values()
         .filter_map(|vehicles| match vehicles.as_slice() {
-            [only] => Some(*only),
+            [(only, false)] => Some(*only),
             _ => None,
         })
         .collect())
