@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dashboardSearchSchema } from '../dashboardSearch';
@@ -621,7 +621,32 @@ vi.mock('lucide-react', () => ({
 
 import { SettingsContent } from '../settings';
 
-function renderSettings() {
+type SettingsSearch = { section?: string };
+type InitialSection = NonNullable<NonNullable<Parameters<typeof SettingsContent>[0]>['initialSection']>;
+
+/** Sets the Settings route search from outside the page, as a sidebar link or back/forward would. */
+let applyRouteSearch: ((search: SettingsSearch) => void) | null = null;
+
+/**
+ * Stands in for the Settings route: the open section is whatever the search names. Navigations the page
+ * makes through `navigate` update that search, so a section switch re-renders the new section as it does
+ * in the app.
+ */
+function SettingsRouteHarness({ initialSearch }: { initialSearch: SettingsSearch }) {
+  const [search, setSearch] = React.useState<SettingsSearch>(initialSearch);
+  React.useEffect(() => {
+    applyRouteSearch = setSearch;
+    mockNavigate.mockImplementation((options: { to: string; search?: SettingsSearch }) => {
+      if (options.to === '/settings') setSearch(options.search ?? {});
+    });
+    return () => {
+      applyRouteSearch = null;
+    };
+  }, []);
+  return <SettingsContent {...(search.section ? { initialSection: search.section as InitialSection } : {})} />;
+}
+
+function renderSettings(initialSearch: SettingsSearch = {}) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -630,9 +655,13 @@ function renderSettings() {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <SettingsContent />
+      <SettingsRouteHarness initialSearch={initialSearch} />
     </QueryClientProvider>
   );
+}
+
+function navigateSettingsRoute(search: SettingsSearch) {
+  act(() => applyRouteSearch?.(search));
 }
 
 function clickSettingsSection(label: string) {
@@ -809,6 +838,51 @@ describe('Settings page', () => {
     renderSettings();
 
     expect(screen.getByRole('option', { name: 'Backups' })).toBeInTheDocument();
+  });
+
+  it('shows Vehicles for a plain /settings navigation after another section was open', () => {
+    renderSettings({ section: 'account' });
+    expect(screen.getByText('Sign Out')).toBeInTheDocument();
+
+    navigateSettingsRoute({});
+
+    expect(screen.getByLabelText('Settings section')).toHaveValue('vehicles');
+    expect(screen.queryByText('Sign Out')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Vehicle' })).toBeInTheDocument();
+  });
+
+  it('follows the section named by the URL on back and forward navigation', () => {
+    renderSettings({ section: 'places' });
+    expect(screen.getByLabelText('Settings section')).toHaveValue('places');
+
+    navigateSettingsRoute({ section: 'account' });
+    expect(screen.getByLabelText('Settings section')).toHaveValue('account');
+    expect(screen.getByText('Sign Out')).toBeInTheDocument();
+
+    navigateSettingsRoute({ section: 'places' });
+    expect(screen.getByLabelText('Settings section')).toHaveValue('places');
+    expect(screen.queryByText('Sign Out')).not.toBeInTheDocument();
+  });
+
+  it('keeps the chosen section open after a sidebar switch with no unsaved edits', () => {
+    renderSettings();
+
+    clickSettingsSection('Account');
+    expect(screen.getByText('Sign Out')).toBeInTheDocument();
+
+    clickSettingsSection('Places');
+    expect(screen.getByLabelText('Settings section')).toHaveValue('places');
+    expect(screen.queryByText('Sign Out')).not.toBeInTheDocument();
+    expect(mockNavigate).toHaveBeenLastCalledWith({ to: '/settings', search: { section: 'places' } });
+  });
+
+  it('selecting the section that is already open does not navigate', () => {
+    renderSettings({ section: 'account' });
+
+    clickSettingsSection('Account');
+
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(screen.getByText('Sign Out')).toBeInTheDocument();
   });
 
   it('renders the connected vehicle display name', () => {
