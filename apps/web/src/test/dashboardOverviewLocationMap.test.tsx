@@ -142,13 +142,18 @@ describe('vehicle overview location map', () => {
     expect(screen.getByTestId('overview-stats').children).toHaveLength(5);
   });
 
-  it('marks the vehicle with its own artwork in an accent ring, turned to its heading', () => {
+  it('marks the vehicle with its own artwork outlined in the accent color, turned to its heading', () => {
     renderOverview();
     fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));
     const map = screen.getByTestId('trip-map');
     expect(map).toHaveAttribute('data-rotation', '92');
     const marker = within(map).getByTestId('overview-map-vehicle-marker');
-    expect(marker).toHaveClass('rounded-full', 'border-2', 'border-accent');
+    // The outline follows the vehicle's silhouette; there is no ring around it.
+    expect(marker).not.toHaveClass('rounded-full');
+    const art = within(marker).getByTestId('overview-map-vehicle-art');
+    expect(art).toHaveClass('h-12');
+    expect(art.style.filter).toContain('drop-shadow(2px 0 0 var(--rm-accent))');
+    expect(art.style.filter).toContain('drop-shadow(0 -2px 0 var(--rm-accent))');
   });
 
   it('applies the widget map type and light/dark overrides', () => {
