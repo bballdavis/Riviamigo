@@ -168,13 +168,8 @@ fn lookup_year(query: &LookupQuery) -> Result<String, AppError> {
 }
 
 fn lookup_text(name: &str, value: Option<&str>) -> Result<String, AppError> {
-    let value = value.map(str::trim).unwrap_or("");
-    if value.is_empty() || value.chars().count() > 80 || value.chars().any(char::is_control) {
-        return Err(AppError::Validation(format!(
-            "{name} must be 1 to 80 characters"
-        )));
-    }
-    Ok(value.to_string())
+    ownership::clean_label(value.unwrap_or(""), 80)
+        .ok_or_else(|| AppError::Validation(format!("{name} must be 1 to 80 characters")))
 }
 
 async fn lookup_menu(

@@ -145,11 +145,14 @@ fn settings_validation_rejects_out_of_range_and_normalizes_custom_vehicles() {
     assert_eq!(vehicle.mpg, None);
     assert!(!vehicle.premium_fuel);
 
+    let mut multi_line = custom("custom-4", Powertrain::Gas, Some(25.0), None);
+    multi_line.label = "My\ncar".into();
     for invalid in [
         custom("kia_ev9", Powertrain::Gas, Some(25.0), None),
         custom("bad id", Powertrain::Gas, Some(25.0), None),
         custom("custom-2", Powertrain::Gas, None, None),
         custom("custom-3", Powertrain::Ev, None, None),
+        multi_line,
     ] {
         let settings = OwnershipSettings {
             comparisons: Comparisons {
@@ -175,6 +178,17 @@ fn reference_vehicles_have_unique_ids_and_the_figures_their_powertrain_needs() {
             _ => assert!(vehicle.mpg.is_some() && !vehicle.costs.maintenance.is_empty()),
         }
     }
+}
+
+#[test]
+fn labels_are_trimmed_bounded_and_single_line() {
+    assert_eq!(clean_label("  Kia ", 80).as_deref(), Some("Kia"));
+    assert_eq!(clean_label("Kia\n", 80).as_deref(), Some("Kia"));
+    assert_eq!(clean_label(&"é".repeat(60), 60).map(|l| l.len()), Some(120));
+    for rejected in ["", "   ", "Ki\na", "Ki\ta", "Ki\u{7f}a", "Ki\u{85}a"] {
+        assert_eq!(clean_label(rejected, 80), None, "{rejected:?}");
+    }
+    assert_eq!(clean_label(&"x".repeat(61), 60), None);
 }
 
 #[test]
