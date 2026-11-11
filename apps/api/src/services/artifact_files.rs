@@ -329,7 +329,10 @@ mod tests {
         ));
         let staging = temp.path().join(".restore-staging").join(id.to_string());
         assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0);
-        limits.min_free_bytes = fs2::available_space(temp.path()).unwrap() + 1;
+        // A reserve no disk can satisfy. Measuring free space and adding one
+        // byte raced against other writers: if anything freed space before the
+        // check, the write was allowed and the assertion failed on busy hosts.
+        limits.min_free_bytes = u64::MAX;
         let mut small: &[u8] = b"small";
         assert!(matches!(
             stage_restore_reader(temp.path(), id, false, &mut small, &limits).await,
