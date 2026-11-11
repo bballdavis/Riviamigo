@@ -25,6 +25,62 @@ fn requires_authorized_connected_runtime_before_reporting_refresh_ready() {
 }
 
 #[tokio::test]
+async fn paused_vehicle_refresh_never_starts_a_collector_or_waits_for_data() {
+    // The no-op supervisor rejects every command and the pool is never
+    // connected, so any start attempt reports SupervisorUnavailable at once.
+    let state = make_helper_state("redis://127.0.0.1/".into());
+    let vehicle_id = Uuid::new_v4();
+    let started = std::time::Instant::now();
+    assert_eq!(
+        start_refreshed_vehicle_telemetry(&state, vehicle_id, true).await,
+        CredentialRefreshTelemetry::Paused
+    );
+    assert_eq!(
+        start_refreshed_vehicle_telemetry(&state, vehicle_id, false).await,
+        CredentialRefreshTelemetry::SupervisorUnavailable
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+}
+
+#[test]
+fn credential_refresh_response_reports_paused_collection() {
+    let vehicle_id = Uuid::new_v4();
+    let paused = credential_refresh_response(vehicle_id, CredentialRefreshTelemetry::Paused);
+    assert_eq!(paused["ok"], true);
+    assert_eq!(paused["vehicle_saved"], true);
+    assert_eq!(paused["vehicle_id"], vehicle_id.to_string());
+    assert_eq!(paused["connection_status"], "paused");
+    assert_eq!(paused["telemetry_status"], "paused");
+    assert_eq!(paused["telemetry_error"], CREDENTIAL_REFRESH_PAUSED_MESSAGE);
+
+    for (telemetry, connection, status, has_error) in [
+        (
+            CredentialRefreshTelemetry::Connected,
+            "connected",
+            "connected",
+            false,
+        ),
+        (
+            CredentialRefreshTelemetry::WaitingForVehicleData,
+            "connected_waiting_for_vehicle_data",
+            "waiting_for_vehicle_data",
+            true,
+        ),
+        (
+            CredentialRefreshTelemetry::SupervisorUnavailable,
+            "connected_waiting_for_vehicle_data",
+            "delayed",
+            true,
+        ),
+    ] {
+        let body = credential_refresh_response(vehicle_id, telemetry);
+        assert_eq!(body["connection_status"], connection);
+        assert_eq!(body["telemetry_status"], status);
+        assert_eq!(body["telemetry_error"].is_string(), has_error);
+    }
+}
+
+#[tokio::test]
 #[ignore = "requires DATABASE_URL"]
 async fn connect_requires_auth() {
     let app = make_app().await;

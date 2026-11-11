@@ -1494,6 +1494,16 @@ async fn refresh_vehicle_credentials(
 
     let mut tx = state.pool.begin().await?;
 
+    // Lock the vehicle row so a concurrent pause or resume cannot interleave
+    // with the start decision made from this value after commit.
+    let collection_paused: bool = sqlx::query_scalar(
+        "SELECT collection_paused FROM riviamigo.vehicles WHERE id = $1 FOR NO KEY UPDATE",
+    )
+    .bind(vid)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
     refresh_vehicle_vin(&mut tx, vid, verified.vin.as_deref()).await?;
 
     sqlx::query(
@@ -1509,6 +1519,43 @@ async fn refresh_vehicle_credentials(
     .execute(&mut *tx)
     .await?;
 
+    if collection_paused {
+        // No collector will run, so record the renewed authorization without
+        // claiming that a worker is starting.
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_runtime_state
+             (vehicle_id, is_online, auth_state, auth_reason_code, updated_at)
+             VALUES ($1, FALSE, 'authorized', NULL, now())
+             ON CONFLICT (vehicle_id) DO UPDATE
+             SET auth_state = 'authorized',
+                 auth_reason_code = NULL,
+                 updated_at = now()",
+        )
+        .bind(vid)
+        .execute(&mut *tx)
+        .await?;
+    } else {
+        mark_vehicle_collector_starting(&mut tx, vid).await?;
+    }
+
+    tx.commit().await?;
+
+    if let Err(error) = redis::AsyncCommands::del::<_, ()>(&mut conn, &key).await {
+        warn!(
+            user_id = %auth.user_id,
+            vehicle_id = %vid,
+            err = %error,
+            "vehicle.refresh_credentials.connect_session_cleanup_failed"
+        );
+    }
+    let telemetry = start_refreshed_vehicle_telemetry(&state, vid, collection_paused).await;
+    Ok(Json(credential_refresh_response(vid, telemetry)))
+}
+
+async fn mark_vehicle_collector_starting(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    vid: Uuid,
+) -> Result<(), AppError> {
     sqlx::query(
         "INSERT INTO riviamigo.vehicle_runtime_state
          (vehicle_id, is_online, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at)
@@ -1522,39 +1569,77 @@ async fn refresh_vehicle_credentials(
              updated_at = now()",
     )
     .bind(vid)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
+    Ok(())
+}
 
-    tx.commit().await?;
+/// What happened to live data collection after a credential refresh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CredentialRefreshTelemetry {
+    /// A manager paused collection for this vehicle; no collector was started.
+    Paused,
+    Connected,
+    WaitingForVehicleData,
+    SupervisorUnavailable,
+}
 
-    if let Err(error) = redis::AsyncCommands::del::<_, ()>(&mut conn, &key).await {
-        warn!(
-            user_id = %auth.user_id,
-            vehicle_id = %vid,
-            err = %error,
-            "vehicle.refresh_credentials.connect_session_cleanup_failed"
-        );
+const CREDENTIAL_REFRESH_PAUSED_MESSAGE: &str = "Rivian credentials saved. Data collection is paused for this vehicle; resume it in Settings > Vehicles to reconnect.";
+
+/// Credential refresh is also the recovery path after a sanitized restore, so
+/// an active vehicle's collector starts immediately rather than staying
+/// authorized in the database but disconnected from Rivian. A paused vehicle
+/// stays paused: no collector is started and no readiness wait is spent.
+async fn start_refreshed_vehicle_telemetry(
+    state: &AppState,
+    vehicle_id: Uuid,
+    collection_paused: bool,
+) -> CredentialRefreshTelemetry {
+    if collection_paused {
+        return CredentialRefreshTelemetry::Paused;
     }
-    // Credential refresh is also the recovery path after a sanitized restore.
-    // Start the worker immediately so an existing vehicle does not remain
-    // authorized in the database but disconnected from Rivian.
-    let telemetry_start_queued = state
+    if !state
         .supervisor
-        .send(SupervisorCommand::StartWorker { vehicle_id: vid })
-        .await;
-    let telemetry_ready = telemetry_start_queued && wait_for_vehicle_data(&state.pool, vid).await;
-    Ok(Json(serde_json::json!({
+        .send(SupervisorCommand::StartWorker { vehicle_id })
+        .await
+    {
+        return CredentialRefreshTelemetry::SupervisorUnavailable;
+    }
+    if wait_for_vehicle_data(&state.pool, vehicle_id).await {
+        CredentialRefreshTelemetry::Connected
+    } else {
+        CredentialRefreshTelemetry::WaitingForVehicleData
+    }
+}
+
+fn credential_refresh_response(
+    vehicle_id: Uuid,
+    telemetry: CredentialRefreshTelemetry,
+) -> serde_json::Value {
+    let (connection_status, telemetry_status, telemetry_error) = match telemetry {
+        CredentialRefreshTelemetry::Paused => {
+            ("paused", "paused", Some(CREDENTIAL_REFRESH_PAUSED_MESSAGE))
+        }
+        CredentialRefreshTelemetry::Connected => ("connected", "connected", None),
+        CredentialRefreshTelemetry::WaitingForVehicleData => (
+            "connected_waiting_for_vehicle_data",
+            "waiting_for_vehicle_data",
+            Some("Rivian credentials saved; vehicle data is still loading"),
+        ),
+        CredentialRefreshTelemetry::SupervisorUnavailable => (
+            "connected_waiting_for_vehicle_data",
+            "delayed",
+            Some("worker supervisor unavailable; retry telemetry start"),
+        ),
+    };
+    serde_json::json!({
         "ok": true,
-        "vehicle_id": vid,
+        "vehicle_id": vehicle_id,
         "vehicle_saved": true,
-        "connection_status": if telemetry_ready { "connected" } else { "connected_waiting_for_vehicle_data" },
-        "telemetry_status": if telemetry_ready { "connected" } else if telemetry_start_queued { "waiting_for_vehicle_data" } else { "delayed" },
-        "telemetry_error": if telemetry_start_queued {
-            if telemetry_ready { serde_json::Value::Null } else { serde_json::Value::String("Rivian credentials saved; vehicle data is still loading".into()) }
-        } else {
-            serde_json::Value::String("worker supervisor unavailable; retry telemetry start".into())
-        },
-    })))
+        "connection_status": connection_status,
+        "telemetry_status": telemetry_status,
+        "telemetry_error": telemetry_error,
+    })
 }
 
 async fn wait_for_vehicle_data(pool: &sqlx::PgPool, vehicle_id: Uuid) -> bool {

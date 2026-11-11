@@ -80,6 +80,12 @@ account, the supervisor replaces that completed worker and starts ingestion
 immediately. A successful refresh should therefore be followed by worker health
 and telemetry-timestamp checks, not only by an `authorized` database state.
 
+A vehicle whose collection a manager paused is the exception: the refresh
+stores the credentials and marks the vehicle `authorized`, but sends no
+worker-start command and does not wait for vehicle data. The response reports
+`connection_status` and `telemetry_status` as `paused`, and resuming the
+vehicle starts the worker.
+
 ## Advisory Renewal Policy
 
 Riviamigo treats the durable token bundle creation time as the most recent full
