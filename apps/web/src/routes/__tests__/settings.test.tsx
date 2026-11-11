@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dashboardSearchSchema } from '../dashboardSearch';
@@ -83,7 +83,7 @@ const hooksMocks = vi.hoisted(() => ({
 const mockNavigate = vi.fn();
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>();
-  return { ...actual, useNavigate: () => mockNavigate };
+  return { ...actual, useNavigate: () => mockNavigate, useBlocker: () => ({ status: 'idle' }) };
 });
 
 // One stable object, as React Query returns: the editor reseeds its form whenever `data` changes.
@@ -459,6 +459,9 @@ vi.mock('@riviamigo/hooks', () => ({
     }),
     updateVehicleSettings: vi.fn().mockResolvedValue({}),
     updateVehicleName: vi.fn().mockResolvedValue({}),
+    updateUnitPreferences: vi.fn().mockImplementation(async (units: unknown) => ({ units })),
+    getAppTimezone: vi.fn().mockResolvedValue({ timezone: 'America/Chicago' }),
+    updateAppTimezone: vi.fn().mockImplementation(async (timezone: string) => ({ timezone })),
     updateVehicleCollection: vi.fn().mockResolvedValue({ ok: true, collection_paused: true, worker_command_queued: true }),
     refreshVehicleArtwork: vi.fn().mockResolvedValue({ ok: true, vehicle_id: 'v1' }),
   },
@@ -472,6 +475,7 @@ vi.mock('@riviamigo/hooks', () => ({
   useBasemapConfig: () => ({ data: settingsMocks.basemapConfig, isLoading: false, isError: false }),
   useUpdateMapStyle: () => ({
     mutate: hooksMocks.updateMapStylePreference,
+    mutateAsync: hooksMocks.updateMapStylePreference,
     isPending: false,
     isError: false,
   }),
@@ -482,6 +486,7 @@ vi.mock('@riviamigo/hooks', () => ({
     error: null,
     variables: undefined,
   }),
+  invalidateVehicleCapacityData: vi.fn(),
   resolveVehicleArtwork: (_images: unknown, model: string) => ({
     light: null,
     dark: null,
@@ -632,6 +637,19 @@ function renderSettings() {
 
 function clickSettingsSection(label: string) {
   fireEvent.click(screen.getByRole('button', { name: label }));
+}
+
+/** The page-level unsaved-changes bar that Settings renders while any draft is dirty. */
+function unsavedChangesBar() {
+  return screen.getByRole('region', { name: 'Unsaved changes' });
+}
+
+function saveUnsavedChanges() {
+  fireEvent.click(within(unsavedChangesBar()).getByRole('button', { name: 'Save' }));
+}
+
+function discardUnsavedChanges() {
+  fireEvent.click(within(unsavedChangesBar()).getByRole('button', { name: 'Discard' }));
 }
 
 describe('Settings page', () => {
@@ -1036,7 +1054,12 @@ describe('Settings page', () => {
     expect(showEditButton).toHaveAttribute('aria-checked', 'false');
     fireEvent.click(showEditButton);
     expect(showEditButton).toHaveAttribute('aria-checked', 'true');
-    expect(localStorage.getItem('rm-show-dashboard-edit-button:u1')).toBe('true');
+    // Staged: nothing is written until the page bar saves it.
+    expect(localStorage.getItem('rm-show-dashboard-edit-button:u1')).toBeNull();
+    saveUnsavedChanges();
+    await waitFor(() => {
+      expect(localStorage.getItem('rm-show-dashboard-edit-button:u1')).toBe('true');
+    });
     confirmSpy.mockRestore();
   });
 
@@ -1180,7 +1203,9 @@ describe('Settings page', () => {
     renderSettings();
     fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
     fireEvent.change(screen.getByDisplayValue('48'), { target: { value: '46' } });
-    fireEvent.click(screen.getByLabelText('Save vehicle'));
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(hooks.api.updateVehicleSettings).not.toHaveBeenCalled();
+    saveUnsavedChanges();
 
     await waitFor(() => {
       expect(hooks.api.updateVehicleSettings).toHaveBeenCalledWith('v1', {
@@ -1305,13 +1330,16 @@ describe('Settings page', () => {
     expect(screen.queryByLabelText('Battery generation')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Battery pack')).toHaveValue('r2');
     expect(screen.queryByText(/matches a Gen \d pack/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('Save vehicle'));
+    // The displayed default is not persisted until the editor has an edit to save.
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Target Tire Pressure'), { target: { value: '47' } });
+    saveUnsavedChanges();
 
     await waitFor(() => {
       expect(hooks.api.updateVehicleSettings).toHaveBeenCalledWith('v1', {
         battery_capacity_kwh: 82,
         battery_config: 'R2',
-        target_tire_pressure_psi: 48,
+        target_tire_pressure_psi: 47,
       });
     });
   });
@@ -1336,13 +1364,14 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
     expect(screen.getByLabelText('Battery generation')).toHaveValue('gen2');
     expect(screen.getByLabelText('Battery pack')).toHaveValue('custom');
-    fireEvent.click(screen.getByLabelText('Save vehicle'));
+    fireEvent.change(screen.getByLabelText('Target Tire Pressure'), { target: { value: '47' } });
+    saveUnsavedChanges();
 
     await waitFor(() => {
       expect(hooks.api.updateVehicleSettings).toHaveBeenCalledWith('v1', {
         battery_capacity_kwh: 135,
         battery_config: 'Custom (135 kWh)',
-        target_tire_pressure_psi: 48,
+        target_tire_pressure_psi: 47,
       });
     });
   });
@@ -1354,7 +1383,7 @@ describe('Settings page', () => {
     renderSettings();
     fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
     fireEvent.change(screen.getByLabelText('Battery pack'), { target: { value: 'r1_large_g2' } });
-    fireEvent.click(screen.getByLabelText('Save vehicle'));
+    saveUnsavedChanges();
 
     await waitFor(() => {
       expect(hooks.api.updateVehicleSettings).toHaveBeenCalledWith('v1', {
@@ -1389,6 +1418,241 @@ describe('Settings page', () => {
     expect(screen.getByLabelText('Battery pack')).toHaveValue('r1_large_g2');
   });
 
+  it('stages vehicle edits behind the page bar and reverts them on Discard', async () => {
+    const hooks = await import('@riviamigo/hooks');
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    fireEvent.change(screen.getByLabelText('Vehicle Name'), { target: { value: 'Renamed Truck' } });
+
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(hooks.api.updateVehicleName).not.toHaveBeenCalled();
+
+    discardUnsavedChanges();
+
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Vehicle Name')).toHaveValue('Adventure Truck');
+    expect(hooks.api.updateVehicleName).not.toHaveBeenCalled();
+    expect(hooks.api.updateVehicleSettings).not.toHaveBeenCalled();
+  });
+
+  it('saves a renamed vehicle through the name endpoint after the battery settings', async () => {
+    const hooks = await import('@riviamigo/hooks');
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    fireEvent.change(screen.getByLabelText('Vehicle Name'), { target: { value: '  Renamed Truck ' } });
+    saveUnsavedChanges();
+
+    await waitFor(() => {
+      expect(hooks.api.updateVehicleName).toHaveBeenCalledWith('v1', 'Renamed Truck');
+    });
+    expect(hooks.api.updateVehicleSettings).toHaveBeenCalledWith('v1', {
+      battery_capacity_kwh: 135,
+      battery_config: 'R1T / R1S Large (Gen 1)',
+      target_tire_pressure_psi: 48,
+    });
+    expect(vi.mocked(hooks.api.updateVehicleSettings).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(hooks.api.updateVehicleName).mock.invocationCallOrder[0]!,
+    );
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Vehicle Name')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+  });
+
+  it('shows an inline error and keeps the bar open when the vehicle name is blank', async () => {
+    const hooks = await import('@riviamigo/hooks');
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    fireEvent.change(screen.getByLabelText('Vehicle Name'), { target: { value: '   ' } });
+    saveUnsavedChanges();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Enter a vehicle name.');
+    expect(screen.getByPlaceholderText('Vehicle name').closest('label')).toHaveTextContent('Enter a vehicle name.');
+    expect(hooks.api.updateVehicleSettings).not.toHaveBeenCalled();
+    expect(hooks.api.updateVehicleName).not.toHaveBeenCalled();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+  });
+
+  it('keeps the editor open with the API message when the battery save is rejected', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    vi.mocked(hooks.api.updateVehicleSettings).mockRejectedValueOnce(
+      Object.assign(new Error('400 bad_request: capacity rejected'), {
+        detail: { message: 'Battery capacity is outside the supported range.' },
+      }),
+    );
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    fireEvent.change(screen.getByLabelText('Target Tire Pressure'), { target: { value: '46' } });
+    saveUnsavedChanges();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Battery capacity is outside the supported range.');
+    expect(screen.getByLabelText('Target Tire Pressure')).toHaveValue(46);
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(hooks.api.updateVehicleName).not.toHaveBeenCalled();
+  });
+
+  it('asks before closing a vehicle editor with unsaved edits', async () => {
+    const hooks = await import('@riviamigo/hooks');
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    fireEvent.change(screen.getByLabelText('Target Tire Pressure'), { target: { value: '46' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close vehicle editor' }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Save your changes?')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stay' }));
+    expect(screen.getByLabelText('Target Tire Pressure')).toHaveValue(46);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close vehicle editor' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Discard' }));
+
+    expect(screen.queryByLabelText('Target Tire Pressure')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+    expect(hooks.api.updateVehicleSettings).not.toHaveBeenCalled();
+  });
+
+  it('asks before opening another vehicle while this editor has unsaved edits', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.vehicles = [
+      settingsMocks.vehicles[0]!,
+      { ...settingsMocks.vehicles[0]!, id: 'v2', display_name: 'Gen 2 SUV', year: 2025, battery_capacity_kwh: 109 },
+    ];
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    fireEvent.change(screen.getByLabelText('Target Tire Pressure'), { target: { value: '46' } });
+    fireEvent.click(screen.getByLabelText('Edit Gen 2 SUV'));
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Save your changes?')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stay' }));
+    expect(screen.getByLabelText('Target Tire Pressure')).toHaveValue(46);
+
+    fireEvent.click(screen.getByLabelText('Edit Gen 2 SUV'));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(hooks.api.updateVehicleSettings).toHaveBeenCalledWith('v1', {
+        battery_capacity_kwh: 135,
+        battery_config: 'R1T / R1S Large (Gen 1)',
+        target_tire_pressure_psi: 46,
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText('Battery generation')).toHaveValue('gen2');
+    });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('stages a unit change behind the page bar and saves it on Save', async () => {
+    const hooks = await import('@riviamigo/hooks');
+
+    renderSettings();
+    clickSettingsSection('Units');
+    fireEvent.click(screen.getByRole('button', { name: /^Metric/ }));
+
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Metric/ })).toHaveTextContent('Selected');
+    expect(hooks.api.updateUnitPreferences).not.toHaveBeenCalled();
+
+    saveUnsavedChanges();
+
+    await waitFor(() => {
+      expect(hooks.api.updateUnitPreferences).toHaveBeenCalledWith({
+        mode: 'metric',
+        distance_unit: 'kilometers',
+        speed_unit: 'kmh',
+        temperature_unit: 'celsius',
+        pressure_unit: 'kpa',
+        altitude_unit: 'meters',
+        place_radius_unit: 'meters',
+        efficiency_display: 'distance_per_energy',
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+    });
+  });
+
+  it('reverts staged unit changes on Discard without calling the API', async () => {
+    const hooks = await import('@riviamigo/hooks');
+
+    renderSettings();
+    clickSettingsSection('Units');
+    fireEvent.click(screen.getByRole('button', { name: /^Metric/ }));
+    discardUnsavedChanges();
+
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Imperial/ })).toHaveTextContent('Selected');
+    expect(hooks.api.updateUnitPreferences).not.toHaveBeenCalled();
+  });
+
+  it('stages custom unit selects and keeps them with an error when the save fails', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    vi.mocked(hooks.api.updateUnitPreferences).mockRejectedValueOnce(new Error('network down'));
+
+    renderSettings();
+    clickSettingsSection('Units');
+    fireEvent.click(screen.getByRole('button', { name: /^Custom/ }));
+    fireEvent.change(screen.getByLabelText('Speed unit'), { target: { value: 'kmh' } });
+    saveUnsavedChanges();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Units could not be saved. Try again.');
+    expect(hooks.api.updateUnitPreferences).toHaveBeenCalledWith(expect.objectContaining({ mode: 'custom', speed_unit: 'kmh' }));
+    expect(screen.getByLabelText('Speed unit')).toHaveValue('kmh');
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+  });
+
+  it('asks before leaving the Units section with unsaved changes', async () => {
+    const hooks = await import('@riviamigo/hooks');
+
+    renderSettings();
+    clickSettingsSection('Units');
+    fireEvent.click(screen.getByRole('button', { name: /^Metric/ }));
+    clickSettingsSection('Account');
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Save your changes?')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stay' }));
+    expect(screen.getByText('Pick a preset system or switch to Custom for per-unit control.')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    clickSettingsSection('Account');
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Discard' }));
+
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/settings', search: { section: 'account' } });
+    expect(screen.queryByText('Pick a preset system or switch to Custom for per-unit control.')).not.toBeInTheDocument();
+    expect(screen.getByText('Sign Out')).toBeInTheDocument();
+    expect(hooks.api.updateUnitPreferences).not.toHaveBeenCalled();
+  });
+
+  it('stages the application time zone for administrators until Save', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.me = { ...settingsMocks.me, role: 'admin' };
+    settingsMocks.auth.accessToken = 'test-access-token';
+
+    renderSettings();
+    clickSettingsSection('Units');
+    await waitFor(() => {
+      expect(screen.getByLabelText('Application time zone')).toHaveValue('America/Chicago');
+    });
+    fireEvent.change(screen.getByLabelText('Application time zone'), { target: { value: 'America/Denver' } });
+
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(hooks.api.updateAppTimezone).not.toHaveBeenCalled();
+
+    saveUnsavedChanges();
+
+    await waitFor(() => {
+      expect(hooks.api.updateAppTimezone).toHaveBeenCalledWith('America/Denver');
+    });
+  });
+
   it('renders the Appearance section', () => {
     renderSettings();
     clickSettingsSection('Appearance');
@@ -1407,6 +1671,8 @@ describe('Settings page', () => {
     }
 
     fireEvent.change(style, { target: { value: 'liberty' } });
+    expect(hooksMocks.updateMapStylePreference).not.toHaveBeenCalled();
+    saveUnsavedChanges();
     await waitFor(() => expect(hooksMocks.updateMapStylePreference).toHaveBeenCalledWith('liberty'));
   });
 
@@ -1575,7 +1841,11 @@ describe('Settings page', () => {
     clickSettingsSection('Appearance');
 
     await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
-    fireEvent.click(await screen.findByRole('radio', { name: /^RAD/ }));
+    // Wait for the saved theme to load so the click stages a change against it.
+    await waitFor(() => expect(screen.getByRole('radio', { name: /^Classic/ })).toHaveAttribute('aria-checked', 'true'));
+    fireEvent.click(screen.getByRole('radio', { name: /^RAD/ }));
+    expect(hooks.themeClient.updatePreferences).not.toHaveBeenCalled();
+    saveUnsavedChanges();
 
     await waitFor(() => {
       expect(hooks.themeClient.updatePreferences).toHaveBeenCalledWith(
@@ -1595,9 +1865,13 @@ describe('Settings page', () => {
 
     await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
     fireEvent.change(screen.getByLabelText('Appearance mode'), { target: { value: 'light' } });
+    saveUnsavedChanges();
 
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/previous selection has been restored/i));
-    expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark');
+    // The failed save keeps the staged edit and the bar open; Discard restores the saved appearance.
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to save appearance mode.');
+    expect(screen.getByLabelText('Appearance mode')).toHaveValue('light');
+    discardUnsavedChanges();
+    await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
     expect(document.documentElement.classList.contains('dark')).toBe(true);
   });
 
@@ -1710,7 +1984,10 @@ describe('Settings page', () => {
       expect(screen.getByText('Rows')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText('Save settings'));
+    // Backup settings are staged; a real edit makes the page bar appear, and its Save persists them.
+    fireEvent.change(screen.getByLabelText('Prefix'), { target: { value: 'prod/riviamigo-staged' } });
+    expect(hooks.api.updateBackupSettings).not.toHaveBeenCalled();
+    saveUnsavedChanges();
 
     await waitFor(() => {
       expect(hooks.api.updateBackupSettings).toHaveBeenCalledWith(
@@ -1720,6 +1997,7 @@ describe('Settings page', () => {
           retention_count: 8,
           local_enabled: true,
           s3_enabled: true,
+          prefix: 'prod/riviamigo-staged',
         })
       );
     }, { timeout: 5_000 });

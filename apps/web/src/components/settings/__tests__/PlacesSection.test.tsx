@@ -1,7 +1,8 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { SettingsDraftProvider } from '../../../features/settings/drafts/SettingsDraftProvider';
 
 const apiMocks = vi.hoisted(() => ({
   getExternalConnections: vi.fn(),
@@ -15,7 +16,18 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock('@riviamigo/hooks', () => ({ api: apiMocks, invalidateChargingData: apiMocks.invalidateChargingData }));
 vi.mock('@riviamigo/ui/primitives', async () => import('../../../test/mockPrimitives'));
-vi.mock('lucide-react', () => ({ HelpCircle: () => <svg />, Home: () => <svg />, Loader2: () => <svg />, Pencil: () => <svg />, Plus: () => <svg />, Search: () => <svg />, Zap: () => <svg />, Trash2: () => <svg /> }));
+vi.mock('@tanstack/react-router', () => ({ useBlocker: () => ({ status: 'idle' }) }));
+vi.mock('lucide-react', () => ({
+  HelpCircle: () => <svg />,
+  Home: () => <svg />,
+  Loader2: () => <svg />,
+  Pencil: () => <svg />,
+  Plus: () => <svg />,
+  Save: () => <svg />,
+  Search: () => <svg />,
+  Zap: () => <svg />,
+  Trash2: () => <svg />,
+}));
 
 import { PlacesSection } from '../PlacesSection';
 
@@ -30,9 +42,23 @@ const place = {
   charging: { id: 'charge-1', name: 'Home charger', billing_type: 'per_kwh' as const, rate: 0.2, session_fee: 1, currency: 'USD', timezone: null, tou_periods: [] },
 };
 
+function tree(unitSystem: 'metric' | 'imperial', client: QueryClient) {
+  return (
+    <QueryClientProvider client={client}>
+      <SettingsDraftProvider>
+        <PlacesSection unitSystem={unitSystem} />
+      </SettingsDraftProvider>
+    </QueryClientProvider>
+  );
+}
+
 function renderSection(unitSystem: 'metric' | 'imperial' = 'metric') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return { client, ...render(<QueryClientProvider client={client}><PlacesSection unitSystem={unitSystem} /></QueryClientProvider>) };
+  return { client, ...render(tree(unitSystem, client)) };
+}
+
+function bar() {
+  return screen.queryByRole('region', { name: 'Unsaved changes' });
 }
 
 describe('PlacesSection', () => {
@@ -46,14 +72,15 @@ describe('PlacesSection', () => {
     apiMocks.deletePlace.mockResolvedValue(undefined);
   });
 
-  it('renders an empty saved-places state and unit-specific defaults', async () => {
+  it('renders an empty saved-places state and unit-specific defaults without a bar', async () => {
     renderSection('imperial');
     expect(await screen.findByText(/No saved places yet/)).toBeInTheDocument();
     expect(screen.getByLabelText('Radius (ft)')).toHaveValue('250');
-    expect(screen.getByRole('button', { name: 'Create Place' })).toBeDisabled();
+    expect(bar()).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create Place' })).not.toBeInTheDocument();
   });
 
-  it('searches, selects an address, and creates a place with per-kWh pricing', async () => {
+  it('searches, selects an address, and creates a place with per-kWh pricing from the bar', async () => {
     renderSection();
     fireEvent.change(screen.getByPlaceholderText('Enter an address'), { target: { value: '123 Main' } });
     fireEvent.click(screen.getByRole('button', { name: /Search/ }));
@@ -63,12 +90,45 @@ describe('PlacesSection', () => {
     fireEvent.click(screen.getByRole('button', { name: /Charging Rates/ }));
     fireEvent.change(screen.getByLabelText('Rate ($/kWh)'), { target: { value: '0.25' } });
     fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '1.5' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Place' }));
+    expect(apiMocks.createPlace).not.toHaveBeenCalled();
+    expect(bar()).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
     await waitFor(() => expect(apiMocks.createPlace).toHaveBeenCalledWith(expect.objectContaining({
       name: 'Downtown', radius_m: 75, is_home: false, is_work: false, address: suggestion,
       charging: { billing_type: 'per_kwh', rate: 0.25, session_fee: 1.5, currency: 'USD' },
     })));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Create Place' })).toBeDisabled());
+    await waitFor(() => expect(bar()).not.toBeInTheDocument());
+    expect(screen.getByPlaceholderText('Home garage')).toHaveValue('');
+  });
+
+  it('blocks a save without a name and keeps the bar open with the message', async () => {
+    renderSection();
+    fireEvent.change(screen.getByPlaceholderText('Enter an address'), { target: { value: '123 Main' } });
+    fireEvent.click(screen.getByRole('button', { name: /Search/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /123 Main Street/ }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Enter a place name.');
+    expect(apiMocks.createPlace).not.toHaveBeenCalled();
+    expect(bar()).toBeInTheDocument();
+  });
+
+  it('keeps the bar open with the API message when the save fails', async () => {
+    apiMocks.createPlace.mockRejectedValueOnce(new Error('Address service unavailable'));
+    renderSection();
+    fireEvent.change(screen.getByPlaceholderText('Enter an address'), { target: { value: '123 Main' } });
+    fireEvent.click(screen.getByRole('button', { name: /Search/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /123 Main Street/ }));
+    fireEvent.change(screen.getByPlaceholderText('Home garage'), { target: { value: 'Downtown' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Address service unavailable');
+    expect(bar()).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Home garage')).toHaveValue('Downtown');
   });
 
   it('clears a selected address when its search text changes', async () => {
@@ -76,9 +136,10 @@ describe('PlacesSection', () => {
     fireEvent.change(screen.getByPlaceholderText('Enter an address'), { target: { value: '123 Main' } });
     fireEvent.click(screen.getByRole('button', { name: /Search/ }));
     fireEvent.click(await screen.findByRole('button', { name: /123 Main Street/ }));
+    expect(screen.getByText('Selected Address')).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText('Enter an address'), { target: { value: 'different address' } });
     expect(screen.queryByText('Selected Address')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Create Place' })).toBeDisabled();
+    expect(bar()).toBeInTheDocument();
   });
 
   it('validates and edits a TOU schedule, including add and remove period controls', async () => {
@@ -94,8 +155,57 @@ describe('PlacesSection', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[1]!);
     expect(screen.getAllByPlaceholderText('Peak')).toHaveLength(1);
     fireEvent.change(screen.getByDisplayValue('Home charger'), { target: { value: 'Edited home' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save Place' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMocks.updatePlace).toHaveBeenCalledWith('place-1', expect.objectContaining({ name: 'Edited home', charging: expect.objectContaining({ billing_type: 'tou', tou_periods: [{ label: 'Night', start_minute: 0, end_minute: 1440, rate: 0.2 }] }) })));
+  });
+
+  it('stages edits to the open place and Discard restores the saved values', async () => {
+    apiMocks.listPlaces.mockResolvedValue([place]);
+    renderSection();
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+
+    fireEvent.change(screen.getByDisplayValue('Home charger'), { target: { value: 'Renamed' } });
+    expect(bar()).toBeInTheDocument();
+    expect(apiMocks.updatePlace).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(screen.getByDisplayValue('Home charger')).toBeInTheDocument();
+    expect(bar()).not.toBeInTheDocument();
+    expect(apiMocks.updatePlace).not.toHaveBeenCalled();
+  });
+
+  it('asks before opening another place while the open place has unsaved changes', async () => {
+    const second = { ...place, id: 'place-2', name: 'Office', is_home: false, is_work: true };
+    apiMocks.listPlaces.mockResolvedValue([place, second]);
+    renderSection();
+    const [firstEdit, secondEdit] = await screen.findAllByRole('button', { name: 'Edit' });
+    fireEvent.click(firstEdit!);
+    fireEvent.change(screen.getByDisplayValue('Home charger'), { target: { value: 'Renamed' } });
+
+    fireEvent.click(secondEdit!);
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Save your changes?')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stay' }));
+    expect(screen.getByDisplayValue('Renamed')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[1]!);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Discard' }));
+    expect(screen.getByDisplayValue('Office')).toBeInTheDocument();
+    expect(apiMocks.updatePlace).not.toHaveBeenCalled();
+  });
+
+  it('keeps Delete immediate while the open place has unsaved changes', async () => {
+    const second = { ...place, id: 'place-2', name: 'Office', is_home: false, is_work: true };
+    apiMocks.listPlaces.mockResolvedValue([place, second]);
+    renderSection();
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Edit' }))[0]!);
+    fireEvent.change(screen.getByDisplayValue('Home charger'), { target: { value: 'Renamed' } });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[1]!);
+
+    await waitFor(() => expect(apiMocks.deletePlace).toHaveBeenCalledWith('place-2'));
+    expect(bar()).toBeInTheDocument();
   });
 
   it('filters saved places by address fields and deletes a place', async () => {
@@ -127,11 +237,25 @@ describe('PlacesSection', () => {
     const view = renderSection('metric');
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     expect(screen.getByDisplayValue('Home charger')).toBeInTheDocument();
-    view.rerender(<QueryClientProvider client={view.client}><PlacesSection unitSystem="imperial" /></QueryClientProvider>);
+    view.rerender(tree('imperial', view.client));
     expect(screen.getByLabelText('Radius (ft)')).toHaveValue('249');
+    expect(bar()).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'New Place' }));
     expect(screen.getByRole('heading', { name: 'Places' })).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Home garage')).toHaveValue('');
+  });
+
+  it('keeps a converted radius on the bar when the user had already edited the place', async () => {
+    apiMocks.listPlaces.mockResolvedValue([place]);
+    const view = renderSection('metric');
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByDisplayValue('Home charger'), { target: { value: 'Renamed' } });
+
+    view.rerender(tree('imperial', view.client));
+
+    expect(screen.getByDisplayValue('Renamed')).toBeInTheDocument();
+    expect(screen.getByLabelText('Radius (ft)')).toHaveValue('249');
+    expect(bar()).toBeInTheDocument();
   });
 
   it('shows TOU validation for malformed, unlabeled, non-contiguous, and negative periods', async () => {

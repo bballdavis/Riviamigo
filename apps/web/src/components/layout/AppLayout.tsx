@@ -539,6 +539,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
       {/* Main content: offset by sidebar width on lg+ */}
       <main
         className={`rm-app-main transition-all duration-200 ${sidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-64'}`}
+        style={{ '--rm-content-inset-left': sidebarCollapsed ? '72px' : '16rem' } as React.CSSProperties}
       >
         <div className="rm-app-content p-4 pt-14 sm:p-6 sm:pt-14 lg:p-6 max-w-7xl mx-auto">
           {children}

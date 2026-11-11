@@ -17,11 +17,10 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react';
-import { useOwnership, useUpdateOwnershipSettings } from '@riviamigo/hooks';
-import type { OwnershipMaintenanceCategory, OwnershipMaintenanceItem } from '@riviamigo/types';
+import type { OwnershipMaintenanceCategory, OwnershipMaintenanceItem, OwnershipResponse } from '@riviamigo/types';
 import { CHART_COLORS } from '@riviamigo/ui/charts';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, SelectPicker } from '@riviamigo/ui/primitives';
-import { buildLedger, formatUsd, normalizeOwnershipResponse, scheduleTargets } from './model';
+import { buildLedger, formatUsd, scheduleTargets, type ScheduleTarget } from './model';
 
 const CATEGORY_OPTIONS: Array<{ value: OwnershipMaintenanceCategory; label: string }> = [
   { value: 'oil', label: 'Oil' },
@@ -70,7 +69,7 @@ const ITEM_COLORS = [
 const MAX_ITEMS = 30;
 
 /** One schedule row held as text while it is edited. */
-interface ItemDraft {
+export interface ItemDraft {
   id: string;
   label: string;
   category: OwnershipMaintenanceCategory;
@@ -79,7 +78,7 @@ interface ItemDraft {
   cost: string;
 }
 
-type ItemErrors = Partial<Record<'label' | 'miles' | 'months' | 'cost', string>>;
+export type ItemErrors = Partial<Record<'label' | 'miles' | 'months' | 'cost', string>>;
 
 const toDraft = (item: OwnershipMaintenanceItem): ItemDraft => ({
   id: item.id,
@@ -89,6 +88,58 @@ const toDraft = (item: OwnershipMaintenanceItem): ItemDraft => ({
   months: item.interval_months == null ? '' : String(item.interval_months),
   cost: String(item.cost_usd),
 });
+
+/** An unsaved change to one vehicle's schedule, staged until the Settings page is saved. */
+export interface ScheduleEdit {
+  drafts: ItemDraft[];
+  /** The user chose "Reset to built-in"; saving clears the stored schedule if the rows still match it. */
+  resetToBuiltIn: boolean;
+}
+
+export type ScheduleEdits = Record<string, ScheduleEdit>;
+export type ScheduleErrors = Record<string, ItemErrors[]>;
+
+const sameDrafts = (left: ItemDraft[], right: ItemDraft[]) => JSON.stringify(left) === JSON.stringify(right);
+
+/** Drop edits that no longer change anything, so an undone edit is not "unsaved". */
+export function normalizeScheduleEdits(edits: ScheduleEdits, targets: ScheduleTarget[]): ScheduleEdits {
+  const next: ScheduleEdits = {};
+  for (const [key, edit] of Object.entries(edits)) {
+    const target = targets.find((entry) => entry.key === key);
+    if (!target) continue;
+    const savedDrafts = target.schedule.map(toDraft);
+    const builtInDrafts = target.builtIn.map(toDraft);
+    const unchanged = edit.resetToBuiltIn
+      ? !target.edited && sameDrafts(edit.drafts, builtInDrafts)
+      : sameDrafts(edit.drafts, savedDrafts);
+    if (!unchanged) next[key] = edit;
+  }
+  return next;
+}
+
+/**
+ * Apply staged schedule edits to the stored maintenance map. Returns per-target
+ * field errors instead of a map when any edited row is invalid.
+ */
+export function applyScheduleEdits(
+  stored: Record<string, OwnershipMaintenanceItem[]> | null | undefined,
+  edits: ScheduleEdits,
+  targets: ScheduleTarget[],
+): { maintenance: Record<string, OwnershipMaintenanceItem[]> | null; errors: ScheduleErrors } {
+  const maintenance = { ...(stored ?? {}) };
+  const errors: ScheduleErrors = {};
+  for (const [key, edit] of Object.entries(edits)) {
+    const target = targets.find((entry) => entry.key === key);
+    if (edit.resetToBuiltIn && target && sameDrafts(edit.drafts, target.builtIn.map(toDraft))) {
+      delete maintenance[key];
+      continue;
+    }
+    const result = draftsToSchedule(edit.drafts);
+    if (result.schedule) maintenance[key] = result.schedule;
+    else errors[key] = result.errors;
+  }
+  return { maintenance: Object.keys(errors).length ? null : maintenance, errors };
+}
 
 /** Validate drafts against the limits the API enforces. */
 export function draftsToSchedule(drafts: ItemDraft[]): {
@@ -170,7 +221,7 @@ function describeInterval(item: OwnershipMaintenanceItem): string {
 }
 
 /** The maintenance schedule behind every vehicle on one Rivian's Ownership page. */
-export function MaintenanceSchedulesCard({ vehicleId, ownLabel }: { vehicleId: string; ownLabel: string }) {
+export function MaintenanceSchedulesCard(props: VehicleSchedulesProps) {
   return (
     <Card>
       <CardHeader className="mb-3 flex-col items-start gap-1">
@@ -185,7 +236,7 @@ export function MaintenanceSchedulesCard({ vehicleId, ownLabel }: { vehicleId: s
         </p>
       </CardHeader>
       <CardContent>
-        <VehicleSchedules vehicleId={vehicleId} ownLabel={ownLabel} />
+        <VehicleSchedules {...props} />
       </CardContent>
     </Card>
   );
@@ -212,32 +263,26 @@ export function SettingsCardTitle({
   );
 }
 
-function VehicleSchedules({ vehicleId, ownLabel }: { vehicleId: string; ownLabel: string }) {
-  const ownership = useOwnership(vehicleId);
-  const { isLoading, isError } = ownership;
-  const data = useMemo(() => (ownership.data ? normalizeOwnershipResponse(ownership.data) : undefined), [ownership.data]);
-  const update = useUpdateOwnershipSettings(vehicleId);
+interface VehicleSchedulesProps {
+  /** The vehicle's ownership data, as last saved. */
+  data: OwnershipResponse;
+  ownLabel: string;
+  edits: ScheduleEdits;
+  errors: ScheduleErrors;
+  onEditsChange: (edits: ScheduleEdits) => void;
+}
+
+function VehicleSchedules({ data, ownLabel, edits, errors, onEditsChange }: VehicleSchedulesProps) {
   const [targetKey, setTargetKey] = useState('own');
   const [now] = useState(() => new Date());
 
-  const targets = useMemo(() => (data ? scheduleTargets(data, ownLabel) : []), [data, ownLabel]);
-  const ledger = useMemo(
-    () => (data ? buildLedger(data, { horizon: 'to_date', now, ownLabel }) : null),
-    [data, now, ownLabel],
-  );
+  const targets = useMemo(() => scheduleTargets(data, ownLabel), [data, ownLabel]);
+  const ledger = useMemo(() => buildLedger(data, { horizon: 'to_date', now, ownLabel }), [data, now, ownLabel]);
   const milesPerMonth = ledger?.avgMonthlyMiles ?? 0;
 
-  if (isError) return <p className="text-sm text-status-danger">Maintenance schedules could not be loaded.</p>;
-  if (isLoading || !data) return <p className="text-sm text-fg-secondary">Loading maintenance schedules...</p>;
   const target = targets.find((entry) => entry.key === targetKey) ?? targets[0];
   if (!target) return null;
-
-  const save = (schedule: OwnershipMaintenanceItem[] | null, onDone: () => void) => {
-    const maintenance = { ...(data.settings.maintenance ?? {}) };
-    if (schedule) maintenance[target.key] = schedule;
-    else delete maintenance[target.key];
-    update.mutate({ ...data.settings, maintenance }, { onSuccess: onDone });
-  };
+  const edit = edits[target.key];
 
   return (
     <div className="grid gap-4">
@@ -245,29 +290,29 @@ function VehicleSchedules({ vehicleId, ownLabel }: { vehicleId: string; ownLabel
         className="w-full sm:max-w-sm"
         aria-label="Vehicle schedule to edit"
         value={target.key}
-        onChange={(key) => {
-          update.reset();
-          setTargetKey(key);
-        }}
+        onChange={(key) => setTargetKey(key)}
         options={targets.map((entry) => ({
           value: entry.key,
-          label: entry.edited ? `${entry.label} (edited)` : entry.label,
+          label: edits[entry.key] ? `${entry.label} (unsaved)` : entry.edited ? `${entry.label} (edited)` : entry.label,
           group: entry.key === 'own' ? 'Your vehicle' : 'Compared vehicles',
         }))}
       />
       <ScheduleEditor
         key={target.key}
         title={target.label}
-        schedule={target.schedule}
+        drafts={edit?.drafts ?? target.schedule.map(toDraft)}
+        errors={errors[target.key] ?? []}
         builtIn={target.builtIn}
-        edited={target.edited}
+        edited={edit ? !edit.resetToBuiltIn : target.edited}
+        canReset={edit ? !edit.resetToBuiltIn : target.edited}
         canEdit={data.can_edit}
         milesPerMonth={milesPerMonth}
         startMs={ledger?.startMs ?? now.getTime()}
         nowMs={now.getTime()}
-        saving={update.isPending}
-        saveFailed={update.isError}
-        onSave={save}
+        onChange={(next) =>
+          onEditsChange(normalizeScheduleEdits({ ...edits, [target.key]: next }, targets))
+        }
+        resetToBuiltIn={edit?.resetToBuiltIn ?? false}
       />
     </div>
   );
@@ -275,62 +320,49 @@ function VehicleSchedules({ vehicleId, ownLabel }: { vehicleId: string; ownLabel
 
 function ScheduleEditor({
   title,
-  schedule,
+  drafts,
+  errors,
   builtIn,
   edited,
+  canReset,
   canEdit,
   milesPerMonth,
   startMs,
   nowMs,
-  saving,
-  saveFailed,
-  onSave,
+  resetToBuiltIn,
+  onChange,
 }: {
   title: string;
-  schedule: OwnershipMaintenanceItem[];
+  drafts: ItemDraft[];
+  errors: ItemErrors[];
   builtIn: OwnershipMaintenanceItem[];
   edited: boolean;
+  canReset: boolean;
   canEdit: boolean;
   milesPerMonth: number;
   startMs: number;
   nowMs: number;
-  saving: boolean;
-  saveFailed: boolean;
-  /** Saves the schedule, or clears the saved one when given `null`. */
-  onSave: (schedule: OwnershipMaintenanceItem[] | null, onDone: () => void) => void;
+  resetToBuiltIn: boolean;
+  /** Stages the edited rows; nothing is saved until the Settings page is saved. */
+  onChange: (edit: ScheduleEdit) => void;
 }) {
-  const [drafts, setDrafts] = useState(() => schedule.map(toDraft));
-  const [errors, setErrors] = useState<ItemErrors[]>([]);
-  const [saved, setSaved] = useState(false);
-  const preview = draftsToSchedule(drafts).schedule ?? schedule;
-  const yearly = preview.reduce((sum, item) => sum + timesPerYear(item, milesPerMonth) * item.cost_usd, 0);
+  // Per row, so one unfinished row does not hide the others' figures.
+  const preview = drafts.map((draft) => draftsToSchedule([draft]).schedule?.[0]);
+  const yearly = preview.reduce(
+    (sum, item) => sum + (item ? timesPerYear(item, milesPerMonth) * item.cost_usd : 0),
+    0,
+  );
+  const stage = (next: ItemDraft[]) => onChange({ drafts: next, resetToBuiltIn });
 
-  const change = (index: number, patch: Partial<ItemDraft>) => {
-    setSaved(false);
-    setDrafts((current) => current.map((draft, at) => (at === index ? { ...draft, ...patch } : draft)));
-  };
-  const remove = (index: number) => {
-    setSaved(false);
-    setDrafts((current) => current.filter((_, at) => at !== index));
-    setErrors((current) => current.filter((_, at) => at !== index));
-  };
-  const add = () => {
-    setSaved(false);
-    setDrafts((current) => [
-      ...current,
+  const change = (index: number, patch: Partial<ItemDraft>) =>
+    stage(drafts.map((draft, at) => (at === index ? { ...draft, ...patch } : draft)));
+  const remove = (index: number) => stage(drafts.filter((_, at) => at !== index));
+  const add = () =>
+    stage([
+      ...drafts,
       { id: `item-${Date.now().toString(36)}`, label: '', category: 'service', miles: '', months: '12', cost: '' },
     ]);
-  };
-  const submit = () => {
-    const result = draftsToSchedule(drafts);
-    setErrors(result.errors);
-    if (result.schedule) onSave(result.schedule, () => setSaved(true));
-  };
-  const reset = () => {
-    setDrafts(builtIn.map(toDraft));
-    setErrors([]);
-    onSave(null, () => setSaved(true));
-  };
+  const reset = () => onChange({ drafts: builtIn.map(toDraft), resetToBuiltIn: true });
 
   return (
     <div className="grid gap-3">
@@ -473,17 +505,11 @@ function ScheduleEditor({
             variant="secondary"
             size="sm"
             iconLeft={<RotateCcw className="h-4 w-4" />}
-            disabled={!edited || saving}
+            disabled={!canReset}
             onClick={reset}
           >
             Reset to built-in
           </Button>
-          <Button variant="primary" size="sm" loading={saving} onClick={submit} className="ml-auto">
-            Save schedule
-          </Button>
-          <span className="w-full text-sm text-fg-secondary sm:w-auto" role="status">
-            {saveFailed ? 'The schedule could not be saved.' : saved ? 'Saved.' : ''}
-          </span>
         </div>
       ) : (
         <p className="text-sm text-fg-secondary">Only the vehicle&apos;s owner or a manager can edit its schedules.</p>
