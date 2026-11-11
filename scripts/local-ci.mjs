@@ -3,7 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { colorTokenViolations } from './check-color-tokens.mjs';
-import { selectHookGate } from './local-ci-policy.mjs';
+import { selectHookGate, selectPushBase } from './local-ci-policy.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 process.env.CARGO_TARGET_DIR ??= join(root, 'apps/api/target-ci-local');
@@ -112,7 +112,12 @@ function ensureSqlxCli() {
   run('cargo', ['install', 'sqlx-cli', '--no-default-features', '--features', 'postgres', '--locked'], { cwd: join(root, 'apps/api'), label: 'Install sqlx-cli' });
 }
 
-function ciChecks() {
+/**
+ * Starts the isolated `riviamigo-ci-local` database and Redis (ports 55432 and
+ * 56379, never the development project), applies migrations, runs `body`, and
+ * always removes the containers and volumes afterwards.
+ */
+function withCiDatabase(body) {
   let cleaned = false;
   const cleanup = () => {
     if (cleaned) return;
@@ -131,31 +136,63 @@ function ciChecks() {
       attempts: 5,
       retryDelayMs: 2_000,
     });
-    commonChecks({ includeInstall: true, includeBuild: true, apiTests: 'none', env: ciEnv });
-    run('cargo', ['sqlx', 'prepare', '--check', '--workspace', '--', '--all-targets', '--all-features'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'SQLx offline metadata' });
-    run('cargo', ['clippy', '--all-targets', '--all-features', '--', '-D', 'warnings'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'Clippy' });
-    run('cargo', ['test', '--all', '--all-features'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'Database-backed API tests' });
-    run('cargo', ['test', '--lib', 'db::migrations::tests::valid_public_ledger_removes_empty_legacy_ledger', '--', '--ignored', '--exact', '--test-threads=1'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'Disposable migration ledger repair' });
-    console.log('\nLocal CI parity gate passed.');
+    body();
   } finally {
     cleanup();
   }
 }
 
-function hookMode() {
-  const gate = selectHookGate(process.env);
+/** The Backend checks workflow's Rust steps, against the isolated database. */
+function apiDatabaseChecks() {
+  run('cargo', ['fmt', '--all', '--check'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'Rust format check' });
+  run('cargo', ['sqlx', 'prepare', '--check', '--workspace', '--', '--all-targets', '--all-features'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'SQLx offline metadata' });
+  run('cargo', ['clippy', '--all-targets', '--all-features', '--', '-D', 'warnings'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'Clippy' });
+  run('cargo', ['test', '--all', '--all-features'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'Database-backed API tests' });
+}
+
+function ciChecks() {
+  withCiDatabase(() => {
+    commonChecks({ includeInstall: true, includeBuild: true, apiTests: 'none', env: ciEnv });
+    apiDatabaseChecks();
+    run('cargo', ['test', '--lib', 'db::migrations::tests::valid_public_ledger_removes_empty_legacy_ledger', '--', '--ignored', '--exact', '--test-threads=1'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'Disposable migration ledger repair' });
+    console.log('\nLocal CI parity gate passed.');
+  });
+}
+
+/** Files the branch changes relative to the integration branch it most likely targets. */
+function changedPathsForPush() {
+  const candidates = ['origin/dev', 'origin/main'].map((ref) => {
+    const mergeBase = git(['merge-base', 'HEAD', ref]);
+    const ahead = mergeBase ? Number.parseInt(git(['rev-list', '--count', `${mergeBase}..HEAD`]), 10) : Number.NaN;
+    return { ref, mergeBase, aheadCount: Number.isInteger(ahead) ? ahead : null };
+  });
+  const base = selectPushBase(candidates);
+  if (!base) return [];
+  return git(['diff', '--name-only', `${base.mergeBase}...HEAD`]).split(/\r?\n/).filter(Boolean);
+}
+
+function hookMode(hook) {
+  const changedPaths = hook === 'pre-push' ? changedPathsForPush() : [];
+  const gate = selectHookGate(process.env, { hook, changedPaths });
   if (gate === 'bypass') {
     console.warn('SKIP_LOCAL_CI=1: local verification bypassed.');
     return;
   }
-  if (gate === 'full') ciChecks();
-  else fastHookChecks();
+  if (gate === 'full') {
+    ciChecks();
+    return;
+  }
+  fastHookChecks();
+  if (gate === 'api') {
+    console.log('\nThis push changes apps/api, so the database-backed API checks run before it leaves (set SKIP_LOCAL_CI=1 to bypass in an emergency).');
+    withCiDatabase(apiDatabaseChecks);
+  }
 }
 
 function installHooks() {
   mkdirSync(hookPath, { recursive: true });
   run('git', ['config', 'core.hooksPath', '.githooks'], { label: 'Install repository Git hooks' });
-  console.log('Hooks installed. Commits and pushes use the fast local gate by default; set RIVIAMIGO_FULL_LOCAL_CI=1 for the full CI gate.');
+  console.log('Hooks installed. Commits use the fast local gate; pushes that change apps/api also run the database-backed API checks. Set RIVIAMIGO_FULL_LOCAL_CI=1 for the full CI gate.');
 }
 
 function uninstallHooks() {

@@ -107,6 +107,27 @@ On Windows it limits that build to four concurrent Cargo jobs to keep the host
 responsive. Set `DEV_CARGO_BUILD_JOBS` to a positive integer when a different
 limit is appropriate for the machine.
 
+## Local CI gate
+
+Catch CI failures before they reach GitHub:
+
+- `pnpm verify:ci` runs the same checks as the GitHub workflows: dependency
+  policy, lint, typecheck, docs, workspace tests, the build, Rust format, SQLx
+  metadata, Clippy, and the database-backed API tests. It starts a separate
+  `riviamigo-ci-local` Compose project on ports 55432 (TimescaleDB) and 56379
+  (Redis), never your development database, and removes it, volumes included,
+  when it finishes. Rust builds go to `apps/api/target-ci-local`.
+- `pnpm pr:create -- <gh pr create arguments>` runs `pnpm verify:ci` and opens
+  the pull request only if it passes. Use it instead of `gh pr create`.
+- `pnpm hooks:install` points Git at `.githooks/`. Every commit and push runs
+  the fast hygiene and migration-integrity gate. A push whose branch changes
+  `apps/api` (compared with the merge base of `origin/dev` or `origin/main`,
+  whichever is closer) also runs Rust format, SQLx metadata, Clippy, and the
+  database-backed API tests against the isolated database. Set
+  `RIVIAMIGO_FULL_LOCAL_CI=1` to run the complete gate on every hook, or
+  `SKIP_LOCAL_CI=1` to bypass it in an emergency. `pnpm hooks:uninstall`
+  removes the hooks.
+
 ## Architecture
 
 - [Backend data flow](./architecture/backend-data-flow.md) follows Rivian connectivity, ingestion, storage, and API delivery.
