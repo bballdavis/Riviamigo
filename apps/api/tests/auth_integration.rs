@@ -2212,6 +2212,100 @@ async fn stats_summary_returns_aggregated_trip_and_charge_values() {
 }
 
 #[tokio::test]
+async fn vehicle_status_reports_facing_corrected_after_backing_in() {
+    let app = TestApp::new().await;
+    let email = "vehicle-facing@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id: Uuid = sqlx::query_scalar("SELECT id FROM riviamigo.users WHERE email = $1")
+        .bind(email)
+        .fetch_one(&app.pool)
+        .await
+        .expect("user id");
+    let vehicle_id = insert_vehicle(&app.pool, user_id, "vehicle-facing", "Facing Truck").await;
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+         VALUES ($1, $2, 'owner', TRUE)
+         ON CONFLICT (vehicle_id, user_id) DO UPDATE SET role = EXCLUDED.role",
+    )
+    .bind(vehicle_id)
+    .bind(user_id)
+    .execute(&app.pool)
+    .await
+    .expect("seed vehicle membership");
+
+    // Recorded shape: east-bound in drive, reverse engaged, and the parked
+    // course later reads west because the vehicle backed into its space.
+    let arrived = chrono::Utc::now() - chrono::Duration::hours(20);
+    let insert_sample = |offset_seconds: i64, heading: f64, gear: &'static str, speed: f64| {
+        sqlx::query(
+            "INSERT INTO timeseries.telemetry (ts, vehicle_id, heading_deg, gear_status, speed_mph)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(arrived + chrono::Duration::seconds(offset_seconds))
+        .bind(vehicle_id)
+        .bind(heading)
+        .bind(gear)
+        .bind(speed)
+        .execute(&app.pool)
+    };
+    insert_sample(0, 103.6, "drive", 12.0)
+        .await
+        .expect("drive sample");
+    insert_sample(180, 103.6, "reverse", 0.0)
+        .await
+        .expect("reverse sample");
+    insert_sample(19 * 3600, -88.6, "park", 0.0)
+        .await
+        .expect("parked sample");
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_latest_status (vehicle_id, ts, heading_deg, gear_status, speed_mph)
+         VALUES ($1, $2, -88.6, 'park', 0)",
+    )
+    .bind(vehicle_id)
+    .bind(arrived + chrono::Duration::hours(19))
+    .execute(&app.pool)
+    .await
+    .expect("seed latest status");
+
+    let facing = |body: &Value| body["facing_deg"].as_f64().expect("facing_deg");
+    let status_path = format!("/v1/vehicles/{vehicle_id}/status");
+    let response = app
+        .request(Method::GET, &status_path, None, Some(&token), None)
+        .await;
+    assert_eq!(
+        response.status,
+        StatusCode::OK,
+        "response: {}",
+        response.body
+    );
+    assert_eq!(response.body["heading_deg"].as_f64(), Some(-88.6));
+    assert!(
+        (facing(&response.body) - 91.4).abs() < 1e-6,
+        "{}",
+        response.body["facing_deg"]
+    );
+
+    // Pulling forward again: the course is the facing direction.
+    insert_sample(19 * 3600 + 60, -88.6, "drive", 6.0)
+        .await
+        .expect("drive away");
+    let response = app
+        .request(Method::GET, &status_path, None, Some(&token), None)
+        .await;
+    assert_eq!(
+        response.status,
+        StatusCode::OK,
+        "response: {}",
+        response.body
+    );
+    assert!(
+        (facing(&response.body) - 271.4).abs() < 1e-6,
+        "{}",
+        response.body["facing_deg"]
+    );
+}
+
+#[tokio::test]
 async fn trip_track_omits_zero_zero_coordinates() {
     let app = TestApp::new().await;
     let token = register_and_login(&app, "trip-track-zero@example.com").await;

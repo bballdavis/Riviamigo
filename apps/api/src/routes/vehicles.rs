@@ -634,6 +634,8 @@ struct VehicleStatusResponse {
     driver_temp_c: Option<f64>,
     outside_temp_c: Option<f64>,
     heading_deg: Option<f64>,
+    /// Nose direction; `heading_deg` corrected after reversing (see `vehicle_facing`).
+    facing_deg: Option<f64>,
     odometer_miles: Option<f64>,
     odometer_miles_ts: Option<chrono::DateTime<chrono::Utc>>,
     tire_fl_psi: Option<f64>,
@@ -3415,6 +3417,9 @@ async fn vehicle_status(
             .then_some(StatusFieldAvailabilityReasonCode::InvalidSensor),
     );
 
+    let facing_deg =
+        crate::services::vehicle_facing::resolve_facing_deg(&state.pool, vid, latest.heading_deg)
+            .await;
     Ok(Json(VehicleStatusResponse {
         vehicle_id: vid,
         is_online: row.as_ref().and_then(|r| r.is_online).unwrap_or(false),
@@ -3469,6 +3474,7 @@ async fn vehicle_status(
         driver_temp_c: latest.driver_temp_c,
         outside_temp_c: latest.outside_temp_c,
         heading_deg: latest.heading_deg,
+        facing_deg,
         odometer_miles: latest.odometer_miles,
         odometer_miles_ts: latest.odometer_miles_ts,
         tire_fl_psi: latest.tire_fl_psi,
