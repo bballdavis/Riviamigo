@@ -41,6 +41,13 @@ use crate::{
     },
 };
 
+mod status;
+
+use status::{
+    derive_vehicle_status_freshness, insert_field_availability, max_seen_at,
+    StatusFieldAvailability, StatusFieldAvailabilityReasonCode,
+};
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/vehicles/connect", post(connect))
@@ -559,31 +566,6 @@ struct VehicleStatusFieldSeenRow {
     door_rear_right_closed_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum StatusFieldAvailabilityState {
-    Current,
-    Historical,
-    NeverSeen,
-}
-
-#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum StatusFieldAvailabilityReasonCode {
-    MissingRecentPayload,
-    NeverSeen,
-    InvalidSensor,
-}
-
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
-struct StatusFieldAvailability {
-    ever_seen: bool,
-    last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
-    latest_event_at: Option<chrono::DateTime<chrono::Utc>>,
-    availability: StatusFieldAvailabilityState,
-    reason_code: Option<StatusFieldAvailabilityReasonCode>,
-}
-
 /// Serializable response shape for `GET /v1/vehicles/:id/status`.
 /// Using a typed struct instead of `serde_json::json!` avoids the recursive
 /// macro expansion that exhausts the compiler's recursion limit as fields grow.
@@ -710,141 +692,6 @@ struct VehicleStatusResponse {
     telemetry_stale: bool,
     telemetry_stale_reason: Option<String>,
     field_availability: BTreeMap<String, StatusFieldAvailability>,
-}
-
-const WS_RECEIVE_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(10);
-const BATTERY_STATUS_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(90);
-const RANGE_STATUS_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(90);
-const CHARGING_STATUS_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(45);
-
-fn timestamp_is_older_than(
-    now: chrono::DateTime<chrono::Utc>,
-    ts: Option<chrono::DateTime<chrono::Utc>>,
-    threshold: chrono::Duration,
-) -> bool {
-    ts.is_some_and(|value| now - value >= threshold)
-}
-
-fn classify_status_field_availability(
-    latest_event_at: Option<chrono::DateTime<chrono::Utc>>,
-    last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
-    reason_override: Option<StatusFieldAvailabilityReasonCode>,
-) -> StatusFieldAvailability {
-    let availability = match (latest_event_at, last_seen_at) {
-        (_, None) => StatusFieldAvailabilityState::NeverSeen,
-        (Some(latest_event_at), Some(last_seen_at)) if last_seen_at < latest_event_at => {
-            StatusFieldAvailabilityState::Historical
-        }
-        _ => StatusFieldAvailabilityState::Current,
-    };
-
-    let reason_code = match availability {
-        StatusFieldAvailabilityState::NeverSeen => {
-            Some(StatusFieldAvailabilityReasonCode::NeverSeen)
-        }
-        StatusFieldAvailabilityState::Historical => {
-            Some(reason_override.unwrap_or(StatusFieldAvailabilityReasonCode::MissingRecentPayload))
-        }
-        StatusFieldAvailabilityState::Current => reason_override,
-    };
-
-    StatusFieldAvailability {
-        ever_seen: last_seen_at.is_some(),
-        last_seen_at,
-        latest_event_at,
-        availability,
-        reason_code,
-    }
-}
-
-fn max_seen_at(
-    values: impl IntoIterator<Item = Option<chrono::DateTime<chrono::Utc>>>,
-) -> Option<chrono::DateTime<chrono::Utc>> {
-    values.into_iter().flatten().max()
-}
-
-fn insert_field_availability(
-    availability: &mut BTreeMap<String, StatusFieldAvailability>,
-    field: &str,
-    latest_event_at: Option<chrono::DateTime<chrono::Utc>>,
-    last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
-    reason_override: Option<StatusFieldAvailabilityReasonCode>,
-) {
-    availability.insert(
-        field.to_string(),
-        classify_status_field_availability(latest_event_at, last_seen_at, reason_override),
-    );
-}
-
-fn derive_vehicle_status_freshness(
-    now: chrono::DateTime<chrono::Utc>,
-    runtime: Option<&VehicleRuntimeStateRow>,
-    latest: &LatestVehicleTelemetry,
-) -> (Option<String>, bool, Option<String>) {
-    let ws_received_at = runtime.and_then(|row| row.last_ws_received_at);
-    let base_health = runtime.and_then(|row| row.worker_health.clone());
-
-    if timestamp_is_older_than(now, ws_received_at, WS_RECEIVE_STALE_AFTER) {
-        return (
-            Some("stale".to_string()),
-            true,
-            Some("ws_silent".to_string()),
-        );
-    }
-
-    let mut telemetry_stale_reason = None;
-
-    if latest.battery_level.is_some()
-        && timestamp_is_older_than(
-            now,
-            latest.battery_level_ts.or(latest.ts),
-            BATTERY_STATUS_STALE_AFTER,
-        )
-    {
-        telemetry_stale_reason = Some("battery_stale".to_string());
-    }
-
-    if latest.distance_to_empty_mi.is_some()
-        && timestamp_is_older_than(
-            now,
-            latest.distance_to_empty_mi_ts.or(latest.ts),
-            RANGE_STATUS_STALE_AFTER,
-        )
-    {
-        telemetry_stale_reason.get_or_insert_with(|| "range_stale".to_string());
-    }
-
-    let charging_active = latest
-        .charger_state
-        .as_deref()
-        .map(|state| matches!(state, "charging"))
-        .unwrap_or(false)
-        || latest
-            .charger_status
-            .as_deref()
-            .map(|status| status.eq_ignore_ascii_case("chrgr_sts_connected_charging"))
-            .unwrap_or(false)
-        || latest.time_to_end_of_charge_min.is_some();
-
-    if charging_active
-        && timestamp_is_older_than(
-            now,
-            latest
-                .charger_status_ts
-                .or(latest.charger_state_ts)
-                .or(latest.time_to_end_of_charge_min_ts)
-                .or(latest.ts),
-            CHARGING_STATUS_STALE_AFTER,
-        )
-    {
-        telemetry_stale_reason.get_or_insert_with(|| "charging_stale".to_string());
-    }
-
-    (
-        base_health,
-        telemetry_stale_reason.is_some(),
-        telemetry_stale_reason,
-    )
 }
 
 #[derive(Debug, sqlx::FromRow)]
