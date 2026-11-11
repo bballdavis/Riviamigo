@@ -14,7 +14,11 @@ const apiMocks = vi.hoisted(() => ({
   invalidateChargingData: vi.fn(),
 }));
 
-vi.mock('@riviamigo/hooks', () => ({ api: apiMocks, invalidateChargingData: apiMocks.invalidateChargingData }));
+vi.mock('@riviamigo/hooks', () => ({
+  api: apiMocks,
+  invalidateChargingData: apiMocks.invalidateChargingData,
+  queryKeys: { places: { all: ['places'] }, externalConnections: { all: ['external-connections'] } },
+}));
 vi.mock('@riviamigo/ui/primitives', async () => import('../../../test/mockPrimitives'));
 vi.mock('@tanstack/react-router', () => ({ useBlocker: () => ({ status: 'idle' }) }));
 vi.mock('lucide-react', () => ({

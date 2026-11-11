@@ -150,6 +150,8 @@ vi.mock('@riviamigo/hooks', () => ({
       all: ['vehicles'],
       status: (vehicleId: string) => ['vehicles', 'status', vehicleId],
     },
+    places: { all: ['places'] },
+    externalConnections: { all: ['external-connections'] },
   },
   themeClient: {
     getCatalog: vi.fn().mockResolvedValue({ builtInThemes: ['classic', 'rad'], customThemes: [] }),
@@ -444,6 +446,7 @@ vi.mock('@riviamigo/hooks', () => ({
       .fn()
       .mockResolvedValue({ ok: true, vehicle_id: 'demo-v1', created: true }),
     deleteVehicle: vi.fn().mockResolvedValue({ ok: true, default_vehicle_id: 'v1' }),
+    setDefaultVehicle: vi.fn().mockResolvedValue({ default_vehicle_id: 'v2' }),
     refreshDemoVehicle: vi.fn().mockResolvedValue({
       ok: true,
       vehicle_id: 'demo-v1',
@@ -1246,7 +1249,7 @@ describe('Settings page', () => {
     await waitFor(() => {
       expect(settingsMocks.auth.setActiveVehicleId).toHaveBeenCalledWith('demo-v1');
     });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles'], exact: true });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'status', 'demo-v1'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'health', 'demo-v1'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'images', 'demo-v1'] });
@@ -1322,6 +1325,25 @@ describe('Settings page', () => {
         target_tire_pressure_psi: 46,
       });
     });
+  });
+
+  it('refreshes only the vehicle list after the default vehicle changes', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.vehicles = [
+      ...settingsMocks.vehicles,
+      { ...settingsMocks.vehicles[0]!, id: 'v2', display_name: 'Weekend Car', rivian_vehicle_id: 'rivian-2' },
+    ];
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
+    renderSettings();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set Weekend Car as default vehicle' }));
+
+    await waitFor(() => expect(hooks.api.setDefaultVehicle).toHaveBeenCalledWith('v2'));
+    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles'], exact: true }));
+    // A prefix match on ['vehicles'] would also refetch every vehicle's status, health, images, and ownership.
+    const prefixMatches = invalidateSpy.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["vehicles"]' && !filters?.exact);
+    expect(prefixMatches).toHaveLength(0);
+    invalidateSpy.mockRestore();
   });
 
   it('deletes a vehicle only after DELETE is typed in a labelled dialog', async () => {

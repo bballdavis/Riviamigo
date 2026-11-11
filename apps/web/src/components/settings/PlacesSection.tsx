@@ -1,6 +1,6 @@
 import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, invalidateChargingData } from '@riviamigo/hooks';
+import { api, invalidateChargingData, queryKeys } from '@riviamigo/hooks';
 import type { Place, PlaceAddress, PlaceChargingInput, PlaceSearchSuggestion, TouPeriod, UpsertPlaceBody } from '@riviamigo/types';
 import type { UnitSystem } from '@riviamigo/ui/lib/utils';
 import { getAppTimezone } from '@riviamigo/ui/lib/dateTime';
@@ -168,7 +168,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
   const [autocompleteAddressQuery, setAutocompleteAddressQuery] = React.useState('');
   const [savedPlacesQuery, setSavedPlacesQuery] = React.useState('');
   const connectionPolicy = useQuery({
-    queryKey: ['external-connections'],
+    queryKey: queryKeys.externalConnections.all,
     queryFn: () => api.getExternalConnections(),
     staleTime: 30_000,
   });
@@ -181,7 +181,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
   const previousUnitSystem = React.useRef(unitSystem);
 
   const places = useQuery({
-    queryKey: ['places'],
+    queryKey: queryKeys.places.all,
     queryFn: () => api.listPlaces(),
   });
 
@@ -199,7 +199,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
       return api.createPlace(body);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['places'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.places.all });
       invalidateChargingData(queryClient);
     },
   });
@@ -207,7 +207,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
   const deletePlace = useMutation({
     mutationFn: (id: string) => api.deletePlace(id),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['places'] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.places.all });
       invalidateChargingData(queryClient);
     },
   });
