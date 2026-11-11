@@ -85,17 +85,35 @@ export function OverviewLocationMap({
   );
 }
 
-/** Small overhead view of the vehicle in an accent ring. The artwork's front faces up (north) before rotation. */
+/**
+ * Traces an accent outline around the artwork's own silhouette. Each
+ * drop-shadow applies to the result of the previous one, so four 2px offsets
+ * close into a continuous border that follows the transparent artwork.
+ */
+const VEHICLE_OUTLINE_FILTER = [
+  'drop-shadow(2px 0 0 var(--rm-accent))',
+  'drop-shadow(-2px 0 0 var(--rm-accent))',
+  'drop-shadow(0 2px 0 var(--rm-accent))',
+  'drop-shadow(0 -2px 0 var(--rm-accent))',
+].join(' ');
+
+/** Small overhead view of the vehicle, outlined in the accent color. The artwork's front faces up (north) before rotation. */
 function VehicleMapMarker({ src }: { src: string | null }) {
   return (
-    <span
-      data-testid="overview-map-vehicle-marker"
-      className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border-2 border-accent bg-bg-surface shadow-lg"
-    >
+    <span data-testid="overview-map-vehicle-marker" className="flex items-center justify-center">
       {src ? (
-        <img src={src} alt="" draggable={false} className="h-10 w-auto max-w-none select-none object-contain" />
+        <img
+          src={src}
+          alt=""
+          draggable={false}
+          data-testid="overview-map-vehicle-art"
+          className="h-12 w-auto max-w-none select-none object-contain"
+          style={{ filter: VEHICLE_OUTLINE_FILTER }}
+        />
       ) : (
-        <Car className="h-5 w-5 text-accent" aria-hidden="true" />
+        <span className="flex h-11 w-11 items-center justify-center rounded-full border-2 border-accent bg-bg-surface shadow-lg">
+          <Car className="h-5 w-5 text-accent" aria-hidden="true" />
+        </span>
       )}
     </span>
   );
