@@ -8,6 +8,7 @@ import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker }
 import { HelpCircle, Home, Loader2, Pencil, Plus, Search, Zap, Trash2 } from 'lucide-react';
 import { useSettingsDraft, useSettingsLeaveGuard } from '../../features/settings/drafts/SettingsDraftProvider';
 import { useStagedValue } from '../../features/settings/drafts/useStagedValue';
+import { saveFailure } from '../../features/settings/drafts/saveFailure';
 
 type PlanType = 'per_kwh' | 'tou';
 type PlaceType = 'home' | 'work' | 'poi';
@@ -372,7 +373,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
         },
       });
     } catch (error) {
-      throw error instanceof Error ? error : new Error('This place could not be saved. Try again.');
+      throw saveFailure(error, 'This place could not be saved. Try again.');
     }
     // The saved place is out of the editor; a new blank place is ready for input.
     resetEditor();
