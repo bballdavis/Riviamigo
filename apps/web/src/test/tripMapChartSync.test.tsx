@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import {
   MAP_TILE_LOAD_TIMEOUT_MS,
@@ -680,5 +680,74 @@ describe('TripMapChart', () => {
   it('shows the empty label when there is neither a route nor a focus point', () => {
     render(<TripMapChart track={[]} focusPoint={null} emptyLabel="Nothing to map" />);
     expect(screen.getByText('Nothing to map')).toBeInTheDocument();
+  });
+
+  it('pins custom focus marker content in place of the dot and turns it with the heading', async () => {
+    const mockMap = Object.assign(new MockMap(), { jumpTo: vi.fn() });
+    const markers: Array<{ element: HTMLElement; setLngLat: ReturnType<typeof vi.fn>; setRotation: ReturnType<typeof vi.fn>; addTo: ReturnType<typeof vi.fn>; remove: ReturnType<typeof vi.fn> }> = [];
+    const Marker = vi.fn(function Marker(options: { element: HTMLElement }) {
+      const marker = {
+        element: options.element,
+        setLngLat: vi.fn(() => marker),
+        setRotation: vi.fn(() => marker),
+        addTo: vi.fn(() => marker),
+        remove: vi.fn(),
+      };
+      markers.push(marker);
+      return marker;
+    });
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }), Marker }));
+    const props = {
+      track: [],
+      basemapConfig: { enabled: true, resolved_provider: 'openfreemap', revision: 'vector-1' },
+      mapLoader: mapLoader as never,
+      focusMarker: <span data-testid="custom-marker">car</span>,
+    };
+
+    const { rerender, unmount } = render(<TripMapChart {...props} focusPoint={{ lat: 1, lng: 2 }} focusRotation={90} />);
+    await waitFor(() => expect(mapLoader).toHaveBeenCalled());
+    await act(async () => mockMap.emit('load'));
+
+    await waitFor(() => expect(markers).toHaveLength(1));
+    const marker = markers[0]!;
+    expect(marker.setLngLat).toHaveBeenCalledWith([2, 1]);
+    expect(marker.setRotation).toHaveBeenCalledWith(90);
+    expect(marker.addTo).toHaveBeenCalledWith(mockMap);
+    expect(within(marker.element).getByTestId('custom-marker')).toHaveTextContent('car');
+    // The default dot is not drawn under the custom marker.
+    await waitFor(() => expect(mockMap.layers.has('trip-active-point-layer')).toBe(false));
+
+    rerender(<TripMapChart {...props} focusPoint={{ lat: 3, lng: 4 }} focusRotation={180} />);
+    await waitFor(() => expect(marker.setLngLat).toHaveBeenLastCalledWith([4, 3]));
+    expect(marker.setRotation).toHaveBeenLastCalledWith(180);
+
+    unmount();
+    expect(marker.remove).toHaveBeenCalled();
+  });
+
+  it('collapses basemap credits behind an info button in compact mode', async () => {
+    const mockMap = new MockMap();
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
+    render(
+      <TripMapChart
+        track={[]}
+        focusPoint={{ lat: 1, lng: 2 }}
+        compactAttribution
+        basemapConfig={{
+          enabled: true,
+          resolved_provider: 'openfreemap',
+          revision: 'vector-1',
+          attributions: [{ label: 'OpenFreeMap', url: 'https://openfreemap.org' }, { label: 'OpenStreetMap', url: null }],
+        }}
+        mapLoader={mapLoader as never}
+      />,
+    );
+
+    expect(screen.queryByText('OpenFreeMap')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show map credits' }));
+    expect(screen.getByRole('link', { name: 'OpenFreeMap' })).toHaveAttribute('href', 'https://openfreemap.org');
+    expect(screen.getByText(/OpenStreetMap/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide map credits' }));
+    expect(screen.queryByText('OpenFreeMap')).not.toBeInTheDocument();
   });
 });

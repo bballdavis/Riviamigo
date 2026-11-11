@@ -1,23 +1,35 @@
 import React, { useMemo } from 'react';
-import { MapPinOff } from 'lucide-react';
-import { useAuth, useBasemapConfig, useUserPreferences } from '@riviamigo/hooks';
+import { Car, MapPinOff } from 'lucide-react';
+import { useAuth, useBasemapConfig, useUserPreferences, useVehicleArtwork } from '@riviamigo/hooks';
 import { TripMapChart, type MapStyleMode } from '@riviamigo/ui/charts';
 import { useDocumentTheme } from '@riviamigo/ui/hooks';
 import type { OverviewMapOptions } from './overviewMap';
 
+/** Overhead artwork already resolved for the overview frame (API light/dark, then packaged fallback). */
+export interface OverviewMarkerArtwork {
+  light?: string | null | undefined;
+  dark?: string | null | undefined;
+  fallback?: string | null | undefined;
+}
+
 /**
- * Current-location map for the Vehicle Overview center stage. It reuses the
- * shared trip map renderer, basemap proxy, and the user's map style unless the
- * widget overrides the style or light/dark mode.
+ * Current-location map for the Vehicle Overview. It reuses the shared trip
+ * map renderer, basemap proxy, and the user's map style unless the widget
+ * overrides the style or light/dark mode. The vehicle is marked with its own
+ * overhead artwork, turned to its compass heading.
  */
 export function OverviewLocationMap({
   latitude,
   longitude,
+  headingDeg,
+  artwork,
   options,
   heightPx,
 }: {
   latitude: number | null | undefined;
   longitude: number | null | undefined;
+  headingDeg?: number | null | undefined;
+  artwork?: OverviewMarkerArtwork | undefined;
   options: OverviewMapOptions;
   heightPx: number;
 }) {
@@ -34,10 +46,18 @@ export function OverviewLocationMap({
     () => (hasLocation ? { lat: latitude as number, lng: longitude as number } : null),
     [hasLocation, latitude, longitude],
   );
+  // Match the artwork variant to the map, not the app, so a forced dark map
+  // still gets the artwork drawn for dark surfaces.
+  const markerSource = mapStyle === 'dark'
+    ? artwork?.dark ?? artwork?.light
+    : artwork?.light ?? artwork?.dark;
+  const markerArtwork = useVehicleArtwork(markerSource);
+  const fallbackMarkerArtwork = useVehicleArtwork(artwork?.fallback);
+  const markerSrc = markerArtwork.src ?? fallbackMarkerArtwork.src ?? null;
 
   if (!focusPoint) {
     return (
-      <div data-testid="overview-location-empty" className="flex h-full w-full flex-col items-center justify-center gap-2 text-sm text-fg-tertiary">
+      <div data-testid="overview-location-empty" className="flex h-full w-full flex-col items-center justify-center gap-2 p-3 text-center text-sm text-fg-tertiary">
         <MapPinOff className="h-6 w-6" aria-hidden="true" />
         <span>No location reported yet</span>
       </div>
@@ -49,6 +69,9 @@ export function OverviewLocationMap({
       <TripMapChart
         track={[]}
         focusPoint={focusPoint}
+        focusMarker={<VehicleMapMarker src={markerSrc} />}
+        focusRotation={headingDeg}
+        compactAttribution
         height={Math.max(160, Math.round(heightPx))}
         mapStyle={mapStyle}
         mapStylePreference={mapStylePreference}
@@ -59,6 +82,22 @@ export function OverviewLocationMap({
         onBasemapRetry={() => void basemap.refetch()}
       />
     </div>
+  );
+}
+
+/** Small overhead view of the vehicle in an accent ring. The artwork's front faces up (north) before rotation. */
+function VehicleMapMarker({ src }: { src: string | null }) {
+  return (
+    <span
+      data-testid="overview-map-vehicle-marker"
+      className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border-2 border-accent bg-bg-surface shadow-lg"
+    >
+      {src ? (
+        <img src={src} alt="" draggable={false} className="h-10 w-auto max-w-none select-none object-contain" />
+      ) : (
+        <Car className="h-5 w-5 text-accent" aria-hidden="true" />
+      )}
+    </span>
   );
 }
 
