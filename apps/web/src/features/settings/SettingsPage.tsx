@@ -938,7 +938,7 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
     } catch (error) {
       throw saveFailure(error, 'Units could not be saved. Try again.');
     }
-    unitsDraft.commit(result.units);
+    unitsDraft.commit(result.units, next);
   };
   useSettingsDraft('units-preferences', { isDirty: unitsDraft.isDirty, save: saveUnitsDraft, discard: unitsDraft.reset });
 
@@ -953,7 +953,7 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
     } catch (error) {
       throw saveFailure(error, 'The application time zone could not be saved. Try again.');
     }
-    timezoneDraft.commit(result.timezone);
+    timezoneDraft.commit(result.timezone, next);
   };
   useSettingsDraft('app-timezone', { isDirty: timezoneDraft.isDirty, save: saveTimezoneDraft, discard: timezoneDraft.reset });
 

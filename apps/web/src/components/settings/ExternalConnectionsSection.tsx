@@ -322,7 +322,15 @@ function ConnectionCard({
   const [bearerToken, setBearerToken] = React.useState('');
   const [message, setMessage] = React.useState<string | null>(null);
   const [previewDataUrl, setPreviewDataUrl] = React.useState<string | null>(null);
-  const hasSecretEdits = apiKey.trim() !== '' || bearerToken.trim() !== '';
+  // A secret counts (and is sent) only while its field is on screen: switching
+  // the mode or provider away from it must not save a hidden key.
+  const draftActive = draft.enabled && draft.mode !== 'disabled';
+  const apiKeyShown = draft.mode === 'custom'
+    || (connection.id === 'basemap' && draftActive && (draft.basemap_provider ?? 'auto') !== 'openfreemap');
+  const bearerShown = draft.mode === 'custom';
+  const pendingApiKey = apiKeyShown ? apiKey.trim() : '';
+  const pendingBearerToken = bearerShown ? bearerToken.trim() : '';
+  const hasSecretEdits = pendingApiKey !== '' || pendingBearerToken !== '';
 
   const update = useMutation({
     mutationFn: (body: UpdateExternalConnectionBody) => api.updateExternalConnection(connection.id, body),
@@ -375,8 +383,8 @@ function ConnectionCard({
     }
     const response = await update.mutateAsync({
       ...submitted,
-      ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
-      ...(bearerToken.trim() ? { bearer_token: bearerToken.trim() } : {}),
+      ...(pendingApiKey ? { api_key: pendingApiKey } : {}),
+      ...(pendingBearerToken ? { bearer_token: pendingBearerToken } : {}),
       ...(isReplacingApiKey ? { clear_api_key: false } : {}),
     }).catch((error: unknown) => {
       throw error instanceof Error && error.message ? error : new Error('Could not save connection.');
@@ -401,8 +409,8 @@ function ConnectionCard({
   function testDraft() {
     test.mutate({
       ...draft,
-      ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
-      ...(bearerToken.trim() ? { bearer_token: bearerToken.trim() } : {}),
+      ...(pendingApiKey ? { api_key: pendingApiKey } : {}),
+      ...(pendingBearerToken ? { bearer_token: pendingBearerToken } : {}),
     });
   }
 
