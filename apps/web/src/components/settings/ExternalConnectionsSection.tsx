@@ -14,6 +14,7 @@ import { useReleaseCheckStatus } from '../../hooks/useGithubReleaseCheck';
 import { RELEASES_URL } from '../../lib/releaseCheck';
 import { useSettingsDraft, useSettingsLeaveGuard } from '../../features/settings/drafts/SettingsDraftProvider';
 import { useStagedValue } from '../../features/settings/drafts/useStagedValue';
+import { saveFailure } from '../../features/settings/drafts/saveFailure';
 
 const CONNECTION_QUERY_KEY = ['external-connections'] as const;
 const GITHUB_RELEASES_ID = 'github_releases';
@@ -387,7 +388,7 @@ function ConnectionCard({
       ...(pendingBearerToken ? { bearer_token: pendingBearerToken } : {}),
       ...(isReplacingApiKey ? { clear_api_key: false } : {}),
     }).catch((error: unknown) => {
-      throw error instanceof Error && error.message ? error : new Error('Could not save connection.');
+      throw saveFailure(error, 'Could not save connection.');
     });
     const saved = response.connections.find((item) => item.id === connection.id);
     staged.commit(saved ? toDraft(saved) : submitted);

@@ -37,6 +37,7 @@ import {
 import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
 import { useSettingsDraft } from '../../features/settings/drafts/SettingsDraftProvider';
 import { useStagedValue } from '../../features/settings/drafts/useStagedValue';
+import { saveFailure } from '../../features/settings/drafts/saveFailure';
 import {
   backupValidationError,
   buildDraft,
@@ -327,7 +328,11 @@ export function BackupSection() {
     const payload = buildPayload(submitted, submittedSecret, submittedClear);
     const problem = backupValidationError(submitted, overview.data?.settings.has_secret_key ?? false, submittedSecret);
     if (!payload || problem) throw new Error(problem ?? 'Backup settings are invalid.');
-    await api.updateBackupSettings(payload);
+    try {
+      await api.updateBackupSettings(payload);
+    } catch (error) {
+      throw saveFailure(error, 'Backup settings could not be saved. Try again.');
+    }
     staged.commit(submitted);
     // Keep edits typed while the request was in flight.
     if (draftRef.current !== submitted) staged.setValue(draftRef.current);

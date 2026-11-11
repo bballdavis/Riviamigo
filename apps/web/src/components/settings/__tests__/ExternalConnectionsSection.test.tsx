@@ -440,6 +440,39 @@ describe('ExternalConnectionsSection', () => {
     expect(apiMocks.updateExternalConnection).not.toHaveBeenCalled();
   });
 
+  it('keeps the connection staged with the API message when the save is rejected', async () => {
+    apiMocks.getExternalConnections.mockResolvedValue(response(true));
+    apiMocks.updateExternalConnection.mockRejectedValueOnce(Object.assign(new Error('400 validation_failed: Endpoint is not allowed'), {
+      code: 'validation_failed',
+      detail: { status: 400, code: 'validation_failed', message: 'Endpoint is not allowed', method: 'PUT', path: '/v1/external-connections/open_meteo' },
+    }));
+    renderSection();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Weather location precision' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Exact route samples' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Endpoint is not allowed');
+    expect(alert).not.toHaveTextContent('400');
+    expect(screen.getByRole('button', { name: 'Weather location precision' })).toHaveTextContent('Exact');
+    expect(screen.getByRole('region', { name: 'Unsaved changes' })).toBeInTheDocument();
+  });
+
+  it('shows the connection fallback instead of a raw transport message when the save fails without an API message', async () => {
+    apiMocks.getExternalConnections.mockResolvedValue(response(true));
+    apiMocks.updateExternalConnection.mockRejectedValueOnce(new Error('400 code: raw transport text'));
+    renderSection();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Weather location precision' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Exact route samples' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not save connection.');
+    expect(alert).not.toHaveTextContent('raw transport text');
+  });
+
   it('keeps unsaved CARTO key edits when the connection refetches', async () => {
     apiMocks.getExternalConnections.mockResolvedValue(basemapResponse({ has_api_key: false, basemap_provider: 'auto' }));
     const { client } = renderSection();

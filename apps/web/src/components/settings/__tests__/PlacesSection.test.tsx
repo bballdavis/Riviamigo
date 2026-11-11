@@ -42,6 +42,14 @@ const place = {
   charging: { id: 'charge-1', name: 'Home charger', billing_type: 'per_kwh' as const, rate: 0.2, session_fee: 1, currency: 'USD', timezone: null, tou_periods: [] },
 };
 
+/** Mirrors the transport's API error: the readable server message lives on `detail`. */
+function apiError(message: string) {
+  return Object.assign(new Error(`400 validation_failed: ${message}`), {
+    code: 'validation_failed',
+    detail: { status: 400, code: 'validation_failed', message, method: 'POST', path: '/v1/places' },
+  });
+}
+
 function tree(unitSystem: 'metric' | 'imperial', client: QueryClient) {
   return (
     <QueryClientProvider client={client}>
@@ -117,7 +125,7 @@ describe('PlacesSection', () => {
   });
 
   it('keeps the bar open with the API message when the save fails', async () => {
-    apiMocks.createPlace.mockRejectedValueOnce(new Error('Address service unavailable'));
+    apiMocks.createPlace.mockRejectedValueOnce(apiError('Address service unavailable'));
     renderSection();
     fireEvent.change(screen.getByPlaceholderText('Enter an address'), { target: { value: '123 Main' } });
     fireEvent.click(screen.getByRole('button', { name: /Search/ }));
@@ -126,9 +134,26 @@ describe('PlacesSection', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Address service unavailable');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Address service unavailable');
+    expect(alert).not.toHaveTextContent('400');
     expect(bar()).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Home garage')).toHaveValue('Downtown');
+  });
+
+  it('shows the place fallback instead of a raw transport message when the save fails without an API message', async () => {
+    apiMocks.createPlace.mockRejectedValueOnce(new Error('400 code: raw transport text'));
+    renderSection();
+    fireEvent.change(screen.getByPlaceholderText('Enter an address'), { target: { value: '123 Main' } });
+    fireEvent.click(screen.getByRole('button', { name: /Search/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /123 Main Street/ }));
+    fireEvent.change(screen.getByPlaceholderText('Home garage'), { target: { value: 'Downtown' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('This place could not be saved. Try again.');
+    expect(alert).not.toHaveTextContent('raw transport text');
   });
 
   it('clears a selected address when its search text changes', async () => {

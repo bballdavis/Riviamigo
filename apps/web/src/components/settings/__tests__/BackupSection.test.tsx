@@ -162,6 +162,39 @@ describe('BackupSection', () => {
     expect(screen.getByText(UNSAVED)).toBeInTheDocument();
   });
 
+  it('keeps the bar open with the API message when the save is rejected', async () => {
+    const user = userEvent.setup();
+    updateSettings.mockRejectedValueOnce(Object.assign(new Error('400 validation_failed: Bucket is not writable'), {
+      code: 'validation_failed',
+      detail: { status: 400, code: 'validation_failed', message: 'Bucket is not writable', method: 'PUT', path: '/v1/backup/settings' },
+    }));
+    renderSection();
+    const retention = await screen.findByLabelText('Retention count');
+    await user.clear(retention);
+    await user.type(retention, '12');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Bucket is not writable');
+    expect(alert).not.toHaveTextContent('400');
+    expect(screen.getByText(UNSAVED)).toBeInTheDocument();
+    expect(screen.getByLabelText('Retention count')).toHaveValue(12);
+  });
+
+  it('shows the backup fallback instead of a raw transport message when the save fails without an API message', async () => {
+    const user = userEvent.setup();
+    updateSettings.mockRejectedValueOnce(new Error('400 code: raw transport text'));
+    renderSection();
+    const retention = await screen.findByLabelText('Retention count');
+    await user.clear(retention);
+    await user.type(retention, '12');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Backup settings could not be saved. Try again.');
+    expect(alert).not.toHaveTextContent('raw transport text');
+  });
+
   it('stages a typed S3 secret until Save and sends it with the payload', async () => {
     const user = userEvent.setup();
     renderSection();
