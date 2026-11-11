@@ -9,7 +9,8 @@ use super::{
 
 #[test]
 fn record_is_a_noop_without_a_running_capture() {
-    // The service is never initialised in unit tests.
+    // No capture is registered for this vehicle (lifecycle tests may install
+    // the registry, but only register vehicles they create).
     let vehicle_id = Uuid::new_v4();
     assert!(!is_capturing(vehicle_id));
     record(vehicle_id, Kind::Ingestion, json!({ "source": "legacy" }));
@@ -134,4 +135,93 @@ fn filename_uses_model_and_start_time() {
         export_filename(None, "2026-09-30T21:10:12Z".parse().unwrap()),
         "riviamigo-capture-vehicle-20260930T2110Z.jsonl"
     );
+}
+
+mod lifecycle_order {
+    use std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        time::Duration,
+    };
+
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    use super::super::{
+        lifecycle::{close_capture, replace_capture},
+        registry::{install_for_tests, register, registered_capture},
+    };
+
+    fn later() -> chrono::DateTime<Utc> {
+        Utc::now() + chrono::Duration::hours(1)
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_keeps_the_previous_capture_registered() {
+        install_for_tests();
+        let vehicle_id = Uuid::new_v4();
+        let previous = Uuid::new_v4();
+        register(vehicle_id, previous, later());
+
+        let result = replace_capture(vehicle_id, || async {
+            anyhow::bail!("transaction failed before commit")
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(registered_capture(vehicle_id), Some(previous));
+    }
+
+    #[tokio::test]
+    async fn concurrent_starts_register_in_commit_order() {
+        install_for_tests();
+        let vehicle_id = Uuid::new_v4();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let first_committed = Arc::new(AtomicBool::new(false));
+
+        let first_flag = Arc::clone(&first_committed);
+        let slow = tokio::spawn(replace_capture(vehicle_id, move || async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            first_flag.store(true, Ordering::SeqCst);
+            Ok((first, later()))
+        }));
+        // Let the slow start take the lifecycle lock first.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let second_flag = Arc::clone(&first_committed);
+        let fast = tokio::spawn(replace_capture(vehicle_id, move || async move {
+            assert!(
+                second_flag.load(Ordering::SeqCst),
+                "the second start must not commit before the first has finished"
+            );
+            Ok((second, later()))
+        }));
+
+        slow.await.unwrap().unwrap();
+        fast.await.unwrap().unwrap();
+        assert_eq!(registered_capture(vehicle_id), Some(second));
+    }
+
+    #[tokio::test]
+    async fn a_failed_stop_restores_the_capture_for_a_retry() {
+        install_for_tests();
+        let vehicle_id = Uuid::new_v4();
+        let capture = Uuid::new_v4();
+        register(vehicle_id, capture, later());
+
+        let failed = close_capture(vehicle_id, |_| async {
+            anyhow::bail!("update failed before commit")
+        })
+        .await;
+        assert!(failed.is_err());
+        assert_eq!(registered_capture(vehicle_id), Some(capture));
+
+        let stopped = close_capture(vehicle_id, |_| async { Ok(true) })
+            .await
+            .unwrap();
+        assert!(stopped);
+        assert_eq!(registered_capture(vehicle_id), None);
+    }
 }
