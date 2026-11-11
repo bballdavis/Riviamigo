@@ -21,7 +21,7 @@ export function SettingsConfirmationDialog({
   onClose: () => void;
 }) {
   const [pending, setPending] = React.useState(false);
-  const titleId = 'settings-confirm-title';
+  const titleId = React.useId();
   const dismiss = () => {
     if (!pending) onClose();
   };
