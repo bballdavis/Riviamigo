@@ -72,6 +72,9 @@
     "turbo": "^2.10.5"
   },
   "knip": {
+    "ignoreBinaries": [
+      "pg_dump"
+    ],
     "ignoreDependencies": [
       "@cmfcmf/docusaurus-search-local",
       "@cmfcmf/docusaurus-plugin-docusaurus-search-local",
