@@ -87,6 +87,31 @@ export function useUpdateOverviewView() {
   });
 }
 
+/** Remember whether the Vehicle Overview's location map is expanded for the signed-in user. */
+export function useUpdateOverviewMapExpanded() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (expanded: boolean) =>
+      api.apiFetch<{ overview_map_expanded: boolean }>('PUT', '/v1/auth/preferences/overview-map-expanded', {
+        overview_map_expanded: expanded,
+      }),
+    onMutate: async (expanded) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.unitPreferences.current });
+      const previous = queryClient.getQueryData<UserPreferencesResponse>(queryKeys.unitPreferences.current);
+      if (previous) {
+        queryClient.setQueryData(queryKeys.unitPreferences.current, { ...previous, overview_map_expanded: expanded });
+      }
+      return { previous };
+    },
+    onError: (_error, _expanded, context) => {
+      if (context?.previous) queryClient.setQueryData(queryKeys.unitPreferences.current, context.previous);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.unitPreferences.current });
+    },
+  });
+}
+
 /** Whether the signed-in user shows the Ownership dashboard. On until they turn it off. */
 export function useOwnershipEnabled(): boolean {
   return useUserPreferences().data?.ownership_enabled !== false;
