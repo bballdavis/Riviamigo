@@ -22,8 +22,8 @@ use std::{
 use crate::{
     db::users::require_admin_or_super_user,
     db::vehicles::{
-        get_default_vehicle_id, require_vehicle_read_access, require_vehicle_role,
-        require_vehicle_session_access,
+        get_default_vehicle_id, is_demo_vehicle_key, require_vehicle_read_access,
+        require_vehicle_role, require_vehicle_session_access,
     },
     errors::AppError,
     ingestion::{
@@ -285,10 +285,6 @@ struct AddVehicleBody {
 #[derive(Deserialize)]
 struct CreateDemoVehicleBody {
     model: String,
-}
-
-fn is_demo_vehicle_key(value: &str) -> bool {
-    value.starts_with("demo-")
 }
 
 fn canonical_vehicle_model(model: &str) -> &str {

@@ -33,10 +33,126 @@ pub struct ChargeSessionSummaryPayload {
     pub meta: Option<ChargeSessionSummaryMeta>,
 }
 
+/// How a completed-session summary's upstream `vehicleId` relates to the local
+/// vehicle being synced. `getCompletedSessionSummaries` returns account-wide
+/// history, so every summary must be classified before it is stored or
+/// matched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SummaryVehicleMatch {
+    /// The summary names the target vehicle's Rivian ID exactly.
+    Match,
+    /// The summary names a different Rivian vehicle; it is never attributed.
+    Foreign,
+    /// The summary has a null or empty `vehicleId`.
+    Unidentified,
+}
+
 impl ChargeSessionSummaryPayload {
-    pub fn belongs_to_vehicle(&self, rivian_vehicle_id: &str) -> bool {
-        self.vehicle_id.as_deref() == Some(rivian_vehicle_id)
+    pub fn vehicle_match(&self, rivian_vehicle_id: &str) -> SummaryVehicleMatch {
+        match self.vehicle_id.as_deref() {
+            None => SummaryVehicleMatch::Unidentified,
+            Some(id) if id.trim().is_empty() => SummaryVehicleMatch::Unidentified,
+            Some(id) if id == rivian_vehicle_id => SummaryVehicleMatch::Match,
+            Some(_) => SummaryVehicleMatch::Foreign,
+        }
     }
+}
+
+/// Per-run tally of account-wide summaries that were filtered by vehicle.
+/// Only counts are logged; the other vehicle's Rivian ID is never recorded.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SummaryAttributionCounts {
+    pub skipped_foreign: u64,
+    pub skipped_unidentified: u64,
+    pub accepted_unidentified: u64,
+}
+
+impl SummaryAttributionCounts {
+    /// Applies the attribution rule and returns whether the summary may be
+    /// stored or replayed for the target vehicle. Unidentified summaries are
+    /// accepted only when `allow_unidentified` is set, which callers derive
+    /// from [`vehicles_accepting_unidentified_summaries`].
+    pub fn admit(&mut self, classification: SummaryVehicleMatch, allow_unidentified: bool) -> bool {
+        match classification {
+            SummaryVehicleMatch::Match => true,
+            SummaryVehicleMatch::Foreign => {
+                self.skipped_foreign += 1;
+                false
+            }
+            SummaryVehicleMatch::Unidentified if allow_unidentified => {
+                self.accepted_unidentified += 1;
+                true
+            }
+            SummaryVehicleMatch::Unidentified => {
+                self.skipped_unidentified += 1;
+                false
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn log(&self, vehicle_id: Option<Uuid>, context: &'static str) {
+        if self.is_empty() {
+            return;
+        }
+        tracing::info!(
+            vehicle_id = ?vehicle_id,
+            context,
+            skipped_foreign = self.skipped_foreign,
+            skipped_unidentified = self.skipped_unidentified,
+            accepted_unidentified = self.accepted_unidentified,
+            "charge history summaries filtered by upstream vehicle identity"
+        );
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct VehicleOwnershipRow {
+    id: Uuid,
+    user_id: Uuid,
+    rivian_vehicle_id: String,
+}
+
+/// Returns the local vehicles that may receive completed-session summaries
+/// whose upstream `vehicleId` is missing: a vehicle qualifies only when it is
+/// the sole non-demo vehicle owned (`vehicles.user_id`) by its user. When
+/// `vehicle_id` is set, only that vehicle's owner is considered.
+pub async fn vehicles_accepting_unidentified_summaries(
+    pool: &PgPool,
+    vehicle_id: Option<Uuid>,
+) -> Result<std::collections::HashSet<Uuid>> {
+    let rows = sqlx::query_as::<_, VehicleOwnershipRow>(
+        r#"
+        SELECT v.id, v.user_id, v.rivian_vehicle_id
+        FROM riviamigo.vehicles v
+        WHERE $1::uuid IS NULL
+           OR v.user_id = (SELECT target.user_id FROM riviamigo.vehicles target WHERE target.id = $1)
+        "#,
+    )
+    .bind(vehicle_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut real_vehicles_by_user = std::collections::HashMap::<Uuid, Vec<Uuid>>::new();
+    for row in rows {
+        if !crate::db::vehicles::is_demo_vehicle_key(&row.rivian_vehicle_id) {
+            real_vehicles_by_user
+                .entry(row.user_id)
+                .or_default()
+                .push(row.id);
+        }
+    }
+
+    Ok(real_vehicles_by_user
+        .into_values()
+        .filter_map(|vehicles| match vehicles.as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -1005,6 +1121,7 @@ pub async fn reconcile_completed_session_summary(
 
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct ChargeSessionCanonicalizationStats {
+    pub misattributed_sessions_reassigned: u64,
     pub source_backfills: u64,
     pub alias_backfills: u64,
     pub payload_reconciliations: u64,
@@ -1026,6 +1143,9 @@ pub struct ChargeSessionDiagnostics {
     pub unlinked_payloads_outside_telemetry_window: i64,
     pub canonical_overlap_pairs: i64,
     pub null_source_rows: i64,
+    /// Sessions whose stored upstream `rivian_vehicle_id` names a different
+    /// vehicle than the local vehicle they are attached to.
+    pub misattributed_sessions: i64,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -1180,6 +1300,12 @@ pub async fn replay_charge_payload_summaries(
     .fetch_all(pool)
     .await?;
 
+    let accepts_unidentified = if payloads.is_empty() {
+        std::collections::HashSet::new()
+    } else {
+        vehicles_accepting_unidentified_summaries(pool, vehicle_id).await?
+    };
+    let mut attribution = SummaryAttributionCounts::default();
     let mut linked = 0u64;
     for payload in payloads {
         let Ok(summary) =
@@ -1188,12 +1314,10 @@ pub async fn replay_charge_payload_summaries(
             continue;
         };
 
-        if !summary.belongs_to_vehicle(&payload.rivian_vehicle_id) {
-            tracing::warn!(
-                vehicle_id = %payload.vehicle_id,
-                payload_id = %payload.id,
-                "skipping charge history payload with mismatched or missing upstream vehicle identity"
-            );
+        if !attribution.admit(
+            summary.vehicle_match(&payload.rivian_vehicle_id),
+            accepts_unidentified.contains(&payload.vehicle_id),
+        ) {
             continue;
         }
 
@@ -1225,7 +1349,124 @@ pub async fn replay_charge_payload_summaries(
         }
     }
 
+    attribution.log(vehicle_id, "stored payload replay");
     Ok(linked)
+}
+
+#[derive(Debug, FromRow)]
+struct ReassignmentCandidateRow {
+    id: Uuid,
+    owner_vehicle_id: Uuid,
+}
+
+/// Moves API-only charge sessions that were attributed to the wrong local
+/// vehicle back to their owner.
+///
+/// Before account-wide completed-session summaries were filtered by vehicle,
+/// a summary for vehicle B could be stored on vehicle A. Such a row keeps the
+/// summary's upstream `rivian_vehicle_id`, which then differs from vehicle A's
+/// Rivian ID. A row is moved only when all of the following hold:
+///
+/// - its source is exactly [`CHARGE_SESSION_SOURCE_RIVIAN_API`] (no telemetry
+///   was merged into it) and no telemetry or charge-curve samples reference it;
+/// - another vehicle of the same user (`vehicles.user_id`) has the row's
+///   `rivian_vehicle_id`.
+///
+/// Mixed-source rows and rows with no same-user owner are left untouched and
+/// remain visible in [`ChargeSessionDiagnostics::misattributed_sessions`].
+/// Aliases and annotations follow the row by foreign key; retained payloads
+/// keep their original vehicle and are not modified. When `vehicle_id` is set,
+/// rows currently on that vehicle and rows owned by it but stored on a sibling
+/// are both considered. The move runs in one transaction.
+pub async fn reassign_misattributed_api_sessions(
+    pool: &PgPool,
+    vehicle_id: Option<Uuid>,
+) -> Result<u64> {
+    let mut transaction = pool.begin().await?;
+    let candidates = sqlx::query_as::<_, ReassignmentCandidateRow>(
+        r#"
+        SELECT cs.id, owner.id AS owner_vehicle_id
+        FROM riviamigo.charge_sessions cs
+        JOIN riviamigo.vehicles current_vehicle ON current_vehicle.id = cs.vehicle_id
+        JOIN riviamigo.vehicles owner
+          ON owner.user_id = current_vehicle.user_id
+         AND owner.rivian_vehicle_id = cs.rivian_vehicle_id
+        WHERE cs.source = $2
+          AND cs.rivian_vehicle_id IS NOT NULL
+          AND cs.rivian_vehicle_id <> current_vehicle.rivian_vehicle_id
+          AND ($1::uuid IS NULL OR cs.vehicle_id = $1 OR owner.id = $1)
+        ORDER BY cs.started_at, cs.id
+        FOR UPDATE OF cs
+        "#,
+    )
+    .bind(vehicle_id)
+    .bind(CHARGE_SESSION_SOURCE_RIVIAN_API)
+    .fetch_all(&mut *transaction)
+    .await?;
+
+    let mut reassigned = Vec::new();
+    for candidate in candidates {
+        // Each move is guarded individually so a row with telemetry-side
+        // evidence, or one that would collide with the owner's
+        // `(vehicle_id, started_at)` uniqueness for rows without a Rivian
+        // session ID, is skipped instead of failing the whole repair.
+        let moved = sqlx::query(
+            r#"
+            UPDATE riviamigo.charge_sessions cs
+            SET vehicle_id = $2
+            WHERE cs.id = $1
+              AND cs.source = $3
+              AND NOT EXISTS (
+                  SELECT 1 FROM timeseries.telemetry t WHERE t.charge_session_id = cs.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM riviamigo.rivian_charge_curve_points p
+                  WHERE p.charge_session_id = cs.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM timeseries.parallax_charge_curve_points p
+                  WHERE p.charge_session_id = cs.id
+              )
+              AND (
+                  cs.rivian_session_id IS NOT NULL
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM riviamigo.charge_sessions existing
+                      WHERE existing.vehicle_id = $2
+                        AND existing.started_at = cs.started_at
+                        AND existing.rivian_session_id IS NULL
+                  )
+              )
+            "#,
+        )
+        .bind(candidate.id)
+        .bind(candidate.owner_vehicle_id)
+        .bind(CHARGE_SESSION_SOURCE_RIVIAN_API)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        if moved > 0 {
+            reassigned.push(candidate.id);
+        }
+    }
+    transaction.commit().await?;
+
+    // Cost resolution depends on the vehicle (profile and network
+    // preferences), so price moved rows against their owner. Merging with the
+    // owner's telemetry session happens during the owner's canonicalization.
+    for session_id in &reassigned {
+        crate::services::cost::recompute_charge_session_cost(pool, *session_id).await?;
+    }
+
+    let reassigned = reassigned.len() as u64;
+    if reassigned > 0 {
+        tracing::info!(
+            vehicle_id = ?vehicle_id,
+            reassigned,
+            "reassigned misattributed API-only charge sessions to their owning vehicle"
+        );
+    }
+    Ok(reassigned)
 }
 
 pub async fn diagnose_charge_sessions(
@@ -1365,6 +1606,20 @@ pub async fn diagnose_charge_sessions(
     .fetch_one(pool)
     .await?;
 
+    let misattributed_sessions = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)::int8
+        FROM riviamigo.charge_sessions cs
+        JOIN riviamigo.vehicles v ON v.id = cs.vehicle_id
+        WHERE ($1::uuid IS NULL OR cs.vehicle_id = $1)
+          AND cs.rivian_vehicle_id IS NOT NULL
+          AND cs.rivian_vehicle_id <> v.rivian_vehicle_id
+        "#,
+    )
+    .bind(vehicle_id)
+    .fetch_one(pool)
+    .await?;
+
     Ok(ChargeSessionDiagnostics {
         alias_duplicate_clusters,
         api_telemetry_overlap_pairs,
@@ -1373,6 +1628,7 @@ pub async fn diagnose_charge_sessions(
         unlinked_payloads_outside_telemetry_window,
         canonical_overlap_pairs,
         null_source_rows,
+        misattributed_sessions,
     })
 }
 
@@ -1382,6 +1638,8 @@ pub async fn canonicalize_charge_sessions(
     vehicle_id: Option<Uuid>,
 ) -> Result<ChargeSessionCanonicalizationStats> {
     let mut stats = ChargeSessionCanonicalizationStats::default();
+    stats.misattributed_sessions_reassigned =
+        reassign_misattributed_api_sessions(pool, vehicle_id).await?;
     stats.source_backfills = backfill_charge_session_sources(pool, vehicle_id).await?;
     stats.alias_backfills = backfill_charge_session_aliases_from_rows(pool, vehicle_id).await?;
     stats.payload_reconciliations =
@@ -1886,16 +2144,50 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
-    fn charge_summary_requires_matching_upstream_vehicle_identity() {
+    fn charge_summary_classifies_upstream_vehicle_identity() {
         for (vehicle_id, expected) in [
-            (serde_json::json!("vehicle-a"), true),
-            (serde_json::json!("vehicle-b"), false),
-            (serde_json::Value::Null, false),
+            (serde_json::json!("vehicle-a"), SummaryVehicleMatch::Match),
+            (serde_json::json!("vehicle-b"), SummaryVehicleMatch::Foreign),
+            // Exact comparison: no case folding or trimming of real IDs.
+            (serde_json::json!("VEHICLE-A"), SummaryVehicleMatch::Foreign),
+            (
+                serde_json::json!(" vehicle-a"),
+                SummaryVehicleMatch::Foreign,
+            ),
+            (serde_json::Value::Null, SummaryVehicleMatch::Unidentified),
+            (serde_json::json!(""), SummaryVehicleMatch::Unidentified),
+            (serde_json::json!("  "), SummaryVehicleMatch::Unidentified),
         ] {
             let summary: ChargeSessionSummaryPayload =
                 serde_json::from_value(serde_json::json!({ "vehicleId": vehicle_id })).unwrap();
-            assert_eq!(summary.belongs_to_vehicle("vehicle-a"), expected);
+            assert_eq!(summary.vehicle_match("vehicle-a"), expected, "{vehicle_id}");
         }
+        let missing: ChargeSessionSummaryPayload =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(
+            missing.vehicle_match("vehicle-a"),
+            SummaryVehicleMatch::Unidentified
+        );
+    }
+
+    #[test]
+    fn summary_attribution_admits_unidentified_only_when_allowed() {
+        let mut counts = SummaryAttributionCounts::default();
+        assert!(counts.admit(SummaryVehicleMatch::Match, false));
+        assert!(counts.admit(SummaryVehicleMatch::Match, true));
+        assert!(!counts.admit(SummaryVehicleMatch::Foreign, false));
+        assert!(!counts.admit(SummaryVehicleMatch::Foreign, true));
+        assert!(!counts.admit(SummaryVehicleMatch::Unidentified, false));
+        assert!(counts.admit(SummaryVehicleMatch::Unidentified, true));
+        assert_eq!(
+            counts,
+            SummaryAttributionCounts {
+                skipped_foreign: 2,
+                skipped_unidentified: 1,
+                accepted_unidentified: 1,
+            }
+        );
+        assert!(SummaryAttributionCounts::default().is_empty());
     }
 
     #[test]
