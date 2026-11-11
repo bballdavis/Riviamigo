@@ -62,8 +62,8 @@ query after a session, not a replacement for the live stream.
 6. Save `accessToken`, `refreshToken`, `userSessionToken`, `appSessionToken`,
    `csrfToken`, and the creation timestamp.
 7. Call `getUserInfo` against the same gateway to read
-   `currentUser.vehicles[].id`, `vin`, `name`, `vehicle.modelYear`, and
-   `vehicle.model`.
+   `currentUser.vehicles[].id`, `vin`, `name`, and `vehicle.model`. The model
+   year shown during discovery is decoded from the VIN.
 8. `/v1/vehicles/connect` returns those vehicle summaries. The browser must
    follow a successful connect by calling `POST /v1/vehicles`, which encrypts
    and persists the temporary token bundle from Redis into

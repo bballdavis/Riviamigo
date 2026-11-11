@@ -25,6 +25,20 @@ feed unhealthy. Older battery, range, or charging timestamps are reported as
 field freshness diagnostics instead; parked vehicles are not expected to emit
 continuous trip or charging telemetry.
 
+Model year is a pure function of the VIN, so Riviamigo does not store it.
+`GET /v1/vehicles` decodes `year` from `riviamigo.vehicles.vin` on every read.
+The decoder validates the 17-character VIN alphabet and uses its alphabetic
+seventh position to disambiguate the 2010-2039 tenth-position model-year codes;
+a missing or undecodable VIN yields `year: null`. Enrollment saves the VIN from
+Rivian's account `vin` field. Adding an already-enrolled vehicle, credential
+renewal, and startup enrichment refresh the saved VIN when Rivian reports a
+non-blank one and never clear a known VIN when Rivian omits it. Enrichment logs
+`vehicle model year unavailable` without the VIN when no decodable VIN is on
+record. Settings uses the year before battery-capacity presets when selecting
+R1 generation (2025 onward is Gen 2); generation detection does not apply to
+R2. An incompatible saved R1 capacity is preserved as a custom value with a
+non-blocking hint rather than silently changing the battery-health baseline.
+
 Telemetry is written to the `timeseries.telemetry` hypertable. The
 `telemetry_1min` continuous aggregate incrementally materializes the prior
 seven days once an hour, ending five minutes before the present. It remains a
