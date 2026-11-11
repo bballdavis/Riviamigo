@@ -56,6 +56,79 @@ rerun cleanup to resolve this condition. Investigate only if a recent session
 reports `payload_audit_failures`; normal expiration is reported as an
 aggregated `payloads_evidence_expired` poll count.
 
+### Charge-history duplicate-key failures
+
+`duplicate key value violates unique constraint "uq_charge_sessions_rivian_session"`
+means a charge-session write tried to use a Rivian session ID already owned by
+another row. The completed-session API returns account-wide history, so live
+sync, backfill, and stored-payload replay classify every summary by its
+upstream `vehicleId` before storing or matching it:
+
+- A summary whose `vehicleId` exactly matches the target vehicle's Rivian ID is
+  processed.
+- A summary that names a different vehicle is always skipped.
+- A summary with a null or empty `vehicleId` is attributed to the target vehicle
+  only when the target is the sole non-demo vehicle of its owner
+  (`vehicles.user_id`) and nothing shows that its Rivian account covers other
+  vehicles: the current response and the vehicle's retained summaries must not
+  name any other upstream vehicle. Otherwise it is skipped, because its vehicle
+  cannot be determined. Adding a second vehicle to an account, or sharing one
+  Rivian login between users, therefore stops later syncs and replays from
+  attributing unidentified summaries. If every summary on a shared account is
+  unidentified there is no evidence to detect the sharing, and those sessions
+  are attributed to the polling vehicle.
+
+Each sync or replay run logs one aggregated `info` line with
+`skipped_foreign`, `skipped_unidentified`, and `accepted_unidentified` counts
+when any of them is nonzero. The other vehicle's Rivian ID is never logged.
+Live sync does not retain payloads for skipped summaries.
+
+Canonicalization merges same-vehicle duplicates before promoting their preferred
+external alias. Promotion leaves the current ID unchanged if another row still
+owns the preferred ID, including a row belonging to another vehicle. The unique
+index must remain enabled.
+
+#### Reassignment of misattributed sessions
+
+Every canonicalization run (charge-history backfill, `canonicalize_charge_sessions`,
+`rebuild_vehicle_history`, and `repair_charge_sessions_from_telemetry`) first
+moves misattributed API-only sessions to their owning vehicle. A session is
+misattributed when its stored `rivian_vehicle_id` is set and differs from the
+Rivian ID of the vehicle it is attached to. It is moved only when:
+
+- its `source` is exactly `rivian_api`, and no telemetry or charge-curve samples
+  reference it; and
+- another vehicle of the same user (`vehicles.user_id`) has that
+  `rivian_vehicle_id`.
+
+With `--vehicle <uuid>`, the run considers both sessions currently on that
+vehicle and sessions belonging to it that sit on a sibling vehicle. Moves run
+in one transaction; aliases and user annotations follow the session, and the
+moved session's cost is recomputed against its new vehicle. Retained payloads
+keep their original vehicle and are not modified or deleted. A moved session is
+merged with the owner's overlapping telemetry session the next time the owner's
+history is canonicalized; this happens in the same run when the owner is the
+target vehicle or when the run covers all vehicles. The run reports the number of moved sessions as
+`misattributed_sessions_reassigned`.
+
+The repair leaves these sessions untouched:
+
+- mixed-source sessions (`telemetry` or `telemetry+rivian_api`), because their
+  telemetry evidence belongs to the vehicle they are on;
+- sessions whose Rivian vehicle ID matches no vehicle of the same user;
+- API-only sessions without a Rivian session ID that would collide with an
+  existing session on the owner at the same start time.
+
+`diagnose_charge_sessions` reports remaining cases as `misattributed_sessions`.
+Inspect any nonzero count against the retained payload's `vehicleId` before
+planning a targeted repair with a verified backup.
+
+After deploying the fix, retry charge-history backfill for each affected vehicle
+and run `diagnose_charge_sessions -- --vehicle <uuid>`. A successful retry alone
+does not prove historical attribution is correct: sessions created from
+unidentified summaries carry no Rivian vehicle ID and are not detected by the
+misattribution count.
+
 ## Diagnostics First
 
 Before changing live history, capture the current enrichment gap report for the affected vehicle:
