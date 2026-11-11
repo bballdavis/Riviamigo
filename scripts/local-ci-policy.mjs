@@ -30,3 +30,12 @@ export function selectPushBase(candidates) {
   if (usable.length === 0) return null;
   return usable.reduce((best, candidate) => (candidate.aheadCount < best.aheadCount ? candidate : best));
 }
+
+/**
+ * Arguments for `gh pr create`. `pnpm pr:create -- <args>` forwards the `--`
+ * separator to the script, and `gh` would treat everything after it as
+ * positional, so drop a leading separator.
+ */
+export function ghPrCreateArgs(args) {
+  return args[0] === '--' ? args.slice(1) : [...args];
+}
