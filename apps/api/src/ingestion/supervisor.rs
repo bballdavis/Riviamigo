@@ -1,6 +1,15 @@
 //! Manages one Tokio task per vehicle.
+//!
+//! The supervisor is the single place that decides whether a vehicle's
+//! worker may run: it refuses every start while the Rivian connection is off
+//! for this server, and each launched worker first confirms that a manager
+//! has not paused collection for its vehicle. Callers can therefore send
+//! `StartWorker` freely (vehicle add, credential refresh, resume, boot).
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
@@ -9,6 +18,98 @@ use uuid::Uuid;
 use crate::{config::Config, ingestion::worker::run_vehicle_worker};
 
 type WorkerEntry = (JoinHandle<()>, broadcast::Sender<()>);
+type WorkerFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+/// How long a worker waits before re-reading its vehicle's collection setting
+/// after the database could not answer.
+const PAUSE_CHECK_RETRY: Duration = Duration::from_secs(5);
+
+/// Builds the task that runs one vehicle's worker. Tests substitute a fake.
+trait WorkerLauncher: Send + Sync {
+    fn launch(&self, vehicle_id: Uuid, shutdown: broadcast::Receiver<()>) -> WorkerFuture;
+}
+
+/// The production launcher: the Rivian vehicle worker, behind the per-vehicle
+/// collection pause.
+struct RivianWorkerLauncher {
+    pool: sqlx::PgPool,
+    redis: redis::Client,
+    age_key: String,
+    config: Config,
+}
+
+impl WorkerLauncher for RivianWorkerLauncher {
+    fn launch(&self, vehicle_id: Uuid, shutdown: broadcast::Receiver<()>) -> WorkerFuture {
+        let pool = self.pool.clone();
+        let redis = self.redis.clone();
+        let age_key = self.age_key.clone();
+        let config = self.config.clone();
+        let gate_pool = pool.clone();
+        Box::pin(run_unless_paused(
+            vehicle_id,
+            shutdown,
+            PAUSE_CHECK_RETRY,
+            move || collection_paused(gate_pool.clone(), vehicle_id),
+            move |shutdown| run_vehicle_worker(vehicle_id, pool, redis, age_key, config, shutdown),
+        ))
+    }
+}
+
+/// Whether a manager paused collection for this vehicle. A vehicle row that no
+/// longer exists is not paused; the worker reports that state itself.
+async fn collection_paused(pool: sqlx::PgPool, vehicle_id: Uuid) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT COALESCE(
+             (SELECT collection_paused FROM riviamigo.vehicles WHERE id = $1),
+             FALSE
+         )",
+    )
+    .bind(vehicle_id)
+    .fetch_one(&pool)
+    .await
+}
+
+/// Run the worker only when its vehicle's collection is not paused. A failed
+/// read is retried (never treated as "not paused") until it succeeds or the
+/// worker is told to stop.
+async fn run_unless_paused<C, CF, R, RF>(
+    vehicle_id: Uuid,
+    mut shutdown: broadcast::Receiver<()>,
+    retry: Duration,
+    mut is_paused: C,
+    run: R,
+) where
+    C: FnMut() -> CF,
+    CF: Future<Output = Result<bool, sqlx::Error>>,
+    R: FnOnce(broadcast::Receiver<()>) -> RF,
+    RF: Future<Output = ()>,
+{
+    loop {
+        match is_paused().await {
+            Ok(false) => break,
+            Ok(true) => {
+                tracing::info!(
+                    vehicle_id = %vehicle_id,
+                    "worker not started: collection is paused for this vehicle"
+                );
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    vehicle_id = %vehicle_id,
+                    err = %error,
+                    retry_seconds = retry.as_secs(),
+                    "worker start deferred: the vehicle's collection setting could not be read"
+                );
+                tokio::select! {
+                    _ = tokio::time::sleep(retry) => {}
+                    _ = shutdown.recv() => return,
+                }
+            }
+        }
+    }
+    run(shutdown).await
+}
 
 fn prepare_worker_start(workers: &mut HashMap<Uuid, WorkerEntry>, vehicle_id: Uuid) -> bool {
     match workers.get(&vehicle_id) {
@@ -21,52 +122,139 @@ fn prepare_worker_start(workers: &mut HashMap<Uuid, WorkerEntry>, vehicle_id: Uu
     }
 }
 
+#[derive(Debug)]
+pub enum SupervisorCommand {
+    StartWorker { vehicle_id: Uuid },
+    StopWorker { vehicle_id: Uuid },
+    Shutdown,
+}
+
+#[derive(Debug, Clone)]
+pub struct SupervisorHandle {
+    tx: mpsc::Sender<SupervisorCommand>,
+}
+
+impl SupervisorHandle {
+    pub async fn send(&self, cmd: SupervisorCommand) -> bool {
+        self.tx.send(cmd).await.is_ok()
+    }
+
+    /// Creates a handle whose commands are silently dropped — for use in tests.
+    pub fn noop() -> Self {
+        let (tx, _rx) = mpsc::channel(1);
+        Self { tx }
+    }
+}
+
+pub struct WorkerSupervisor {
+    launcher: Arc<dyn WorkerLauncher>,
+    /// False when the Rivian connection is switched off for this server.
+    workers_enabled: bool,
+    workers: HashMap<Uuid, WorkerEntry>,
+    cmd_rx: mpsc::Receiver<SupervisorCommand>,
+}
+
+impl WorkerSupervisor {
+    pub fn start(
+        pool: sqlx::PgPool,
+        redis: redis::Client,
+        age_key: String,
+        config: Config,
+        workers_enabled: bool,
+    ) -> SupervisorHandle {
+        let (cmd_tx, cmd_rx) = mpsc::channel(64);
+
+        let mut sup = WorkerSupervisor {
+            launcher: Arc::new(RivianWorkerLauncher {
+                pool,
+                redis,
+                age_key,
+                config,
+            }),
+            workers_enabled,
+            workers: HashMap::new(),
+            cmd_rx,
+        };
+
+        tokio::spawn(async move { sup.run().await });
+
+        SupervisorHandle { tx: cmd_tx }
+    }
+
+    async fn run(&mut self) {
+        while let Some(cmd) = self.cmd_rx.recv().await {
+            match cmd {
+                SupervisorCommand::StartWorker { vehicle_id } => {
+                    if !self.workers_enabled {
+                        tracing::info!(
+                            vehicle_id = %vehicle_id,
+                            "worker not started: Rivian connection is off for this server"
+                        );
+                        continue;
+                    }
+                    if !prepare_worker_start(&mut self.workers, vehicle_id) {
+                        continue;
+                    }
+                    let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+                    let handle = tokio::spawn(self.launcher.launch(vehicle_id, shutdown_rx));
+                    self.workers.insert(vehicle_id, (handle, shutdown_tx));
+                    tracing::info!(vehicle_id = %vehicle_id, "worker started");
+                }
+                SupervisorCommand::StopWorker { vehicle_id } => {
+                    if let Some((handle, shutdown_tx)) = self.workers.remove(&vehicle_id) {
+                        let _ = shutdown_tx.send(());
+                        tokio::spawn(async move {
+                            tokio::pin!(handle);
+                            tokio::select! {
+                                _ = &mut handle => {},
+                                _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                                    handle.abort();
+                                    tracing::warn!(vehicle_id = %vehicle_id, "worker did not stop within 5s; aborted");
+                                }
+                            }
+                        });
+                        tracing::info!(vehicle_id = %vehicle_id, "worker stop requested");
+                    }
+                }
+                SupervisorCommand::Shutdown => {
+                    let drain: Vec<_> = self.workers.drain().collect();
+                    for (vid, (handle, shutdown_tx)) in drain {
+                        let _ = shutdown_tx.send(());
+                        tokio::spawn(async move {
+                            tokio::pin!(handle);
+                            tokio::select! {
+                                _ = &mut handle => {},
+                                _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                                    handle.abort();
+                                    tracing::warn!(vehicle_id = %vid, "worker did not stop within 5s on shutdown; aborted");
+                                }
+                            }
+                        });
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc,
     };
     use tokio::time::timeout;
 
-    /// Build a minimal `Config` suitable for unit tests (no real DB connections made).
-    fn test_config() -> Config {
-        Config {
-            database_url: "postgres://invalid/invalid".into(),
-            redis_url: "redis://127.0.0.1/".into(),
-            jwt_secret: None,
-            jwt_public_key: None,
-            age_encryption_key: None,
-            port: 3001,
-            allowed_origins: vec![],
-            s3_endpoint: None,
-            s3_access_key: None,
-            s3_secret_key: None,
-            backup_artifact_dir: std::env::temp_dir()
-                .join("riviamigo-backups-test")
-                .to_string_lossy()
-                .into_owned(),
-            vehicle_image_cache_dir: std::env::temp_dir()
-                .join("riviamigo-vehicle-images-test")
-                .to_string_lossy()
-                .into_owned(),
-            backup_driver: "pg_dump".into(),
-            backup_poll_interval_seconds: 60,
-            restore_agent_url: "http://127.0.0.1:3002".into(),
-            restore_agent_key_file: "/backups/.restore-agent-key".into(),
-            recovery: crate::config::RecoveryConfig::default(),
-            origin_bind: crate::config::OriginBindConfig::default(),
-            security: Default::default(),
-            rivian_ws_reconnect_initial_seconds: 10,
-            rivian_ws_reconnect_max_seconds: 900,
-            rivian_raw_event_retention_days: 7,
-            rivian_persist_raw_events: false,
-            rivian_suppress_duplicate_telemetry: true,
-            riviamigo_env: None,
-            cookie_insecure: Some(true),
-            allow_insecure_lan_http_auth: false,
-            rate_limit: crate::config::RateLimitConfig::default(),
+    /// A launcher whose workers park until told to stop.
+    struct ParkedLauncher;
+
+    impl WorkerLauncher for ParkedLauncher {
+        fn launch(&self, _vehicle_id: Uuid, mut shutdown: broadcast::Receiver<()>) -> WorkerFuture {
+            Box::pin(async move {
+                let _ = shutdown.recv().await;
+            })
         }
     }
 
@@ -75,24 +263,102 @@ mod tests {
     /// pre-injected so tests can verify `StopWorker` / `Shutdown` behaviour
     /// without touching the real worker factory.
     fn make_supervisor_with_workers(
-        extra_workers: HashMap<Uuid, (JoinHandle<()>, broadcast::Sender<()>)>,
+        extra_workers: HashMap<Uuid, WorkerEntry>,
     ) -> (SupervisorHandle, WorkerSupervisor) {
-        use sqlx::postgres::PgPoolOptions;
-        let pool = PgPoolOptions::new()
-            .connect_lazy("postgres://invalid/invalid")
-            .expect("lazy pool");
-        let redis = redis::Client::open("redis://127.0.0.1/").expect("redis client");
         let (cmd_tx, cmd_rx) = mpsc::channel(64);
         let sup = WorkerSupervisor {
-            pool,
-            redis,
-            age_key: "test-key".into(),
-            config: test_config(),
+            launcher: Arc::new(ParkedLauncher),
             workers_enabled: true,
             workers: extra_workers,
             cmd_rx,
         };
         (SupervisorHandle { tx: cmd_tx }, sup)
+    }
+
+    // ── collection pause ──────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn a_paused_vehicle_never_starts_its_worker() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_clone = Arc::clone(&ran);
+        let (_tx, rx) = broadcast::channel(1);
+        run_unless_paused(
+            Uuid::new_v4(),
+            rx,
+            Duration::from_millis(1),
+            || async { Ok(true) },
+            move |_| async move { ran_clone.store(true, Ordering::SeqCst) },
+        )
+        .await;
+        assert!(!ran.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn an_active_vehicle_starts_its_worker() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_clone = Arc::clone(&ran);
+        let (_tx, rx) = broadcast::channel(1);
+        run_unless_paused(
+            Uuid::new_v4(),
+            rx,
+            Duration::from_millis(1),
+            || async { Ok(false) },
+            move |_| async move { ran_clone.store(true, Ordering::SeqCst) },
+        )
+        .await;
+        assert!(ran.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unreadable_pause_setting_is_retried_not_assumed() {
+        let checks = Arc::new(AtomicU32::new(0));
+        let checks_clone = Arc::clone(&checks);
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_clone = Arc::clone(&ran);
+        let (_tx, rx) = broadcast::channel(1);
+        run_unless_paused(
+            Uuid::new_v4(),
+            rx,
+            Duration::from_secs(5),
+            move || {
+                let attempt = checks_clone.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if attempt < 2 {
+                        Err(sqlx::Error::PoolTimedOut)
+                    } else {
+                        Ok(true)
+                    }
+                }
+            },
+            move |_| async move { ran_clone.store(true, Ordering::SeqCst) },
+        )
+        .await;
+        assert_eq!(checks.load(Ordering::SeqCst), 3);
+        assert!(
+            !ran.load(Ordering::SeqCst),
+            "the retried read found the vehicle paused"
+        );
+    }
+
+    #[tokio::test]
+    async fn stopping_while_the_pause_setting_is_unreadable_does_not_start() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_clone = Arc::clone(&ran);
+        let (tx, rx) = broadcast::channel(1);
+        tx.send(()).unwrap();
+        timeout(
+            Duration::from_secs(2),
+            run_unless_paused(
+                Uuid::new_v4(),
+                rx,
+                Duration::from_secs(3600),
+                || async { Err(sqlx::Error::PoolTimedOut) },
+                move |_| async move { ran_clone.store(true, Ordering::SeqCst) },
+            ),
+        )
+        .await
+        .expect("a stop request ends the wait");
+        assert!(!ran.load(Ordering::SeqCst));
     }
 
     // ── noop handle ───────────────────────────────────────────────────────────
@@ -193,7 +459,7 @@ mod tests {
         let vehicle_id = Uuid::new_v4();
 
         let (shutdown_tx, mut shutdown_rx) = broadcast::channel::<()>(1);
-        let signal_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let signal_count = Arc::new(AtomicU32::new(0));
         let signal_clone = Arc::clone(&signal_count);
         let handle = tokio::spawn(async move {
             // Count how many shutdown signals arrive.
@@ -284,129 +550,5 @@ mod tests {
         })
         .await
         .expect("all workers should receive shutdown within 2s");
-    }
-}
-
-#[derive(Debug)]
-pub enum SupervisorCommand {
-    StartWorker { vehicle_id: Uuid },
-    StopWorker { vehicle_id: Uuid },
-    Shutdown,
-}
-
-#[derive(Debug, Clone)]
-pub struct SupervisorHandle {
-    tx: mpsc::Sender<SupervisorCommand>,
-}
-
-impl SupervisorHandle {
-    pub async fn send(&self, cmd: SupervisorCommand) -> bool {
-        self.tx.send(cmd).await.is_ok()
-    }
-
-    /// Creates a handle whose commands are silently dropped — for use in tests.
-    pub fn noop() -> Self {
-        let (tx, _rx) = mpsc::channel(1);
-        Self { tx }
-    }
-}
-
-pub struct WorkerSupervisor {
-    pool: sqlx::PgPool,
-    redis: redis::Client,
-    age_key: String,
-    config: Config,
-    /// False when the Rivian connection is switched off for this server.
-    workers_enabled: bool,
-    workers: HashMap<Uuid, WorkerEntry>,
-    cmd_rx: mpsc::Receiver<SupervisorCommand>,
-}
-
-impl WorkerSupervisor {
-    pub fn start(
-        pool: sqlx::PgPool,
-        redis: redis::Client,
-        age_key: String,
-        config: Config,
-        workers_enabled: bool,
-    ) -> SupervisorHandle {
-        let (cmd_tx, cmd_rx) = mpsc::channel(64);
-
-        let mut sup = WorkerSupervisor {
-            pool,
-            redis,
-            age_key,
-            config,
-            workers_enabled,
-            workers: HashMap::new(),
-            cmd_rx,
-        };
-
-        tokio::spawn(async move { sup.run().await });
-
-        SupervisorHandle { tx: cmd_tx }
-    }
-
-    async fn run(&mut self) {
-        while let Some(cmd) = self.cmd_rx.recv().await {
-            match cmd {
-                SupervisorCommand::StartWorker { vehicle_id } => {
-                    if !self.workers_enabled {
-                        tracing::info!(
-                            vehicle_id = %vehicle_id,
-                            "worker not started: Rivian connection is off for this server"
-                        );
-                        continue;
-                    }
-                    if !prepare_worker_start(&mut self.workers, vehicle_id) {
-                        continue;
-                    }
-                    let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
-                    let handle = tokio::spawn(run_vehicle_worker(
-                        vehicle_id,
-                        self.pool.clone(),
-                        self.redis.clone(),
-                        self.age_key.clone(),
-                        self.config.clone(),
-                        shutdown_rx,
-                    ));
-                    self.workers.insert(vehicle_id, (handle, shutdown_tx));
-                    tracing::info!(vehicle_id = %vehicle_id, "worker started");
-                }
-                SupervisorCommand::StopWorker { vehicle_id } => {
-                    if let Some((handle, shutdown_tx)) = self.workers.remove(&vehicle_id) {
-                        let _ = shutdown_tx.send(());
-                        tokio::spawn(async move {
-                            tokio::pin!(handle);
-                            tokio::select! {
-                                _ = &mut handle => {},
-                                _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                                    handle.abort();
-                                    tracing::warn!(vehicle_id = %vehicle_id, "worker did not stop within 5s; aborted");
-                                }
-                            }
-                        });
-                        tracing::info!(vehicle_id = %vehicle_id, "worker stop requested");
-                    }
-                }
-                SupervisorCommand::Shutdown => {
-                    let drain: Vec<_> = self.workers.drain().collect();
-                    for (vid, (handle, shutdown_tx)) in drain {
-                        let _ = shutdown_tx.send(());
-                        tokio::spawn(async move {
-                            tokio::pin!(handle);
-                            tokio::select! {
-                                _ = &mut handle => {},
-                                _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                                    handle.abort();
-                                    tracing::warn!(vehicle_id = %vid, "worker did not stop within 5s on shutdown; aborted");
-                                }
-                            }
-                        });
-                    }
-                    break;
-                }
-            }
-        }
     }
 }
