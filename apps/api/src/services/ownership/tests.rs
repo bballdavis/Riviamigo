@@ -178,6 +178,64 @@ fn reference_vehicles_have_unique_ids_and_the_figures_their_powertrain_needs() {
 }
 
 #[test]
+fn stored_settings_skip_only_the_entries_this_build_cannot_read() {
+    use super::settings::{parse_comparisons, parse_maintenance};
+
+    let vehicle_id = uuid::Uuid::new_v4();
+    let comparisons = parse_comparisons(
+        vehicle_id,
+        json!({
+            "enabled": ["kia_ev9", 7, "custom-1"],
+            "custom": [
+                { "id": "custom-1", "label": "Old truck", "powertrain": "gas",
+                  "price_usd": 30000.0, "mpg": 18.0 },
+                { "id": "custom-2", "label": "Future", "powertrain": "hydrogen",
+                  "price_usd": 1.0 },
+                { "id": "custom-3", "label": "Commuter", "powertrain": "ev",
+                  "price_usd": 25000.0, "kwh_per_mi": 0.3 }
+            ]
+        }),
+    );
+    assert_eq!(
+        comparisons.enabled,
+        Some(vec!["kia_ev9".to_string(), "custom-1".to_string()])
+    );
+    let ids: Vec<_> = comparisons.custom.iter().map(|v| v.id.as_str()).collect();
+    assert_eq!(ids, ["custom-1", "custom-3"]);
+
+    let maintenance = parse_maintenance(
+        vehicle_id,
+        json!({
+            "own": [
+                { "id": "rotate", "label": "Rotate tires", "category": "tires",
+                  "interval_mi": 7500.0, "interval_months": null, "cost_usd": 40.0 },
+                { "id": "laser", "label": "Laser alignment", "category": "lasers",
+                  "interval_mi": 1000.0, "interval_months": null, "cost_usd": 1.0 }
+            ],
+            "kia_ev9": [
+                { "id": "bad", "label": "Unreadable", "category": "unknown",
+                  "interval_mi": 1000.0, "interval_months": null, "cost_usd": 1.0 }
+            ],
+            "tesla_model_y": [],
+            "bmw_x7": "not a schedule"
+        }),
+    );
+    assert_eq!(maintenance["own"].len(), 1);
+    assert_eq!(maintenance["own"][0].id, "rotate");
+    // No readable items: fall back to the built-in schedule.
+    assert!(!maintenance.contains_key("kia_ev9"));
+    // An intentionally emptied schedule stays empty.
+    assert!(maintenance["tesla_model_y"].is_empty());
+    assert!(!maintenance.contains_key("bmw_x7"));
+
+    assert_eq!(
+        parse_comparisons(vehicle_id, json!("garbage")),
+        Comparisons::default()
+    );
+    assert!(parse_maintenance(vehicle_id, serde_json::Value::Null).is_empty());
+}
+
+#[test]
 fn fuel_price_refresh_decision_serves_fresh_or_recently_attempted_copies() {
     use super::fuel_prices::{refresh_decision, RefreshDecision};
     use chrono::{Duration, TimeZone, Utc};
