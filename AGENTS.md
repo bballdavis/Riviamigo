@@ -58,6 +58,8 @@ Use these entrypoints in this order:
 - If you touch shared seams, ingestion, routing, or any other significant runtime path, run the relevant build check before handing off. In practice that means `pnpm build` for workspace-wide TypeScript/Vite changes and the relevant backend build/test command for Rust changes.
 - If a behavior change affects shared UX or repo workflow, add or update verification where practical.
 - For shared UI changes, include mobile breakpoint verification alongside desktop behavior instead of leaving responsive follow-up work for later.
+- Open pull requests with `pnpm pr:create -- <gh pr create args>`, not `gh pr create` directly. It runs `pnpm verify:ci` first, the local CI-parity gate that includes the database-backed API tests against an isolated `riviamigo-ci-local` database, and only opens the PR when that passes. A red check that already exists on the base branch is still a failure to fix or report, not something to merge past.
+- Install the repository hooks once per clone with `pnpm hooks:install`. Commits run the fast hygiene gate; a push whose branch changes `apps/api` also runs Rust format, SQLx metadata, Clippy, and the database-backed API tests. `SKIP_LOCAL_CI=1` is an emergency bypass only.
 
 ## Documentation System
 
@@ -141,6 +143,9 @@ pnpm lint
 pnpm test
 pnpm docs:check
 pnpm docs:build
+pnpm verify:ci
+pnpm hooks:install
+pnpm pr:create -- --base dev --title "..." --body-file <file>
 pnpm -C apps/web exec vitest run src/test/<file>.test.tsx
 ```
 
