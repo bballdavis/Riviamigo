@@ -162,6 +162,26 @@ describe('BackupSection', () => {
     expect(screen.getByText(UNSAVED)).toBeInTheDocument();
   });
 
+  it('keeps an edit typed while the save is in flight staged after the save completes', async () => {
+    let finish!: (value: unknown) => void;
+    updateSettings.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const user = userEvent.setup();
+    renderSection();
+    const retention = await screen.findByLabelText('Retention count');
+    await user.clear(retention);
+    await user.type(retention, '12');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+
+    await user.clear(screen.getByLabelText('Retention count'));
+    await user.type(screen.getByLabelText('Retention count'), '15');
+    await act(async () => finish({}));
+
+    expect(updateSettings).toHaveBeenCalledWith({ ...basePayload, retention_count: 12 });
+    expect(screen.getByLabelText('Retention count')).toHaveValue(15);
+    expect(screen.getByText(UNSAVED)).toBeInTheDocument();
+  });
+
   it('keeps the bar open with the API message when the save is rejected', async () => {
     const user = userEvent.setup();
     updateSettings.mockRejectedValueOnce(Object.assign(new Error('400 validation_failed: Bucket is not writable'), {
