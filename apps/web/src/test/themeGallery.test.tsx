@@ -2,11 +2,11 @@ import * as React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ThemeRef } from '@riviamigo/types';
 import { ThemeGallery } from '../features/settings/ThemeGallery';
 
 const mocks = vi.hoisted(() => ({
   getCatalog: vi.fn(),
-  getPreferences: vi.fn(),
   updatePreferences: vi.fn(),
   create: vi.fn(),
   navigate: vi.fn(),
@@ -14,29 +14,46 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('@riviamigo/hooks', () => ({
-  queryKeys: { themePreferences: { all: ['theme-preferences', 'v2'], forUser: (userId: string) => ['theme-preferences', 'v2', userId] }, unitPreferences: { current: ['unit-preferences'] }, themes: { catalog: (userId: string) => ['themes', userId, 'catalog'] } },
-  themeClient: { getCatalog: mocks.getCatalog, getPreferences: mocks.getPreferences, updatePreferences: mocks.updatePreferences, create: mocks.create },
+  queryKeys: { themes: { catalog: (userId: string) => ['themes', userId, 'catalog'] } },
+  themeClient: { getCatalog: mocks.getCatalog, updatePreferences: mocks.updatePreferences, create: mocks.create },
   useAuth: (selector: (state: { userId: string }) => unknown) => selector({ userId: 'user-1' }),
 }));
 
-function renderGallery() {
+function renderGallery(props: { selected?: ThemeRef; loading?: boolean; disabled?: boolean; onSelect?: (choice: unknown) => void } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<QueryClientProvider client={client}><ThemeGallery /></QueryClientProvider>);
+  const onSelect = props.onSelect ?? vi.fn();
+  const view = render(
+    <QueryClientProvider client={client}>
+      <ThemeGallery selected={props.selected} loading={props.loading ?? false} disabled={props.disabled ?? false} onSelect={onSelect} />
+    </QueryClientProvider>,
+  );
+  return { ...view, onSelect };
 }
 
 describe('ThemeGallery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getCatalog.mockResolvedValue({ schemaVersion: 2, registryHash: 'hash', builtins: [], customThemes: [] });
-    mocks.getPreferences.mockResolvedValue({ preferences: { schemaVersion: 2, mode: 'dark', selection: { kind: 'builtin', themeId: 'classic' } }, etag: '"theme-preferences-1"' });
     mocks.updatePreferences.mockResolvedValue({ preferences: { schemaVersion: 2, mode: 'dark', selection: { kind: 'builtin', themeId: 'rad' } }, etag: '"theme-preferences-2"' });
     mocks.create.mockResolvedValue({ themeId: 'custom-1', etag: '"theme-custom-1-1"' });
   });
 
-  it('persists built-in selection through the V2 account preference', async () => {
-    renderGallery();
+  it('reports a built-in pick to the parent and does not save it', async () => {
+    const { onSelect } = renderGallery({ selected: { kind: 'builtin', themeId: 'classic' } });
     fireEvent.click(await screen.findByRole('radio', { name: /^RAD/ }));
-    await waitFor(() => expect(mocks.updatePreferences).toHaveBeenCalledWith({ schemaVersion: 2, mode: 'dark', selection: { kind: 'builtin', themeId: 'rad' } }, '"theme-preferences-1"'));
+    expect(onSelect).toHaveBeenCalledWith({ selection: { kind: 'builtin', themeId: 'rad' }, resolvedTheme: null });
+    expect(mocks.updatePreferences).not.toHaveBeenCalled();
+  });
+
+  it('marks the staged selection as active rather than the saved one', async () => {
+    renderGallery({ selected: { kind: 'builtin', themeId: 'rad' } });
+    expect(await screen.findByRole('radio', { name: /^RAD/ })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: /^Classic/ })).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('disables the cards while the parent is saving', async () => {
+    renderGallery({ selected: { kind: 'builtin', themeId: 'classic' }, disabled: true });
+    expect(await screen.findByRole('radio', { name: /^RAD/ })).toBeDisabled();
   });
 
   it('creates an owned theme and opens Theme Studio', async () => {
