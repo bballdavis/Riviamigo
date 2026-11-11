@@ -13,13 +13,22 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@riviamigo/ui/charts')>();
   return {
     ...actual,
-    TripMapChart: (props: { focusPoint?: { lat: number; lng: number } | null; mapStyle?: string; mapStylePreference?: string }) => (
+    TripMapChart: (props: {
+      focusPoint?: { lat: number; lng: number } | null;
+      focusMarker?: React.ReactNode;
+      focusRotation?: number | null;
+      mapStyle?: string;
+      mapStylePreference?: string;
+    }) => (
       <div
         data-testid="trip-map"
         data-focus={props.focusPoint ? `${props.focusPoint.lat},${props.focusPoint.lng}` : 'none'}
+        data-rotation={props.focusRotation ?? 'none'}
         data-mode={props.mapStyle}
         data-style={props.mapStylePreference}
-      />
+      >
+        {props.focusMarker}
+      </div>
     ),
   };
 });
@@ -91,6 +100,7 @@ beforeEach(() => {
     battery_level: 64,
     latitude: 37.77,
     longitude: -122.42,
+    heading_deg: 92,
     last_updated: '2026-05-12T12:00:00Z',
   };
 });
@@ -103,7 +113,8 @@ describe('vehicle overview location map', () => {
     expect(freshness).toHaveAttribute('data-tone', 'fresh');
     expect(freshness.textContent).toBe('');
     expect(screen.getByRole('button', { name: 'Vehicle cluster' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('overview-image-stage')).toHaveAttribute('data-view', 'cluster');
+    expect(screen.getByTestId('overview-stats').children).toHaveLength(5);
+    expect(screen.queryByTestId('overview-location-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('trip-map')).not.toBeInTheDocument();
   });
 
@@ -115,19 +126,29 @@ describe('vehicle overview location map', () => {
     expect(freshness).toHaveAttribute('data-tone', 'stale');
   });
 
-  it('shows the current location with the app map style when the map view is chosen', () => {
+  it('swaps the stat column for the current-location map and keeps the vehicle image', () => {
     renderOverview();
     fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));
     expect(screen.getByRole('button', { name: 'Current location map' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('overview-image-stage')).toHaveAttribute('data-view', 'map');
-    const map = screen.getByTestId('trip-map');
+    const panel = screen.getByTestId('overview-location-panel');
+    const map = within(panel).getByTestId('trip-map');
     expect(map).toHaveAttribute('data-focus', '37.77,-122.42');
     expect(map).toHaveAttribute('data-style', 'liberty');
-    // The stat rows stay in place beside the map.
-    expect(screen.getByTestId('overview-stats').children).toHaveLength(5);
+    expect(screen.queryByTestId('overview-stats')).not.toBeInTheDocument();
+    expect(screen.getByTestId('overview-image-stage')).toContainElement(screen.getByTestId('overview-vehicle-art-frame'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Vehicle cluster' }));
     expect(screen.queryByTestId('trip-map')).not.toBeInTheDocument();
+    expect(screen.getByTestId('overview-stats').children).toHaveLength(5);
+  });
+
+  it('marks the vehicle with its own artwork in an accent ring, turned to its heading', () => {
+    renderOverview();
+    fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));
+    const map = screen.getByTestId('trip-map');
+    expect(map).toHaveAttribute('data-rotation', '92');
+    const marker = within(map).getByTestId('overview-map-vehicle-marker');
+    expect(marker).toHaveClass('rounded-full', 'border-2', 'border-accent');
   });
 
   it('applies the widget map type and light/dark overrides', () => {
@@ -159,6 +180,8 @@ describe('vehicle overview location map', () => {
     for (const row of Array.from(screen.getByTestId('overview-stats').children)) {
       expect(row.className).toContain('@min-[34rem]/overview:border-r-0');
     }
+    fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));
+    expect(screen.getByTestId('overview-location-panel').className).toContain('@min-[34rem]/overview:border-r-0');
   });
 });
 

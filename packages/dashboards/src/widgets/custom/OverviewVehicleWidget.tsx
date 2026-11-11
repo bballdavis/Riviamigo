@@ -125,6 +125,7 @@ export function CurrentVehicleStatePanel({
   const overlaysLight = getDoorOverlayUrls(images?.all, openDoorStates, 'light');
   const overlaysDark = getDoorOverlayUrls(images?.all, openDoorStates, 'dark');
   const imageStageRef = useRef<HTMLDivElement | null>(null);
+  const [locationPanelRef, locationPanelHeight] = useObservedHeight();
   const [imageStageHeight, setImageStageHeight] = useState(0);
   const [imageStageWidth, setImageStageWidth] = useState(0);
   const locksKnown = [
@@ -224,22 +225,12 @@ export function CurrentVehicleStatePanel({
             </div>
           </div>
         </div>
-        <div ref={imageStageRef} data-testid="overview-image-stage" data-view={showMap ? 'map' : 'cluster'} className="relative min-h-60 overflow-hidden rounded-2xl border border-border bg-bg-surface/70 p-1 @min-[34rem]/overview:min-h-0 @min-[58rem]/overview:min-h-60">
-          {showMap && mapOptions ? (
-            <div className="absolute inset-0 z-10">
-              <OverviewLocationMap
-                latitude={status?.latitude}
-                longitude={status?.longitude}
-                options={mapOptions}
-                heightPx={imageStageHeight - 2}
-              />
-            </div>
-          ) : null}
-          <div className={`absolute right-3 top-3 z-30 items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 px-2 py-1 text-[11px] text-fg-tertiary shadow-sm backdrop-blur ${showMap ? 'hidden' : 'inline-flex'}`}>
+        <div ref={imageStageRef} data-testid="overview-image-stage" className="relative min-h-60 overflow-hidden rounded-2xl border border-border bg-bg-surface/70 p-1 @min-[34rem]/overview:min-h-0 @min-[58rem]/overview:min-h-60">
+          <div className="absolute right-3 top-3 z-30 inline-flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 px-2 py-1 text-[11px] text-fg-tertiary shadow-sm backdrop-blur">
             {status?.doors_locked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3 text-accent" />}
             {locksKnown ? (status?.doors_locked ? 'Locked' : 'Unlocked') : 'Locks pending'}
           </div>
-          <div className={`absolute inset-1 z-10 items-center justify-center ${showMap ? 'hidden' : 'flex'}`}>
+          <div className="absolute inset-1 z-10 flex items-center justify-center">
             {overheadArtworkAvailable ? (
               <VehicleArtFrame source={apiOverheadFallback} fallbackSource={localOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth}>
                 <VehicleOverheadLayers base={baseOverheadLight ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} isR1tFallback={vehicleModel === 'R1T'} />
@@ -272,6 +263,24 @@ export function CurrentVehicleStatePanel({
             )}
           </div>
         </div>
+        {showMap && mapOptions ? (
+          <div
+            ref={locationPanelRef}
+            data-testid="overview-location-panel"
+            className="relative min-h-60 overflow-hidden rounded-xl border border-border bg-bg-surface @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-r-none @min-[34rem]/overview:border-r-0"
+          >
+            <div className="absolute inset-0">
+              <OverviewLocationMap
+                latitude={status?.latitude}
+                longitude={status?.longitude}
+                headingDeg={status?.heading_deg}
+                artwork={resolvedOverhead}
+                options={mapOptions}
+                heightPx={locationPanelHeight - 2}
+              />
+            </div>
+          </div>
+        ) : (
         <div data-testid="overview-stats" className="grid auto-rows-fr gap-2 @min-[34rem]/overview:gap-1.5 @min-[58rem]/overview:gap-2">
           {stats.map((stat) => (
             <div
@@ -291,9 +300,25 @@ export function CurrentVehicleStatePanel({
             </div>
           ))}
         </div>
+        )}
       </div>
     </section>
   );
+}
+
+/** Tracks an element's border-box height through a callback ref, so it also works for elements that mount later. */
+function useObservedHeight(): [(element: HTMLDivElement | null) => void, number] {
+  const [element, setElement] = useState<HTMLDivElement | null>(null);
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const update = () => setHeight(element.getBoundingClientRect().height);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return [setElement, height];
 }
 
 type TelemetryFreshness = { tone: 'fresh' | 'stale' | 'pending'; label: string };

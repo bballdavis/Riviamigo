@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { Loader2 } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Info, Loader2 } from 'lucide-react';
 import type { BasemapStyleDescriptor, MapStylePreference } from '@riviamigo/types';
 import { CHART_COLORS } from './ChartProvider';
 import { useDocumentPalette } from '../hooks/useDocumentPalette';
@@ -48,8 +49,21 @@ export interface TripMapChartProps {
   focusPoint?: LatLng | null;
   /** Zoom used when centering on `focusPoint` without routes. */
   focusZoom?: number;
+  /**
+   * Custom marker content drawn at `focusPoint` instead of the default dot,
+   * for example a small vehicle image. It is pinned to the map, so it stays
+   * on the location while the map is panned.
+   */
+  focusMarker?: React.ReactNode;
+  /** Clockwise degrees from north applied to `focusMarker` (a compass heading). */
+  focusRotation?: number | null | undefined;
   /** Copy shown when there is neither a route nor a focus point. */
   emptyLabel?: string;
+  /**
+   * Collapse the basemap credits behind a small info button, for maps too
+   * narrow to show the full line without covering the map.
+   */
+  compactAttribution?: boolean;
   startPoint?: LatLng;
   endPoint?: LatLng;
   height?: number;
@@ -66,6 +80,20 @@ export interface TripMapChartProps {
   onBasemapRetry?: () => void;
   mapLoader?: typeof loadMapLibre;
 }
+
+interface MarkerApi {
+  setLngLat(lngLat: [number, number]): MarkerApi;
+  setRotation(rotation: number): MarkerApi;
+  addTo(map: unknown): MarkerApi;
+  remove(): void;
+}
+
+type MarkerConstructor = new (options: {
+  element: HTMLElement;
+  anchor?: 'center';
+  rotationAlignment?: 'map' | 'viewport';
+  pitchAlignment?: 'map' | 'viewport';
+}) => MarkerApi;
 
 interface MapSourceApi {
   setData(data: unknown): void;
@@ -189,7 +217,10 @@ export function TripMapChart({
   activePoint,
   focusPoint = null,
   focusZoom = DEFAULT_FOCUS_ZOOM,
+  focusMarker,
+  focusRotation = null,
   emptyLabel = 'No route points in this period',
+  compactAttribution = false,
   height = 320,
   className,
   mapStyle = 'dark',
@@ -207,11 +238,23 @@ export function TripMapChart({
   const onRouteClickRef = React.useRef(onRouteClick);
   const latestRoutesRef = React.useRef<TripMapRoute[]>([]);
   const latestSelectedRouteIdsRef = React.useRef<string[]>([]);
-  // A focus point is drawn with the same marker as a scrubbed active point.
-  const markerPoint = activePoint ?? focusPoint;
+  const markerConstructorRef = React.useRef<MarkerConstructor | null>(null);
+  const focusMarkerRef = React.useRef<MarkerApi | null>(null);
+  const [focusMarkerElement] = React.useState<HTMLDivElement | null>(
+    () => (typeof document === 'undefined' ? null : document.createElement('div')),
+  );
+  const [mapLoaded, setMapLoaded] = React.useState(false);
+  const [attributionOpen, setAttributionOpen] = React.useState(false);
+  const [customFocusMarkerShown, setCustomFocusMarkerShown] = React.useState(false);
+  const hasFocusMarker = focusMarker !== undefined && focusMarker !== null;
+  // A focus point is drawn with the same dot as a scrubbed active point unless
+  // custom marker content is pinned there instead.
+  const markerPoint = activePoint ?? (customFocusMarkerShown ? null : focusPoint);
   const latestActivePointRef = React.useRef<LatLng | null | undefined>(markerPoint);
   const focusPointRef = React.useRef<LatLng | null>(focusPoint);
   const focusZoomRef = React.useRef(focusZoom);
+  const focusRotationRef = React.useRef(0);
+  focusRotationRef.current = typeof focusRotation === 'number' && Number.isFinite(focusRotation) ? focusRotation : 0;
   const latestVisibleRouteSignatureRef = React.useRef<string>('');
   const activePointFrameRef = React.useRef<number | null>(null);
   const lastActivePointRef = React.useRef<LatLng | null>(null);
@@ -353,6 +396,7 @@ export function TripMapChart({
         const maplibregl = await mapLoader();
 
         if (cancelled || !containerRef.current) return;
+        markerConstructorRef.current = (maplibregl as { Marker?: MarkerConstructor }).Marker ?? null;
 
         const routeStart = routeList[0]?.track[0];
         const firstPoint = routeStart ?? focusPointRef.current;
@@ -425,6 +469,7 @@ export function TripMapChart({
           if (!mapRef.current) return;
 
           isLoadedRef.current = true;
+          setMapLoaded(true);
           lastRouteSignatureRef.current = '';
           syncRoutes(
             mapRef.current,
@@ -490,7 +535,11 @@ export function TripMapChart({
       cancelled = true;
       clearTileLoadTimeout();
       isLoadedRef.current = false;
+      setMapLoaded(false);
       lastRouteSignatureRef.current = '';
+      focusMarkerRef.current?.remove();
+      focusMarkerRef.current = null;
+      setCustomFocusMarkerShown(false);
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -509,6 +558,39 @@ export function TripMapChart({
     if (focusLat === undefined || focusLng === undefined || routeList.length > 0) return;
     mapRef.current.jumpTo?.({ center: [focusLng, focusLat] });
   }, [focusLat, focusLng, routeList.length]);
+
+  // Pin custom focus marker content. DOM markers live outside the map style,
+  // so they survive light/dark and basemap swaps without re-adding.
+  const hasFocusPoint = focusLat !== undefined && focusLng !== undefined;
+  React.useEffect(() => {
+    const MarkerCtor = markerConstructorRef.current;
+    const map = mapRef.current;
+    const point = focusPointRef.current;
+    if (!mapLoaded || !map || !hasFocusMarker || !hasFocusPoint || !point || !focusMarkerElement || !MarkerCtor) return;
+    const marker = new MarkerCtor({
+      element: focusMarkerElement,
+      anchor: 'center',
+      rotationAlignment: 'map',
+      pitchAlignment: 'map',
+    });
+    marker.setLngLat([point.lng, point.lat]);
+    marker.setRotation(focusRotationRef.current);
+    marker.addTo(map);
+    focusMarkerRef.current = marker;
+    setCustomFocusMarkerShown(true);
+    return () => {
+      marker.remove();
+      if (focusMarkerRef.current === marker) focusMarkerRef.current = null;
+      setCustomFocusMarkerShown(false);
+    };
+  }, [focusMarkerElement, hasFocusMarker, hasFocusPoint, mapLoaded]);
+
+  React.useEffect(() => {
+    const marker = focusMarkerRef.current;
+    if (!marker || focusLat === undefined || focusLng === undefined) return;
+    marker.setLngLat([focusLng, focusLat]);
+    marker.setRotation(focusRotationRef.current);
+  }, [customFocusMarkerShown, focusLat, focusLng, focusRotation]);
 
   // ── Style swap — update tiles in place without destroying the map ─────────
   // setStyle() clears all sources/layers, so we re-sync routes once the new
@@ -679,6 +761,14 @@ export function TripMapChart({
 
   }
 
+  const attributionId = React.useId();
+  const attributionLinks = (
+    <>
+      {basemap.attributions?.map((item, index) => <React.Fragment key={`${item.label}-${index}`}>{index > 0 ? ' · ' : ''}{item.url ? <a href={item.url} target="_blank" rel="noopener noreferrer" className="hover:text-fg">{item.label}</a> : item.label}</React.Fragment>)}
+      {!basemap.attributions?.length && (basemap.attribution_url ? <a href={basemap.attribution_url} target="_blank" rel="noopener noreferrer" className="hover:text-fg">{basemap.attribution}</a> : basemap.attribution)}
+    </>
+  );
+
   return (
     !hasMapContent ? (
       <div
@@ -689,16 +779,36 @@ export function TripMapChart({
       </div>
     ) : (
       <div className="relative">
+        {focusMarkerElement && hasFocusMarker ? createPortal(focusMarker, focusMarkerElement) : null}
         <div
           ref={containerRef}
           style={{ height }}
           className={className ?? 'w-full rounded-xl overflow-hidden'}
         />
         {basemap.enabled && ((basemap.attributions?.length ?? 0) > 0 || basemap.attribution) ? (
-          <div className="absolute bottom-1 right-1 max-w-[calc(100%-0.5rem)] rounded bg-bg/80 px-1.5 py-0.5 text-right text-[10px] text-fg-tertiary">
-            {basemap.attributions?.map((item, index) => <React.Fragment key={`${item.label}-${index}`}>{index > 0 ? ' · ' : ''}{item.url ? <a href={item.url} target="_blank" rel="noopener noreferrer" className="hover:text-fg">{item.label}</a> : item.label}</React.Fragment>)}
-            {!basemap.attributions?.length && (basemap.attribution_url ? <a href={basemap.attribution_url} target="_blank" rel="noopener noreferrer" className="hover:text-fg">{basemap.attribution}</a> : basemap.attribution)}
-          </div>
+          compactAttribution ? (
+            <div className="absolute bottom-1 right-1 flex max-w-[calc(100%-0.5rem)] items-end justify-end gap-1">
+              {attributionOpen ? (
+                <div id={attributionId} className="rounded bg-bg/90 px-1.5 py-0.5 text-right text-[10px] leading-snug text-fg-tertiary">
+                  {attributionLinks}
+                </div>
+              ) : null}
+              <button
+                type="button"
+                aria-label={attributionOpen ? 'Hide map credits' : 'Show map credits'}
+                aria-expanded={attributionOpen}
+                aria-controls={attributionOpen ? attributionId : undefined}
+                onClick={() => setAttributionOpen((open) => !open)}
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-bg/80 text-fg-tertiary hover:text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+              >
+                <Info className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          ) : (
+            <div className="absolute bottom-1 right-1 max-w-[calc(100%-0.5rem)] rounded bg-bg/80 px-1.5 py-0.5 text-right text-[10px] text-fg-tertiary">
+              {attributionLinks}
+            </div>
+          )
         ) : null}
         {showTilesLoading && !mapError && !basemapError ? (
           <div
