@@ -3,7 +3,7 @@ import { delimiter, dirname, join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { colorTokenViolations } from './check-color-tokens.mjs';
-import { selectHookGate, selectPushBase } from './local-ci-policy.mjs';
+import { ghPrCreateArgs, selectHookGate, selectPushBase } from './local-ci-policy.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 process.env.CARGO_TARGET_DIR ??= join(root, 'apps/api/target-ci-local');
@@ -252,7 +252,7 @@ function uninstallHooks() {
 
 function createPr(args) {
   ciChecks();
-  run('gh', ['pr', 'create', ...args], { label: 'Create GitHub pull request' });
+  run('gh', ['pr', 'create', ...ghPrCreateArgs(args)], { label: 'Create GitHub pull request' });
 }
 
 const [mode, ...args] = process.argv.slice(2);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { selectHookGate, selectPushBase } from './local-ci-policy.mjs';
+import { ghPrCreateArgs, selectHookGate, selectPushBase } from './local-ci-policy.mjs';
 
 test('hooks use the fast local gate by default', () => {
   for (const hook of ['pre-commit', 'pre-push']) {
@@ -43,4 +43,10 @@ test('the push base is the integration branch the feature branch is closest to',
     'origin/dev',
   );
   assert.equal(selectPushBase([{ ref: 'origin/dev', mergeBase: '', aheadCount: null }]), null);
+});
+
+test('pr:create forwards gh arguments without the pnpm separator', () => {
+  assert.deepEqual(ghPrCreateArgs(['--', '--base', 'dev', '--title', 'fix(ci): x']), ['--base', 'dev', '--title', 'fix(ci): x']);
+  assert.deepEqual(ghPrCreateArgs(['--base', 'dev']), ['--base', 'dev']);
+  assert.deepEqual(ghPrCreateArgs([]), []);
 });
