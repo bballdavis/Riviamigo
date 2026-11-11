@@ -83,7 +83,7 @@ const hooksMocks = vi.hoisted(() => ({
 const mockNavigate = vi.fn();
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>();
-  return { ...actual, useNavigate: () => mockNavigate };
+  return { ...actual, useNavigate: () => mockNavigate, useBlocker: () => ({ status: 'idle' }) };
 });
 
 // One stable object, as React Query returns: the editor reseeds its form whenever `data` changes.
