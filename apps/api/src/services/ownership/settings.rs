@@ -11,6 +11,7 @@ use crate::{
     services::ownership_schedules::{validate_schedule, MaintenanceItem},
 };
 
+use super::labels::clean_label;
 use super::reference::{reference_vehicles, Powertrain};
 
 const MAX_CUSTOM_VEHICLES: usize = 12;
@@ -164,7 +165,6 @@ pub fn validate_settings(
     let reserved: Vec<&str> = reference_vehicles().iter().map(|v| v.id).collect();
     let mut seen = std::collections::HashSet::new();
     for vehicle in custom.iter_mut() {
-        vehicle.label = vehicle.label.trim().to_string();
         if !valid_id(&vehicle.id)
             || reserved.contains(&vehicle.id.as_str())
             || !seen.insert(vehicle.id.clone())
@@ -173,11 +173,12 @@ pub fn validate_settings(
                 "custom comparison vehicle ids must be unique".into(),
             ));
         }
-        if vehicle.label.is_empty() || vehicle.label.chars().count() > 80 {
-            return Err(AppError::Validation(
-                "custom comparison vehicle name must be 1 to 80 characters".into(),
-            ));
-        }
+        vehicle.label = clean_label(&vehicle.label, 80).ok_or_else(|| {
+            AppError::Validation(
+                "custom comparison vehicle name must be 1 to 80 characters without line breaks or tabs"
+                    .into(),
+            )
+        })?;
         check_amount(
             "custom vehicle price",
             Some(vehicle.price_usd),
