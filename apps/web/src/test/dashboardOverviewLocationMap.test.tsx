@@ -36,6 +36,10 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
 const vehicleStatus = vi.hoisted(() => ({
   current: {} as Record<string, unknown>,
 }));
+const savedPreferences = vi.hoisted(() => ({
+  overviewView: undefined as string | undefined,
+  updateOverviewView: { mutate: (() => undefined) as (view: string) => void },
+}));
 
 vi.mock('@riviamigo/hooks', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@riviamigo/hooks')>();
@@ -46,7 +50,8 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     useMetricCatalog: () => ({ data: [] }),
     useBatteryHealth: () => ({ data: undefined }),
     useBasemapConfig: () => ({ data: { enabled: true, revision: 'r1', styles: [] }, isError: false, refetch: vi.fn() }),
-    useUserPreferences: () => ({ data: { map_style: 'liberty' } }),
+    useUserPreferences: () => ({ data: { map_style: 'liberty', overview_view: savedPreferences.overviewView } }),
+    useUpdateOverviewView: () => savedPreferences.updateOverviewView,
     useCurrentVehicleStatus: () => ({ data: vehicleStatus.current }),
     useVehicles: () => ({ data: [{ id: 'vehicle-1', model: 'R1S', images: null }] }),
   };
@@ -95,6 +100,8 @@ function renderOverview(options?: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  savedPreferences.overviewView = undefined;
+  savedPreferences.updateOverviewView = { mutate: vi.fn() };
   vehicleStatus.current = {
     vehicle_id: 'vehicle-1',
     battery_level: 64,
@@ -187,6 +194,33 @@ describe('vehicle overview location map', () => {
     }
     fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));
     expect(screen.getByTestId('overview-location-panel').className).toContain('@min-[34rem]/overview:border-r-0');
+  });
+});
+
+describe('saved overview view', () => {
+  it('opens on the view the user last chose', () => {
+    savedPreferences.overviewView = 'map';
+    renderOverview();
+    expect(screen.getByRole('button', { name: 'Current location map' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('overview-location-panel')).toBeInTheDocument();
+  });
+
+  it('saves each choice to the account and switches immediately', () => {
+    renderOverview();
+    fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));
+    expect(savedPreferences.updateOverviewView.mutate).toHaveBeenLastCalledWith('map');
+    expect(screen.getByTestId('overview-location-panel')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Vehicle cluster' }));
+    expect(savedPreferences.updateOverviewView.mutate).toHaveBeenLastCalledWith('cluster');
+    expect(screen.getByTestId('overview-stats')).toBeInTheDocument();
+  });
+
+  it('stays on the cluster when the saved map view is turned off for the widget', () => {
+    savedPreferences.overviewView = 'map';
+    renderOverview({ locationMap: false });
+    expect(screen.queryByTestId('overview-location-panel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('overview-stats').children).toHaveLength(5);
   });
 });
 
