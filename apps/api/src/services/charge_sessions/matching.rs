@@ -8,8 +8,12 @@ use uuid::Uuid;
 
 use super::{ChargeSessionExternalAlias, MatchRow};
 
-pub(super) async fn find_session_by_external_alias(
-    pool: &PgPool,
+/// The session with the highest source priority wins. Each session is
+/// considered once however many of its aliases match (`EXISTS` rather than a
+/// join), and ties fall back to the earliest start and then the id so the
+/// choice is deterministic.
+pub(super) async fn find_session_by_external_alias<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     vehicle_id: Uuid,
     aliases: &[ChargeSessionExternalAlias],
 ) -> Result<Option<MatchRow>> {
@@ -24,36 +28,44 @@ pub(super) async fn find_session_by_external_alias(
 
     let matched = sqlx::query_as::<_, MatchRow>(
         r#"
-        SELECT DISTINCT ON (cs.id)
+        SELECT
             cs.id,
             cs.source
         FROM riviamigo.charge_sessions cs
-        LEFT JOIN riviamigo.charge_session_external_aliases alias
-          ON alias.charge_session_id = cs.id
         WHERE cs.vehicle_id = $1
           AND (
               cs.rivian_session_id = ANY($2)
-              OR alias.external_id = ANY($2)
+              OR EXISTS (
+                  SELECT 1
+                  FROM riviamigo.charge_session_external_aliases alias
+                  WHERE alias.charge_session_id = cs.id
+                    AND alias.external_id = ANY($2)
+              )
           )
-        ORDER BY cs.id,
-                 CASE COALESCE(cs.source, '')
+        ORDER BY CASE COALESCE(cs.source, '')
                      WHEN 'telemetry+rivian_api' THEN 4
                      WHEN 'telemetry' THEN 3
                      WHEN 'rivian_api' THEN 1
                      ELSE 2
-                 END DESC
+                 END DESC,
+                 cs.started_at ASC,
+                 cs.id ASC
+        LIMIT 1
         "#,
     )
     .bind(vehicle_id)
     .bind(&external_ids)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
 
     Ok(matched)
 }
 
-pub(super) async fn find_session_by_grouping_key(
-    pool: &PgPool,
+/// The session with the highest source priority wins, then the one whose
+/// start is closest to the incoming summary's start. Each session is
+/// considered once however many of its aliases share the grouping key.
+pub(super) async fn find_session_by_grouping_key<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     vehicle_id: Uuid,
     grouping_key: Option<&str>,
     started_at: Option<DateTime<Utc>>,
@@ -64,28 +76,33 @@ pub(super) async fn find_session_by_grouping_key(
 
     let matched = sqlx::query_as::<_, MatchRow>(
         r#"
-        SELECT DISTINCT ON (cs.id)
+        SELECT
             cs.id,
             cs.source
         FROM riviamigo.charge_sessions cs
-        JOIN riviamigo.charge_session_external_aliases alias
-          ON alias.charge_session_id = cs.id
         WHERE cs.vehicle_id = $1
-          AND alias.transaction_id_grouping_key = $2
-        ORDER BY cs.id,
-                 CASE COALESCE(cs.source, '')
+          AND EXISTS (
+              SELECT 1
+              FROM riviamigo.charge_session_external_aliases alias
+              WHERE alias.charge_session_id = cs.id
+                AND alias.transaction_id_grouping_key = $2
+          )
+        ORDER BY CASE COALESCE(cs.source, '')
                      WHEN 'telemetry+rivian_api' THEN 4
                      WHEN 'telemetry' THEN 3
                      WHEN 'rivian_api' THEN 1
                      ELSE 2
                  END DESC,
-                 ABS(EXTRACT(EPOCH FROM (cs.started_at - COALESCE($3, cs.started_at)))) ASC
+                 ABS(EXTRACT(EPOCH FROM (cs.started_at - COALESCE($3, cs.started_at)))) ASC,
+                 cs.started_at ASC,
+                 cs.id ASC
+        LIMIT 1
         "#,
     )
     .bind(vehicle_id)
     .bind(grouping_key)
     .bind(started_at)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
 
     Ok(matched)
