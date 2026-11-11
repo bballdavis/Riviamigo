@@ -1109,17 +1109,20 @@ describe('Settings page', () => {
     });
   });
 
+  const gen1CapacityHint = "Your saved capacity (135 kWh) matches a Gen 1 pack; your vehicle's VIN indicates Gen 2.";
+  const gen2CapacityHint = "Your saved capacity (109 kWh) matches a Gen 2 pack; your vehicle's VIN indicates Gen 1.";
+
   it.each([
-    { year: 2025, capacity: null, generation: 'gen2', pack: 'r1_large_g2' },
-    { year: 2026, capacity: 109, generation: 'gen2', pack: 'r1_large_g2' },
-    { year: 2025, capacity: 135, generation: 'gen2', pack: 'custom' },
-    { year: 2026, capacity: 123, generation: 'gen2', pack: 'custom' },
-    { year: 2024, capacity: null, generation: 'gen1', pack: 'r1_large_g1' },
-    { year: 2024, capacity: 109, generation: 'gen1', pack: 'custom' },
-    { year: null, capacity: 109, generation: 'gen2', pack: 'r1_large_g2' },
-    { year: null, capacity: 135, generation: 'gen1', pack: 'r1_large_g1' },
-    { year: null, capacity: null, generation: 'gen1', pack: 'r1_large_g1' },
-  ])('uses model year before saved capacity: $year / $capacity', ({ year, capacity, generation, pack }) => {
+    { year: 2025, capacity: null, generation: 'gen2', pack: 'r1_large_g2', hint: null },
+    { year: 2026, capacity: 109, generation: 'gen2', pack: 'r1_large_g2', hint: null },
+    { year: 2025, capacity: 135, generation: 'gen2', pack: 'custom', hint: gen1CapacityHint },
+    { year: 2026, capacity: 123, generation: 'gen2', pack: 'custom', hint: null },
+    { year: 2024, capacity: null, generation: 'gen1', pack: 'r1_large_g1', hint: null },
+    { year: 2024, capacity: 109, generation: 'gen1', pack: 'custom', hint: gen2CapacityHint },
+    { year: null, capacity: 109, generation: 'gen2', pack: 'r1_large_g2', hint: null },
+    { year: null, capacity: 135, generation: 'gen1', pack: 'r1_large_g1', hint: null },
+    { year: null, capacity: null, generation: 'gen1', pack: 'r1_large_g1', hint: null },
+  ])('uses R1 model year before saved capacity: $year / $capacity', ({ year, capacity, generation, pack, hint }) => {
     settingsMocks.vehicles[0]!.year = year;
     settingsMocks.vehicles[0]!.battery_capacity_kwh = capacity;
 
@@ -1129,6 +1132,46 @@ describe('Settings page', () => {
     expect(screen.getByLabelText('Battery generation')).toHaveValue(generation);
     expect(screen.getByLabelText('Battery pack')).toHaveValue(pack);
     if (pack === 'custom') expect(screen.getByDisplayValue(String(capacity))).toBeInTheDocument();
+    if (hint) {
+      expect(screen.getByRole('note')).toHaveTextContent(hint);
+    } else {
+      expect(screen.queryByText(/matches a Gen \d pack/)).not.toBeInTheDocument();
+    }
+  });
+
+  it('defaults an R2 to the R2 pack even when its model year is 2025 or later', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.vehicles[0]!.model = 'R2';
+    settingsMocks.vehicles[0]!.year = 2026;
+    settingsMocks.vehicles[0]!.battery_capacity_kwh = null;
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+
+    expect(screen.queryByLabelText('Battery generation')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Battery pack')).toHaveValue('r2');
+    expect(screen.queryByText(/matches a Gen \d pack/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Save vehicle'));
+
+    await waitFor(() => {
+      expect(hooks.api.updateVehicleSettings).toHaveBeenCalledWith('v1', {
+        battery_capacity_kwh: 82,
+        battery_config: 'R2',
+        target_tire_pressure_psi: 48,
+      });
+    });
+  });
+
+  it('shows an R2 capacity outside the R2 pack as custom without an R1 generation hint', () => {
+    settingsMocks.vehicles[0]!.model = 'R2';
+    settingsMocks.vehicles[0]!.year = 2026;
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+
+    expect(screen.getByLabelText('Battery pack')).toHaveValue('custom');
+    expect(screen.getByDisplayValue('135')).toBeInTheDocument();
+    expect(screen.queryByText(/matches a Gen \d pack/)).not.toBeInTheDocument();
   });
 
   it('preserves a saved capacity when the refreshed model year corrects the generation', async () => {
