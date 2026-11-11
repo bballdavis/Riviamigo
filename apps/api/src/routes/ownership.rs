@@ -96,7 +96,7 @@ async fn get_ownership(
         vehicle_lookup_enabled,
         reference_vehicles: ownership::reference_vehicles(),
         class_defaults: ownership::class_defaults(),
-        own_defaults: ownership::OWN_VEHICLE_DEFAULTS,
+        own_defaults: ownership::own_vehicle_defaults(),
     }))
 }
 

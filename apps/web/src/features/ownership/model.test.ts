@@ -11,22 +11,39 @@ import {
   insightSentence,
   ordinal,
   ownRank,
+  scheduleTargets,
 } from './model';
+
+type Item = OwnershipCostAssumptions['maintenance'][number];
+const item = (
+  id: string,
+  category: Item['category'],
+  interval_mi: number | null,
+  interval_months: number | null,
+  cost_usd: number,
+): Item => ({ id, label: id, category, interval_mi, interval_months, cost_usd });
+
+const evSchedule: Item[] = [
+  item('service', 'service', null, 12, 200),
+  item('brake_pads', 'brakes', 100_000, null, 800),
+  item('tires', 'tires', 30_000, null, 1_600),
+];
 
 const costs = (overrides: Partial<OwnershipCostAssumptions> = {}): OwnershipCostAssumptions => ({
   annual_retention: 0.85,
-  oil_interval_mi: null,
-  oil_cost_usd: null,
-  brake_interval_mi: 100_000,
-  brake_cost_usd: 800,
-  tire_interval_mi: 30_000,
-  tire_cost_usd: 1_600,
-  annual_service_usd: 200,
   insurance_monthly_usd: 100,
+  maintenance: evSchedule,
   ...overrides,
 });
 
-const gasCosts = costs({ oil_interval_mi: 5_000, oil_cost_usd: 100, brake_interval_mi: 40_000 });
+const gasCosts = costs({
+  maintenance: [
+    item('oil', 'oil', 5_000, null, 100),
+    item('service', 'service', null, 12, 200),
+    item('brake_pads', 'brakes', 40_000, null, 800),
+    item('tires', 'tires', 30_000, null, 1_600),
+  ],
+});
 
 function response(overrides: Partial<OwnershipResponse> = {}): OwnershipResponse {
   return {
@@ -214,6 +231,37 @@ describe('buildLedger', () => {
     const jump = gas.points.findIndex((point, index) => index > 0 && point.t === gas.points[index - 1]?.t);
     expect(jump).toBeGreaterThan(0);
     expect((gas.points[jump]?.spent ?? 0) - (gas.points[jump - 1]?.spent ?? 0)).toBe(100);
+  });
+
+  it('posts an item at its mileage or its time interval, whichever comes first', () => {
+    const data = response();
+    // About 900 mi a month: a 20,000 mi / 6 month item is due on time, twice in the year.
+    data.reference_vehicles[1] = {
+      ...data.reference_vehicles[1]!,
+      default_enabled: true,
+      maintenance: [item('filter', 'service', 20_000, 6, 50), item('rotation', 'service', 3_000, 24, 10)],
+    };
+    const other = find(build(data), 'other_ev');
+    const labels = other.months.flatMap((month) => month.oneTime.flatMap((entry) => entry.labels));
+    expect(labels.filter((label) => label.startsWith('filter'))).toHaveLength(1);
+    // The 3,000 mi rotation falls due by mileage: about 8,900 mi / 3,000 = 2 times.
+    expect(labels.join(' ')).toMatch(/rotation/);
+    expect(other.totals.service).toBeCloseTo(50 + 2 * 10);
+  });
+
+  it('uses a saved schedule over the built-in one, and the tire price on the tracked vehicle', () => {
+    const data = response();
+    data.settings.tire_set_cost_usd = 2_000;
+    const builtIn = scheduleTargets(data, 'R1S');
+    expect(builtIn.map((target) => target.key)).toEqual(['own', 'gas_suv', 'other_ev']);
+    expect(builtIn[0]?.schedule.find((entry) => entry.category === 'tires')?.cost_usd).toBe(2_000);
+    expect(builtIn.every((target) => !target.edited)).toBe(true);
+
+    data.settings.maintenance = { gas_suv: [item('oil', 'oil', 1_000, null, 10)] };
+    const gas = find(build(data), 'gas_suv');
+    expect(gas.totals.oilCount).toBe(8);
+    expect(gas.totals.brakes + gas.totals.tires + gas.totals.service).toBe(0);
+    expect(scheduleTargets(data, 'R1S')[1]?.edited).toBe(true);
   });
 
   it('records each month\'s running and one-time costs per vehicle', () => {

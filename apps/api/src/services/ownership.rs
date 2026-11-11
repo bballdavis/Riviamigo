@@ -18,6 +18,7 @@ use crate::{
     services::{
         external_connections as connections,
         outbound::{outbound_client_for_url, read_response_limited},
+        ownership_schedules::{default_schedule, validate_schedule, MaintenanceItem},
     },
 };
 
@@ -49,20 +50,14 @@ pub enum Powertrain {
     Gas,
 }
 
-/// Maintenance and running-cost assumptions for one vehicle. Intervals are in
-/// miles; a `None` oil interval means the vehicle has no oil service.
-#[derive(Debug, Clone, Copy, Serialize)]
+/// Value and running-cost assumptions for one vehicle. Maintenance is a
+/// schedule of items, each due by mileage, time, or whichever comes first.
+#[derive(Debug, Clone, Serialize)]
 pub struct CostAssumptions {
     /// Share of value kept each year, compounded.
     pub annual_retention: f64,
-    pub oil_interval_mi: Option<f64>,
-    pub oil_cost_usd: Option<f64>,
-    pub brake_interval_mi: f64,
-    pub brake_cost_usd: f64,
-    pub tire_interval_mi: f64,
-    pub tire_cost_usd: f64,
-    pub annual_service_usd: f64,
     pub insurance_monthly_usd: f64,
+    pub maintenance: Vec<MaintenanceItem>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -86,61 +81,29 @@ pub struct ClassDefaults {
     pub gas: CostAssumptions,
 }
 
-const EV_DEFAULTS: CostAssumptions = CostAssumptions {
-    annual_retention: 0.85,
-    oil_interval_mi: None,
-    oil_cost_usd: None,
-    brake_interval_mi: 100_000.0,
-    brake_cost_usd: 800.0,
-    tire_interval_mi: 35_000.0,
-    tire_cost_usd: 1_400.0,
-    annual_service_usd: 130.0,
-    insurance_monthly_usd: 180.0,
-};
+fn assumptions(
+    annual_retention: f64,
+    insurance_monthly_usd: f64,
+    schedule: &str,
+) -> CostAssumptions {
+    CostAssumptions {
+        annual_retention,
+        insurance_monthly_usd,
+        maintenance: default_schedule(schedule),
+    }
+}
 
-const HYBRID_DEFAULTS: CostAssumptions = CostAssumptions {
-    annual_retention: 0.89,
-    oil_interval_mi: Some(10_000.0),
-    oil_cost_usd: Some(95.0),
-    brake_interval_mi: 80_000.0,
-    brake_cost_usd: 650.0,
-    tire_interval_mi: 50_000.0,
-    tire_cost_usd: 900.0,
-    annual_service_usd: 260.0,
-    insurance_monthly_usd: 150.0,
-};
+/// Assumptions for the tracked Rivian where the owner has not supplied a figure.
+pub fn own_vehicle_defaults() -> CostAssumptions {
+    assumptions(0.85, 185.0, "own")
+}
 
-const GAS_DEFAULTS: CostAssumptions = CostAssumptions {
-    annual_retention: 0.86,
-    oil_interval_mi: Some(7_500.0),
-    oil_cost_usd: Some(120.0),
-    brake_interval_mi: 45_000.0,
-    brake_cost_usd: 900.0,
-    tire_interval_mi: 45_000.0,
-    tire_cost_usd: 1_200.0,
-    annual_service_usd: 420.0,
-    insurance_monthly_usd: 175.0,
-};
-
-/// Assumptions for the tracked Rivian itself where the user has not supplied
-/// a figure. Heavy EVs wear tires faster than the EV class default.
-pub const OWN_VEHICLE_DEFAULTS: CostAssumptions = CostAssumptions {
-    annual_retention: 0.85,
-    oil_interval_mi: None,
-    oil_cost_usd: None,
-    brake_interval_mi: 100_000.0,
-    brake_cost_usd: 900.0,
-    tire_interval_mi: 25_000.0,
-    tire_cost_usd: 1_800.0,
-    annual_service_usd: 150.0,
-    insurance_monthly_usd: 185.0,
-};
-
+/// Assumptions for a vehicle the owner adds, by powertrain.
 pub fn class_defaults() -> ClassDefaults {
     ClassDefaults {
-        ev: EV_DEFAULTS,
-        hybrid: HYBRID_DEFAULTS,
-        gas: GAS_DEFAULTS,
+        ev: assumptions(0.85, 180.0, "class_ev"),
+        hybrid: assumptions(0.89, 150.0, "class_hybrid"),
+        gas: assumptions(0.86, 175.0, "class_gas"),
     }
 }
 
@@ -157,11 +120,7 @@ pub fn reference_vehicles() -> Vec<ReferenceVehicle> {
             kwh_per_mi: Some(0.40),
             premium_fuel: false,
             default_enabled: true,
-            costs: CostAssumptions {
-                annual_retention: 0.84,
-                tire_cost_usd: 1_300.0,
-                ..EV_DEFAULTS
-            },
+            costs: assumptions(0.84, 180.0, "kia_ev9"),
         },
         ReferenceVehicle {
             id: "tesla_model_y",
@@ -172,7 +131,7 @@ pub fn reference_vehicles() -> Vec<ReferenceVehicle> {
             kwh_per_mi: Some(0.27),
             premium_fuel: false,
             default_enabled: true,
-            costs: EV_DEFAULTS,
+            costs: assumptions(0.85, 180.0, "tesla_model_y"),
         },
         ReferenceVehicle {
             id: "chevrolet_tahoe",
@@ -183,17 +142,7 @@ pub fn reference_vehicles() -> Vec<ReferenceVehicle> {
             kwh_per_mi: None,
             premium_fuel: false,
             default_enabled: true,
-            costs: CostAssumptions {
-                annual_retention: 0.88,
-                oil_cost_usd: Some(130.0),
-                brake_interval_mi: 40_000.0,
-                brake_cost_usd: 1_000.0,
-                tire_interval_mi: 40_000.0,
-                tire_cost_usd: 1_500.0,
-                annual_service_usd: 450.0,
-                insurance_monthly_usd: 185.0,
-                ..GAS_DEFAULTS
-            },
+            costs: assumptions(0.88, 185.0, "chevrolet_tahoe"),
         },
         ReferenceVehicle {
             id: "bmw_x7",
@@ -204,17 +153,7 @@ pub fn reference_vehicles() -> Vec<ReferenceVehicle> {
             kwh_per_mi: None,
             premium_fuel: true,
             default_enabled: true,
-            costs: CostAssumptions {
-                annual_retention: 0.84,
-                oil_interval_mi: Some(10_000.0),
-                oil_cost_usd: Some(220.0),
-                brake_interval_mi: 40_000.0,
-                brake_cost_usd: 1_400.0,
-                tire_interval_mi: 35_000.0,
-                tire_cost_usd: 1_900.0,
-                annual_service_usd: 650.0,
-                insurance_monthly_usd: 230.0,
-            },
+            costs: assumptions(0.84, 230.0, "bmw_x7"),
         },
         ReferenceVehicle {
             id: "range_rover",
@@ -225,17 +164,7 @@ pub fn reference_vehicles() -> Vec<ReferenceVehicle> {
             kwh_per_mi: None,
             premium_fuel: true,
             default_enabled: false,
-            costs: CostAssumptions {
-                annual_retention: 0.82,
-                oil_interval_mi: Some(10_000.0),
-                oil_cost_usd: Some(260.0),
-                brake_interval_mi: 40_000.0,
-                brake_cost_usd: 1_600.0,
-                tire_interval_mi: 35_000.0,
-                tire_cost_usd: 2_100.0,
-                annual_service_usd: 800.0,
-                insurance_monthly_usd: 260.0,
-            },
+            costs: assumptions(0.82, 260.0, "range_rover"),
         },
         ReferenceVehicle {
             id: "porsche_cayenne",
@@ -246,17 +175,7 @@ pub fn reference_vehicles() -> Vec<ReferenceVehicle> {
             kwh_per_mi: None,
             premium_fuel: true,
             default_enabled: true,
-            costs: CostAssumptions {
-                annual_retention: 0.85,
-                oil_interval_mi: Some(10_000.0),
-                oil_cost_usd: Some(350.0),
-                brake_interval_mi: 35_000.0,
-                brake_cost_usd: 1_800.0,
-                tire_interval_mi: 25_000.0,
-                tire_cost_usd: 2_000.0,
-                annual_service_usd: 900.0,
-                insurance_monthly_usd: 250.0,
-            },
+            costs: assumptions(0.85, 250.0, "porsche_cayenne"),
         },
         ReferenceVehicle {
             id: "toyota_camry_hybrid",
@@ -267,10 +186,7 @@ pub fn reference_vehicles() -> Vec<ReferenceVehicle> {
             kwh_per_mi: None,
             premium_fuel: false,
             default_enabled: true,
-            costs: CostAssumptions {
-                annual_retention: 0.90,
-                ..HYBRID_DEFAULTS
-            },
+            costs: assumptions(0.9, 150.0, "toyota_camry_hybrid"),
         },
         ReferenceVehicle {
             id: "toyota_prius",
@@ -281,11 +197,7 @@ pub fn reference_vehicles() -> Vec<ReferenceVehicle> {
             kwh_per_mi: None,
             premium_fuel: false,
             default_enabled: false,
-            costs: CostAssumptions {
-                annual_retention: 0.90,
-                tire_cost_usd: 800.0,
-                ..HYBRID_DEFAULTS
-            },
+            costs: assumptions(0.9, 150.0, "toyota_prius"),
         },
     ]
 }
@@ -331,7 +243,15 @@ pub struct OwnershipSettings {
     pub projection_years: Option<i16>,
     #[serde(default)]
     pub comparisons: Comparisons,
+    /// Edited maintenance schedules by vehicle key; a vehicle that is not
+    /// listed uses its built-in schedule.
+    #[serde(default)]
+    pub maintenance: std::collections::BTreeMap<String, Vec<MaintenanceItem>>,
 }
+
+/// Most vehicles a settings row can hold edited schedules for: the tracked
+/// vehicle, the built-in references, and the added vehicles, with room to spare.
+const MAX_SCHEDULE_VEHICLES: usize = 40;
 
 fn check_amount(name: &str, value: Option<f64>, min: f64, max: f64) -> Result<(), AppError> {
     match value {
@@ -387,6 +307,19 @@ pub fn validate_settings(
         0.01,
         100.0,
     )?;
+    if settings.maintenance.len() > MAX_SCHEDULE_VEHICLES {
+        return Err(AppError::Validation(format!(
+            "maintenance schedules are limited to {MAX_SCHEDULE_VEHICLES} vehicles"
+        )));
+    }
+    for (key, schedule) in settings.maintenance.iter_mut() {
+        if !valid_id(key) {
+            return Err(AppError::Validation(
+                "maintenance schedules must be keyed by a vehicle id".into(),
+            ));
+        }
+        validate_schedule(schedule)?;
+    }
     if let Some(years) = settings.projection_years {
         if !(1..=MAX_PROJECTION_YEARS).contains(&years) {
             return Err(AppError::Validation(format!(
@@ -476,12 +409,14 @@ struct SettingsRow {
     gas_price_usd_per_gallon: Option<f64>,
     projection_years: Option<i16>,
     comparisons: serde_json::Value,
+    maintenance: serde_json::Value,
 }
 
 pub async fn load_settings(pool: &PgPool, vehicle_id: Uuid) -> Result<OwnershipSettings, AppError> {
     let row = sqlx::query_as::<_, SettingsRow>(
         "SELECT purchase_price_usd, purchase_date, resale_value_usd, insurance_monthly_usd,
-                tire_set_cost_usd, gas_price_usd_per_gallon, projection_years, comparisons
+                tire_set_cost_usd, gas_price_usd_per_gallon, projection_years, comparisons,
+                maintenance
          FROM riviamigo.vehicle_ownership_settings
          WHERE vehicle_id = $1",
     )
@@ -501,6 +436,7 @@ pub async fn load_settings(pool: &PgPool, vehicle_id: Uuid) -> Result<OwnershipS
             // A shape this build cannot read falls back to the defaults
             // rather than making the whole page fail.
             comparisons: serde_json::from_value(row.comparisons).unwrap_or_default(),
+            maintenance: serde_json::from_value(row.maintenance).unwrap_or_default(),
         },
     })
 }
@@ -513,12 +449,14 @@ pub async fn save_settings(
 ) -> Result<(), AppError> {
     let comparisons = serde_json::to_value(&settings.comparisons)
         .map_err(|error| AppError::Internal(error.into()))?;
+    let maintenance = serde_json::to_value(&settings.maintenance)
+        .map_err(|error| AppError::Internal(error.into()))?;
     sqlx::query(
         "INSERT INTO riviamigo.vehicle_ownership_settings
            (vehicle_id, purchase_price_usd, purchase_date, resale_value_usd,
             insurance_monthly_usd, tire_set_cost_usd, gas_price_usd_per_gallon,
-            projection_years, comparisons, updated_at, updated_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10)
+            projection_years, comparisons, maintenance, updated_at, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11)
          ON CONFLICT (vehicle_id) DO UPDATE SET
            purchase_price_usd = EXCLUDED.purchase_price_usd,
            purchase_date = EXCLUDED.purchase_date,
@@ -528,6 +466,7 @@ pub async fn save_settings(
            gas_price_usd_per_gallon = EXCLUDED.gas_price_usd_per_gallon,
            projection_years = EXCLUDED.projection_years,
            comparisons = EXCLUDED.comparisons,
+           maintenance = EXCLUDED.maintenance,
            updated_at = now(),
            updated_by = EXCLUDED.updated_by",
     )
@@ -540,6 +479,7 @@ pub async fn save_settings(
     .bind(settings.gas_price_usd_per_gallon)
     .bind(settings.projection_years)
     .bind(comparisons)
+    .bind(maintenance)
     .bind(user_id)
     .execute(pool)
     .await?;
@@ -1208,7 +1148,7 @@ mod tests {
         for vehicle in &vehicles {
             match vehicle.powertrain {
                 Powertrain::Ev => assert!(vehicle.kwh_per_mi.is_some() && vehicle.mpg.is_none()),
-                _ => assert!(vehicle.mpg.is_some() && vehicle.costs.oil_interval_mi.is_some()),
+                _ => assert!(vehicle.mpg.is_some() && !vehicle.costs.maintenance.is_empty()),
             }
         }
     }

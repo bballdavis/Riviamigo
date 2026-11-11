@@ -41,6 +41,7 @@ import { AuthenticationSection } from '../../components/settings/AuthenticationS
 import { BackupSection } from '../../components/settings/BackupSection';
 import { ExternalConnectionsSection } from '../../components/settings/ExternalConnectionsSection';
 import { OwnershipCostsSettings } from '../ownership/OwnershipCostsFields';
+import { OwnershipSettingsSection } from '../ownership/OwnershipSettingsSection';
 import { JobsSection } from '../../components/settings/JobsSection';
 import { PlacesSection } from '../../components/settings/PlacesSection';
 import { ChargingSection } from '../../components/settings/ChargingSection';
@@ -55,7 +56,7 @@ import {
   getRivianCredentialRenewalNotice,
 } from '../../lib/rivianCredentialRenewal';
 import {
-  Car, ChartLine, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Ruler, Save, Search, ShieldCheck, Star, Trash2, Unlock, Users, X, Zap,
+  Car, ChartLine, CircleDollarSign, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Ruler, Save, Search, ShieldCheck, Star, Trash2, Unlock, Users, X, Zap,
 } from 'lucide-react';
 
 function dashboardActionId(dashboard: DashboardConfig) {
@@ -83,7 +84,7 @@ const RIVIAN_BATTERY_PRESETS: Record<BatteryGen, Array<{ key: string; label: str
 const ALL_PRESETS = [...RIVIAN_BATTERY_PRESETS.gen1, ...RIVIAN_BATTERY_PRESETS.gen2];
 const R2_PRESET = { key: 'r2', label: 'R2', kwh: 82 };
 
-type SettingsSection = 'vehicles' | 'dashboards' | 'charts' | 'units' | 'places' | 'charging' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account' | 'authentication';
+type SettingsSection = 'vehicles' | 'dashboards' | 'charts' | 'units' | 'places' | 'charging' | 'ownership' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account' | 'authentication';
 
 const baseSections: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
   { id: 'vehicles', label: 'Vehicles', icon: Car },
@@ -92,6 +93,7 @@ const baseSections: Array<{ id: SettingsSection; label: string; icon: React.Elem
   { id: 'units', label: 'Units', icon: Ruler },
   { id: 'places', label: 'Places', icon: MapPin },
   { id: 'charging', label: 'Charging', icon: Zap },
+  { id: 'ownership', label: 'Ownership', icon: CircleDollarSign },
   { id: 'external', label: 'External Connections', icon: Globe2 },
   { id: 'api', label: 'API Access', icon: KeyRound },
   { id: 'jobs', label: 'Jobs', icon: ListChecks },
@@ -2089,6 +2091,8 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
             {activeSection === 'places' && <PlacesSection unitSystem={placesUnitSystem} />}
 
             {activeSection === 'charging' && <ChargingSection />}
+
+            {activeSection === 'ownership' && <OwnershipSettingsSection vehicles={vehicles ?? []} />}
 
             {activeSection === 'external' && <ExternalConnectionsSection />}
 

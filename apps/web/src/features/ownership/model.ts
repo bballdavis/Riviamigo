@@ -13,6 +13,8 @@ import type {
   OwnershipCostAssumptions,
   OwnershipCustomVehicle,
   OwnershipFuelPriceMonth,
+  OwnershipMaintenanceCategory,
+  OwnershipMaintenanceItem,
   OwnershipPowertrain,
   OwnershipResponse,
 } from '@riviamigo/types';
@@ -108,14 +110,16 @@ export interface LedgerTotals {
   netPerMile: number | null;
 }
 
-export type OneTimeKind = 'oil' | 'brakes' | 'tires' | 'service';
+export type OneTimeKind = OwnershipMaintenanceCategory;
+
+const ONE_TIME_ORDER: OneTimeKind[] = ['oil', 'brakes', 'tires', 'service'];
 
 /** What one vehicle spent in one period. */
 export interface LedgerMonth {
   fuel: number;
   insurance: number;
   /** One-time costs that fell due in the period, in a fixed order. */
-  oneTime: Array<{ kind: OneTimeKind; count: number; usd: number }>;
+  oneTime: Array<{ kind: OneTimeKind; count: number; usd: number; labels: string[] }>;
 }
 
 export interface VehicleLedger {
@@ -178,6 +182,66 @@ function nextMonth(ms: number): number {
 function addYears(ms: number, years: number): number {
   const date = new Date(ms);
   return Date.UTC(date.getUTCFullYear() + years, date.getUTCMonth(), date.getUTCDate());
+}
+
+function addMonths(ms: number, months: number): number {
+  const date = new Date(ms);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, date.getUTCDate());
+}
+
+/** Schedule key of the tracked vehicle in `settings.maintenance`. */
+export const OWN_SCHEDULE_KEY = 'own';
+
+/** The schedule the owner saved for a vehicle, or its built-in one. */
+export function scheduleFor(
+  data: OwnershipResponse,
+  key: string,
+  builtIn: OwnershipMaintenanceItem[],
+): OwnershipMaintenanceItem[] {
+  return data.settings.maintenance?.[key] ?? builtIn;
+}
+
+/** Built-in schedule of the tracked vehicle, with the owner's tire price applied. */
+function ownBuiltInSchedule(data: OwnershipResponse): OwnershipMaintenanceItem[] {
+  const tirePrice = data.settings.tire_set_cost_usd;
+  return data.own_defaults.maintenance.map((item) =>
+    item.category === 'tires' && tirePrice != null ? { ...item, cost_usd: tirePrice } : item,
+  );
+}
+
+export interface ScheduleTarget {
+  key: string;
+  label: string;
+  powertrain: OwnershipPowertrain;
+  builtIn: OwnershipMaintenanceItem[];
+  schedule: OwnershipMaintenanceItem[];
+  edited: boolean;
+}
+
+/** Every vehicle whose maintenance schedule the owner can edit, tracked vehicle first. */
+export function scheduleTargets(data: OwnershipResponse, ownLabel: string): ScheduleTarget[] {
+  const target = (
+    key: string,
+    label: string,
+    powertrain: OwnershipPowertrain,
+    builtIn: OwnershipMaintenanceItem[],
+  ): ScheduleTarget => ({
+    key,
+    label,
+    powertrain,
+    builtIn,
+    schedule: scheduleFor(data, key, builtIn),
+    edited: data.settings.maintenance?.[key] != null,
+  });
+  return [
+    target(OWN_SCHEDULE_KEY, ownLabel, 'ev', ownBuiltInSchedule(data)),
+    ...data.reference_vehicles.map((vehicle) =>
+      target(vehicle.id, vehicle.label, vehicle.powertrain, vehicle.maintenance),
+    ),
+    ...data.settings.comparisons.custom.map((vehicle) =>
+      target(vehicle.id, vehicle.label, vehicle.powertrain, data.class_defaults[vehicle.powertrain].maintenance),
+    ),
+  ];
 }
 
 function monthKey(ms: number): string {
@@ -294,11 +358,15 @@ export function comparisonVehicles(data: OwnershipResponse): LedgerVehicle[] {
     mpg: vehicle.mpg,
     kwhPerMi: vehicle.kwh_per_mi,
     premiumFuel: vehicle.premium_fuel,
-    costs: vehicle,
+    costs: { ...vehicle, maintenance: scheduleFor(data, vehicle.id, vehicle.maintenance) },
   }));
-  const custom = data.settings.comparisons.custom.map((vehicle) =>
-    customVehicle(vehicle, data.class_defaults[vehicle.powertrain]),
-  );
+  const custom = data.settings.comparisons.custom.map((vehicle) => {
+    const defaults = data.class_defaults[vehicle.powertrain];
+    return customVehicle(vehicle, {
+      ...defaults,
+      maintenance: scheduleFor(data, vehicle.id, defaults.maintenance),
+    });
+  });
   return [...references, ...custom];
 }
 
@@ -430,7 +498,7 @@ export function buildLedger(data: OwnershipResponse, options: BuildLedgerOptions
       annual_retention: ownRetention,
       insurance_monthly_usd:
         settings.insurance_monthly_usd ?? data.own_defaults.insurance_monthly_usd,
-      tire_cost_usd: settings.tire_set_cost_usd ?? data.own_defaults.tire_cost_usd,
+      maintenance: scheduleFor(data, OWN_SCHEDULE_KEY, ownBuiltInSchedule(data)),
     },
   };
 
@@ -461,19 +529,45 @@ export function buildLedger(data: OwnershipResponse, options: BuildLedgerOptions
 }
 
 /** How many times a recurring item falls due while a counter advances. */
-function crossings(before: number, after: number, interval: number | null): number {
-  if (!interval || interval <= 0) return 0;
-  return Math.max(0, Math.floor(after / interval) - Math.floor(before / interval));
+interface ScheduleState {
+  item: OwnershipMaintenanceItem;
+  /** Odometer and time when the item was last done; the purchase counts as done. */
+  lastMiles: number;
+  lastMs: number;
 }
 
-/** Calendar anniversaries of `startMs` that fall after `fromMs`, up to and including `toMs`. */
-function anniversaries(startMs: number, fromMs: number, toMs: number): number {
-  let count = 0;
-  for (let year = 1; ; year += 1) {
-    const anniversary = addYears(startMs, year);
-    if (anniversary > toMs) return count;
-    if (anniversary > fromMs) count += 1;
+/**
+ * Times each item falls due within one period. An item is due at its mileage
+ * interval or its time interval since it was last done, whichever comes
+ * first; miles are spread evenly across the period to place each event.
+ */
+function dueInPeriod(
+  states: ScheduleState[],
+  period: { startMs: number; endMs: number; miles: number },
+  milesBefore: number,
+): Array<{ item: OwnershipMaintenanceItem; count: number }> {
+  const span = Math.max(1, period.endMs - period.startMs);
+  const milesAt = (ms: number) => milesBefore + period.miles * Math.min(1, Math.max(0, (ms - period.startMs) / span));
+  const timeAtMiles = (miles: number) =>
+    period.miles > 0 ? period.startMs + ((miles - milesBefore) / period.miles) * span : Number.POSITIVE_INFINITY;
+  const due: Array<{ item: OwnershipMaintenanceItem; count: number }> = [];
+  for (const state of states) {
+    const { item } = state;
+    let count = 0;
+    // Bounded so a nonsense interval can never hang the page.
+    for (let guard = 0; guard < 120; guard += 1) {
+      const byMiles = item.interval_mi ? timeAtMiles(state.lastMiles + item.interval_mi) : Number.POSITIVE_INFINITY;
+      const byTime = item.interval_months ? addMonths(state.lastMs, item.interval_months) : Number.POSITIVE_INFINITY;
+      const at = Math.min(byMiles, byTime);
+      if (!(at <= period.endMs)) break;
+      const when = Math.max(at, period.startMs);
+      state.lastMiles = byMiles <= byTime && item.interval_mi ? state.lastMiles + item.interval_mi : milesAt(when);
+      state.lastMs = when;
+      count += 1;
+    }
+    if (count > 0) due.push({ item, count });
   }
+  return due;
 }
 
 function buildVehicleLedger(
@@ -520,6 +614,7 @@ function buildVehicleLedger(
   const points: LedgerPoint[] = [point(startMs)];
   const atPeriodEnd: LedgerPoint[] = [point(startMs)];
   const months: LedgerMonth[] = [];
+  const schedule: ScheduleState[] = costs.maintenance.map((item) => ({ item, lastMiles: 0, lastMs: startMs }));
 
   periods.forEach((period, index) => {
     const milesBefore = totals.miles;
@@ -544,29 +639,35 @@ function buildVehicleLedger(
     running += fuel + insurance;
     points.push(point(period.endMs));
 
-    // Costs that land all at once.
-    const oilCount = crossings(milesBefore, milesAfter, costs.oil_interval_mi);
-    const brakeCount = crossings(milesBefore, milesAfter, costs.brake_interval_mi);
-    const tireCount = crossings(milesBefore, milesAfter, costs.tire_interval_mi);
-    const serviceCount = anniversaries(startMs, period.startMs, period.endMs);
-    const oil = oilCount * (costs.oil_cost_usd ?? 0);
-    const brakes = brakeCount * costs.brake_cost_usd;
-    const tires = tireCount * costs.tire_cost_usd;
-    const service = serviceCount * costs.annual_service_usd;
-    const events = oil + brakes + tires + service;
-    const oneTime: LedgerMonth['oneTime'] = [];
-    if (oilCount && oil > 0) oneTime.push({ kind: 'oil', count: oilCount, usd: oil });
-    if (brakeCount) oneTime.push({ kind: 'brakes', count: brakeCount, usd: brakes });
-    if (tireCount) oneTime.push({ kind: 'tires', count: tireCount, usd: tires });
-    if (serviceCount && service > 0) oneTime.push({ kind: 'service', count: serviceCount, usd: service });
+    // Costs that land all at once, grouped by breakdown column.
+    const byKind = new Map<OneTimeKind, LedgerMonth['oneTime'][number]>();
+    for (const { item, count } of dueInPeriod(schedule, period, milesBefore)) {
+      const entry = byKind.get(item.category) ?? { kind: item.category, count: 0, usd: 0, labels: [] };
+      entry.count += count;
+      entry.usd += count * item.cost_usd;
+      entry.labels.push(count > 1 ? `${item.label} ×${count}` : item.label);
+      byKind.set(item.category, entry);
+    }
+    const oneTime = ONE_TIME_ORDER.flatMap((kind) => {
+      const entry = byKind.get(kind);
+      return entry && entry.usd > 0 ? [entry] : [];
+    });
+    const events = oneTime.reduce((sum, entry) => sum + entry.usd, 0);
     months.push({ fuel, insurance, oneTime });
-    totals.oil += oil;
-    totals.oilCount += oilCount;
-    totals.brakes += brakes;
-    totals.brakeCount += brakeCount;
-    totals.tires += tires;
-    totals.tireCount += tireCount;
-    totals.service += service;
+    for (const entry of oneTime) {
+      if (entry.kind === 'oil') {
+        totals.oil += entry.usd;
+        totals.oilCount += entry.count;
+      } else if (entry.kind === 'brakes') {
+        totals.brakes += entry.usd;
+        totals.brakeCount += entry.count;
+      } else if (entry.kind === 'tires') {
+        totals.tires += entry.usd;
+        totals.tireCount += entry.count;
+      } else {
+        totals.service += entry.usd;
+      }
+    }
     if (events > 0) {
       running += events;
       points.push(point(period.endMs));

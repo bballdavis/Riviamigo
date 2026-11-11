@@ -1,3 +1,4 @@
+import { useNavigate } from '@tanstack/react-router';
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownWideNarrow,
@@ -27,6 +28,7 @@ import {
 import {
   useAuth,
   useOwnership,
+  useOwnershipEnabled,
   useResolvedVehicleSelection,
   useUpdateOwnershipSettings,
 } from '@riviamigo/hooks';
@@ -62,7 +64,6 @@ import {
   projectionYearsOf,
   type Horizon,
   type Ledger,
-  type OneTimeKind,
   type VehicleLedger,
 } from './model';
 
@@ -72,6 +73,8 @@ export function OwnershipContent() {
   const { setActiveVehicleId } = useAuth();
   const setSessionVehicleId = setActiveVehicleId ?? (() => {});
   const { authReady, effectiveVehicleId, vehicleSelectionReady, vehicles } = useResolvedVehicleSelection();
+  const ownershipEnabled = useOwnershipEnabled();
+  const navigate = useNavigate();
   const activeVehicle = vehicles.find((vehicle) => vehicle.id === effectiveVehicleId);
   const ownLabel = activeVehicle?.display_name || activeVehicle?.model || 'Your vehicle';
 
@@ -96,6 +99,13 @@ export function OwnershipContent() {
       >
         {!authReady || !vehicleSelectionReady ? (
           <div className="p-4 text-sm text-fg-secondary">Loading...</div>
+        ) : !ownershipEnabled ? (
+          <EmptyState
+            icon={<CircleDollarSign />}
+            title="Ownership is turned off"
+            description="Turn it back on in Settings, under Ownership, to see what your Rivian costs to own."
+            action={{ label: 'Open Ownership settings', onClick: () => navigate({ to: '/settings', search: { section: 'ownership' } }) }}
+          />
         ) : !effectiveVehicleId ? (
           <NoVehicleState
             title="No vehicle selected"
@@ -409,11 +419,6 @@ function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string; ownLab
               >
                 {mode === 'net' ? 'Net cost over time' : 'Money spent over time'}
               </SectionTitle>
-              <p className="mt-1 text-base text-fg-secondary">
-                {mode === 'net'
-                  ? 'Purchase price and running costs, less what each vehicle would sell for.'
-                  : 'Starts at the purchase price and adds every cost as it lands.'}
-              </p>
             </div>
             <Segmented
               label="Chart value"
@@ -554,7 +559,7 @@ const CHART_INFO: InfoItem[] = [
     title: 'One-time costs',
     icon: <Wrench />,
     color: CHART_COLORS.sky,
-    body: 'Oil changes, brakes, tires, and annual service land as vertical jumps at the mileage or anniversary they fall due.',
+    body: "Each vehicle's maintenance schedule (oil, filters, fluids, brakes, tires) lands as vertical jumps when items fall due.",
   },
   {
     key: 'shaded',
@@ -575,7 +580,7 @@ const CHART_INFO: InfoItem[] = [
     title: 'Money spent or net',
     icon: <Scale />,
     color: CHART_COLORS.rose,
-    body: 'Money spent counts every dollar paid. Net of resale subtracts what each vehicle would sell for at that point.',
+    body: 'Money spent starts at the purchase price and adds every cost as it lands. Net of resale subtracts what each vehicle would sell for at that point.',
   },
 ];
 
@@ -758,9 +763,12 @@ function Segmented<TValue extends string>({
           aria-pressed={option.value === value}
           onClick={() => onChange(option.value)}
           className={[
-            'h-full rounded-md px-3 text-base font-medium transition-colors',
+            'h-full rounded-md border px-3 text-base font-medium transition-colors',
             'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent',
-            option.value === value ? 'bg-bg-surface text-fg shadow-sm' : 'text-fg-secondary hover:text-fg-secondary',
+            // The selected option carries an accent border and tint so it reads at a glance.
+            option.value === value
+              ? 'border-accent bg-accent/10 font-semibold text-fg shadow-sm'
+              : 'border-transparent text-fg-secondary hover:text-fg',
           ].join(' ')}
         >
           {option.label}
@@ -771,13 +779,6 @@ function Segmented<TValue extends string>({
 }
 
 const PERIOD_KIND_LABEL = { estimated: 'Estimated', actual: 'Recorded', projected: 'Projected' } as const;
-
-const ONE_TIME_LABEL: Record<OneTimeKind, [string, string]> = {
-  oil: ['Oil change', 'Oil changes'],
-  brakes: ['Brakes', 'Brakes'],
-  tires: ['Tires', 'Tires'],
-  service: ['Annual service', 'Annual service'],
-};
 
 function CursorReadout({
   ledger,
@@ -853,7 +854,7 @@ function CursorReadout({
                     {oneTime.length ? (
                       <span>
                         <span className="sm:hidden">, </span>
-                        {oneTime.map((item) => ONE_TIME_LABEL[item.kind][item.count > 1 ? 1 : 0]).join(', ')}
+                        {oneTime.flatMap((item) => item.labels).join(', ')}
                       </span>
                     ) : null}
                   </span>
@@ -1151,7 +1152,7 @@ function BreakdownPanel({ id, entry, color }: { id: string; entry: VehicleLedger
         })}
       </ul>
       <p className="mt-2.5 text-xs text-fg-secondary">
-        Shares of the net cost. Maintenance covers oil changes, brakes, and annual service.
+        Shares of the net cost. Maintenance covers oil, brakes, and scheduled service items.
       </p>
       </div>
     </div>
@@ -1374,7 +1375,7 @@ const METHOD_ITEMS: InfoItem[] = [
     title: 'Maintenance',
     icon: <Wrench />,
     color: CHART_COLORS.sky,
-    body: 'Oil, brakes, and tires fall due by mileage; service once a year on your purchase anniversary. A ×2 or (2) is how many times.',
+    body: 'Each vehicle follows its own schedule from the manufacturer: items fall due by mileage or time, whichever comes first. Edit them in Settings, under Ownership. A ×2 or (2) is how many times.',
   },
   {
     key: 'insurance',

@@ -1328,6 +1328,8 @@ export interface UserPreferencesResponse {
   units: UnitPreferences;
   theme: ThemePreferences;
   map_style: MapStylePreference;
+  /** Whether the user shows the Ownership dashboard; missing on older servers means shown. */
+  ownership_enabled?: boolean;
 }
 
 export type DashboardChartFavorites = Record<string, string>;
@@ -1703,17 +1705,24 @@ export interface RivianStewardshipResponse {
 export type OwnershipPowertrain = 'ev' | 'hybrid' | 'gas';
 
 /** Maintenance and running-cost assumptions. Intervals are miles. */
+/** Which cost-breakdown column a maintenance item counts toward. */
+export type OwnershipMaintenanceCategory = 'oil' | 'brakes' | 'tires' | 'service';
+
+/** One scheduled maintenance item, due by mileage, time, or whichever comes first. */
+export interface OwnershipMaintenanceItem {
+  id: string;
+  label: string;
+  category: OwnershipMaintenanceCategory;
+  interval_mi: number | null;
+  interval_months: number | null;
+  cost_usd: number;
+}
+
 export interface OwnershipCostAssumptions {
   /** Share of value kept each year, compounded. */
   annual_retention: number;
-  oil_interval_mi: number | null;
-  oil_cost_usd: number | null;
-  brake_interval_mi: number;
-  brake_cost_usd: number;
-  tire_interval_mi: number;
-  tire_cost_usd: number;
-  annual_service_usd: number;
   insurance_monthly_usd: number;
+  maintenance: OwnershipMaintenanceItem[];
 }
 
 export interface OwnershipReferenceVehicle extends OwnershipCostAssumptions {
@@ -1754,6 +1763,11 @@ export interface OwnershipSettings {
   /** Years of ownership the Projected view covers, from the purchase date; null uses 5. */
   projection_years: number | null;
   comparisons: OwnershipComparisons;
+  /**
+   * Edited maintenance schedules keyed by vehicle: 'own' for the tracked
+   * vehicle, otherwise a comparison vehicle's id. Missing means built-in.
+   */
+  maintenance?: Record<string, OwnershipMaintenanceItem[]>;
 }
 
 export interface OwnershipUsageMonth {

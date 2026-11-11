@@ -65,7 +65,12 @@ export {
 export { useTelemetryLanes } from './useTelemetryLanes';
 export { BASEMAP_CONFIG_QUERY_KEY, useBasemapConfig } from './useBasemapConfig';
 export type { BasemapConfigPayload } from './useBasemapConfig';
-export { useUserPreferences, useUpdateMapStyle } from './useUserPreferences';
+export {
+  useOwnershipEnabled,
+  useUpdateMapStyle,
+  useUpdateOwnershipPreference,
+  useUserPreferences,
+} from './useUserPreferences';
 export { useDocumentTheme } from './useDocumentTheme';
 export { AuthenticatedVehicleArtwork, useVehicleArtwork } from './useVehicleArtwork';
 export { getVehicleArtworkFallback, normalizeVehicleArtworkModel, resolveVehicleArtwork } from './vehicleArtworkFallback';
