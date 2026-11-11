@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExternalConnectionsResponse } from '@riviamigo/types';
 
@@ -438,6 +438,60 @@ describe('ExternalConnectionsSection', () => {
     expect(screen.getByRole('button', { name: 'Weather location precision' })).toHaveTextContent('Approximate');
     expect(screen.queryByRole('region', { name: 'Unsaved changes' })).not.toBeInTheDocument();
     expect(apiMocks.updateExternalConnection).not.toHaveBeenCalled();
+  });
+
+  it('keeps a non-secret edit made while the save is in flight', async () => {
+    apiMocks.getExternalConnections.mockResolvedValue(response(true));
+    let finish!: (value: ExternalConnectionsResponse) => void;
+    apiMocks.updateExternalConnection.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    renderSection();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Weather location precision' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Exact route samples' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Weather location precision' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Approximate (~1 km)' }));
+    const saved = response(true);
+    saved.connections[0]!.weather_precision = 'exact';
+    await act(async () => finish(saved));
+
+    expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('open_meteo', expect.objectContaining({ weather_precision: 'exact' }));
+    expect(screen.getByRole('button', { name: 'Weather location precision' })).toHaveTextContent('Approximate');
+    expect(screen.getByRole('region', { name: 'Unsaved changes' })).toBeInTheDocument();
+  });
+
+  it('keeps a secret typed while the save is in flight and clears only the submitted one', async () => {
+    const data = basemapResponse({ has_api_key: false, basemap_provider: 'auto' });
+    apiMocks.getExternalConnections.mockResolvedValue(data);
+    let finish!: (value: ExternalConnectionsResponse) => void;
+    apiMocks.updateExternalConnection.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    renderSection();
+
+    fireEvent.change(await screen.findByLabelText('CARTO Basemap key'), { target: { value: 'first-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByLabelText('CARTO Basemap key'), { target: { value: 'second-key' } });
+    await act(async () => finish(data));
+
+    expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('basemap', expect.objectContaining({ api_key: 'first-key' }));
+    expect(screen.getByLabelText('CARTO Basemap key')).toHaveValue('second-key');
+    expect(screen.getByRole('region', { name: 'Unsaved changes' })).toBeInTheDocument();
+  });
+
+  it('clears the submitted secret once the save succeeds', async () => {
+    const data = basemapResponse({ has_api_key: false, basemap_provider: 'auto' });
+    apiMocks.getExternalConnections.mockResolvedValue(data);
+    apiMocks.updateExternalConnection.mockResolvedValue(data);
+    renderSection();
+
+    fireEvent.change(await screen.findByLabelText('CARTO Basemap key'), { target: { value: 'first-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Unsaved changes' })).not.toBeInTheDocument());
+    expect(screen.getByLabelText('CARTO Basemap key')).toHaveValue('');
   });
 
   it('keeps the connection staged with the API message when the save is rejected', async () => {
