@@ -1,4 +1,4 @@
-use crate::routes::vehicles::{
+use crate::routes::vehicles::status::{
     classify_status_field_availability, max_seen_at, StatusFieldAvailabilityReasonCode,
     StatusFieldAvailabilityState,
 };
