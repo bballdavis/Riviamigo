@@ -1,6 +1,7 @@
 import Link from '@docusaurus/Link';
 import Layout from '@theme/Layout';
 import useBaseUrl from '@docusaurus/useBaseUrl';
+import ThemedImage from '@theme/ThemedImage';
 import type {ReactElement} from 'react';
 import styles from './index.module.css';
 
@@ -49,10 +50,11 @@ export default function Home(): ReactElement {
         <section className={styles.hero}>
           <div className={styles.heroGlow} aria-hidden="true" />
           <div className={styles.heroCopy}>
-            <picture>
-              <source media="(prefers-color-scheme: dark)" srcSet={darkLogo} />
-              <img className={styles.logo} src={lightLogo} alt="Riviamigo" />
-            </picture>
+            <ThemedImage
+              className={styles.logo}
+              alt="Riviamigo"
+              sources={{light: lightLogo, dark: darkLogo}}
+            />
             <p className={styles.eyebrow}>Private Rivian telemetry, on hardware you control</p>
             <h1>Your Rivian&apos;s data companion.</h1>
             <p className={styles.lede}>
@@ -68,13 +70,10 @@ export default function Home(): ReactElement {
             </div>
           </div>
           <div className={styles.heroVisual}>
-            <picture>
-              <source media="(prefers-color-scheme: dark)" srcSet={darkOverview} />
-              <img
-                src={lightOverview}
-                alt="Riviamigo vehicle overview dashboard showing battery, range, charging, and vehicle status"
-              />
-            </picture>
+            <ThemedImage
+              alt="Riviamigo vehicle overview dashboard showing battery, range, charging, and vehicle status"
+              sources={{light: lightOverview, dark: darkOverview}}
+            />
           </div>
         </section>
 
