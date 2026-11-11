@@ -5,6 +5,7 @@ import { CHART_COLORS } from '../../../../packages/ui/src/charts/ChartProvider';
 import { MiniSparkline } from '../../../../packages/ui/src/charts/MiniSparkline';
 import { buildRichTimeSeriesUPlotSeries, RichTimeSeriesChart } from '../../../../packages/ui/src/charts/RichTimeSeriesChart';
 import { TripMapChart } from '../../../../packages/ui/src/charts/TripMapChart';
+import { formatRgba, parseRgba } from '../../../../packages/ui/src/lib/color';
 import { applyThemePreferences, applyThemeRuntime, getThemeRuntimeSnapshot } from '@riviamigo/ui/lib/theme';
 import { resolveTheme } from '../../../../packages/themes/src/index';
 
@@ -188,6 +189,17 @@ describe('palette-aware chart renderer boundaries', () => {
     expect(map.sources.has('trip-active-point')).toBe(true);
     expect(map.layers.has('trip-routes-line')).toBe(true);
     expect(map.layers.has('trip-active-point-layer')).toBe(true);
+    // Simulate MapLibre fetching the provider style through the theme transform.
+    const styleOptions = map.setStyle.mock.calls.at(-1)?.[1] as { transformStyle: (previous: unknown, next: unknown) => unknown };
+    styleOptions.transformStyle(undefined, {
+      sources: { openmaptiles: { type: 'vector' } },
+      layers: [
+        { id: 'background', type: 'background', paint: { 'background-color': 'rgb(12,12,12)' } },
+        { id: 'label_city', type: 'symbol', source: 'openmaptiles', 'source-layer': 'place', layout: { 'text-field': '{name}' }, paint: { 'text-color': '#666' } },
+      ],
+    });
+    map.layers.add('background');
+    map.layers.add('label_city');
     const setStyleCalls = map.setStyle.mock.calls.length;
 
     setPalette('rad');
@@ -199,5 +211,10 @@ describe('palette-aware chart renderer boundaries', () => {
     expect(map.sources.has('trip-active-point')).toBe(true);
     expect(map.layers.has('trip-routes-line')).toBe(true);
     expect(map.layers.has('trip-active-point-layer')).toBe(true);
+    // The themed basemap is repainted in place from the new tokens.
+    const surface = parseRgba(getThemeRuntimeSnapshot().cssVariables['--rm-bg-surface']!)!;
+    expect(map.setPaintProperty).toHaveBeenCalledWith('background', 'background-color', formatRgba(surface));
+    expect(map.setPaintProperty).toHaveBeenCalledWith('label_city', 'text-color', expect.any(String));
+    expect(map.setPaintProperty).not.toHaveBeenCalledWith('trip-routes-line', expect.anything(), expect.anything());
   });
 });
