@@ -85,14 +85,34 @@ function hygiene() {
   run('git', ['diff', '--check', 'HEAD'], { label: 'Repository whitespace check' });
 }
 
+/**
+ * The Security workflow's gitleaks scan, over the same range it covers: the
+ * commits this branch adds. Moving code re-adds its lines, so fixtures that
+ * were allowed by path can surface here too.
+ */
+function secretScan({ required }) {
+  const probe = spawnSync('gitleaks', ['version'], { stdio: 'ignore', shell: process.platform === 'win32', windowsHide: true });
+  if (probe.status !== 0) {
+    const message = 'gitleaks is not installed, so the Security workflow\'s secret scan cannot run locally (macOS: brew install gitleaks).';
+    if (required) throw new Error(message);
+    console.warn(`Skipping secret scan: ${message}`);
+    return;
+  }
+  const base = pushBase();
+  const range = base?.mergeBase ? `${base.mergeBase}..HEAD` : 'HEAD~1..HEAD';
+  run('gitleaks', ['git', '--no-banner', '--redact', '--config', '.gitleaks.toml', '--log-opts', range, '.'], { label: `Secret scan (gitleaks, ${range})` });
+}
+
 function fastHookChecks() {
   hygiene();
+  secretScan({ required: false });
   run('node', ['tools/migration-integrity.mjs'], { label: 'Migration integrity' });
 }
 
 function commonChecks({ includeInstall = false, includeBuild = false, apiTests = 'lib', env = {} } = {}) {
   if (includeInstall) run('pnpm', ['install', '--frozen-lockfile'], { label: 'Install locked dependencies' });
   hygiene();
+  secretScan({ required: true });
   run('node', ['tools/migration-integrity.mjs'], { label: 'Migration integrity' });
   run('pnpm', ['deps:check'], { label: 'Dependency policy' });
   run('pnpm', ['peers', 'check'], { label: 'Peer dependencies' });
@@ -209,14 +229,19 @@ function ciChecks() {
   });
 }
 
-/** Files the branch changes relative to the integration branch it most likely targets. */
-function changedPathsForPush() {
+/** The integration branch (and merge base) the current branch most likely targets. */
+function pushBase() {
   const candidates = ['origin/dev', 'origin/main'].map((ref) => {
     const mergeBase = git(['merge-base', 'HEAD', ref]);
     const ahead = mergeBase ? Number.parseInt(git(['rev-list', '--count', `${mergeBase}..HEAD`]), 10) : Number.NaN;
     return { ref, mergeBase, aheadCount: Number.isInteger(ahead) ? ahead : null };
   });
-  const base = selectPushBase(candidates);
+  return selectPushBase(candidates);
+}
+
+/** Files the branch changes relative to the integration branch it most likely targets. */
+function changedPathsForPush() {
+  const base = pushBase();
   if (!base) return [];
   return git(['diff', '--name-only', `${base.mergeBase}...HEAD`]).split(/\r?\n/).filter(Boolean);
 }

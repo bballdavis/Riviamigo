@@ -73,6 +73,7 @@
   },
   "knip": {
     "ignoreBinaries": [
+      "gitleaks",
       "pg_dump"
     ],
     "ignoreDependencies": [

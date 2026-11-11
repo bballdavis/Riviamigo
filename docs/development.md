@@ -111,8 +111,9 @@ limit is appropriate for the machine.
 
 Catch CI failures before they reach GitHub:
 
-- `pnpm verify:ci` runs the same checks as the GitHub workflows: dependency
-  policy, lint, typecheck, docs, workspace tests, the build, Rust format, SQLx
+- `pnpm verify:ci` runs the same checks as the GitHub workflows: the
+  gitleaks secret scan over the branch's commits (install with
+  `brew install gitleaks`), dependency policy, lint, typecheck, docs, workspace tests, the build, Rust format, SQLx
   metadata, Clippy, and the database-backed API tests. It starts a separate
   `riviamigo-ci-local` Compose project on ports 55432 (TimescaleDB) and 56379
   (Redis), never your development database, and removes it, volumes included,
@@ -123,11 +124,13 @@ Catch CI failures before they reach GitHub:
   Debian or Ubuntu install `postgresql-client-18`. The gate runs database tests
   four at a time (`RUST_TEST_THREADS`, overridable), because every test creates
   and migrates its own database and unbounded parallelism exhausts connection
-  pools on a local Docker database.
+  pools on a local Docker database. The Security workflow's cargo audit, pnpm
+  audit, and Semgrep scans are not part of the local gate.
 - `pnpm pr:create -- <gh pr create arguments>` runs `pnpm verify:ci` and opens
   the pull request only if it passes. Use it instead of `gh pr create`.
 - `pnpm hooks:install` points Git at `.githooks/`. Every commit and push runs
-  the fast hygiene and migration-integrity gate. A push whose branch changes
+  the fast hygiene, secret-scan (skipped with a warning when gitleaks is not
+  installed), and migration-integrity gate. A push whose branch changes
   `apps/api` (compared with the merge base of `origin/dev` or `origin/main`,
   whichever is closer) also runs Rust format, SQLx metadata, Clippy, and the
   database-backed API tests against the isolated database. Set
