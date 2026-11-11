@@ -94,5 +94,5 @@ export type { TripTirePressureChartProps, TripTirePressurePoint } from './TripTi
 export { TirePressureTripsChart } from './TirePressureTripsChart';
 export type { TirePressureTripsChartProps } from './TirePressureTripsChart';
 
-export { CostTimelineChart, costTimelineTicks } from './CostTimelineChart';
+export { COST_TIMELINE_PLOT_INSET, CostTimelineChart, costTimelineTicks } from './CostTimelineChart';
 export type { CostTimelineChartProps, CostTimelineRegion, CostTimelineRow, CostTimelineSeries } from './CostTimelineChart';

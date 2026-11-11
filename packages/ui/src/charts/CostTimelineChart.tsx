@@ -49,6 +49,17 @@ export interface CostTimelineChartProps {
 }
 
 const MONTH_MS = 30.44 * 86_400_000;
+const Y_AXIS_WIDTH = 52;
+
+/**
+ * Pixels between the chart's edges and its plot area. A control that tracks
+ * the time axis, such as a slider under the chart, insets by the same amount
+ * so a given instant sits at the same x in both.
+ */
+export const COST_TIMELINE_PLOT_INSET = {
+  left: CHART_MARGINS.withYAxis.left + Y_AXIS_WIDTH,
+  right: CHART_MARGINS.withYAxis.right,
+} as const;
 
 export function costTimelineTicks(startMs: number, endMs: number): number[] {
   const months = Math.max(1, (endMs - startMs) / MONTH_MS);
@@ -131,7 +142,7 @@ export function CostTimelineChart({
             axisLine={false}
           />
           <YAxis
-            width={52}
+            width={Y_AXIS_WIDTH}
             domain={['auto', 'auto']}
             tickFormatter={formatAxisUsd}
             tick={TICK_STYLE}
