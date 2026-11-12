@@ -123,16 +123,20 @@ pub fn backed_into_position(evidence: &FacingEvidence) -> bool {
 /// when it is in drive or reverse, reports a moving speed, or carries a
 /// bearing different from the last one stored. A parked vehicle repeating its
 /// bearing changes nothing. The first bearing after a worker starts always
-/// counts, since the last one stored before it is unknown.
+/// counts, since the last one stored before it is unknown. A mark that failed
+/// stays pending and is asked for again with the next stored row.
 #[derive(Debug, Default)]
 pub struct FacingInputs {
     last_bearing: Option<f64>,
+    mark_pending: bool,
 }
 
 impl FacingInputs {
-    /// Record a telemetry row that was stored, and return whether it can
-    /// change the saved facing. Call it only for rows actually written, so a
-    /// row that failed to store is not mistaken for one already counted.
+    /// Record a telemetry row that was stored, and return whether the saved
+    /// facing must be marked stale: this row can change it, or an earlier
+    /// mark has not succeeded yet. Call it only for rows actually written, so
+    /// a row that failed to store is not mistaken for one already counted,
+    /// and call [`FacingInputs::marked`] once [`mark_stale`] succeeds.
     pub fn stored(
         &mut self,
         gear_status: Option<&str>,
@@ -150,7 +154,13 @@ impl FacingInputs {
             }
             _ => false,
         };
-        motion_gear || moving || new_bearing
+        self.mark_pending |= motion_gear || moving || new_bearing;
+        self.mark_pending
+    }
+
+    /// The saved facing was marked stale.
+    pub fn marked(&mut self) {
+        self.mark_pending = false;
     }
 }
 
@@ -454,18 +464,36 @@ mod tests {
     #[test]
     fn only_motion_speed_or_a_new_bearing_can_change_the_saved_facing() {
         let mut inputs = FacingInputs::default();
+        let mut stored = |gear, speed, bearing| {
+            let mark = inputs.stored(gear, speed, bearing);
+            if mark {
+                inputs.marked();
+            }
+            mark
+        };
         // The first bearing a worker stores always counts.
-        assert!(inputs.stored(Some("park"), Some(0.0), Some(118.0)));
+        assert!(stored(Some("park"), Some(0.0), Some(118.0)));
         // A parked vehicle repeating its course, or reporting no bearing.
-        assert!(!inputs.stored(Some("park"), Some(0.0), Some(118.0)));
-        assert!(!inputs.stored(None, None, None));
-        assert!(!inputs.stored(Some("park"), Some(0.4), None));
+        assert!(!stored(Some("park"), Some(0.0), Some(118.0)));
+        assert!(!stored(None, None, None));
+        assert!(!stored(Some("park"), Some(0.4), None));
         // Motion gears in any case, a moving speed, or a changed course.
-        assert!(inputs.stored(Some("Reverse"), Some(0.0), Some(118.0)));
-        assert!(inputs.stored(Some("DRIVE"), None, None));
-        assert!(inputs.stored(None, Some(MOVING_SPEED_MPH), None));
-        assert!(inputs.stored(Some("park"), Some(0.0), Some(298.0)));
-        assert!(!inputs.stored(Some("park"), Some(0.0), Some(298.0)));
+        assert!(stored(Some("Reverse"), Some(0.0), Some(118.0)));
+        assert!(stored(Some("DRIVE"), None, None));
+        assert!(stored(None, Some(MOVING_SPEED_MPH), None));
+        assert!(stored(Some("park"), Some(0.0), Some(298.0)));
+        assert!(!stored(Some("park"), Some(0.0), Some(298.0)));
+    }
+
+    #[test]
+    fn a_failed_mark_is_asked_for_again_until_it_succeeds() {
+        let mut inputs = FacingInputs::default();
+        assert!(inputs.stored(Some("reverse"), Some(2.0), Some(190.0)));
+        // The mark failed: parked rows repeating the course still ask for it.
+        assert!(inputs.stored(Some("park"), Some(0.0), Some(190.0)));
+        assert!(inputs.stored(Some("park"), Some(0.0), Some(190.0)));
+        inputs.marked();
+        assert!(!inputs.stored(Some("park"), Some(0.0), Some(190.0)));
     }
 
     #[test]

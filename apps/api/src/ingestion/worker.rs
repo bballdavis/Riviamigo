@@ -784,10 +784,11 @@ pub async fn run_vehicle_worker(
                     event.speed_mph,
                     event.heading_deg,
                 ) {
-                    if let Err(error) =
-                        crate::services::vehicle_facing::mark_stale(&pool, vehicle_id).await
-                    {
-                        tracing::warn!(vehicle_id=%vehicle_id, err=%error, "vehicle facing could not be marked stale");
+                    match crate::services::vehicle_facing::mark_stale(&pool, vehicle_id).await {
+                        Ok(()) => facing_inputs.marked(),
+                        Err(error) => {
+                            tracing::warn!(vehicle_id=%vehicle_id, err=%error, "vehicle facing could not be marked stale; retrying with the next stored row");
+                        }
                     }
                 }
             }
