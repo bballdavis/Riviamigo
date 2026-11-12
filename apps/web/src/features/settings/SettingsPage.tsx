@@ -1,8 +1,8 @@
 import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, AuthenticatedVehicleArtwork, queryKeys, resolveVehicleArtwork, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
-import { type UnitPreferences, type VehicleImages, type VehicleMember } from '@riviamigo/types';
+import { api, queryKeys, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
+import { type UnitPreferences } from '@riviamigo/types';
 import {
   materializeUserDashboardDraft,
   useCloneDashboard,
@@ -20,15 +20,12 @@ import {
   type UnitSystem,
 } from '@riviamigo/ui/lib/utils';
 import {
-  appTimezoneOptions,
-  formatAppDate,
-  formatAppDateTime,
   getAppTimezone,
   setAppTimezone,
 } from '@riviamigo/ui/lib/dateTime';
 import {
   PageLayout, Card, CardHeader, CardTitle, CardContent,
-  Button, Badge, Input, SelectPicker, Tooltip,
+  Button, Badge, Input, SelectPicker,
 } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../../components/layout/AppLayout';
 import { useReleaseCheckStatus } from '../../hooks/useGithubReleaseCheck';
@@ -42,10 +39,12 @@ import { JobsSection } from '../../components/settings/JobsSection';
 import { PlacesSection } from '../../components/settings/PlacesSection';
 import { ChargingSection } from '../../components/settings/ChargingSection';
 import { AppearanceSection } from './AppearanceSection';
+import { UnitsSection } from './UnitsSection';
+import { ApiAccessSection } from './ApiAccessSection';
+import { VehiclesSection } from './VehiclesSection';
 import { SettingsDraftProvider, useSettingsDraft, useSettingsLeaveGuard } from './drafts/SettingsDraftProvider';
 import { useStagedValue } from './drafts/useStagedValue';
 import { saveFailure } from './drafts/saveFailure';
-import { VehicleBatteryEditor } from './VehicleBatteryEditor';
 import { IMPERIAL_UNITS, METRIC_UNITS, sameUnitPreferences } from './unitPreferenceDrafts';
 import { RawTelemetryExplorer } from '../../components/settings/RawTelemetryExplorer';
 import { ChartManagerSection } from './charts/ChartManagerSection';
@@ -55,11 +54,7 @@ import { canManageSystemDashboards } from '../../components/dashboard/DashboardP
 import { useDashboardEditButtonPreference } from '../../components/dashboard/useDashboardEditButtonPreference';
 import { PASSWORD_MIN_LENGTH, PasswordRequirements } from '../../components/auth/PasswordRequirements';
 import {
-  formatRivianRenewalDate,
-  getRivianCredentialRenewalNotice,
-} from '../../lib/rivianCredentialRenewal';
-import {
-  Car, ChartLine, CircleDollarSign, Clipboard, Database, DatabaseBackup, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Ruler, Search, ShieldCheck, Star, Trash2, Users, Zap,
+  Car, ChartLine, CircleDollarSign, Clipboard, Database, DatabaseBackup, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Ruler, ShieldCheck, Zap,
 } from 'lucide-react';
 
 type SettingsSection = 'vehicles' | 'dashboards' | 'charts' | 'units' | 'places' | 'charging' | 'ownership' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account' | 'authentication';
@@ -79,45 +74,6 @@ const baseSections: Array<{ id: SettingsSection; label: string; icon: React.Elem
   { id: 'appearance', label: 'Appearance', icon: ShieldCheck },
   { id: 'account', label: 'Account', icon: LogOut },
 ];
-
-function formatMembershipRole(role: VehicleMember['role'] | undefined) {
-  if (role === 'owner') return 'Owner';
-  if (role === 'manager') return 'Manager';
-  return 'Viewer';
-}
-
-function membershipBadgeVariant(role: VehicleMember['role'] | undefined): 'success' | 'warning' | 'default' {
-  if (role === 'owner') return 'success';
-  if (role === 'manager') return 'warning';
-  return 'default';
-}
-
-function ThemeVehicleImage({
-  images,
-  model,
-  placement,
-  className,
-  fallback,
-}: {
-  images?: VehicleImages | null | undefined;
-  model?: string | null | undefined;
-  placement: 'side' | 'overhead' | 'front' | 'rear';
-  className?: string;
-  fallback: React.ReactNode;
-}) {
-  const resolved = resolveVehicleArtwork(images, model, placement === 'side' ? 'vehicle-card' : 'health');
-  const light = resolved.light;
-  const dark = resolved.dark ?? light;
-
-  if (!light && !dark && !resolved.fallback) return <>{fallback}</>;
-
-  return (
-    <>
-      <AuthenticatedVehicleArtwork source={light} fallbackSource={resolved.fallback} fallbackProps={{ className: `${className ?? ''} dark:hidden` }} alt="" className={`${className ?? ''} dark:hidden`} loading="lazy" />
-      <AuthenticatedVehicleArtwork source={dark} fallbackSource={resolved.fallback} fallbackProps={{ className: `${className ?? ''} hidden dark:block` }} alt="" className={`${className ?? ''} hidden dark:block`} loading="lazy" />
-    </>
-  );
-}
 
 function DashboardSettingsSection({
   dashboards,
@@ -273,7 +229,7 @@ export function SettingsContent(props: SettingsContentProps = {}) {
 
 function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }: SettingsContentProps) {
   const requestLeave = useSettingsLeaveGuard();
-  const { accessToken, clearSession, logout, defaultVehicleId, setDefaultVehicleId, setActiveVehicleId } = useAuth();
+  const { accessToken, clearSession, logout, defaultVehicleId } = useAuth();
   const authReady = useAuthReady();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -281,7 +237,9 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
   const me = useMe();
   // Applied (saved) edit-button preference; the section stages edits in `editButtonDraft`.
   const [savedShowEditButton, setShowEditButton] = useDashboardEditButtonPreference(me.data?.user_id);
-  const [activeSection, setActiveSection] = React.useState<SettingsSection>(initialSection ?? 'vehicles');
+  // The URL is the only source of the open section, so any navigation to /settings (sidebar links,
+  // back/forward, the renewal notice) shows the section it names, and a plain /settings shows Vehicles.
+  const activeSection: SettingsSection = initialSection ?? 'vehicles';
   const [apiKeyName, setApiKeyName] = React.useState('Local troubleshooting');
   const [apiKeyVehicleId, setApiKeyVehicleId] = React.useState('');
   const [createdKey, setCreatedKey] = React.useState<string | null>(null);
@@ -289,21 +247,13 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
   // Device-local copies of the applied unit and time zone preferences, used until the server answers.
   const [localUnitPreferences, setLocalUnitPreferences] = React.useState<UnitPreferences>(() => getUnitPreferences());
   const [localAppTimezone, setLocalAppTimezone] = React.useState(() => getAppTimezone());
-  const [editingBatteryVehicleId, setEditingBatteryVehicleId] = React.useState<string | null>(null);
-  const [deleteConfirmId, setDeleteConfirmId] = React.useState<string | null>(null);
-  const [deleteConfirmText, setDeleteConfirmText] = React.useState('');
-  const [demoRefreshConfirmId, setDemoRefreshConfirmId] = React.useState<string | null>(null);
-  const [sharingVehicleId, setSharingVehicleId] = React.useState<string | null>(null);
-  const [shareEmail, setShareEmail] = React.useState('');
-  const [shareRole, setShareRole] = React.useState<VehicleMember['role']>('viewer');
-  const [latestInviteToken, setLatestInviteToken] = React.useState<string | null>(null);
-  const [demoPickerOpen, setDemoPickerOpen] = React.useState(false);
   const [currentPassword, setCurrentPassword] = React.useState('');
   const [newPassword, setNewPassword] = React.useState('');
   const [confirmNewPassword, setConfirmNewPassword] = React.useState('');
   const [passwordChangeError, setPasswordChangeError] = React.useState('');
   const [changingPassword, setChangingPassword] = React.useState(false);
   const canCreateDemoVehicle = me.data?.role === 'admin' || me.data?.role === 'super_user';
+  const [latestInviteToken, setLatestInviteToken] = React.useState<string | null>(null);
   const isAdmin = canManageSystemDashboards(me.data?.role);
   const canManageBackups = me.data?.role === 'admin' || me.data?.role === 'super_user';
   const canManageAuthentication = me.data?.role === 'super_user';
@@ -320,15 +270,11 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
     [canManageAuthentication, canManageBackups],
   );
 
-  React.useEffect(() => {
-    if (initialSection && initialSection !== activeSection) setActiveSection(initialSection);
-  }, [activeSection, initialSection]);
-
   function selectSettingsSection(next: SettingsSection) {
     if (next === activeSection) return;
-    // Staged edits belong to the open section; save or discard them first.
+    // Staged edits belong to the open section; save or discard them first. The navigation
+    // itself changes the open section, through `initialSection`.
     requestLeave(() => {
-      setActiveSection(next);
       navigate({ to: '/settings', search: next === 'vehicles' ? {} : { section: next } });
     });
   }
@@ -458,24 +404,6 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
     }
   }, [apiKeyVehicleId, vehicles]);
 
-  const vehicleMembers = useQuery({
-    queryKey: queryKeys.vehicleMembers.byVehicle(sharingVehicleId),
-    queryFn: () => api.listVehicleMembers(sharingVehicleId!),
-    enabled: authReady && activeSection === 'vehicles' && !!sharingVehicleId && !!accessToken,
-  });
-  const vehicleInvites = useQuery({
-    queryKey: queryKeys.vehicleInvites.byVehicle(sharingVehicleId),
-    queryFn: () => api.listVehicleInvites(sharingVehicleId!),
-    enabled: authReady && activeSection === 'vehicles' && !!sharingVehicleId && !!accessToken,
-  });
-
-  React.useEffect(() => {
-    if (!sharingVehicleId) return;
-    if (!(vehicles ?? []).some((vehicle) => vehicle.id === sharingVehicleId)) {
-      setSharingVehicleId(null);
-    }
-  }, [sharingVehicleId, vehicles]);
-
   const createApiKey = useMutation({
     mutationFn: () => api.createApiKey({
       vehicle_id: apiKeyVehicleId,
@@ -490,108 +418,6 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
   const revokeApiKey = useMutation({
     mutationFn: (id: string) => api.revokeApiKey(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.apiKeys.all }),
-  });
-
-  const deleteVehicle = useMutation({
-    mutationFn: (vehicleId: string) => api.deleteVehicle(vehicleId),
-    onSuccess: (result) => {
-      setDefaultVehicleId(result.default_vehicle_id ?? null);
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
-    },
-  });
-
-  const refreshVehicleArtwork = useMutation({
-    mutationFn: (vehicleId: string) => api.refreshVehicleArtwork(vehicleId),
-    onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.images(result.vehicle_id) });
-    },
-  });
-
-  const updateVehicleCollection = useMutation({
-    mutationFn: ({ vehicleId, paused }: { vehicleId: string; paused: boolean }) =>
-      api.updateVehicleCollection(vehicleId, paused),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
-    },
-  });
-
-  const purgeVehicleArtworkCache = useMutation({
-    mutationFn: (vehicleId: string) => api.purgeVehicleArtworkCache(vehicleId),
-    onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.images(result.vehicle_id) });
-    },
-  });
-
-  const refreshDemoVehicle = useMutation({
-    mutationFn: (vehicleId: string) => api.refreshDemoVehicle(vehicleId),
-    onSuccess: () => {
-      setDemoRefreshConfirmId(null);
-      void queryClient.invalidateQueries();
-    },
-  });
-
-  const setDefaultVehicle = useMutation({
-    mutationFn: (vehicleId: string) => api.setDefaultVehicle(vehicleId),
-    onSuccess: (result) => {
-      setDefaultVehicleId(result.default_vehicle_id);
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
-      queryClient.invalidateQueries({ queryKey: queryKeys.me.all });
-    },
-  });
-
-  const addVehicleMember = useMutation({
-    mutationFn: ({ vehicleId, email, role }: { vehicleId: string; email: string; role: VehicleMember['role'] }) =>
-      api.addVehicleMember(vehicleId, { email, role }),
-    onSuccess: (result, variables) => {
-      setShareEmail('');
-      setShareRole('viewer');
-      setLatestInviteToken(result.invite_created ? (result.invite_token ?? null) : null);
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicleMembers.byVehicle(variables.vehicleId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicleInvites.byVehicle(variables.vehicleId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
-    },
-  });
-
-  const createDemoVehicle = useMutation({
-    mutationFn: (model: 'R1T' | 'R1S' | 'R2') => api.createDemoVehicle({ model }),
-    onSuccess: (result) => {
-      setActiveVehicleId(result.vehicle_id);
-      setDemoPickerOpen(false);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.status(result.vehicle_id) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.health(result.vehicle_id) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.images(result.vehicle_id) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.me.all });
-    },
-  });
-
-  const updateVehicleMember = useMutation({
-    mutationFn: ({ vehicleId, userId, role }: { vehicleId: string; userId: string; role: VehicleMember['role'] }) =>
-      api.updateVehicleMember(vehicleId, userId, { role }),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicleMembers.byVehicle(variables.vehicleId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
-    },
-  });
-
-  const removeVehicleMember = useMutation({
-    mutationFn: ({ vehicleId, userId }: { vehicleId: string; userId: string }) =>
-      api.removeVehicleMember(vehicleId, userId),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicleMembers.byVehicle(variables.vehicleId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
-      queryClient.invalidateQueries({ queryKey: queryKeys.me.all });
-    },
-  });
-
-  const revokeVehicleInvite = useMutation({
-    mutationFn: ({ vehicleId, inviteId }: { vehicleId: string; inviteId: string }) =>
-      api.revokeVehicleInvite(vehicleId, inviteId),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicleInvites.byVehicle(variables.vehicleId) });
-    },
   });
 
   const updateUnitPreferences = useMutation({
@@ -656,11 +482,6 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
     },
     discard: editButtonDraft.reset,
   });
-
-  function startEditVehicle(vehicleId: string) {
-    if (editingBatteryVehicleId === vehicleId) return;
-    requestLeave(() => setEditingBatteryVehicleId(vehicleId));
-  }
 
   async function handleLogout() {
     await logout();
@@ -782,565 +603,16 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
 
           <div className="min-w-0">
             {activeSection === 'vehicles' && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Vehicles</CardTitle>
-                  <div className="flex items-center gap-2">
-                    {canCreateDemoVehicle && (
-                      <div className="relative">
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          iconLeft={<Plus className="h-3.5 w-3.5" />}
-                          loading={createDemoVehicle.isPending}
-                          onClick={() => setDemoPickerOpen((current) => !current)}
-                        >
-                          Demo Vehicle
-                        </Button>
-                        {demoPickerOpen && (
-                          <div className="absolute right-0 top-full z-20 mt-2 w-40 rounded-lg border border-border bg-bg-surface p-1 shadow-lg">
-                            {(['R1T', 'R1S', 'R2'] as const).map((model) => (
-                              <button
-                                key={model}
-                                type="button"
-                                className="w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-secondary transition-colors hover:bg-bg-elevated hover:text-fg"
-                                onClick={() => createDemoVehicle.mutate(model)}
-                              >
-                                {model}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    <Button variant="secondary" size="sm" iconLeft={<Plus className="h-3.5 w-3.5" />}
-                      onClick={() => navigate({ to: '/connect' })}>
-                      Vehicle
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  {(vehicles?.length ?? 0) === 0 && (
-                    <p className="text-sm text-fg-tertiary">No vehicles connected yet.</p>
-                  )}
-                  {/* Delete confirmation dialog */}
-                  {deleteConfirmId && (() => {
-                    const dv = vehicles?.find((v) => v.id === deleteConfirmId);
-                    return (
-                      <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-page/80 backdrop-blur-sm">
-                        <div className="w-full max-w-sm rounded-xl border border-border bg-bg-surface p-5 shadow-lg">
-                          <h3 className="text-sm font-semibold text-fg">Delete {dv?.display_name}?</h3>
-                          <p className="mt-2 text-xs text-fg-tertiary">
-                            This permanently removes all local telemetry, trips, and charging history for this vehicle.
-                            Type <strong className="font-semibold text-fg">DELETE</strong> below to confirm.
-                          </p>
-                          <input
-                            value={deleteConfirmText}
-                            onChange={(e) => setDeleteConfirmText(e.target.value)}
-                            placeholder="DELETE"
-                            autoFocus
-                            className="mt-3 h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                          />
-                          <div className="mt-3 flex justify-end gap-2">
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() => { setDeleteConfirmId(null); setDeleteConfirmText(''); }}
-                            >
-                              Cancel
-                            </Button>
-                            <Button
-                              variant="danger"
-                              size="sm"
-                              disabled={deleteConfirmText !== 'DELETE'}
-                              loading={deleteVehicle.isPending}
-                              onClick={() => {
-                                deleteVehicle.mutate(deleteConfirmId);
-                                setDeleteConfirmId(null);
-                                setDeleteConfirmText('');
-                              }}
-                            >
-                              Delete Vehicle
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  {demoRefreshConfirmId && (() => {
-                    const demo = vehicles?.find((vehicle) => vehicle.id === demoRefreshConfirmId);
-                    return (
-                      <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-page/80 px-4 backdrop-blur-sm">
-                        <div className="w-full max-w-sm rounded-xl border border-border bg-bg-surface p-5 shadow-lg">
-                          <h3 className="text-sm font-semibold text-fg">Refresh {demo?.display_name ?? 'demo vehicle'}?</h3>
-                          <p className="mt-2 text-xs text-fg-tertiary">
-                            This replaces only the illustrative telemetry, trips, charging, and weather history with a fresh rolling 14-day demo window. Sharing and vehicle settings stay unchanged.
-                          </p>
-                          <div className="mt-4 flex justify-end gap-2">
-                            <Button variant="secondary" size="sm" onClick={() => setDemoRefreshConfirmId(null)}>
-                              Cancel
-                            </Button>
-                            <Button
-                              variant="primary"
-                              size="sm"
-                              loading={refreshDemoVehicle.isPending}
-                              onClick={() => refreshDemoVehicle.mutate(demoRefreshConfirmId)}
-                            >
-                              Refresh Demo Data
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  <div className="divide-y divide-border">
-                    {vehicles?.map((v) => {
-                      const isActive = defaultVehicleId === v.id || (!defaultVehicleId && vehicles[0]?.id === v.id);
-                      const isEditingBattery = editingBatteryVehicleId === v.id;
-                      const isSharingExpanded = sharingVehicleId === v.id;
-                      const membershipRole = v.membership_role ?? 'viewer';
-                      const canManageVehicle = membershipRole === 'owner' || membershipRole === 'manager';
-                      const canManageMembers = membershipRole === 'owner';
-                      const isDemo = v.is_demo ?? v.rivian_vehicle_id?.startsWith('demo-') ?? false;
-
-                      const needsReauth = !isDemo && v.auth_state === 'needs_reauth';
-                      const renewalNotice = !isDemo && !needsReauth
-                        ? getRivianCredentialRenewalNotice(v)
-                        : null;
-                      const expectedRenewalDate = !isDemo
-                        ? formatRivianRenewalDate(v.expected_renewal_at)
-                        : null;
-                      const collectionPaused = !isDemo && v.collection_paused === true;
-                      const collectorHealthy = v.worker_health === 'ok' || v.worker_health === 'connected';
-                      const collectorPassive = v.worker_health === 'passive';
-                      const healthColor = isDemo
-                        ? 'var(--rm-status-info)'
-                        : collectionPaused
-                        ? 'var(--rm-status-warning)'
-                        : needsReauth
-                        ? 'var(--rm-status-warning)'
-                        : collectorHealthy
-                          ? 'var(--rm-status-positive)'
-                          : collectorPassive
-                            ? 'var(--rm-border-default)'
-                          : v.worker_health != null
-                            ? 'var(--rm-status-danger)'
-                            : 'var(--rm-border-default)';
-                      const healthText = isDemo
-                        ? 'Demo data'
-                        : collectionPaused
-                        ? 'Paused'
-                        : needsReauth
-                        ? 'Login required'
-                        : collectorHealthy
-                          ? (isActive ? 'Active' : 'Connected')
-                          : collectorPassive
-                            ? 'Standby'
-                          : v.worker_health != null
-                            ? 'Error'
-                            : (isActive ? 'Active' : 'Offline');
-                      const hasGlow = isDemo || collectionPaused || needsReauth || v.worker_health != null;
-
-                      const modelLine = [v.model, v.year, v.trim].filter(Boolean).join(' · ') || 'Vehicle details pending';
-                      const batteryLabel = v.battery_capacity_kwh != null ? ` · ${v.battery_capacity_kwh} kWh` : '';
-
-                      return (
-                      <div key={v.id} className="py-2">
-                        <div className="@container/vehicle rounded-lg border border-border bg-bg-elevated/35 p-3">
-                          {/* Sized by the card, not the window: image and details sit side by side once
-                              the card is wide enough, and the actions join that row only when the
-                              details still have room, so nothing overlaps at in-between widths. */}
-                          <div className="grid gap-3 @min-[30rem]/vehicle:grid-cols-[10rem_minmax(0,1fr)] @min-[56rem]/vehicle:grid-cols-[10rem_minmax(0,1fr)_auto]">
-                            {/* Status chip */}
-                            <div
-                              className="flex w-full flex-col items-center justify-center gap-1 rounded-xl border bg-bg-elevated/70 px-1.5 py-2 transition-shadow"
-                              style={{
-                                borderColor: healthColor,
-                                boxShadow: hasGlow
-                                  ? `0 0 18px color-mix(in oklab, ${healthColor} 35%, transparent)`
-                                  : 'none',
-                              }}
-                            >
-                              <ThemeVehicleImage
-                                images={v.images}
-                                model={v.model}
-                                placement="side"
-                                className="w-full object-contain"
-                                fallback={<Car className="h-6 w-6 text-fg-secondary" />}
-                              />
-                              <span className="text-[10px] font-medium leading-none" style={{ color: healthColor }}>
-                                {healthText}
-                              </span>
-                            </div>
-
-                            {/* Name + model */}
-                            <div className="flex min-w-0 flex-1 flex-col">
-                              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-                                <p className="text-lg font-medium text-fg">{v.display_name}</p>
-                                <Badge variant={membershipBadgeVariant(membershipRole)} size="sm">
-                                  {formatMembershipRole(membershipRole)}
-                                </Badge>
-                                {isDemo && (
-                                  <Badge variant="info" size="sm" dot>Demo data</Badge>
-                                )}
-                                {isActive && (
-                                  <Badge variant="success" size="sm" dot>Default vehicle</Badge>
-                                )}
-                                {collectionPaused && (
-                                  <Badge variant="warning" size="sm" dot>Collection paused</Badge>
-                                )}
-                                {needsReauth && (
-                                  <Badge variant="warning" size="sm" dot>Refresh Rivian login required</Badge>
-                                )}
-                                {renewalNotice && (
-                                  <Badge variant="warning" size="sm" dot>{renewalNotice.label}</Badge>
-                                )}
-                                {isAdmin && !isDemo && v.images?.cache && (
-                                  <Badge
-                                    variant={v.images.cache.status === 'ready' ? 'success' : v.images.cache.status === 'failed' ? 'warning' : 'default'}
-                                    size="sm"
-                                    title={v.images.cache.last_error ?? undefined}
-                                  >
-                                    {v.images.cache.status === 'ready' ? 'Artwork' : 'Artwork restoring'} {v.images.cache.ready_asset_count}/{v.images.cache.asset_count}
-                                  </Badge>
-                                )}
-                              </div>
-                              <div className="mt-auto grid grid-cols-[auto_1fr] items-baseline gap-x-2 gap-y-0.5 text-sm">
-                                <span className="text-fg-tertiary">Model</span>
-                                <span className="text-fg">{modelLine}{!isEditingBattery && batteryLabel}</span>
-                                <span className="text-fg-tertiary">VIN</span>
-                                <span className="break-all font-mono text-fg">{v.vin ?? 'Not reported'}</span>
-                                <span className="whitespace-nowrap text-fg-tertiary">Rivian ID</span>
-                                <span className="break-all font-mono text-fg">{v.rivian_vehicle_id}</span>
-                                {!isDemo && (
-                                  <>
-                                    <span className="whitespace-nowrap text-fg-tertiary">Rivian renewal</span>
-                                    <span className="text-fg">
-                                      {expectedRenewalDate ? `${expectedRenewalDate} (estimated)` : 'Estimate unavailable'}
-                                    </span>
-                                  </>
-                                )}
-                              </div>
-                              {renewalNotice ? (
-                                <p className="mt-2 max-w-[65ch] text-sm leading-5 text-status-warning">
-                                  {renewalNotice.message}
-                                </p>
-                              ) : null}
-                            </div>
-
-                            {/* Action buttons */}
-                            <div className="flex flex-wrap items-center justify-start gap-1.5 border-t border-border/60 pt-3 @min-[30rem]/vehicle:col-span-2 @min-[30rem]/vehicle:justify-end @min-[56rem]/vehicle:col-span-1 @min-[56rem]/vehicle:self-center @min-[56rem]/vehicle:border-t-0 @min-[56rem]/vehicle:pt-0">
-                              {!isActive && (
-                                <Tooltip content="Set as default vehicle">
-                                  <Button
-                                    aria-label={`Set ${v.display_name} as default vehicle`}
-                                    variant="secondary"
-                                    size="sm"
-                                    className="h-8 w-8 px-0"
-                                    loading={setDefaultVehicle.isPending && setDefaultVehicle.variables === v.id}
-                                    onClick={() => setDefaultVehicle.mutate(v.id)}
-                                  >
-                                    <Star className="h-3.5 w-3.5" />
-                                  </Button>
-                                </Tooltip>
-                              )}
-                              {canManageMembers && (
-                                <Tooltip content={isSharingExpanded ? 'Hide sharing' : 'Manage sharing'}>
-                                  <Button
-                                    aria-label={`${isSharingExpanded ? 'Hide sharing for' : 'Manage sharing for'} ${v.display_name}`}
-                                    variant="secondary"
-                                    size="sm"
-                                    className="h-8 w-8 px-0"
-                                    onClick={() => {
-                                      setSharingVehicleId((current) => current === v.id ? null : v.id);
-                                      setShareEmail('');
-                                      setShareRole('viewer');
-                                    }}
-                                  >
-                                    <Users className="h-3.5 w-3.5" />
-                                  </Button>
-                                </Tooltip>
-                              )}
-                              {canManageVehicle && !isDemo && (
-                                <Tooltip content={collectionPaused ? 'Resume data collection from Rivian' : 'Pause data collection from Rivian'}>
-                                  <Button
-                                    aria-label={`${collectionPaused ? 'Resume' : 'Pause'} data collection for ${v.display_name}`}
-                                    aria-pressed={collectionPaused}
-                                    variant="secondary"
-                                    size="sm"
-                                    className={[
-                                      'h-8 w-8 px-0',
-                                      collectionPaused
-                                        ? 'border-[var(--rm-status-warning)] text-[var(--rm-status-warning)] hover:border-[var(--rm-status-warning)] hover:text-[var(--rm-status-warning)]'
-                                        : '',
-                                    ].join(' ')}
-                                    loading={updateVehicleCollection.isPending && updateVehicleCollection.variables?.vehicleId === v.id}
-                                    onClick={() => updateVehicleCollection.mutate({ vehicleId: v.id, paused: !collectionPaused })}
-                                  >
-                                    {collectionPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
-                                  </Button>
-                                </Tooltip>
-                              )}
-                              {canManageVehicle && !isDemo && (
-                                <Tooltip content="Refresh Rivian login">
-                                  <Button
-                                    aria-label={`Refresh Rivian login for ${v.display_name}`}
-                                    variant="secondary"
-                                    size="sm"
-                                    className={[
-                                      'h-8 w-8 px-0',
-                                      needsReauth
-                                        ? 'border-[var(--rm-status-warning)] text-[var(--rm-status-warning)] hover:border-[var(--rm-status-warning)] hover:text-[var(--rm-status-warning)]'
-                                        : '',
-                                    ].join(' ')}
-                                    onClick={() => navigate({ to: '/connect', search: { mode: 'refresh', vehicle_id: v.id } })}
-                                  >
-                                    <RefreshCw className="h-3.5 w-3.5" />
-                                  </Button>
-                                </Tooltip>
-                              )}
-                              {isAdmin && !isDemo && (
-                                <Tooltip content="Clear local artwork cache; the next artwork view restores it">
-                                  <Button
-                                    aria-label={`Clear local artwork cache for ${v.display_name}`}
-                                    variant="secondary"
-                                    size="sm"
-                                    className="h-8 w-8 px-0"
-                                    loading={purgeVehicleArtworkCache.isPending && purgeVehicleArtworkCache.variables === v.id}
-                                    onClick={() => purgeVehicleArtworkCache.mutate(v.id)}
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </Button>
-                                </Tooltip>
-                              )}
-                              {isAdmin && !isDemo && (
-                                <Tooltip content="Refresh vehicle artwork from Rivian">
-                                  <Button
-                                    aria-label={`Refresh vehicle artwork for ${v.display_name}`}
-                                    variant="secondary"
-                                    size="sm"
-                                    className="h-8 w-8 px-0"
-                                    loading={refreshVehicleArtwork.isPending && refreshVehicleArtwork.variables === v.id}
-                                    onClick={() => refreshVehicleArtwork.mutate(v.id)}
-                                  >
-                                    <RefreshCw className="h-3.5 w-3.5" />
-                                  </Button>
-                                </Tooltip>
-                              )}
-                              {isAdmin && isDemo && (
-                                <Tooltip content="Refresh demo data">
-                                  <Button
-                                    aria-label={`Refresh demo data for ${v.display_name}`}
-                                    variant="secondary"
-                                    size="sm"
-                                    className="h-8 w-8 px-0"
-                                    loading={refreshDemoVehicle.isPending && refreshDemoVehicle.variables === v.id}
-                                    onClick={() => setDemoRefreshConfirmId(v.id)}
-                                  >
-                                    <RotateCcw className="h-3.5 w-3.5" />
-                                  </Button>
-                                </Tooltip>
-                              )}
-                              {canManageVehicle && (
-                                <Tooltip content="Edit vehicle">
-                                  <Button
-                                    aria-label={`Edit ${v.display_name}`}
-                                    variant="secondary"
-                                    size="sm"
-                                    className="h-8 w-8 px-0"
-                                    onClick={() => startEditVehicle(v.id)}
-                                  >
-                                    <Pencil className="h-3.5 w-3.5" />
-                                  </Button>
-                                </Tooltip>
-                              )}
-                              {membershipRole === 'owner' && (
-                                <Tooltip content="Delete vehicle">
-                                  <Button
-                                    aria-label={`Delete ${v.display_name}`}
-                                    variant="danger"
-                                    size="sm"
-                                    className="h-8 w-8 px-0"
-                                    onClick={() => { setDeleteConfirmId(v.id); setDeleteConfirmText(''); }}
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </Button>
-                                </Tooltip>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Battery capacity edit — only when open. Staged; the page bar saves it. */}
-                          {isEditingBattery && (
-                            <VehicleBatteryEditor
-                              key={v.id}
-                              vehicle={v}
-                              onDone={() => setEditingBatteryVehicleId((current) => (current === v.id ? null : current))}
-                            />
-                          )}
-                          {isSharingExpanded && (
-                            <div className="mt-3 border-t border-border/70 pt-3">
-                              <div className="grid gap-3">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <div>
-                                    <p className="text-sm font-medium text-fg">Vehicle Access</p>
-                                    <p className="text-xs text-fg-tertiary">
-                                      Owners can add existing Riviamigo users, adjust roles, and remove access.
-                                    </p>
-                                  </div>
-                                  <Button
-                                    variant="secondary"
-                                    size="sm"
-                                    loading={vehicleMembers.isFetching}
-                                    onClick={() => {
-                                      vehicleMembers.refetch();
-                                      vehicleInvites.refetch();
-                                    }}
-                                  >
-                                    Refresh
-                                  </Button>
-                                </div>
-
-                                <div className="grid gap-2 rounded-xl border border-border bg-bg-elevated/35 p-3 md:grid-cols-[minmax(0,1.6fr)_11rem_auto]">
-                                  <input
-                                    value={shareEmail}
-                                    onChange={(event) => setShareEmail(event.target.value)}
-                                    placeholder="user@example.com"
-                                    className="h-9 rounded-lg border border-border bg-bg-surface px-3 text-sm text-fg outline-none focus:border-accent"
-                                  />
-                                  <SelectPicker
-                                    className="w-full"
-                                    value={shareRole}
-                                    onChange={(value) => setShareRole(value as VehicleMember['role'])}
-                                    aria-label="Vehicle member role"
-                                    options={[{ value: 'viewer', label: 'Viewer' }, { value: 'manager', label: 'Manager' }, { value: 'owner', label: 'Owner' }]}
-                                  />
-                                  <Button
-                                    size="sm"
-                                    className="h-9"
-                                    loading={addVehicleMember.isPending}
-                                    disabled={!shareEmail.trim()}
-                                    onClick={() => addVehicleMember.mutate({ vehicleId: v.id, email: shareEmail.trim(), role: shareRole })}
-                                  >
-                                    Add Member
-                                  </Button>
-                                </div>
-                                {latestInviteToken && (
-                                  <div className="rounded-xl border border-border bg-bg-elevated/25 p-3 text-xs text-fg-tertiary">
-                                    Invite created for a user not yet registered. Token:
-                                    <span className="ml-2 font-mono text-fg">{latestInviteToken}</span>
-                                  </div>
-                                )}
-
-                                <div className="grid gap-2">
-                                  {vehicleMembers.isLoading && (
-                                    <div className="rounded-xl border border-border bg-bg-elevated/25 p-3 text-sm text-fg-tertiary">
-                                      Loading members...
-                                    </div>
-                                  )}
-                                  {!vehicleMembers.isLoading && (vehicleMembers.data?.length ?? 0) === 0 && (
-                                    <div className="rounded-xl border border-border bg-bg-elevated/25 p-3 text-sm text-fg-tertiary">
-                                      No members found for this vehicle yet.
-                                    </div>
-                                  )}
-                                  {vehicleMembers.data?.map((member) => {
-                                    const isCurrentUser = member.user_id === me.data?.user_id;
-                                    return (
-                                      <div
-                                        key={member.user_id}
-                                        className="grid gap-2 rounded-xl border border-border bg-bg-elevated/25 p-3 md:grid-cols-[minmax(0,1fr)_10rem_auto]"
-                                      >
-                                        <div className="min-w-0">
-                                          <div className="flex flex-wrap items-center gap-2">
-                                            <p className="truncate text-sm font-medium text-fg">{member.email}</p>
-                                            <Badge variant={membershipBadgeVariant(member.role)} size="sm">
-                                              {formatMembershipRole(member.role)}
-                                            </Badge>
-                                            {member.is_default && (
-                                              <Badge variant="success" size="sm">Default here</Badge>
-                                            )}
-                                            {isCurrentUser && (
-                                              <Badge variant="default" size="sm">You</Badge>
-                                            )}
-                                          </div>
-                                          <p className="mt-1 text-xs text-fg-tertiary">
-                              Added {formatAppDate(member.created_at)}
-                                          </p>
-                                        </div>
-                                        <SelectPicker
-                                          className="min-w-[7rem]"
-                                          value={member.role}
-                                          onChange={(value) => updateVehicleMember.mutate({
-                                            vehicleId: v.id,
-                                            userId: member.user_id,
-                                            role: value as VehicleMember['role'],
-                                          })}
-                                          aria-label={`Role for ${member.email}`}
-                                          disabled={updateVehicleMember.isPending}
-                                          options={[{ value: 'viewer', label: 'Viewer' }, { value: 'manager', label: 'Manager' }, { value: 'owner', label: 'Owner' }]}
-                                        />
-                                        <Button
-                                          variant="danger"
-                                          size="sm"
-                                          className="h-9"
-                                          loading={
-                                            removeVehicleMember.isPending
-                                            && removeVehicleMember.variables?.vehicleId === v.id
-                                            && removeVehicleMember.variables?.userId === member.user_id
-                                          }
-                                          onClick={() => removeVehicleMember.mutate({ vehicleId: v.id, userId: member.user_id })}
-                                        >
-                                          {isCurrentUser ? 'Remove Me' : 'Remove'}
-                                        </Button>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                                <div className="grid gap-2 pt-1">
-                                  <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Pending Invites</p>
-                                  {(vehicleInvites.data ?? [])
-                                    .filter((invite) => !invite.accepted_at && !invite.revoked_at)
-                                    .map((invite) => (
-                                      <div key={invite.id} className="grid gap-2 rounded-xl border border-border bg-bg-elevated/25 p-3 md:grid-cols-[minmax(0,1fr)_auto]">
-                                        <div className="min-w-0">
-                                          <p className="truncate text-sm text-fg">
-                                            {invite.invitee_email} <span className="text-fg-tertiary">({formatMembershipRole(invite.role)})</span>
-                                          </p>
-                                          <p className="mt-1 text-xs text-fg-tertiary">
-                                            Expires {formatAppDate(invite.expires_at)}
-                                          </p>
-                                        </div>
-                                        <Button
-                                          variant="danger"
-                                          size="sm"
-                                          className="h-9"
-                                          loading={revokeVehicleInvite.isPending && revokeVehicleInvite.variables?.inviteId === invite.id}
-                                          onClick={() => revokeVehicleInvite.mutate({ vehicleId: v.id, inviteId: invite.id })}
-                                        >
-                                          Revoke
-                                        </Button>
-                                      </div>
-                                    ))}
-                                  {(vehicleInvites.data ?? []).filter((invite) => !invite.accepted_at && !invite.revoked_at).length === 0 && (
-                                    <div className="rounded-xl border border-border bg-bg-elevated/25 p-3 text-sm text-fg-tertiary">
-                                      No pending invites.
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      );
-                    })}
-                  </div>
-                </CardContent>
-              </Card>
+              <VehiclesSection
+                vehicles={vehicles}
+                defaultVehicleId={defaultVehicleId}
+                currentUserId={me.data?.user_id}
+                isAdmin={isAdmin}
+                canCreateDemoVehicle={canCreateDemoVehicle}
+                latestInviteToken={latestInviteToken}
+                onLatestInviteTokenChange={setLatestInviteToken}
+              />
             )}
-
             {activeSection === 'dashboards' && (
               <DashboardSettingsSection
                 dashboards={dashboards.data ?? []}
@@ -1361,261 +633,36 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
             {activeSection === 'charts' && <ChartManagerSection />}
 
             {activeSection === 'api' && (
-              <div className="flex flex-col gap-5">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Integration Keys</CardTitle>
-                  </CardHeader>
-                  <CardContent className="grid gap-4">
-                    <p className="text-sm text-fg-tertiary">
-                      Integration keys are read-only and limited to one vehicle. Dashboard, account, and administrative changes stay in the signed-in app.
-                    </p>
-                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_13rem_auto] md:items-end">
-                      <label className="grid gap-1">
-                        <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Name</span>
-                        <input
-                          value={apiKeyName}
-                          onChange={(event) => setApiKeyName(event.target.value)}
-                          className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                        />
-                      </label>
-                      <label className="grid gap-1">
-                        <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Vehicle</span>
-                        <SelectPicker
-                          className="w-full"
-                          value={apiKeyVehicleId}
-                          onChange={setApiKeyVehicleId}
-                          aria-label="API key vehicle"
-                          options={vehicles?.map((vehicle) => ({ value: vehicle.id, label: vehicle.display_name })) ?? []}
-                        />
-                      </label>
-                      <Button
-                        size="sm"
-                        iconLeft={<KeyRound className="h-3.5 w-3.5" />}
-                        loading={createApiKey.isPending}
-                        disabled={!apiKeyVehicleId || !apiKeyName.trim()}
-                        onClick={() => createApiKey.mutate()}
-                      >
-                        Create
-                      </Button>
-                    </div>
-
-                    {createdKey && (
-                      <div className="rounded-lg border border-accent/40 bg-accent/10 p-3">
-                        <div className="mb-2 flex items-center justify-between gap-3">
-                          <p className="text-sm font-medium text-fg">New key</p>
-                          <Button variant="secondary" size="sm" iconLeft={<Clipboard className="h-3.5 w-3.5" />} onClick={copyCreatedKey}>
-                            Copy
-                          </Button>
-                        </div>
-                        <p className="break-all font-mono text-xs text-fg">{createdKey}</p>
-                        <p className="mt-2 text-xs text-fg-tertiary">This is shown once. Store it before leaving this section.</p>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Issued Keys</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    {apiKeys.isError && (
-                      <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-status-danger/30 bg-status-danger/10 p-3 text-sm text-fg">
-                        <span>Could not load integration keys. The server logged the request details; retry after checking the API migration status.</span>
-                        <Button variant="secondary" size="sm" onClick={() => apiKeys.refetch()}>Retry</Button>
-                      </div>
-                    )}
-                    {(apiKeys.data?.length ?? 0) === 0 && (
-                      <p className="text-sm text-fg-tertiary">No API keys issued yet.</p>
-                    )}
-                    <div className="divide-y divide-border">
-                      {apiKeys.data?.map((key) => (
-                        <div key={key.id} className="grid gap-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <p className="text-sm font-medium text-fg">{key.name}</p>
-                              <Badge variant={key.revoked_at ? 'default' : key.access_level_state === 'legacy_unmigrated' ? 'warning' : 'success'}>
-                                {key.revoked_at ? 'revoked' : key.access_level_state === 'legacy_unmigrated' ? `${key.access_level} · migrate` : key.access_level}
-                              </Badge>
-                            </div>
-                            <p className="mt-1 font-mono text-xs text-fg-tertiary">{key.id}</p>
-                            <p className="mt-1 text-xs text-fg-tertiary">
-                              Created {formatAppDateTime(key.created_at)}
-                              {key.last_used_at ? ` / Last used ${formatAppDateTime(key.last_used_at)}` : ' / Never used'}
-                            </p>
-                          </div>
-                          {!key.revoked_at && (
-                            <Button
-                              variant="danger"
-                              size="sm"
-                              iconLeft={<Trash2 className="h-3.5 w-3.5" />}
-                              loading={revokeApiKey.isPending}
-                              onClick={() => revokeApiKey.mutate(key.id)}
-                            >
-                              Revoke
-                            </Button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Integration Reference</CardTitle>
-                  </CardHeader>
-                  <CardContent className="grid gap-3">
-                    <div className="relative">
-                      <label className="sr-only" htmlFor="api-endpoint-search">Search API endpoints</label>
-                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-tertiary" />
-                      <input
-                        id="api-endpoint-search"
-                        value={apiCatalogSearch}
-                        onChange={(event) => setApiCatalogSearch(event.target.value)}
-                        placeholder="Search API endpoints"
-                        className="h-9 w-full rounded-lg border border-border bg-bg-surface pl-9 pr-3 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-accent"
-                      />
-                    </div>
-
-                    {apiCatalog.isLoading && <p className="text-sm text-fg-tertiary">Loading API endpoints...</p>}
-                    {apiCatalog.isError && (
-                      <div className="flex items-center justify-between gap-3 rounded-lg border border-status-danger/30 bg-status-danger/10 p-3 text-sm text-fg">
-                        <span>Could not load the API endpoint list.</span>
-                        <Button variant="secondary" size="sm" onClick={() => apiCatalog.refetch()}>Retry</Button>
-                      </div>
-                    )}
-                    {!apiCatalog.isLoading && !apiCatalog.isError && (
-                      <>
-                        <p className="text-xs text-fg-tertiary">
-                          Showing {filteredApiEndpoints.length} of {apiCatalog.data?.endpoints.length ?? 0} endpoints
-                        </p>
-                        {filteredApiEndpoints.length > 0 ? (
-                          <div className="divide-y divide-border rounded-lg border border-border">
-                            {filteredApiEndpoints.map((endpoint) => (
-                              <div key={`${endpoint.method}-${endpoint.path}`} className="flex items-center gap-3 px-3 py-2.5">
-                                <Badge variant="default">{endpoint.method}</Badge>
-                                <span className="min-w-0 break-all font-mono text-xs text-fg">{endpoint.path}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-sm text-fg-tertiary">No endpoints match your search.</p>
-                        )}
-                      </>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
+              <ApiAccessSection
+                vehicles={vehicles}
+                apiKeys={apiKeys}
+                apiCatalog={apiCatalog}
+                apiKeyName={apiKeyName}
+                onApiKeyNameChange={setApiKeyName}
+                apiKeyVehicleId={apiKeyVehicleId}
+                onApiKeyVehicleIdChange={setApiKeyVehicleId}
+                createdKey={createdKey}
+                onCopyCreatedKey={copyCreatedKey}
+                createPending={createApiKey.isPending}
+                onCreate={() => createApiKey.mutate()}
+                revokePending={revokeApiKey.isPending}
+                onRevoke={(keyId) => revokeApiKey.mutate(keyId)}
+                apiCatalogSearch={apiCatalogSearch}
+                onApiCatalogSearchChange={setApiCatalogSearch}
+                filteredApiEndpoints={filteredApiEndpoints}
+              />
             )}
 
             {activeSection === 'units' && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Units</CardTitle>
-                </CardHeader>
-                <CardContent className="grid gap-4">
-                  <p className="text-sm text-fg-tertiary">Pick a preset system or switch to Custom for per-unit control.</p>
-                  <div className="grid gap-3 md:grid-cols-3">
-                    {[
-                      {
-                        value: 'imperial' as const,
-                        title: 'Imperial',
-                        copy: 'Miles, mph, Fahrenheit, psi, and feet. This is the default.',
-                      },
-                      {
-                        value: 'metric' as const,
-                        title: 'Metric',
-                        copy: 'Kilometers, km/h, Celsius, kPa, and meters.',
-                      },
-                      {
-                        value: 'custom' as const,
-                        title: 'Custom',
-                        copy: 'Choose each unit family independently.',
-                      },
-                    ].map((option) => {
-                      const active = unitPreferences.mode === option.value;
-                      return (
-                        <button
-                          key={option.value}
-                          type="button"
-                          onClick={() => handleUnitModeChange(option.value)}
-                          className={[
-                            'rounded-xl border p-4 text-left transition-colors',
-                            active
-                              ? 'border-accent bg-accent/10 shadow-sm'
-                              : 'border-border bg-bg-elevated/40 hover:border-accent/60 hover:bg-bg-elevated/70',
-                          ].join(' ')}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <p className="text-sm font-medium text-fg">{option.title}</p>
-                              <p className="mt-1 text-xs text-fg-tertiary">{option.copy}</p>
-                            </div>
-                            <Badge variant={active ? 'success' : 'default'}>
-                              {active ? 'Selected' : 'Set'}
-                            </Badge>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {unitPreferences.mode === 'custom' ? (
-                    <div className="rounded-xl border border-border bg-bg-elevated/35 p-3">
-                      <p className="mb-3 text-xs uppercase tracking-wider text-fg-tertiary">Custom Units</p>
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <label className="grid gap-1 text-sm text-fg">
-                          <span>Distance / Range</span>
-                          <SelectPicker className="w-full" value={unitPreferences.distance_unit} onChange={(value) => handleCustomUnitChange('distance_unit', value as UnitPreferences['distance_unit'])} aria-label="Distance and range unit" options={[{ value: 'miles', label: 'Miles (mi)' }, { value: 'kilometers', label: 'Kilometers (km)' }]} />
-                        </label>
-                        <label className="grid gap-1 text-sm text-fg">
-                          <span>Speed</span>
-                          <SelectPicker className="w-full" value={unitPreferences.speed_unit} onChange={(value) => handleCustomUnitChange('speed_unit', value as UnitPreferences['speed_unit'])} aria-label="Speed unit" options={[{ value: 'mph', label: 'Miles/hour (mph)' }, { value: 'kmh', label: 'Kilometers/hour (km/h)' }]} />
-                        </label>
-                        <label className="grid gap-1 text-sm text-fg">
-                          <span>Temperature</span>
-                          <SelectPicker className="w-full" value={unitPreferences.temperature_unit} onChange={(value) => handleCustomUnitChange('temperature_unit', value as UnitPreferences['temperature_unit'])} aria-label="Temperature unit" options={[{ value: 'fahrenheit', label: 'Fahrenheit (F)' }, { value: 'celsius', label: 'Celsius (C)' }]} />
-                        </label>
-                        <label className="grid gap-1 text-sm text-fg">
-                          <span>Pressure</span>
-                          <SelectPicker className="w-full" value={unitPreferences.pressure_unit} onChange={(value) => handleCustomUnitChange('pressure_unit', value as UnitPreferences['pressure_unit'])} aria-label="Pressure unit" options={[{ value: 'psi', label: 'PSI' }, { value: 'kpa', label: 'kPa' }]} />
-                        </label>
-                        <label className="grid gap-1 text-sm text-fg">
-                          <span>Altitude</span>
-                          <SelectPicker className="w-full" value={unitPreferences.altitude_unit} onChange={(value) => handleCustomUnitChange('altitude_unit', value as UnitPreferences['altitude_unit'])} aria-label="Altitude unit" options={[{ value: 'feet', label: 'Feet (ft)' }, { value: 'meters', label: 'Meters (m)' }]} />
-                        </label>
-                        <label className="grid gap-1 text-sm text-fg">
-                          <span>Place Radius</span>
-                          <SelectPicker className="w-full" value={unitPreferences.place_radius_unit} onChange={(value) => handleCustomUnitChange('place_radius_unit', value as UnitPreferences['place_radius_unit'])} aria-label="Place radius unit" options={[{ value: 'feet', label: 'Feet (ft)' }, { value: 'meters', label: 'Meters (m)' }]} />
-                        </label>
-                        <label className="grid gap-1 text-sm text-fg md:col-span-2">
-                          <span>Efficiency Display</span>
-                          <SelectPicker className="w-full" value={unitPreferences.efficiency_display} onChange={(value) => handleCustomUnitChange('efficiency_display', value as UnitPreferences['efficiency_display'])} aria-label="Efficiency display" options={[{ value: 'distance_per_energy', label: 'Distance per energy (mi/kWh or km/kWh)' }, { value: 'energy_per_distance', label: 'Energy per distance (Wh/mi or Wh/km)' }]} />
-                        </label>
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className="grid gap-3 rounded-xl border border-border bg-bg-elevated/35 p-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] md:items-end">
-                    <div>
-                      <p className="text-xs uppercase tracking-wider text-fg-tertiary">Time zone</p>
-                      <p className="mt-1 text-sm text-fg">Application time zone</p>
-                      <p className="mt-1 text-xs text-fg-tertiary">
-                        All Riviamigo dates, charts, local-day groupings, and scheduled backups use this time zone.
-                        {!canManageBackups ? ' An administrator manages this shared setting.' : ''}
-                      </p>
-                    </div>
-                    <SelectPicker
-                      className="w-full"
-                      value={appTimezone}
-                      onChange={(value) => timezoneDraft.setValue(value)}
-                      aria-label="Application time zone"
-                      disabled={!canManageBackups || updateAppTimezone.isPending || appTimezoneQuery.isLoading}
-                      options={appTimezoneOptions(appTimezone)}
-                    />
-                  </div>
-                </CardContent>
-              </Card>
+              <UnitsSection
+                unitPreferences={unitPreferences}
+                onUnitModeChange={handleUnitModeChange}
+                onCustomUnitChange={handleCustomUnitChange}
+                appTimezone={appTimezone}
+                onAppTimezoneChange={(value) => timezoneDraft.setValue(value)}
+                appTimezoneDisabled={!canManageBackups || updateAppTimezone.isPending || appTimezoneQuery.isLoading}
+                canManageBackups={canManageBackups}
+              />
             )}
 
             {activeSection === 'places' && <PlacesSection unitSystem={placesUnitSystem} />}

@@ -364,3 +364,98 @@ async fn empty_provider_manifest_cleans_only_the_target_vehicle() {
     );
     tx.rollback().await.expect("rollback test fixtures");
 }
+
+#[test]
+fn artwork_repair_follows_the_pause_and_rivian_connection_switches() {
+    assert_eq!(artwork_repair_blocked(false, false, true), None);
+    assert_eq!(
+        artwork_repair_blocked(true, false, true),
+        Some(ArtworkRepairBlocked::Demo)
+    );
+    assert_eq!(
+        artwork_repair_blocked(false, true, true),
+        Some(ArtworkRepairBlocked::Paused)
+    );
+    assert_eq!(
+        artwork_repair_blocked(false, false, false),
+        Some(ArtworkRepairBlocked::RivianConnectionOff)
+    );
+    // A paused vehicle reports its own pause even when the server is off.
+    assert_eq!(
+        artwork_repair_blocked(false, true, false),
+        Some(ArtworkRepairBlocked::Paused)
+    );
+}
+
+async fn artwork_cache_state_exists(pool: &sqlx::PgPool, vehicle_id: Uuid) -> bool {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM riviamigo.vehicle_artwork_cache_state WHERE vehicle_id = $1)",
+    )
+    .bind(vehicle_id)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
+async fn paused_vehicles_and_vehicle_listing_never_claim_an_artwork_repair() {
+    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+        .await
+        .expect("test database");
+    let mut conn = pool.acquire().await.unwrap();
+    let user_id = insert_artwork_test_user(&mut conn).await;
+    let paused = insert_artwork_test_vehicle(&mut conn, user_id, "provider-paused").await;
+    let active = insert_artwork_test_vehicle(&mut conn, user_id, "provider-listed").await;
+    drop(conn);
+    sqlx::query("UPDATE riviamigo.vehicles SET collection_paused = TRUE WHERE id = $1")
+        .bind(paused)
+        .execute(&pool)
+        .await
+        .unwrap();
+    for vehicle_id in [paused, active] {
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role)
+             VALUES ($1, $2, 'owner')",
+        )
+        .bind(vehicle_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let mut state = make_helper_state("redis://127.0.0.1/".into());
+    state.pool = pool.clone();
+
+    // Even the explicit, backoff-bypassing mode refuses a paused vehicle.
+    for force in [false, true] {
+        assert_eq!(
+            queue_vehicle_artwork_repair_with_mode(&state, paused, force).await,
+            Err(ArtworkRepairBlocked::Paused)
+        );
+    }
+    assert!(!artwork_cache_state_exists(&pool, paused).await);
+
+    // Listing an active vehicle with no cached artwork stays a local read.
+    let Json(body) = list_vehicles(
+        State(state),
+        crate::middleware::auth::AuthUser {
+            user_id,
+            default_vehicle_id: None,
+            api_access_level: None,
+            api_vehicle_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(body["vehicles"].as_array().unwrap().len(), 2);
+    assert!(!artwork_cache_state_exists(&pool, active).await);
+    assert!(!artwork_cache_state_exists(&pool, paused).await);
+
+    sqlx::query("DELETE FROM riviamigo.users WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+}

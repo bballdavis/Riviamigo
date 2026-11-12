@@ -3,6 +3,10 @@ export const queryKeys = {
   me: { all: ['me'] as const },
   auth: { config: ['auth-config'] as const, identities: ['auth-identities'] as const, authenticationSettings: ['authentication-settings'] as const },
   vehicles: {
+    /**
+     * The vehicle list. Every other vehicle key starts with this prefix, so invalidating it without
+     * `exact: true` also refetches each vehicle's status, health, images, and ownership.
+     */
     all: ['vehicles'] as const,
     status: (vehicleId: string | null) => ['vehicles', 'status', vehicleId] as const,
   },
@@ -15,6 +19,9 @@ export const queryKeys = {
   },
   apiKeys: { all: ['api-keys'] as const },
   apiCatalog: { all: ['api-catalog'] as const },
+  /** Saved places. Charging and trip consumers read the same key. */
+  places: { all: ['places'] as const },
+  externalConnections: { all: ['external-connections'] as const },
   vehicleMembers: {
     byVehicle: (vehicleId: string | null) => ['vehicle-members', vehicleId] as const,
   },

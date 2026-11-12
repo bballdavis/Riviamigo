@@ -146,13 +146,17 @@ export function AppearanceSection({ preferencesQuery }: { preferencesQuery: Pref
   async function saveAppearance() {
     setApplying(true);
     try {
+      const stagedMode = mode.value;
+      // The theme save carries the staged mode too. Running the legacy mode save after it would
+      // send the palette captured before this save and could reset the theme that was just saved.
+      let modeSaved = false;
       if (choice.isDirty && choice.value) {
         const staged = choice.value;
         const current = queryClient.getQueryData<ThemePreferencesResponse>(preferenceKey) ?? savedPreference;
         if (!current?.etag) throw new Error('Appearance preferences are still loading.');
         try {
           await selectTheme.mutateAsync({
-            mode: mode.isDirty ? mode.value : current.preferences.mode,
+            mode: mode.isDirty ? stagedMode : current.preferences.mode,
             selection: staged.ref,
             etag: current.etag,
           });
@@ -162,15 +166,17 @@ export function AppearanceSection({ preferencesQuery }: { preferencesQuery: Pref
           throw new Error('The theme changed elsewhere or could not be saved. Refresh and try again.');
         }
         choice.commit(staged);
+        modeSaved = true;
       }
       if (mode.isDirty) {
-        const staged = mode.value;
-        try {
-          await updateThemeMode.mutateAsync({ mode: staged, palette: server.palette });
-        } catch {
-          throw new Error('Unable to save appearance mode. Try again or discard your changes.');
+        if (!modeSaved) {
+          try {
+            await updateThemeMode.mutateAsync({ mode: stagedMode, palette: server.palette });
+          } catch {
+            throw new Error('Unable to save appearance mode. Try again or discard your changes.');
+          }
         }
-        mode.commit(staged);
+        mode.commit(stagedMode);
       }
       if (mapStyle.isDirty) {
         const staged = mapStyle.value;

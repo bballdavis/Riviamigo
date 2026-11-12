@@ -6,6 +6,7 @@
 //! owns only the facts that ledger is built from.
 
 mod fuel_prices;
+mod labels;
 mod lookup;
 mod reference;
 mod settings;
@@ -14,6 +15,7 @@ mod usage;
 pub use fuel_prices::{
     fuel_price_endpoint, fuel_prices, parse_fuel_prices, FuelPriceMonth, FuelPrices,
 };
+pub use labels::clean_label;
 pub use lookup::{
     lookup_json, parse_lookup_menu, parse_lookup_vehicle, LookupOption, LookupVehicle,
 };

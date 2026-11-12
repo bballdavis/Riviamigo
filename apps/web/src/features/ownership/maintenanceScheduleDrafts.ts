@@ -1,6 +1,7 @@
 /** Maintenance schedule drafts: the text rows the editor holds, their validation, and the staged-edit bookkeeping. */
 import type { OwnershipMaintenanceCategory, OwnershipMaintenanceItem } from '@riviamigo/types';
 import type { ScheduleTarget } from './model';
+import { ownershipLabelError } from './ownershipLabels';
 
 /** One schedule row held as text while it is edited. */
 export interface ItemDraft {
@@ -83,8 +84,8 @@ export function draftsToSchedule(drafts: ItemDraft[]): {
   const number = (raw: string) => Number(raw.trim().replace(/[$,\s]/g, ''));
   const errors = drafts.map((draft) => {
     const found: ItemErrors = {};
-    const label = draft.label.trim();
-    if (!label || label.length > 60) found.label = 'Enter a name of 1 to 60 characters.';
+    const labelError = ownershipLabelError(draft.label, 60);
+    if (labelError) found.label = labelError;
     const miles = draft.miles.trim();
     const months = draft.months.trim();
     if (!miles && !months) found.miles = 'Enter miles, months, or both.';

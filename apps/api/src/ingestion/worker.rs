@@ -471,6 +471,7 @@ pub async fn run_vehicle_worker(
     // OTA available version tracking (triggers release notes fetch on change).
     let mut last_ota_available_version: Option<String> = None;
     let mut persistence_gate = TelemetryPersistenceGate::new(vehicle_id);
+    let mut facing_inputs = crate::services::vehicle_facing::FacingInputs::default();
     let mut raw_cleanup_tick: u64 = 0;
     // Shared counter batch — flushed every 50 events to amortize DB upserts.
     let mut counter_batch = CounterBatch::new(vehicle_id);
@@ -776,6 +777,20 @@ pub async fn run_vehicle_worker(
             {
                 counter_batch.increment("telemetry_writes_persisted");
                 mark_persisted(&pool, vehicle_id, event.ts).await;
+                // The saved facing is worked out from stored telemetry, so it
+                // is marked stale only after the row that can change it commits.
+                if facing_inputs.stored(
+                    event.gear_status.as_deref(),
+                    event.speed_mph,
+                    event.heading_deg,
+                ) {
+                    match crate::services::vehicle_facing::mark_stale(&pool, vehicle_id).await {
+                        Ok(()) => facing_inputs.marked(),
+                        Err(error) => {
+                            tracing::warn!(vehicle_id=%vehicle_id, err=%error, "vehicle facing could not be marked stale; retrying with the next stored row");
+                        }
+                    }
+                }
             }
         } else if let PersistenceDecision::Suppress(reason) = persistence_decision {
             counter_batch.increment("telemetry_writes_suppressed");
@@ -4096,7 +4111,7 @@ fn legacy_capture_fields(inbound: &WsInboundEvent) -> Option<(CaptureKind, serde
             CaptureKind::LegacyConnection,
             serde_json::json!({
                 "message_type": inbound.message_type,
-                "detail": raw.filter(serde_json::Value::is_object),
+                "detail": raw.as_ref().and_then(control_capture_detail),
             }),
         )),
         WsInboundKind::Telemetry | WsInboundKind::ChargingSession => {
@@ -4145,6 +4160,46 @@ fn legacy_capture_fields(inbound: &WsInboundEvent) -> Option<(CaptureKind, serde
             ))
         }
     }
+}
+
+/// Control-frame keys that carry only protocol state, never provider text.
+const CONTROL_DETAIL_KEYS: &[&str] = &[
+    "type",
+    "id",
+    "subscription_id",
+    "operation",
+    "hold_reason",
+    "backoff_seconds",
+    "http_status",
+    "disabled_vehicle_state_fields",
+    "invalid_fields",
+];
+
+/// The shareable part of a control frame. Rivian error messages and close
+/// reasons are free text that can name the vehicle, so only allowlisted keys
+/// and GraphQL error codes are kept.
+fn control_capture_detail(raw: &serde_json::Value) -> Option<serde_json::Value> {
+    let object = raw.as_object()?;
+    let mut detail: serde_json::Map<String, serde_json::Value> = CONTROL_DETAIL_KEYS
+        .iter()
+        .filter_map(|key| Some(((*key).to_owned(), object.get(*key)?.clone())))
+        .collect();
+    let errors = match object.get("payload") {
+        Some(serde_json::Value::Array(errors)) => errors.iter().collect::<Vec<_>>(),
+        Some(error @ serde_json::Value::Object(map)) if map.contains_key("message") => {
+            vec![error]
+        }
+        _ => Vec::new(),
+    };
+    if !errors.is_empty() {
+        let codes: Vec<&str> = errors
+            .iter()
+            .filter_map(|error| error.pointer("/extensions/code")?.as_str())
+            .collect();
+        detail.insert("error_count".into(), errors.len().into());
+        detail.insert("error_codes".into(), codes.into());
+    }
+    Some(serde_json::Value::Object(detail))
 }
 
 fn persistence_label(decision: &PersistenceDecision) -> &'static str {
@@ -4337,6 +4392,71 @@ mod diagnostic_capture_tests {
         assert!(fields["fields"].get("gnssSpeed").is_none());
         let text = ingestion_capture::sanitize(fields).to_string();
         assert!(!text.contains("33.1234567") && !text.contains("97.7654321"));
+    }
+
+    #[test]
+    fn control_frames_keep_protocol_state_but_not_provider_text() {
+        let control = |raw: serde_json::Value| WsInboundEvent {
+            kind: WsInboundKind::Control,
+            received_at: Utc::now(),
+            raw: raw.to_string(),
+            message_type: raw["type"].as_str().map(String::from),
+            telemetry: None,
+            charging_session: None,
+            battery_cell_type: None,
+        };
+        let rivian_vehicle_id = "01-234567890";
+
+        let (_, fields) = legacy_capture_fields(&control(serde_json::json!({
+            "type": "error",
+            "id": "1",
+            "payload": [{
+                "message": format!("vehicle {rivian_vehicle_id} is not accessible"),
+                "extensions": { "code": "FORBIDDEN" },
+            }],
+        })))
+        .unwrap();
+        assert_eq!(
+            fields["detail"],
+            serde_json::json!({
+                "type": "error",
+                "id": "1",
+                "error_count": 1,
+                "error_codes": ["FORBIDDEN"],
+            })
+        );
+
+        for raw in [
+            serde_json::json!({
+                "type": "ws_schema_rejected",
+                "reason": format!("Cannot query field for {rivian_vehicle_id}"),
+                "invalid_fields": ["cabinPreconditioningType"],
+            }),
+            serde_json::json!({
+                "type": "ws_no_active_subscriptions",
+                "reason": format!("no subscriptions for {rivian_vehicle_id}"),
+            }),
+            serde_json::json!({
+                "type": "connection_error",
+                "payload": { "message": format!("{rivian_vehicle_id} rejected") },
+            }),
+        ] {
+            let (_, fields) = legacy_capture_fields(&control(raw)).unwrap();
+            let text = fields.to_string();
+            assert!(!text.contains(rivian_vehicle_id), "{text}");
+            assert!(fields["detail"]["type"].is_string(), "{text}");
+        }
+
+        let (_, fields) = legacy_capture_fields(&control(serde_json::json!({
+            "type": "reconnect",
+            "hold_reason": "rate_limited",
+            "backoff_seconds": 30,
+        })))
+        .unwrap();
+        assert_eq!(
+            fields["detail"],
+            serde_json::json!({ "type": "reconnect", "hold_reason": "rate_limited", "backoff_seconds": 30 })
+        );
     }
 
     #[test]

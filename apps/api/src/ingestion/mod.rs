@@ -61,12 +61,12 @@ pub async fn start_workers(
     // credentials were intentionally redacted. The worker records an
     // actionable needs_reauth state when credentials are absent; limiting
     // startup to credential-bearing rows leaves stale authorized/connected
-    // runtime state behind indefinitely after a restore. A vehicle whose
-    // collection a manager paused stays stopped until it is resumed.
+    // runtime state behind indefinitely after a restore. The supervisor keeps
+    // a vehicle whose collection a manager paused stopped until it is resumed;
+    // that check lives there so every StartWorker sender honours it.
     let enrolled: Vec<uuid::Uuid> = sqlx::query_scalar(
         "SELECT v.id FROM riviamigo.vehicles v \
-         WHERE v.rivian_vehicle_id NOT LIKE 'demo-%' \
-           AND NOT v.collection_paused",
+         WHERE v.rivian_vehicle_id NOT LIKE 'demo-%'",
     )
     .fetch_all(&pool)
     .await?;

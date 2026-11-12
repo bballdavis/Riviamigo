@@ -14,6 +14,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  ResponsiveDialog,
   SelectPicker,
 } from '@riviamigo/ui/primitives';
 import {
@@ -37,6 +38,8 @@ import {
 import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
 import { useSettingsDraft } from '../../features/settings/drafts/SettingsDraftProvider';
 import { useStagedValue } from '../../features/settings/drafts/useStagedValue';
+import { saveFailure } from '../../features/settings/drafts/saveFailure';
+import { SettingsConfirmationDialog, type SettingsConfirmation } from '../../features/settings/SettingsConfirmationDialog';
 import {
   backupValidationError,
   buildDraft,
@@ -279,8 +282,6 @@ export function BackupSection() {
   const savedDraft = React.useMemo(() => (overview.data ? buildDraft(overview.data) : null), [overview.data]);
   const staged = useStagedValue(savedDraft);
   const draft = staged.value;
-  const draftRef = React.useRef(draft);
-  draftRef.current = draft;
   const [secretKey, setSecretKey] = React.useState('');
   const [clearSecretKey, setClearSecretKey] = React.useState(false);
   const [expandedArtifactId, setExpandedArtifactId] = React.useState<string | null>(null);
@@ -290,6 +291,7 @@ export function BackupSection() {
     BackupOverview['artifacts'][number] | null
   >(null);
   const [pendingRestorePlan, setPendingRestorePlan] = React.useState<RestorePlan | null>(null);
+  const [deleteImportConfirmation, setDeleteImportConfirmation] = React.useState<SettingsConfirmation | null>(null);
   const [restoreConfirmation, setRestoreConfirmation] = React.useState('');
   const [uploadProgress, setUploadProgress] = React.useState<number | null>(null);
   const [activeRestore, setActiveRestore] = React.useState<{
@@ -327,10 +329,13 @@ export function BackupSection() {
     const payload = buildPayload(submitted, submittedSecret, submittedClear);
     const problem = backupValidationError(submitted, overview.data?.settings.has_secret_key ?? false, submittedSecret);
     if (!payload || problem) throw new Error(problem ?? 'Backup settings are invalid.');
-    await api.updateBackupSettings(payload);
-    staged.commit(submitted);
-    // Keep edits typed while the request was in flight.
-    if (draftRef.current !== submitted) staged.setValue(draftRef.current);
+    try {
+      await api.updateBackupSettings(payload);
+    } catch (error) {
+      throw saveFailure(error, 'Backup settings could not be saved. Try again.');
+    }
+    // Edits typed while the request was in flight stay staged; only the submitted part is adopted.
+    staged.commit(submitted, submitted);
     setSecretKey((current) => (current === submittedSecret ? '' : current));
     setClearSecretKey((current) => (current === submittedClear ? false : current));
     void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all });
@@ -1122,13 +1127,12 @@ export function BackupSection() {
                             }
                             onClick={(event) => {
                               event.stopPropagation();
-                              if (
-                                window.confirm(
-                                  `Delete imported recovery package "${artifact.file_name}"?`
-                                )
-                              ) {
-                                deleteUploadedArtifact.mutate(artifact.id);
-                              }
+                              setDeleteImportConfirmation({
+                                title: `Delete imported recovery package "${artifact.file_name}"?`,
+                                description: 'The uploaded file is removed from this server.',
+                                confirmLabel: 'Delete package',
+                                run: () => deleteUploadedArtifact.mutateAsync(artifact.id),
+                              });
                             }}
                           />
                         )}
@@ -1252,15 +1256,25 @@ export function BackupSection() {
         </CardContent>
       </Card>
 
+      {deleteImportConfirmation ? (
+        <SettingsConfirmationDialog
+          confirmation={deleteImportConfirmation}
+          onClose={() => setDeleteImportConfirmation(null)}
+        />
+      ) : null}
+
       {pendingRestoreArtifact && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-page/80 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-2xl border border-border bg-bg-surface p-5 shadow-2xl">
+        <ResponsiveDialog
+          titleId="restore-confirmation-title"
+          onClose={() => { if (!requestRestore.isPending) closeRestoreConfirmation(); }}
+        >
+          <div className="flex-1 overflow-y-auto px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1.25rem,env(safe-area-inset-top))] sm:p-5">
             <div className="flex items-start gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-status-warning/30 bg-status-warning/10 text-status-warning">
                 <AlertTriangle className="h-5 w-5" />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-fg">Restore this backup?</p>
+                <h2 id="restore-confirmation-title" className="text-sm font-semibold text-fg">Restore this backup?</h2>
                 <p className="mt-1 text-sm text-fg-tertiary">
                   This replaces the current users, dashboards, telemetry, settings, and artwork with{' '}
                   <span className="font-mono text-fg">{pendingRestoreArtifact.file_name}</span>.
@@ -1272,6 +1286,7 @@ export function BackupSection() {
                 type="button"
                 className="rounded-md p-1 text-fg-tertiary hover:bg-bg-elevated hover:text-fg"
                 aria-label="Close restore confirmation"
+                disabled={requestRestore.isPending}
                 onClick={closeRestoreConfirmation}
               >
                 <X className="h-4 w-4" />
@@ -1336,7 +1351,7 @@ export function BackupSection() {
               />
             </label>
             <div className="mt-4 flex items-center justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={closeRestoreConfirmation}>
+              <Button variant="secondary" size="sm" disabled={requestRestore.isPending} onClick={closeRestoreConfirmation}>
                 Cancel
               </Button>
               <Button
@@ -1360,7 +1375,7 @@ export function BackupSection() {
               </p>
             )}
           </div>
-        </div>
+        </ResponsiveDialog>
       )}
 
       {activeRestore && (

@@ -1,6 +1,7 @@
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::Serialize;
 use sqlx::{FromRow, PgPool};
+use uuid::Uuid;
 
 use crate::errors::AppError;
 
@@ -74,32 +75,57 @@ pub fn rivian_renewal_state_for_auth(
     rivian_renewal_state(issued_at, now, auth_state == Some("needs_reauth"))
 }
 
-pub async fn rivian_status(pool: &PgPool) -> Result<RivianConnectionStatus, AppError> {
-    let issued_at = sqlx::query_scalar::<_, Option<DateTime<Utc>>>(
-        "SELECT MIN(token_created_at) FROM riviamigo.vehicle_credentials",
-    )
-    .fetch_one(pool)
-    .await?;
-    let auth_failed = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicle_runtime_state WHERE auth_state = 'needs_reauth')",
-    )
-    .fetch_one(pool)
-    .await?;
-    let runtime = sqlx::query_as::<_, (Option<String>, Option<String>)>(
-        r#"SELECT worker_health, worker_health_msg
-           FROM riviamigo.vehicle_runtime_state
-           ORDER BY CASE worker_health
-               WHEN 'error' THEN 5
-               WHEN 'degraded' THEN 4
-               WHEN 'stale' THEN 3
-               WHEN 'starting' THEN 2
-               WHEN 'connected' THEN 1
-               ELSE 0
-           END DESC, updated_at DESC
-           LIMIT 1"#,
-    )
-    .fetch_optional(pool)
-    .await?;
+/// The Rivian connection as one caller sees it. Only vehicles the user is a
+/// member of count (only the scoped vehicle for a vehicle-scoped API key), and
+/// vehicles whose collection is paused are left out: their worker is stopped
+/// on purpose, so its last health and auth state are not the connection's.
+pub async fn rivian_status(
+    pool: &PgPool,
+    user_id: Uuid,
+    scoped_vehicle_id: Option<Uuid>,
+) -> Result<RivianConnectionStatus, AppError> {
+    let (issued_at, auth_failed, observed_health, observed_error) =
+        sqlx::query_as::<_, (Option<DateTime<Utc>>, bool, Option<String>, Option<String>)>(
+            r#"WITH scope AS (
+               SELECT v.id
+               FROM riviamigo.vehicles v
+               JOIN riviamigo.vehicle_memberships m ON m.vehicle_id = v.id
+               WHERE m.user_id = $1
+                 AND ($2::uuid IS NULL OR v.id = $2)
+                 AND NOT v.collection_paused
+           )
+           SELECT
+               (SELECT MIN(c.token_created_at)
+                FROM riviamigo.vehicle_credentials c
+                WHERE c.vehicle_id IN (SELECT id FROM scope)) AS issued_at,
+               EXISTS (
+                   SELECT 1
+                   FROM riviamigo.vehicle_runtime_state r
+                   WHERE r.vehicle_id IN (SELECT id FROM scope)
+                     AND r.auth_state = 'needs_reauth'
+               ) AS auth_failed,
+               worst.worker_health,
+               worst.worker_health_msg
+           FROM (SELECT 1) AS caller
+           LEFT JOIN LATERAL (
+               SELECT r.worker_health, r.worker_health_msg
+               FROM riviamigo.vehicle_runtime_state r
+               WHERE r.vehicle_id IN (SELECT id FROM scope)
+               ORDER BY CASE r.worker_health
+                   WHEN 'error' THEN 5
+                   WHEN 'degraded' THEN 4
+                   WHEN 'stale' THEN 3
+                   WHEN 'starting' THEN 2
+                   WHEN 'connected' THEN 1
+                   ELSE 0
+               END DESC, r.updated_at DESC
+               LIMIT 1
+           ) AS worst ON TRUE"#,
+        )
+        .bind(user_id)
+        .bind(scoped_vehicle_id)
+        .fetch_one(pool)
+        .await?;
     let expected = issued_at.map(|at| at + RIVIAN_RENEWAL_INTERVAL);
     Ok(RivianConnectionStatus {
         credential_issued_at: issued_at,
@@ -107,8 +133,8 @@ pub async fn rivian_status(pool: &PgPool) -> Result<RivianConnectionStatus, AppE
         renewal_state: issued_at.map(|at| {
             rivian_renewal_state_for_auth(at, Utc::now(), auth_failed.then_some("needs_reauth"))
         }),
-        observed_health: runtime.as_ref().and_then(|row| row.0.clone()),
-        observed_error: runtime.and_then(|row| row.1),
+        observed_health,
+        observed_error,
     })
 }
 

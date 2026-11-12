@@ -1,12 +1,13 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MAP_TILE_LOAD_TIMEOUT_MS,
   MAP_TILE_LOADING_INDICATOR_DELAY_MS,
   TripMapChart,
   type TripMapRoute,
 } from '../../../../packages/ui/src/charts/TripMapChart';
+import { applyThemeRuntime } from '@riviamigo/ui/lib/theme';
 
 type MapHandler = (event?: unknown) => void;
 
@@ -111,6 +112,12 @@ function stockStyleFixture(): StyleFixture {
 }
 
 describe('TripMapChart', () => {
+  // Tests run in the default dark app theme; a light map mode needs a light
+  // document for its Follow appearance style to be theme-painted.
+  afterEach(() => {
+    applyThemeRuntime({ mode: 'dark', palette: 'classic' });
+  });
+
   it('shows a loading indicator instead of tile errors while the first tiles load', async () => {
     const mockMap = new MockMap();
     const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
@@ -186,6 +193,7 @@ describe('TripMapChart', () => {
   });
 
   it('logs MapLibre failures after loading and retries the active style', async () => {
+    applyThemeRuntime({ mode: 'light', palette: 'classic' });
     const mockMap = new MockMap();
     const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -246,6 +254,7 @@ describe('TripMapChart', () => {
   });
 
   it('ignores expected resource aborts during a MapLibre style swap', async () => {
+    applyThemeRuntime({ mode: 'light', palette: 'classic' });
     const mockMap = new MockMap();
     const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -327,6 +336,7 @@ describe('TripMapChart', () => {
   });
 
   it('maps Follow appearance to Positron in light mode and Dark in dark mode', async () => {
+    applyThemeRuntime({ mode: 'light', palette: 'classic' });
     const mockMap = new MockMap();
     const mapConstructor = vi.fn(function Map(_options: unknown) { return mockMap; });
     const mapLoader = vi.fn(async () => ({ Map: mapConstructor }));
@@ -362,6 +372,8 @@ describe('TripMapChart', () => {
     expect(mockMap.setStyle).toHaveBeenCalledWith('/v1/external/basemap/openfreemap/styles/positron?v=1', THEMED_STYLE_OPTIONS);
     await act(async () => mockMap.emit('load'));
 
+    // The app theme follows the map mode, as it does in the product.
+    act(() => applyThemeRuntime({ mode: 'dark', palette: 'classic' }));
     rerender(
       <TripMapChart
         routes={buildRoutes(1)}
@@ -824,5 +836,67 @@ describe('TripMapChart', () => {
     expect(screen.getByText(/OpenStreetMap/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Hide map credits' }));
     expect(screen.queryByText('OpenFreeMap')).not.toBeInTheDocument();
+  });
+});
+
+describe('TripMapChart forced map mode', () => {
+  const DARK_STYLE_URL = '/v1/external/basemap/openfreemap/styles/dark?v=2';
+
+  afterEach(() => {
+    applyThemeRuntime({ mode: 'dark', palette: 'classic' });
+  });
+
+  it('loads the stock dark style for a dark map in a light app instead of painting it from light tokens', async () => {
+    applyThemeRuntime({ mode: 'light', palette: 'classic' });
+    const mockMap = new MockMap();
+    const mapConstructor = vi.fn(function Map(_options: unknown) { return mockMap; });
+    render(<TripMapChart routes={buildRoutes(1)} track={[]} basemapConfig={VECTOR_CONFIG} mapStyle="dark" mapLoader={vi.fn(async () => ({ Map: mapConstructor })) as never} />);
+
+    await waitFor(() => expect(mapConstructor).toHaveBeenCalledTimes(1));
+    expect(mapConstructor.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ style: DARK_STYLE_URL }));
+    expect(mockMap.setStyle).not.toHaveBeenCalled();
+  });
+
+  it('themes a forced map only while the app theme shares its mode', async () => {
+    applyThemeRuntime({ mode: 'light', palette: 'classic' });
+    const mockMap = new MockMap();
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map(_options: unknown) { return mockMap; }) }));
+    render(<TripMapChart routes={buildRoutes(1)} track={[]} basemapConfig={VECTOR_CONFIG} mapStyle="dark" mapLoader={mapLoader as never} />);
+    await waitFor(() => expect(mapLoader).toHaveBeenCalledTimes(1));
+    await act(async () => mockMap.emit('load'));
+
+    act(() => applyThemeRuntime({ mode: 'dark', palette: 'classic' }));
+    await waitFor(() => expect(mockMap.setStyle).toHaveBeenLastCalledWith(DARK_STYLE_URL, THEMED_STYLE_OPTIONS));
+
+    act(() => applyThemeRuntime({ mode: 'light', palette: 'classic' }));
+    await waitFor(() => expect(mockMap.setStyle).toHaveBeenLastCalledWith(DARK_STYLE_URL));
+  });
+
+  it('does not repaint a stock style from the app palette after the app theme stops matching', async () => {
+    applyThemeRuntime({ mode: 'dark', palette: 'classic' });
+    const mockMap = new MockMap();
+    mockMap.layers.add('background');
+    mockMap.layers.add('label_city');
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map(_options: unknown) { return mockMap; }) }));
+    render(<TripMapChart routes={buildRoutes(1)} track={[]} basemapConfig={VECTOR_CONFIG} mapStyle="dark" mapLoader={mapLoader as never} />);
+    await waitFor(() => expect(mockMap.setStyle).toHaveBeenCalledTimes(1));
+    await act(async () => mockMap.emit('load'));
+
+    // Matching theme: the provider JSON is captured, so a palette change repaints it (control).
+    const themedOptions = mockMap.setStyle.mock.calls[0]?.[1] as { transformStyle: (previous: unknown, next: unknown) => unknown };
+    themedOptions.transformStyle(undefined, stockStyleFixture());
+    mockMap.setPaintProperty.mockClear();
+    act(() => applyThemeRuntime({ mode: 'dark', palette: 'rad' }));
+    await waitFor(() => expect(mockMap.setPaintProperty).toHaveBeenCalledWith('background', 'background-color', expect.any(String)));
+
+    // The app switches to light while the map stays dark. The stock style is
+    // loaded, and a later palette change must not paint dark JSON with light tokens.
+    act(() => applyThemeRuntime({ mode: 'light', palette: 'classic' }));
+    await waitFor(() => expect(mockMap.setStyle).toHaveBeenLastCalledWith(DARK_STYLE_URL));
+    mockMap.setPaintProperty.mockClear();
+    act(() => applyThemeRuntime({ mode: 'light', palette: 'rad' }));
+    await act(async () => undefined);
+    expect(mockMap.setPaintProperty.mock.calls.filter(([layerId]) => layerId === 'background')).toEqual([]);
+    expect(mockMap.setPaintProperty.mock.calls.filter(([layerId]) => layerId === 'label_city')).toEqual([]);
   });
 });

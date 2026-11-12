@@ -202,9 +202,13 @@ interface BasemapStyleOptions {
  * "Follow appearance" on a vector provider is repainted from the active
  * theme's tokens. Explicitly chosen presets keep the provider's stock look,
  * and raster providers (Carto) cannot be recolored per layer.
+ *
+ * The tokens describe the document's own theme, so a forced map mode that
+ * differs from it (the Overview's dark map in a light app) keeps the stock
+ * style for the mode it asked for instead of painting a light ground.
  */
-function isThemedBasemap(basemap: BasemapConfig, preference: MapStylePreference, mode: MapStyleMode) {
-  if (!basemap.enabled) return false;
+function isThemedBasemap(basemap: BasemapConfig, preference: MapStylePreference, mode: MapStyleMode, documentMode: MapStyleMode) {
+  if (!basemap.enabled || mode !== documentMode) return false;
   const { descriptor, url } = resolveStyleDescriptor(basemap, preference, mode);
   return descriptor?.id === 'follow-theme' && descriptor.kind === 'style' && Boolean(url);
 }
@@ -222,9 +226,10 @@ function basemapStyleOptions(
   basemap: BasemapConfig,
   preference: MapStylePreference,
   mode: MapStyleMode,
+  documentMode: MapStyleMode,
   onStockStyle: StockBasemapListener,
 ): BasemapStyleOptions | undefined {
-  if (!isThemedBasemap(basemap, preference, mode)) return undefined;
+  if (!isThemedBasemap(basemap, preference, mode, documentMode)) return undefined;
   const { url } = resolveStyleDescriptor(basemap, preference, mode);
   // Tokens are read when the style JSON arrives, so the transform always
   // paints from the theme that is active at that moment. The stock JSON is
@@ -242,10 +247,11 @@ function applyBasemapStyle(
   mode: MapStyleMode,
   basemap: BasemapConfig,
   preference: MapStylePreference,
+  documentMode: MapStyleMode,
   onStockStyle: StockBasemapListener,
 ) {
   const style = buildMapLibreStyle(mode, basemap, preference);
-  const options = basemapStyleOptions(basemap, preference, mode, onStockStyle);
+  const options = basemapStyleOptions(basemap, preference, mode, documentMode, onStockStyle);
   if (options) map.setStyle(style, options);
   else map.setStyle(style);
 }
@@ -253,7 +259,8 @@ function applyBasemapStyle(
 /**
  * Repaints the loaded basemap from the current tokens in place. Palette and
  * custom-theme changes keep the same provider style, so reloading it would
- * only drop and re-add the route overlays.
+ * only drop and re-add the route overlays. A stock (forced-mismatch) style is
+ * never repainted, because the tokens do not describe its mode.
  */
 function repaintThemedBasemap(
   map: MapApi,
@@ -261,8 +268,9 @@ function repaintThemedBasemap(
   basemap: BasemapConfig,
   preference: MapStylePreference,
   mode: MapStyleMode,
+  documentMode: MapStyleMode,
 ) {
-  if (!stock || stock.mode !== mode || !isThemedBasemap(basemap, preference, mode)) return;
+  if (!stock || stock.mode !== mode || !isThemedBasemap(basemap, preference, mode, documentMode)) return;
   if (stock.url !== resolveStyleDescriptor(basemap, preference, mode).url) return;
   const themed = themeBasemapStyle(stock.style, resolveBasemapThemeColors(mode), mode);
   for (const layer of themed.layers ?? []) {
@@ -273,9 +281,10 @@ function repaintThemedBasemap(
   }
 }
 
-function basemapSignature(basemap: BasemapConfig, mode: MapStyleMode, preference: MapStylePreference) {
+function basemapSignature(basemap: BasemapConfig, mode: MapStyleMode, preference: MapStylePreference, documentMode: MapStyleMode) {
   const resolved = resolveStyleDescriptor(basemap, preference, mode);
-  return `${mode}|${preference}|${basemap.enabled}|${basemap.revision}|${resolved.url}|${resolved.descriptor?.kind ?? 'raster'}`;
+  const themed = isThemedBasemap(basemap, preference, mode, documentMode) ? 'themed' : 'stock';
+  return `${mode}|${preference}|${basemap.enabled}|${basemap.revision}|${resolved.url}|${resolved.descriptor?.kind ?? 'raster'}|${themed}`;
 }
 
 export async function loadMapLibre() {
@@ -355,10 +364,16 @@ export function TripMapChart({
   const palette = useDocumentPalette();
   const isDark = useDocumentTheme();
   const themeRevision = useThemeRevision();
+  // The mode the document's theme tokens describe; a themed basemap needs it to match `mapStyle`.
+  const documentMode: MapStyleMode = isDark ? 'dark' : 'light';
+  const documentModeRef = React.useRef<MapStyleMode>(documentMode);
   const stockBasemapRef = React.useRef<StockBasemapStyle | null>(null);
   const rememberStockBasemap = React.useCallback<StockBasemapListener>((stock) => {
     stockBasemapRef.current = stock;
   }, []);
+  // A forced-mode map is themed only while the document shares its mode, so
+  // this flips (and the style is re-applied) when the app theme changes.
+  const themedAppearance = isThemedBasemap(basemap, mapStylePreference, mapStyle, documentMode);
 
   React.useEffect(() => {
     accessTokenRef.current = accessToken;
@@ -371,7 +386,8 @@ export function TripMapChart({
   React.useEffect(() => {
     mapStyleRef.current = mapStyle;
     mapStylePreferenceRef.current = mapStylePreference;
-  }, [mapStyle, mapStylePreference]);
+    documentModeRef.current = documentMode;
+  }, [documentMode, mapStyle, mapStylePreference]);
 
   const routeList = React.useMemo(
     () => (routes?.length ? routes : [{ id: 'trip', track }]).filter((route) => route.track.length > 1),
@@ -402,18 +418,6 @@ export function TripMapChart({
     focusPointRef.current = focusPoint;
     focusZoomRef.current = focusZoom;
   }, [focusPoint, focusZoom, markerPoint, selectedRouteIds, visibleRouteSignature, visibleRoutes]);
-
-  React.useEffect(() => {
-    const element = containerRef.current;
-    if (!element || typeof ResizeObserver === 'undefined') return;
-
-    const observer = new ResizeObserver(() => {
-      mapRef.current?.resize();
-    });
-
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
 
   const clearTileLoadTimeout = React.useCallback(() => {
     if (tileLoadTimeoutRef.current !== null) {
@@ -489,13 +493,15 @@ export function TripMapChart({
         const initialBasemap = basemapRef.current;
         const initialMapStyle = mapStyleRef.current;
         const initialMapStylePreference = mapStylePreferenceRef.current;
-        appliedBasemapSignatureRef.current = basemapSignature(initialBasemap, initialMapStyle, initialMapStylePreference);
+        const initialDocumentMode = documentModeRef.current;
+        appliedBasemapSignatureRef.current = basemapSignature(initialBasemap, initialMapStyle, initialMapStylePreference, initialDocumentMode);
         // The constructor cannot transform a fetched style, so a themed
         // basemap is applied through setStyle() right after construction.
         const initialStyleOptions = basemapStyleOptions(
           initialBasemap,
           initialMapStylePreference,
           initialMapStyle,
+          initialDocumentMode,
           rememberStockBasemap,
         );
         const initialStyle = buildMapLibreStyle(initialMapStyle, initialBasemap, initialMapStylePreference);
@@ -504,6 +510,7 @@ export function TripMapChart({
           ...(initialStyleOptions ? {} : { style: initialStyle }),
           center: [firstPoint.lng, firstPoint.lat],
           zoom: routeStart ? 12 : focusZoomRef.current,
+          // trackResize (default on) keeps the canvas in step with its container, even if it is replaced.
           attributionControl: false,
           transformRequest: (url: string) => {
             try {
@@ -581,6 +588,7 @@ export function TripMapChart({
             basemapRef.current,
             mapStyleRef.current,
             mapStylePreferenceRef.current,
+            documentModeRef.current,
           );
           if (currentSignature !== appliedBasemapSignatureRef.current) {
             appliedBasemapSignatureRef.current = currentSignature;
@@ -600,11 +608,11 @@ export function TripMapChart({
             };
             map.on('style.load', restoreAfterInitialSwap);
             beginTileLoad();
-            applyBasemapStyle(map, mapStyleRef.current, basemapRef.current, mapStylePreferenceRef.current, rememberStockBasemap);
+            applyBasemapStyle(map, mapStyleRef.current, basemapRef.current, mapStylePreferenceRef.current, documentModeRef.current, rememberStockBasemap);
             map.triggerRepaint?.();
           } else {
             // The theme can change while the first style is still loading.
-            repaintThemedBasemap(map, stockBasemapRef.current, basemapRef.current, mapStylePreferenceRef.current, mapStyleRef.current);
+            repaintThemedBasemap(map, stockBasemapRef.current, basemapRef.current, mapStylePreferenceRef.current, mapStyleRef.current, documentModeRef.current);
           }
           requestAnimationFrame(() => {
             mapRef.current?.resize();
@@ -710,9 +718,11 @@ export function TripMapChart({
     }
 
     map.on('style.load', onStyleLoad);
-    appliedBasemapSignatureRef.current = basemapSignature(basemap, mapStyle, mapStylePreference);
+    // `themedAppearance` (not the document mode itself) decides whether the
+    // style must be swapped, so a theme change never reloads a stock style.
+    appliedBasemapSignatureRef.current = basemapSignature(basemap, mapStyle, mapStylePreference, documentModeRef.current);
     beginTileLoad();
-    applyBasemapStyle(map, mapStyle, basemap, mapStylePreference, rememberStockBasemap);
+    applyBasemapStyle(map, mapStyle, basemap, mapStylePreference, documentModeRef.current, rememberStockBasemap);
     // An unchanged style diff may not schedule a frame; force one so `idle`
     // always follows and the loading state cannot wait for the timeout.
     map.triggerRepaint?.();
@@ -720,12 +730,12 @@ export function TripMapChart({
     return () => {
       map.off('style.load', onStyleLoad);
     };
-  }, [basemap, beginTileLoad, mapStyle, mapStylePreference, rememberStockBasemap]);
+  }, [basemap, beginTileLoad, mapStyle, mapStylePreference, rememberStockBasemap, themedAppearance]);
 
   // Palette and custom-theme changes repaint a themed basemap in place.
   React.useEffect(() => {
     if (!isLoadedRef.current || !mapRef.current) return;
-    repaintThemedBasemap(mapRef.current, stockBasemapRef.current, basemapRef.current, mapStylePreferenceRef.current, mapStyleRef.current);
+    repaintThemedBasemap(mapRef.current, stockBasemapRef.current, basemapRef.current, mapStylePreferenceRef.current, mapStyleRef.current, documentModeRef.current);
   }, [palette, themeRevision]);
 
   const retryMap = React.useCallback(() => {
@@ -737,7 +747,7 @@ export function TripMapChart({
     }
     appliedBasemapSignatureRef.current = '';
     beginTileLoad();
-    applyBasemapStyle(map, mapStyleRef.current, basemapRef.current, mapStylePreferenceRef.current, rememberStockBasemap);
+    applyBasemapStyle(map, mapStyleRef.current, basemapRef.current, mapStylePreferenceRef.current, documentModeRef.current, rememberStockBasemap);
     map.triggerRepaint?.();
   }, [beginTileLoad, rememberStockBasemap]);
 
