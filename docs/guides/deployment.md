@@ -95,12 +95,6 @@ fingerprint and identity-key functions used by ingestion, backfill, and
 compaction; it does not start another backfill. Do not add a second backfill
 container.
 
-Migration 0040 adds two partial indexes on the telemetry table so vehicle
-status can work out which way a parked vehicle faces. The indexes are built
-once, before the app binds, so the first start after this upgrade takes longer
-on an installation with a lot of telemetry. Let it finish: an interrupted
-build is rolled back and starts over on the next start.
-
 Before an upgrade, verify a recovery package and a raw `pg_dump`. If rollback
 is required after the migration ledger advances, restore that pre-upgrade dump
 using the previous image; reverting the image alone is not a safe rollback.
