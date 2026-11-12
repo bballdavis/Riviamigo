@@ -62,6 +62,14 @@ Draft previews are scoped unless the user explicitly enters the visibly labeled,
 memory-only full-app preview. No theme state is stored in `localStorage`.
 Classic-dark is applied before authentication and after logout/account changes.
 
+The theme runtime writes the effective mode to `<html>` as the class `light`
+or `dark`, resolving System mode from `prefers-color-scheme` and re-applying
+when the OS scheme changes. Tailwind's `dark:` variant is bound to that class
+in `apps/web/src/index.css`, so `dark:` utilities follow the app's selected mode,
+never the OS directly. Do not add `@media (prefers-color-scheme)` rules to app
+styles; prefer semantic tokens, and reserve `dark:` for paired assets such as
+light/dark vehicle artwork.
+
 `packages/themes` owns the semantic catalog, Classic and RAD definitions,
 inheritance validation, all sixteen ordered chart-series slots, legacy aliases,
 brand manifests, deterministic generated artifacts, and registry hash. Run
