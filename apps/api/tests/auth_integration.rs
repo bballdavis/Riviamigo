@@ -2492,6 +2492,121 @@ async fn vehicle_facing_survives_a_drive_shift_without_moving() {
 }
 
 #[tokio::test]
+async fn vehicle_facing_evidence_wraps_bearings_and_honours_a_pull_away() {
+    use riviamigo_api::services::vehicle_facing::{facing_deg, load_facing_evidence};
+
+    let app = TestApp::new().await;
+    let email = "vehicle-facing-sql@example.com";
+    register_and_login(&app, email).await;
+    let user_id: Uuid = sqlx::query_scalar("SELECT id FROM riviamigo.users WHERE email = $1")
+        .bind(email)
+        .fetch_one(&app.pool)
+        .await
+        .expect("user id");
+    let insert = |vehicle_id: Uuid, rows: Vec<(i64, f64, &'static str, f64)>| {
+        let pool = app.pool.clone();
+        async move {
+            let start = chrono::Utc::now() - chrono::Duration::hours(2);
+            for (offset_seconds, heading, gear, speed) in rows {
+                sqlx::query(
+                    "INSERT INTO timeseries.telemetry (ts, vehicle_id, heading_deg, gear_status, speed_mph)
+                     VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind(start + chrono::Duration::seconds(offset_seconds))
+                .bind(vehicle_id)
+                .bind(heading)
+                .bind(gear)
+                .bind(speed)
+                .execute(&pool)
+                .await
+                .expect("telemetry sample");
+            }
+        }
+    };
+
+    // Reverse while creeping across north (350 to 20 degrees) is a 30 degree
+    // turn, not 330: the reverse shift does not count, so the earlier moving
+    // drive anchors the course and the bearing is not flipped.
+    let wrap = insert_vehicle(&app.pool, user_id, "vehicle-facing-wrap", "Wrap").await;
+    insert(
+        wrap,
+        vec![
+            (0, 350.0, "DRIVE", 20.0),
+            (60, 350.0, "Reverse", 0.0),
+            (120, 20.0, "reverse", 1.0),
+            (180, 20.0, "park", 0.0),
+        ],
+    )
+    .await;
+    let evidence = load_facing_evidence(&app.pool, wrap)
+        .await
+        .expect("evidence");
+    assert_eq!(evidence.shifts.len(), 2, "{evidence:?}");
+    assert_eq!(evidence.shifts[0].gear, "reverse");
+    assert!(!evidence.shifts[0].course_turned, "{evidence:?}");
+    assert!(evidence.shifts[1].moved, "{evidence:?}");
+    assert_eq!(facing_deg(Some(20.0), &evidence), Some(20.0));
+
+    // Back into a space with a real turn, then pull away in drive: the moving
+    // drive shift is newest, so the bearing is the facing again.
+    let pull_away = insert_vehicle(&app.pool, user_id, "vehicle-facing-pull", "Pull").await;
+    insert(
+        pull_away,
+        vec![
+            (0, 100.0, "drive", 15.0),
+            (60, 100.0, "reverse", 0.0),
+            (90, 190.0, "reverse", 3.0),
+            (120, 190.0, "park", 0.0),
+            (3600, 190.0, "drive", 0.0),
+            (3660, 10.0, "drive", 6.0),
+        ],
+    )
+    .await;
+    let evidence = load_facing_evidence(&app.pool, pull_away)
+        .await
+        .expect("evidence");
+    assert_eq!(evidence.shifts[0].gear, "drive");
+    assert!(evidence.shifts[0].moved, "{evidence:?}");
+    assert_eq!(evidence.shifts[1].gear, "reverse");
+    assert!(evidence.shifts[1].course_turned, "{evidence:?}");
+    assert_eq!(facing_deg(Some(10.0), &evidence), Some(10.0));
+    // Before pulling away, the back-in would flip the same bearing.
+    let parked = riviamigo_api::services::vehicle_facing::FacingEvidence {
+        shifts: evidence.shifts[1..].to_vec(),
+    };
+    assert_eq!(facing_deg(Some(190.0), &parked), Some(10.0));
+
+    // Real telemetry repeats the engaged gear on every row: a back-in is a run
+    // of reverse rows whose bearing turns gradually, then park rows. The run
+    // as a whole turned, so the parked bearing is flipped.
+    let realistic = insert_vehicle(&app.pool, user_id, "vehicle-facing-rows", "Rows").await;
+    insert(
+        realistic,
+        vec![
+            (0, 95.0, "drive", 18.0),
+            (5, 98.0, "drive", 12.0),
+            (10, 100.0, "drive", 4.0),
+            (15, 100.0, "reverse", 0.0),
+            (20, 112.0, "reverse", 2.0),
+            (25, 131.0, "reverse", 3.0),
+            (30, 160.0, "reverse", 3.0),
+            (35, 187.0, "reverse", 2.0),
+            (40, 190.0, "reverse", 0.0),
+            (45, 190.0, "park", 0.0),
+            (600, 190.0, "park", 0.0),
+        ],
+    )
+    .await;
+    let evidence = load_facing_evidence(&app.pool, realistic)
+        .await
+        .expect("evidence");
+    assert_eq!(evidence.shifts.len(), 2, "{evidence:?}");
+    assert_eq!(evidence.shifts[0].gear, "reverse");
+    assert!(evidence.shifts[0].course_turned, "{evidence:?}");
+    assert_eq!(facing_deg(Some(190.0), &evidence), Some(10.0));
+}
+
+#[tokio::test]
 async fn overview_view_preference_is_saved_per_user() {
     let app = TestApp::new().await;
     let token = register_and_login(&app, "overview-view@example.com").await;
