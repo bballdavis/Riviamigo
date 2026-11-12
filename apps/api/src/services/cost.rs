@@ -515,6 +515,57 @@ pub async fn recompute_charge_session_cost(
     Ok(Some(result))
 }
 
+/// Totals from re-pricing a set of charging sessions.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChargeCostRecomputeSummary {
+    /// Sessions that were re-priced.
+    pub processed: usize,
+    /// Sessions whose cost, cost method, or profile changed.
+    pub changed: usize,
+}
+
+/// Re-price every charging session for `vehicle_id`, or for every vehicle
+/// when `None`. Sessions are processed oldest first so a partial run leaves a
+/// contiguous, already-corrected history behind it.
+pub async fn recompute_charging_costs(
+    pool: &PgPool,
+    vehicle_id: Option<Uuid>,
+) -> Result<ChargeCostRecomputeSummary> {
+    #[derive(sqlx::FromRow)]
+    struct PricedSession {
+        id: Uuid,
+        cost_profile_id: Option<Uuid>,
+        cost_method: Option<String>,
+        cost_usd: Option<f64>,
+    }
+
+    let sessions = sqlx::query_as::<_, PricedSession>(
+        r#"SELECT id, cost_profile_id, cost_method, cost_usd
+           FROM riviamigo.charge_sessions
+           WHERE $1::uuid IS NULL OR vehicle_id = $1
+           ORDER BY started_at, id"#,
+    )
+    .bind(vehicle_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut summary = ChargeCostRecomputeSummary::default();
+    for session in sessions {
+        let Some(result) = recompute_charge_session_cost(pool, session.id).await? else {
+            // Deleted between the listing and the re-price.
+            continue;
+        };
+        summary.processed += 1;
+        if result.cost_profile_id != session.cost_profile_id
+            || Some(result.cost_method.as_str()) != session.cost_method.as_deref()
+            || result.cost_usd != session.cost_usd
+        {
+            summary.changed += 1;
+        }
+    }
+    Ok(summary)
+}
+
 async fn fetch_profile(pool: &PgPool, id: Uuid) -> Result<Option<CostProfile>> {
     let row = sqlx::query_as!(
         CostProfile,

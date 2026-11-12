@@ -101,6 +101,22 @@ file. Production must use HTTPS and leave `COOKIE_INSECURE` unset.
 
 The launcher builds only the API and restore-supervisor binaries that it runs;
 maintenance binaries remain available through their explicit Cargo commands.
+Repairs that are safe to repeat per vehicle can also be offered in
+**Settings > Jobs**: register a kind in `apps/api/src/services/maintenance_jobs.rs`
+and its run is recorded in `riviamigo.maintenance_job_runs` (migration
+`0041_maintenance_job_runs`). Managers start one with
+`POST /v1/vehicles/{id}/maintenance-jobs/{kind}`, and members read the latest
+run of each with `GET /v1/vehicles/{id}/maintenance-jobs`. Only one run per
+vehicle and kind can be running; a run still marked running after two hours is
+recorded as interrupted.
+The registered jobs share their work with the matching binaries where one
+exists (`recompute_charging_costs`, `recompute_trip_energy`,
+`backfill_outside_temp`, `backfill_trip_addresses`). "Recover missed charging
+sessions" (`services/charge_session_recovery.rs`) is a deliberately narrower
+version of `repair_charge_sessions_from_telemetry`: it only inserts sessions
+for unrecorded charging windows and closes open telemetry sessions, while the
+binary also rewrites, merges, and deletes overlapping sessions and stays an
+operator-only repair.
 The build uses the checked-in SQLx query metadata so a brand-new development
 database can compile before the API process applies its embedded migrations.
 When a compile-time query changes, refresh and commit the SQLx metadata before
