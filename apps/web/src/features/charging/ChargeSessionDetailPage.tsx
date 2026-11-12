@@ -11,7 +11,7 @@ import { NoVehicleState } from '../../components/layout/NoVehicleState';
 import { formatKwh, formatDuration, formatCurrency, formatDistanceKm, formatPercent } from '@riviamigo/ui/lib/utils';
 import { formatAppDate, formatAppTime } from '@riviamigo/ui/lib/dateTime';
 import { parseISO } from 'date-fns';
-import { ArrowLeft, Edit2, Info, MapPin, RotateCcw, Save } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Edit2, Info, MapPin, RotateCcw, Save } from 'lucide-react';
 
 export function ChargeSessionContent() {
   return <ChargeSessionContentInner />;
@@ -145,33 +145,33 @@ function ChargeSessionContentInner() {
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <SensorChipSummary
+                definitionId="charging_total_energy"
                 title="Energy Added"
                 value={session ? displayedEnergy != null ? formatKwh(displayedEnergy) : isActiveSession ? 'Pending' : '-' : '-'}
                 secondary={liveRange != null ? `Range added: ${formatDistanceKm(liveRange)} · Live` : session?.range_added_km != null ? `Range added: ${formatDistanceKm(session.range_added_km)}` : undefined}
-                icon="lucide:bolt"
-                dataAccent="series-01"
-                valueColor="data"
-                accentBorder
               />
               <SensorChipSummary
+                definitionId="charging_max_limit"
                 title="SoC"
                 value={
                   session?.soc_start != null && (liveSoc != null || session.soc_end != null)
-                    ? `${formatPercent(session.soc_start, 0)} -> ${formatPercent(liveSoc ?? session.soc_end!, 0)}${isActiveSession && liveSoc != null ? ' · Live' : ''}`
+                    ? <SocChange start={session.soc_start} end={liveSoc ?? session.soc_end!} />
                     : '-'
                 }
-                icon="lucide:battery"
+                secondary={isActiveSession && liveSoc != null ? 'Live' : undefined}
               />
               <SensorChipSummary
                 title="Duration"
                 value={session ? displayedDuration != null ? formatDuration(displayedDuration) : isActiveSession ? 'Pending' : '-' : '-'}
                 icon="lucide:clock-3"
+                dataAccent="series-14"
+                valueColor="data"
               />
               <SensorChipSummary
+                definitionId="charging_total_cost"
                 title="Cost"
                 value={session?.cost_usd != null ? formatCurrency(session.cost_usd) : isActiveSession ? 'Pending' : '-'}
                 secondary={isActiveSession && session?.live_current_price != null ? `Current estimate: ${formatCurrency(session.live_current_price)}` : undefined}
-                icon="lucide:receipt"
               />
             </div>
 
@@ -461,6 +461,17 @@ function SessionSourcePanel({ session }: { session: ChargeSessionDetail }) {
         ))}
       </div>
     </section>
+  );
+}
+
+function SocChange({ start, end }: { start: number; end: number }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span>{formatPercent(start, 0)}</span>
+      <ArrowRight aria-hidden="true" className="h-[0.8em] w-[0.8em] shrink-0 opacity-70" strokeWidth={2.5} />
+      <span className="sr-only"> to </span>
+      <span>{formatPercent(end, 0)}</span>
+    </span>
   );
 }
 

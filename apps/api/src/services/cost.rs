@@ -232,9 +232,88 @@ struct TelemetryEnergyRow {
     energy_kwh: f64,
 }
 
+/// One state-of-charge observation from the 1-minute telemetry rollup.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct SocSample {
+    ts: DateTime<Utc>,
+    soc: f64,
+    /// Battery capacity for the whole window (max observed), in Wh.
+    cap_wh: Option<f64>,
+}
+
+/// Convert successive SOC samples into timed energy deliveries.
+///
+/// Consecutive 1-minute buckets attribute the SOC rise to the later bucket.
+/// When samples are further apart, the rise is attributed from the start of
+/// the gap at no more than the session's fastest observed per-minute rate,
+/// and any time left in the gap is treated as idle.
+///
+/// Telemetry stops arriving once the car stops charging, so the final rise to
+/// the target SOC is often reported only when the session closes. Without
+/// this, a session that finished at 5:55 AM on a free overnight tariff had
+/// its last kWh billed at 6:09 AM, after the free window ended.
+fn soc_samples_to_energy_readings(samples: &[SocSample]) -> Vec<TimedEnergyPoint> {
+    struct Rise {
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+        minutes: i64,
+        kwh: f64,
+    }
+
+    let rises: Vec<Rise> = samples
+        .windows(2)
+        .filter_map(|pair| {
+            let (prev, cur) = (&pair[0], &pair[1]);
+            let cap_wh = cur.cap_wh.or(prev.cap_wh)?;
+            let kwh = (cur.soc - prev.soc) / 100.0 * cap_wh / 1000.0;
+            if !(kwh.is_finite() && kwh > 0.0) || cur.ts <= prev.ts {
+                return None;
+            }
+            let minutes = ((cur.ts - prev.ts).num_seconds() as f64 / 60.0)
+                .round()
+                .max(1.0) as i64;
+            Some(Rise {
+                from: prev.ts,
+                to: cur.ts,
+                minutes,
+                kwh,
+            })
+        })
+        .collect();
+
+    let peak_kwh_per_minute = rises
+        .iter()
+        .map(|rise| rise.kwh / rise.minutes as f64)
+        .fold(0.0_f64, f64::max);
+
+    let mut readings = Vec::with_capacity(rises.len());
+    for rise in rises {
+        let mut remaining = rise.kwh;
+        for minute in 1..=rise.minutes {
+            if remaining <= f64::EPSILON {
+                break;
+            }
+            // The peak rate covers every rise by construction; the last
+            // minute takes any floating-point remainder.
+            let (ts, kwh) = if minute == rise.minutes {
+                (rise.to, remaining)
+            } else {
+                (
+                    rise.from + chrono::Duration::minutes(minute),
+                    remaining.min(peak_kwh_per_minute),
+                )
+            };
+            readings.push(TimedEnergyPoint { ts, kwh });
+            remaining -= kwh;
+        }
+    }
+    readings
+}
+
 /// Fetch per-interval energy readings for a charging session.
 ///
-/// Primary source: `timeseries.telemetry_1min` — 1-minute SOC-delta buckets.
+/// Primary source: `timeseries.telemetry_1min` — SOC rises between buckets,
+///   attributed by [`soc_samples_to_energy_readings`].
 /// Fallback: `riviamigo.rivian_charge_curve_points` — Rivian API backfill
 ///   power samples, converted from kW to kWh (÷ 60 for one minute).
 ///
@@ -247,29 +326,16 @@ async fn fetch_session_energy_readings(
     ended_at: DateTime<Utc>,
     session_id: Uuid,
 ) -> Result<Vec<TimedEnergyPoint>> {
-    let rows = sqlx::query_as::<_, TelemetryEnergyRow>(
-        r#"WITH samples AS (
-               SELECT bucket,
-                      avg_soc,
-                      MAX(battery_capacity_wh) OVER () AS cap_wh
-               FROM timeseries.telemetry_1min
-               WHERE vehicle_id = $1
-                 AND bucket >= $2
-                 AND bucket <= $3
-                 AND avg_soc IS NOT NULL
-           ),
-           deltas AS (
-               SELECT bucket AS ts,
-                      GREATEST(0.0,
-                          (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket))
-                              / 100.0 * cap_wh / 1000.0
-                      ) AS energy_kwh
-               FROM samples
-           )
-           SELECT ts, energy_kwh
-           FROM deltas
-           WHERE energy_kwh > 0
-           ORDER BY ts"#,
+    let samples = sqlx::query_as::<_, SocSample>(
+        r#"SELECT bucket AS ts,
+                  avg_soc AS soc,
+                  MAX(battery_capacity_wh) OVER () AS cap_wh
+           FROM timeseries.telemetry_1min
+           WHERE vehicle_id = $1
+             AND bucket >= $2
+             AND bucket <= $3
+             AND avg_soc IS NOT NULL
+           ORDER BY bucket"#,
     )
     .bind(vehicle_id)
     .bind(started_at)
@@ -277,14 +343,9 @@ async fn fetch_session_energy_readings(
     .fetch_all(pool)
     .await?;
 
-    if !rows.is_empty() {
-        return Ok(rows
-            .into_iter()
-            .map(|r| TimedEnergyPoint {
-                ts: r.ts,
-                kwh: r.energy_kwh,
-            })
-            .collect());
+    let readings = soc_samples_to_energy_readings(&samples);
+    if !readings.is_empty() {
+        return Ok(readings);
     }
 
     // Fallback: Rivian API backfill curve points stored during polling.
@@ -795,5 +856,108 @@ mod tests {
             Some(0.0),
             "expected $0 since all charging is in free periods"
         );
+    }
+
+    fn soc_sample(hour: u32, minute: u32, soc: f64) -> SocSample {
+        SocSample {
+            ts: Utc
+                .with_ymd_and_hms(2026, 11, 12, hour, minute, 0)
+                .single()
+                .unwrap(),
+            soc,
+            cap_wh: Some(111_095.0),
+        }
+    }
+
+    fn free_overnight_profile() -> CostProfile {
+        let mut profile = make_profile("tou", 0.0, 0.0);
+        profile.timezone = Some("America/Chicago".into());
+        profile.tou_periods = json!([
+            { "label": "Night 1", "start_minute": 0,    "end_minute": 360,  "rate": 0.0 },
+            { "label": "Day",     "start_minute": 360,  "end_minute": 1200, "rate": 0.322499 },
+            { "label": "Night 2", "start_minute": 1200, "end_minute": 1440, "rate": 0.0 }
+        ]);
+        profile
+    }
+
+    // ── Regression: Nov 11, 2026 home session, 9:30 PM – 6:09 AM CST.
+    // ── Telemetry stopped at 5:51 AM (98.9%) and the next sample was the
+    // ── 100% reading at 6:09 AM. Stamping that whole 1.1% rise on 6:09 billed
+    // ── 1.22 kWh at the Day rate ($0.39) although charging ended before 6 AM.
+    #[test]
+    fn soc_rise_after_telemetry_gap_is_not_billed_after_charging_stopped() {
+        // CST = UTC-6: 11:30Z is 5:30 AM local. Values copied from production.
+        let samples = vec![
+            soc_sample(11, 30, 95.900002),
+            soc_sample(11, 31, 96.099998),
+            soc_sample(11, 32, 96.200005),
+            soc_sample(11, 33, 96.400002),
+            soc_sample(11, 35, 96.6500015),
+            soc_sample(11, 36, 96.900002),
+            soc_sample(11, 38, 97.1500015),
+            soc_sample(11, 40, 97.400002),
+            soc_sample(11, 42, 97.6500015),
+            soc_sample(11, 43, 97.900002),
+            soc_sample(11, 45, 98.1500015),
+            soc_sample(11, 47, 98.400002),
+            soc_sample(11, 49, 98.6500015),
+            soc_sample(11, 51, 98.900002),
+            soc_sample(12, 9, 100.0),
+        ];
+        let readings = soc_samples_to_energy_readings(&samples);
+
+        let total: f64 = readings.iter().map(|r| r.kwh).sum();
+        let expected = (100.0 - 95.900002) / 100.0 * 111.095;
+        assert!((total - expected).abs() < 1e-9, "energy must be conserved");
+
+        let six_am = Utc
+            .with_ymd_and_hms(2026, 11, 12, 12, 0, 0)
+            .single()
+            .unwrap();
+        assert!(
+            readings.iter().all(|r| r.ts < six_am),
+            "no energy should land after 6 AM: {readings:?}"
+        );
+        let cost = compute_tou_cost_from_readings(&free_overnight_profile(), &readings);
+        assert_eq!(cost, Some(0.0));
+    }
+
+    #[test]
+    fn consecutive_minute_rises_keep_their_own_bucket() {
+        let samples = vec![
+            soc_sample(4, 0, 50.0),
+            soc_sample(4, 1, 50.2),
+            soc_sample(4, 2, 50.4),
+        ];
+        let readings = soc_samples_to_energy_readings(&samples);
+        let stamps: Vec<_> = readings.iter().map(|r| r.ts).collect();
+        assert_eq!(stamps, vec![samples[1].ts, samples[2].ts]);
+    }
+
+    #[test]
+    fn mid_session_gap_at_steady_rate_spreads_across_the_gap() {
+        // 0.1%/minute throughout, with a ten-minute connectivity gap.
+        let samples = vec![
+            soc_sample(4, 0, 50.0),
+            soc_sample(4, 1, 50.1),
+            soc_sample(4, 2, 50.2),
+            soc_sample(4, 12, 51.2),
+        ];
+        let readings = soc_samples_to_energy_readings(&samples);
+        assert_eq!(readings.len(), 12);
+        let per_minute = 0.1 / 100.0 * 111.095;
+        for reading in &readings {
+            assert!((reading.kwh - per_minute).abs() < 1e-9, "{readings:?}");
+        }
+        assert_eq!(readings.last().unwrap().ts, samples[3].ts);
+    }
+
+    #[test]
+    fn soc_drops_and_missing_capacity_yield_no_energy() {
+        let mut samples = vec![soc_sample(4, 0, 60.0), soc_sample(4, 1, 59.5)];
+        assert!(soc_samples_to_energy_readings(&samples).is_empty());
+        samples = vec![soc_sample(4, 0, 60.0), soc_sample(4, 1, 61.0)];
+        samples.iter_mut().for_each(|s| s.cap_wh = None);
+        assert!(soc_samples_to_energy_readings(&samples).is_empty());
     }
 }
