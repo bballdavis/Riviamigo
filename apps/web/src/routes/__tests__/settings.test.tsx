@@ -1017,6 +1017,36 @@ describe('Settings page', () => {
     await waitFor(() => expect(hooks.api.updateVehicleCollection).toHaveBeenCalledWith('v1', false));
   });
 
+  it('blocks artwork refresh for a paused vehicle and reports refused row actions', async () => {
+    settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' };
+    const vehicle = {
+      id: 'v1',
+      display_name: 'Adventure Truck',
+      model: 'R1T',
+      year: null,
+      trim: null,
+      vin: null,
+      rivian_vehicle_id: 'rivian-1',
+      battery_capacity_kwh: 135,
+      target_tire_pressure_psi: 48,
+      membership_role: 'owner',
+      is_demo: false,
+    };
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.vehicles = [Object.assign({}, vehicle, { collection_paused: true })];
+    const { unmount } = renderSettings();
+    expect(screen.getByRole('button', { name: 'Refresh vehicle artwork for Adventure Truck' })).toBeDisabled();
+    unmount();
+
+    settingsMocks.vehicles = [vehicle];
+    vi.mocked(hooks.api.refreshVehicleArtwork).mockRejectedValueOnce(
+      Object.assign(new Error('400 VALIDATION: refused'), { detail: { message: 'The Rivian connection is off for this server.' } }),
+    );
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh vehicle artwork for Adventure Truck' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The Rivian connection is off for this server.');
+  });
+
   it('renders dashboard persistence controls and triggers dashboard actions for admins', async () => {
     settingsMocks.me = {
       user_id: 'u1',

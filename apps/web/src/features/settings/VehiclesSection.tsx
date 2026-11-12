@@ -7,6 +7,7 @@ import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Tooltip } from
 import { Car, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Star, Trash2, Users } from 'lucide-react';
 import { formatRivianRenewalDate, getRivianCredentialRenewalNotice } from '../../lib/rivianCredentialRenewal';
 import { useSettingsLeaveGuard } from './drafts/SettingsDraftProvider';
+import { saveFailure } from './drafts/saveFailure';
 import { ThemeVehicleImage, formatMembershipRole, membershipBadgeVariant } from './vehicleSettingsDisplay';
 import { VehicleBatteryEditor } from './VehicleBatteryEditor';
 import { VehicleConfirmDialogs } from './VehicleConfirmDialogs';
@@ -52,8 +53,17 @@ export function VehiclesSection({
     }
   }, [sharingVehicleId, vehicles]);
 
+  // Row actions report failures here; the API message explains refusals such
+  // as refreshing artwork for a paused vehicle.
+  const [actionError, setActionError] = React.useState<string | null>(null);
+  const rowAction = (fallback: string) => ({
+    onMutate: () => setActionError(null),
+    onError: (error: unknown) => setActionError(saveFailure(error, fallback).message),
+  });
+
   const deleteVehicle = useMutation({
     mutationFn: (vehicleId: string) => api.deleteVehicle(vehicleId),
+    ...rowAction('Unable to delete the vehicle.'),
     onSuccess: (result) => {
       setDefaultVehicleId(result.default_vehicle_id ?? null);
       queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
@@ -62,6 +72,7 @@ export function VehiclesSection({
 
   const refreshVehicleArtwork = useMutation({
     mutationFn: (vehicleId: string) => api.refreshVehicleArtwork(vehicleId),
+    ...rowAction('Unable to refresh vehicle artwork.'),
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
       void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.images(result.vehicle_id) });
@@ -71,6 +82,7 @@ export function VehiclesSection({
   const updateVehicleCollection = useMutation({
     mutationFn: ({ vehicleId, paused }: { vehicleId: string; paused: boolean }) =>
       api.updateVehicleCollection(vehicleId, paused),
+    ...rowAction('Unable to change data collection for the vehicle.'),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
     },
@@ -78,6 +90,7 @@ export function VehiclesSection({
 
   const purgeVehicleArtworkCache = useMutation({
     mutationFn: (vehicleId: string) => api.purgeVehicleArtworkCache(vehicleId),
+    ...rowAction('Unable to clear the artwork cache.'),
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
       void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.images(result.vehicle_id) });
@@ -94,6 +107,7 @@ export function VehiclesSection({
 
   const setDefaultVehicle = useMutation({
     mutationFn: (vehicleId: string) => api.setDefaultVehicle(vehicleId),
+    ...rowAction('Unable to set the default vehicle.'),
     onSuccess: (result) => {
       setDefaultVehicleId(result.default_vehicle_id);
       queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
@@ -161,6 +175,11 @@ export function VehiclesSection({
         {(vehicles?.length ?? 0) === 0 && (
           <p className="text-sm text-fg-tertiary">No vehicles connected yet.</p>
         )}
+        {actionError ? (
+          <p role="alert" className="mb-3 rounded-lg border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-sm text-status-danger">
+            {actionError}
+          </p>
+        ) : null}
         <VehicleConfirmDialogs
           vehicles={vehicles}
           deleteConfirmId={deleteConfirmId}
@@ -395,12 +414,13 @@ export function VehiclesSection({
                       </Tooltip>
                     )}
                     {isAdmin && !isDemo && (
-                      <Tooltip content="Refresh vehicle artwork from Rivian">
+                      <Tooltip content={collectionPaused ? 'Resume data collection to refresh artwork from Rivian' : 'Refresh vehicle artwork from Rivian'}>
                         <Button
                           aria-label={`Refresh vehicle artwork for ${v.display_name}`}
                           variant="secondary"
                           size="sm"
                           className="h-8 w-8 px-0"
+                          disabled={collectionPaused}
                           loading={refreshVehicleArtwork.isPending && refreshVehicleArtwork.variables === v.id}
                           onClick={() => refreshVehicleArtwork.mutate(v.id)}
                         >
