@@ -305,7 +305,14 @@ async fn refresh_fuel_prices_if_stale(
 /// Stored monthly prices, refreshed first when the connection allows it.
 /// Stored months are returned even while the connection is disabled.
 pub async fn fuel_prices(pool: &PgPool, age_key: &str) -> Result<FuelPrices, AppError> {
-    let (connection_enabled, refresh_failed) = refresh_fuel_prices_if_stale(pool, age_key).await?;
+    // A refresh problem never fails the page: report it as a failed refresh
+    // and serve whatever months are stored.
+    let (connection_enabled, refresh_failed) = refresh_fuel_prices_if_stale(pool, age_key)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(err = %error, "ownership.fuel_prices.refresh_check_failed");
+            (true, true)
+        });
     let rows = sqlx::query_as::<_, (NaiveDate, Option<f64>, Option<f64>, Option<DateTime<Utc>>)>(
         "SELECT month,
                 MAX(price_usd_per_gallon) FILTER (WHERE grade = 'regular') AS regular_usd,
