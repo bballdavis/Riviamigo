@@ -53,7 +53,9 @@ export function OverviewLocationMap({
     : artwork?.light ?? artwork?.dark;
   const markerArtwork = useVehicleArtwork(markerSource);
   const fallbackMarkerArtwork = useVehicleArtwork(artwork?.fallback);
-  const markerSrc = markerArtwork.src ?? fallbackMarkerArtwork.src ?? null;
+  // While the real artwork loads the marker shows its plain car icon, never
+  // the packaged fallback art.
+  const markerSrc = markerArtwork.isLoading ? null : markerArtwork.src ?? fallbackMarkerArtwork.src ?? null;
 
   if (!focusPoint) {
     return (

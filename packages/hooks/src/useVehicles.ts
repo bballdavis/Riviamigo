@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
 import { useAuth } from './useAuth';
 import { queryKeys } from './queryKeys';
+import { collectProtectedArtworkUrls, pruneVehicleArtworkCache } from './vehicleArtworkCache';
 
 export function useVehicles() {
   const accessToken = useAuth((state) => state.accessToken);
@@ -10,7 +11,13 @@ export function useVehicles() {
   const authReady = !isBootstrapping && isAuthenticated && !!accessToken;
   return useQuery({
     queryKey: queryKeys.vehicles.all,
-    queryFn: () => api.listVehicles(),
+    queryFn: async () => {
+      const vehicles = await api.listVehicles();
+      // Artwork URLs change whenever the images do (and on reconnect), so the
+      // fresh list says which cached pictures are still in use.
+      void pruneVehicleArtworkCache(collectProtectedArtworkUrls(vehicles));
+      return vehicles;
+    },
     enabled: authReady,
     staleTime: 5 * 60 * 1000,
     placeholderData: (previous) => previous,

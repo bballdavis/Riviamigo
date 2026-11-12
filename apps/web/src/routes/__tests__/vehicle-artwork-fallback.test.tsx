@@ -201,17 +201,17 @@ describe('vehicle artwork fallback contract', () => {
     }
   });
 
-  it('shows packaged artwork on the first render while protected artwork is pending', () => {
+  it('waits for pending protected artwork instead of flashing packaged artwork', () => {
     renderArtwork(
       <AuthenticatedVehicleArtwork
         source="/v1/vehicle-image-cache/00000000-0000-0000-0000-000000000000/overview.webp"
         fallbackSource="/vehicle-images/fallbacks/r1t/overview.webp"
         alt="Pending protected Rivian"
+        loadingIndicator={<span>Loading picture</span>}
       />,
     );
 
-    const image = screen.getByRole('img', { name: 'Pending protected Rivian' });
-    expect(image.getAttribute('src')).toBe('/vehicle-images/fallbacks/r1t/overview.webp');
-    expect(image.getAttribute('data-artwork-fallback')).toBe('true');
+    expect(screen.getByText('Loading picture')).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'Pending protected Rivian' })).toBeNull();
   });
 });
