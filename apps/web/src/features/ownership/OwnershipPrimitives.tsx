@@ -1,7 +1,7 @@
 /** Shared chrome for the Ownership page: control sizing, info tooltips, section titles, and segmented toggles. */
 import React from 'react';
 import { Info } from 'lucide-react';
-import { CardTitle, Tooltip } from '@riviamigo/ui/primitives';
+import { CardTitle, SegmentedControl, Tooltip } from '@riviamigo/ui/primitives';
 
 /** Shared height for the toolbar controls: touch-sized on phones, compact from `sm`. */
 export const CONTROL_HEIGHT = 'h-11 sm:h-9';
@@ -107,29 +107,13 @@ export function Segmented<TValue extends string>({
   onChange: (value: TValue) => void;
 }) {
   return (
-    <div
-      role="group"
-      aria-label={label}
-      className={`inline-flex shrink-0 rounded-lg border border-border bg-bg-elevated/50 p-0.5 ${CONTROL_HEIGHT}`}
-    >
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          aria-pressed={option.value === value}
-          onClick={() => onChange(option.value)}
-          className={[
-            'h-full rounded-md border px-3 text-base font-medium transition-colors',
-            'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent',
-            // The selected option carries an accent border and tint so it reads at a glance.
-            option.value === value
-              ? 'border-accent bg-accent/10 font-semibold text-fg shadow-sm'
-              : 'border-transparent text-fg-secondary hover:text-fg',
-          ].join(' ')}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
+    <SegmentedControl
+      label={label}
+      value={value}
+      options={options}
+      onChange={onChange}
+      className={`gap-0 rounded-lg p-0.5 ${CONTROL_HEIGHT}`}
+      optionClassName="h-full rounded-md text-base"
+    />
   );
 }
