@@ -56,6 +56,8 @@ export function VehicleSharingPanel({
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.vehicleMembers.byVehicle(variables.vehicleId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
+      // The ownership response carries the caller's edit right for the vehicle.
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.ownership(variables.vehicleId) });
     },
   });
 
@@ -65,6 +67,7 @@ export function VehicleSharingPanel({
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.vehicleMembers.byVehicle(variables.vehicleId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.ownership(variables.vehicleId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.me.all });
     },
   });
