@@ -19,6 +19,13 @@ use std::{
 
 const WORK_DIR: &str = ".recovery-work";
 const LOCK_SUFFIX: &str = ".lock";
+/// A lock file this young may belong to an owner that created it but has not
+/// locked it yet, so the sweep leaves it alone.
+const LOCK_FILE_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
+/// A workspace directory with no lock file was made by a build that predates
+/// lock files, or lost its lock file. During an upgrade such a build may still
+/// be using it, so it is reclaimed only once it is clearly stale.
+const UNLOCKED_DIR_GRACE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
 /// Workspaces this process owns. Advisory locks already exclude them on a
 /// local filesystem; this also covers filesystems that emulate `flock` with
@@ -65,14 +72,24 @@ fn workspace_ids(parent: &Dir) -> std::io::Result<std::collections::BTreeSet<Str
 /// it was reclaimed.
 fn reclaim_if_abandoned(parent: &Dir, id: &str) -> std::io::Result<bool> {
     let lock_name = lock_name(id);
-    // A directory left without its lock file (for example by a build that
-    // predates the lock) gets one so the reclaim is still exclusive.
     let lock = match parent.open(&lock_name) {
-        Ok(file) => file,
-        Err(error) if error.kind() == ErrorKind::NotFound => parent.open_with(
-            &lock_name,
-            cap_std::fs::OpenOptions::new().write(true).create(true),
-        )?,
+        Ok(file) => {
+            if younger_than(parent, &lock_name, LOCK_FILE_GRACE)? {
+                return Ok(false);
+            }
+            file
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            if younger_than(parent, id, UNLOCKED_DIR_GRACE)? {
+                return Ok(false);
+            }
+            // Give the stale directory a lock file so the reclaim is still
+            // exclusive against another sweeping process.
+            parent.open_with(
+                &lock_name,
+                cap_std::fs::OpenOptions::new().write(true).create(true),
+            )?
+        }
         Err(error) => return Err(error),
     }
     .into_std();
@@ -91,6 +108,41 @@ fn reclaim_if_abandoned(parent: &Dir, id: &str) -> std::io::Result<bool> {
         Err(error) if error.kind() == ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
+    Ok(true)
+}
+
+/// Whether `name` under `parent` was modified less than `grace` ago. A
+/// missing entry, or a clock that reads earlier than the entry, counts as
+/// young so the sweep errs toward leaving it.
+fn younger_than(parent: &Dir, name: &str, grace: std::time::Duration) -> std::io::Result<bool> {
+    let modified = match parent.metadata(name) {
+        Ok(metadata) => metadata.modified()?.into_std(),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(true),
+        Err(error) => return Err(error),
+    };
+    Ok(std::time::SystemTime::now()
+        .duration_since(modified)
+        .map_or(true, |age| age < grace))
+}
+
+/// Whether the open `lock` is still the file named `lock_name`. A sweep in
+/// another process can unlink a lock file between its creation and its lock;
+/// an owner holding such an orphaned lock would not protect its workspace.
+#[cfg(unix)]
+fn lock_still_linked(parent: &Dir, lock_name: &str, lock: &File) -> std::io::Result<bool> {
+    use cap_std::fs::MetadataExt as _;
+    use std::os::unix::fs::MetadataExt as _;
+    let held = lock.metadata()?;
+    match parent.metadata(lock_name) {
+        Ok(named) => Ok(named.dev() == held.dev() && named.ino() == held.ino()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(not(unix))]
+fn lock_still_linked(_parent: &Dir, _lock_name: &str, _lock: &File) -> std::io::Result<bool> {
+    // Windows refuses to delete a file another handle has open.
     Ok(true)
 }
 
@@ -182,6 +234,19 @@ impl RecoveryWorkspace {
             return Err(AppError::Internal(anyhow::anyhow!(
                 "could not lock a new recovery workspace: {error}"
             )));
+        }
+        match lock_still_linked(&parent, &lock_name(&name), &lock) {
+            Ok(true) => {}
+            Ok(false) => {
+                forget(&parent, false);
+                return Err(AppError::Internal(anyhow::anyhow!(
+                    "a concurrent sweep removed a new recovery workspace's lock file; try again"
+                )));
+            }
+            Err(error) => {
+                forget(&parent, true);
+                return Err(error.into());
+            }
         }
         let builder = cap_std::fs::DirBuilder::new();
         // cap-std directory handles may use O_PATH on Linux, which cannot be
@@ -304,6 +369,10 @@ mod tests {
         }
         std::fs::write(work.join(lock_name(&with_lock)), b"").unwrap();
         std::fs::write(work.join(lock_name(&lone_lock)), b"").unwrap();
+        // Crash leftovers are old; age them past both grace periods.
+        backdate(&work.join(&dir_only), UNLOCKED_DIR_GRACE);
+        backdate(&work.join(lock_name(&with_lock)), LOCK_FILE_GRACE);
+        backdate(&work.join(lock_name(&lone_lock)), LOCK_FILE_GRACE);
 
         // Held by another live owner: its lock is taken on a separate handle,
         // as another process would hold it.
@@ -311,6 +380,7 @@ mod tests {
         std::fs::create_dir_all(work.join(&held)).unwrap();
         let held_lock = File::create(work.join(lock_name(&held))).unwrap();
         held_lock.try_lock().unwrap();
+        backdate(&work.join(lock_name(&held)), LOCK_FILE_GRACE);
 
         // Entries that are not workspaces are never touched.
         std::fs::create_dir_all(work.join("operator-notes")).unwrap();
@@ -337,6 +407,57 @@ mod tests {
         let _next = RecoveryWorkspace::new(root.path(), &limits).unwrap();
         assert!(!work.join(&held).exists());
         assert!(live.path().is_dir());
+    }
+
+    /// Sets `path`'s modification time to `age` plus a minute in the past.
+    fn backdate(path: &Path, age: std::time::Duration) {
+        let when = std::time::SystemTime::now() - age - std::time::Duration::from_secs(60);
+        File::open(path).unwrap().set_modified(when).unwrap();
+    }
+
+    #[test]
+    fn leaves_fresh_unlocked_entries_for_their_owners() {
+        let root = tempfile::tempdir().unwrap();
+        let work = root.path().join(WORK_DIR);
+        std::fs::create_dir_all(&work).unwrap();
+        let limits = RecoveryConfig {
+            min_free_bytes: 0,
+            ..Default::default()
+        };
+        // An owner that has created its lock file but not locked it yet, and
+        // an in-use workspace from an older build that writes no lock file.
+        let unlocked_lock = uuid::Uuid::new_v4().to_string();
+        let legacy_dir = uuid::Uuid::new_v4().to_string();
+        std::fs::write(work.join(lock_name(&unlocked_lock)), b"").unwrap();
+        std::fs::create_dir_all(work.join(&legacy_dir)).unwrap();
+        std::fs::write(work.join(&legacy_dir).join("database.dump"), b"fixture").unwrap();
+
+        let _workspace = RecoveryWorkspace::new(root.path(), &limits).unwrap();
+
+        assert!(work.join(lock_name(&unlocked_lock)).exists());
+        assert!(work.join(&legacy_dir).join("database.dump").exists());
+        assert!(!work.join(lock_name(&legacy_dir)).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detects_a_lock_file_unlinked_before_it_was_locked() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        let name = lock_name(&uuid::Uuid::new_v4().to_string());
+        let lock = parent
+            .open_with(
+                &name,
+                cap_std::fs::OpenOptions::new().write(true).create_new(true),
+            )
+            .unwrap()
+            .into_std();
+        assert!(lock_still_linked(&parent, &name, &lock).unwrap());
+        // Another sweep unlinks it, then a new file takes the same name.
+        parent.remove_file(&name).unwrap();
+        assert!(!lock_still_linked(&parent, &name, &lock).unwrap());
+        parent.write(&name, b"").unwrap();
+        assert!(!lock_still_linked(&parent, &name, &lock).unwrap());
     }
 
     #[cfg(unix)]
