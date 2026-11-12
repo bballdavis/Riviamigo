@@ -40,7 +40,8 @@ const MAX_SHIFTS: i64 = 6;
 
 /// How many recent drive/reverse telemetry rows are read to find those
 /// shifts. The gear is repeated on every row while it is engaged, so a shift
-/// is the first row of a run of one gear; several days of driving fit here.
+/// is the first row of a run of one gear. When the budget is used up, the
+/// oldest run read is usually cut short, so it is not treated as a shift.
 const MOTION_ROW_BUDGET: i64 = 1000;
 
 /// One `drive` or `reverse` shift and what happened before the next one.
@@ -49,7 +50,9 @@ pub struct GearShift {
     /// The gear, lower-cased.
     pub gear: String,
     pub shifted_at: DateTime<Utc>,
-    /// The bearing held when the shift was reported.
+    /// The last bearing reported before the shift, or the shift row's own
+    /// bearing when there is none in the day before it. The shift row may
+    /// already carry the new course, so it is compared like any later bearing.
     pub bearing_at_shift: Option<f64>,
     /// A later bearing, before the next shift, turned at least
     /// [`COURSE_TURN_DEG`] from `bearing_at_shift`.
@@ -109,7 +112,8 @@ fn normalize(degrees: f64) -> Option<f64> {
 /// newest drive/reverse rows (an index range scan on the 0040 partial index,
 /// whose predicate this repeats exactly; a test keeps them in step) and
 /// `shifts` keeps the first row of each run of one gear. A park between two
-/// runs of the same gear does not split them. Each shift's phase lasts until
+/// runs of the same gear does not split them. When the budget is full, the
+/// oldest row read starts a run that is probably cut short, so it is skipped. Each shift's phase lasts until
 /// the next shift, so a back-in's whole reverse run, and any bearing reported
 /// after it, decides whether the course turned. The bearing probes use the
 /// heading partial index; the turn probe stops at the first turned bearing and
@@ -125,7 +129,11 @@ const FACING_EVIDENCE_SQL: &str = r#"WITH motion AS (
            ),
            runs AS (
                SELECT ts, gear,
-                      gear IS DISTINCT FROM lag(gear) OVER (ORDER BY ts) AS starts_run
+                      CASE
+                          WHEN lag(gear) OVER (ORDER BY ts) IS NULL
+                              THEN count(*) OVER () < $5
+                          ELSE gear <> lag(gear) OVER (ORDER BY ts)
+                      END AS starts_run
                FROM motion
            ),
            shifts AS (
@@ -147,22 +155,31 @@ const FACING_EVIDENCE_SQL: &str = r#"WITH motion AS (
                   moving.ts IS NOT NULL AS moved
            FROM phases p
            LEFT JOIN LATERAL (
-               SELECT t.heading_deg
-               FROM timeseries.telemetry t
-               WHERE t.vehicle_id = $1
-                 AND t.ts > now() - interval '31 days'
-                 AND t.ts <= p.ts
-                 AND t.ts > p.ts - interval '1 day'
-                 AND t.heading_deg IS NOT NULL
-               ORDER BY t.ts DESC
-               LIMIT 1
+               SELECT COALESCE(
+                   (SELECT t.heading_deg
+                    FROM timeseries.telemetry t
+                    WHERE t.vehicle_id = $1
+                      AND t.ts > now() - interval '31 days'
+                      AND t.ts < p.ts
+                      AND t.ts > p.ts - interval '1 day'
+                      AND t.heading_deg IS NOT NULL
+                    ORDER BY t.ts DESC
+                    LIMIT 1),
+                   (SELECT t.heading_deg
+                    FROM timeseries.telemetry t
+                    WHERE t.vehicle_id = $1
+                      AND t.ts > now() - interval '31 days'
+                      AND t.ts = p.ts
+                      AND t.heading_deg IS NOT NULL
+                    LIMIT 1)
+               ) AS heading_deg
            ) held ON TRUE
            LEFT JOIN LATERAL (
                SELECT t.ts
                FROM timeseries.telemetry t
                WHERE t.vehicle_id = $1
                  AND t.ts > now() - interval '31 days'
-                 AND t.ts > p.ts
+                 AND t.ts >= p.ts
                  AND t.ts < p.ended_at
                  AND t.heading_deg IS NOT NULL
                  AND abs((t.heading_deg - held.heading_deg)
