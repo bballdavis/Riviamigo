@@ -384,6 +384,14 @@ async function installApiMocks(page: Page, options: { vehicleStatus?: Record<str
     window.localStorage.setItem('rm-show-dashboard-edit-button:e2e-user', 'true');
   });
   await page.routeWebSocket('**/v1/vehicles/live**', (socket) => socket.close());
+  // Account theme preferences moved to /v2; without a mock the request falls
+  // through unauthenticated and the 401 signs the test user out.
+  await page.route('**/v2/auth/preferences/theme', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    headers: { etag: '"e2e-theme"' },
+    body: JSON.stringify({ schemaVersion: 2, mode: 'dark', selection: { kind: 'builtin', themeId: 'classic' } }),
+  }));
   await page.route('**/v1/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
