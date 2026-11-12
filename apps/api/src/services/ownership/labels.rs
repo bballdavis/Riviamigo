@@ -18,6 +18,10 @@ pub fn clean_label(value: &str, max_chars: usize) -> Option<String> {
 /// when nothing readable is left. Applied on load, so one legacy name cannot
 /// block every later save of the record it belongs to.
 pub fn repair_stored_label(value: &str, max_chars: usize) -> Option<String> {
+    // A name that already passes is kept exactly as stored.
+    if let Some(valid) = clean_label(value, max_chars) {
+        return Some(valid);
+    }
     let spaced: String = value
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
@@ -45,6 +49,10 @@ mod tests {
         assert_eq!(
             repair_stored_label(&"x".repeat(90), 80).map(|l| l.len()),
             Some(80)
+        );
+        assert_eq!(
+            repair_stored_label("Two  spaces", 60).as_deref(),
+            Some("Two  spaces")
         );
         let repaired = repair_stored_label("A\u{0}B", 60).unwrap();
         assert_eq!(clean_label(&repaired, 60).as_deref(), Some("A B"));
