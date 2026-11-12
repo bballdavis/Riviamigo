@@ -1,5 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef } from 'react';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { OwnershipResponse, OwnershipSettings } from '@riviamigo/types';
 import { api } from './api';
 import { useAuthReady } from './useAuthState';
@@ -32,6 +31,35 @@ export function useOwnershipSettings(vehicleId: string | null, enabled = true) {
   });
 }
 
+/** One vehicle's save ordering, shared by every hook instance on a client. */
+interface SaveQueue {
+  tail: Promise<unknown>;
+  sequence: number;
+  inFlight: number;
+}
+
+const saveQueues = new WeakMap<QueryClient, Map<string, SaveQueue>>();
+
+/**
+ * The save queue for one vehicle on one query client. It outlives the hook
+ * instance, so a save made after the page remounts, or from the settings
+ * editor, still waits for one already in flight.
+ */
+function saveQueueFor(client: QueryClient, vehicleId: string | null): SaveQueue {
+  let queues = saveQueues.get(client);
+  if (!queues) {
+    queues = new Map();
+    saveQueues.set(client, queues);
+  }
+  const id = vehicleId ?? '';
+  let queue = queues.get(id);
+  if (!queue) {
+    queue = { tail: Promise.resolve(), sequence: 0, inFlight: 0 };
+    queues.set(id, queue);
+  }
+  return queue;
+}
+
 /**
  * Saves the vehicle's whole ownership settings object. The cache is updated
  * optimistically and rolled back when the save fails.
@@ -44,20 +72,18 @@ export function useOwnershipSettings(vehicleId: string | null, enabled = true) {
 export function useUpdateOwnershipSettings(vehicleId: string | null) {
   const queryClient = useQueryClient();
   const key = queryKeys.vehicle.ownership(vehicleId);
-  const queueRef = useRef<Promise<unknown>>(Promise.resolve());
-  const sequenceRef = useRef(0);
-  const inFlightRef = useRef(0);
+  const queue = saveQueueFor(queryClient, vehicleId);
 
   const mutation = useMutation({
     mutationFn: (settings: OwnershipSettings) => {
-      const request = queueRef.current.then(() => api.updateOwnershipSettings(vehicleId!, settings));
+      const request = queue.tail.then(() => api.updateOwnershipSettings(vehicleId!, settings));
       // A failed save must not stall the saves queued behind it.
-      queueRef.current = request.catch(() => undefined);
+      queue.tail = request.catch(() => undefined);
       return request;
     },
     onMutate: async (settings: OwnershipSettings) => {
-      const sequence = ++sequenceRef.current;
-      inFlightRef.current += 1;
+      const sequence = ++queue.sequence;
+      queue.inFlight += 1;
       // Cancel first: a refetch already in flight would otherwise land after
       // the optimistic write and show the pre-save response.
       await queryClient.cancelQueries({ queryKey: key });
@@ -67,7 +93,7 @@ export function useUpdateOwnershipSettings(vehicleId: string | null) {
     },
     onSuccess: (saved, _settings, context) => {
       // An older save finishing must not overwrite the newer one's optimistic state.
-      if (context?.sequence !== sequenceRef.current) return;
+      if (context?.sequence !== queue.sequence) return;
       queryClient.setQueryData<OwnershipResponse>(key, (current) =>
         current ? { ...current, settings: saved.settings } : current,
       );
@@ -76,15 +102,15 @@ export function useUpdateOwnershipSettings(vehicleId: string | null) {
       // Only the newest save rolls back. An older save's snapshot can already
       // include changes that a newer save still has in flight; the refetch
       // once everything settles puts the server's state back either way.
-      if (context?.sequence !== sequenceRef.current || !context.previous) return;
+      if (context?.sequence !== queue.sequence || !context.previous) return;
       queryClient.setQueryData(key, context.previous);
     },
     onSettled: () => {
-      inFlightRef.current -= 1;
+      queue.inFlight -= 1;
       // The settings key is nested under the ownership key, so one
       // invalidation refreshes the page and the settings editor together.
       // Waiting for the last save avoids a refetch that shows a mid-burst state.
-      if (inFlightRef.current === 0) void queryClient.invalidateQueries({ queryKey: key });
+      if (queue.inFlight === 0) void queryClient.invalidateQueries({ queryKey: key });
     },
   });
 

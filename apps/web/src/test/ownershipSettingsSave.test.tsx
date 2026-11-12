@@ -114,6 +114,34 @@ describe('useUpdateOwnershipSettings', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
   });
 
+  it('keeps saves ordered across a remount and between hook instances', async () => {
+    const { client, result: first } = setup();
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const pendingFirst = deferred<OwnershipSettingsResponse>();
+    const send = vi.spyOn(api, 'updateOwnershipSettings')
+      .mockReturnValueOnce(pendingFirst.promise)
+      .mockResolvedValueOnce(reply(settingsWith(['a', 'b'])));
+
+    act(() => {
+      first.current.mutate(settingsWith(['a']));
+    });
+    // The page remounts (or the settings editor saves) while the first save is in flight.
+    const { result: second } = renderHook(() => useUpdateOwnershipSettings(VEHICLE_ID), { wrapper });
+    act(() => {
+      second.current.mutate(settingsWith(['a', 'b']));
+    });
+    await flush();
+    expect(send).toHaveBeenCalledTimes(1);
+
+    await act(async () => pendingFirst.resolve(reply(settingsWith(['a']))));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(second.current.isSuccess).toBe(true));
+    // The older instance's late success does not overwrite the newer save.
+    expect(customIds(client)).toEqual(['a', 'b']);
+  });
+
   it('keeps the newest change when an older save fails, and does not stall the saves behind it', async () => {
     const { client, result } = setup();
     const first = deferred<OwnershipSettingsResponse>();
