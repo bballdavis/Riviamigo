@@ -2630,6 +2630,122 @@ async fn vehicle_facing_evidence_wraps_bearings_and_honours_a_pull_away() {
 }
 
 #[tokio::test]
+async fn vehicle_facing_is_saved_until_telemetry_can_change_it() {
+    use riviamigo_api::services::vehicle_facing::{mark_stale, resolve_facing_deg, save_facing};
+
+    let app = TestApp::new().await;
+    let email = "vehicle-facing-saved@example.com";
+    register_and_login(&app, email).await;
+    let user_id: Uuid = sqlx::query_scalar("SELECT id FROM riviamigo.users WHERE email = $1")
+        .bind(email)
+        .fetch_one(&app.pool)
+        .await
+        .expect("user id");
+    let vehicle = insert_vehicle(&app.pool, user_id, "vehicle-facing-saved", "Saved").await;
+    let start = chrono::Utc::now() - chrono::Duration::hours(2);
+    let insert = |rows: Vec<(i64, f64, &'static str, f64)>| {
+        let pool = app.pool.clone();
+        async move {
+            for (offset_seconds, heading, gear, speed) in rows {
+                sqlx::query(
+                    "INSERT INTO timeseries.telemetry (ts, vehicle_id, heading_deg, gear_status, speed_mph)
+                     VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind(start + chrono::Duration::seconds(offset_seconds))
+                .bind(vehicle)
+                .bind(heading)
+                .bind(gear)
+                .bind(speed)
+                .execute(&pool)
+                .await
+                .expect("telemetry sample");
+            }
+        }
+    };
+    let saved = || {
+        let pool = app.pool.clone();
+        async move {
+            sqlx::query_as::<_, (Option<bool>, i64)>(
+                "SELECT facing_reversed, facing_epoch
+                 FROM riviamigo.vehicle_latest_status WHERE vehicle_id = $1",
+            )
+            .bind(vehicle)
+            .fetch_one(&pool)
+            .await
+            .expect("saved facing")
+        }
+    };
+
+    // Without a latest-status row the facing is still worked out, just not saved.
+    insert(vec![
+        (0, 100.0, "drive", 10.0),
+        (60, 280.0, "reverse", 2.0),
+        (120, 280.0, "park", 0.0),
+    ])
+    .await;
+    assert_eq!(
+        resolve_facing_deg(&app.pool, vehicle, Some(280.0)).await,
+        Some(100.0)
+    );
+    assert_eq!(resolve_facing_deg(&app.pool, vehicle, None).await, None);
+
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_latest_status (vehicle_id, ts, heading_deg, gear_status)
+         VALUES ($1, now(), 280, 'park')",
+    )
+    .bind(vehicle)
+    .execute(&app.pool)
+    .await
+    .expect("latest status");
+    assert_eq!(saved().await, (None, 0));
+
+    // The first read works out the back-in and saves it.
+    assert_eq!(
+        resolve_facing_deg(&app.pool, vehicle, Some(280.0)).await,
+        Some(100.0)
+    );
+    assert_eq!(saved().await, (Some(true), 0));
+
+    // Later reads use the saved answer and do not read telemetry again: rows
+    // added without marking the facing stale do not change it.
+    insert(vec![
+        (3600, 280.0, "drive", 0.0),
+        (3660, 10.0, "drive", 6.0),
+    ])
+    .await;
+    assert_eq!(
+        resolve_facing_deg(&app.pool, vehicle, Some(10.0)).await,
+        Some(190.0)
+    );
+
+    // Ingestion marks it stale after storing such rows; the next read works
+    // out the pull-away and saves that.
+    mark_stale(&app.pool, vehicle).await.expect("mark stale");
+    assert_eq!(saved().await, (None, 1));
+    assert_eq!(
+        resolve_facing_deg(&app.pool, vehicle, Some(10.0)).await,
+        Some(10.0)
+    );
+    assert_eq!(saved().await, (Some(false), 1));
+
+    // A read that began before telemetry was stored cannot save its answer:
+    // the epoch it read is no longer current.
+    mark_stale(&app.pool, vehicle).await.expect("mark stale");
+    mark_stale(&app.pool, vehicle).await.expect("mark stale");
+    assert!(!save_facing(&app.pool, vehicle, 2, true)
+        .await
+        .expect("save"));
+    assert_eq!(saved().await, (None, 3));
+    assert!(save_facing(&app.pool, vehicle, 3, false)
+        .await
+        .expect("save"));
+    assert!(!save_facing(&app.pool, vehicle, 3, true)
+        .await
+        .expect("save"));
+    assert_eq!(saved().await, (Some(false), 3));
+}
+
+#[tokio::test]
 async fn overview_view_preference_is_saved_per_user() {
     let app = TestApp::new().await;
     let token = register_and_login(&app, "overview-view@example.com").await;

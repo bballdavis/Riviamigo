@@ -471,6 +471,7 @@ pub async fn run_vehicle_worker(
     // OTA available version tracking (triggers release notes fetch on change).
     let mut last_ota_available_version: Option<String> = None;
     let mut persistence_gate = TelemetryPersistenceGate::new(vehicle_id);
+    let mut facing_inputs = crate::services::vehicle_facing::FacingInputs::default();
     let mut raw_cleanup_tick: u64 = 0;
     // Shared counter batch — flushed every 50 events to amortize DB upserts.
     let mut counter_batch = CounterBatch::new(vehicle_id);
@@ -776,6 +777,19 @@ pub async fn run_vehicle_worker(
             {
                 counter_batch.increment("telemetry_writes_persisted");
                 mark_persisted(&pool, vehicle_id, event.ts).await;
+                // The saved facing is worked out from stored telemetry, so it
+                // is marked stale only after the row that can change it commits.
+                if facing_inputs.stored(
+                    event.gear_status.as_deref(),
+                    event.speed_mph,
+                    event.heading_deg,
+                ) {
+                    if let Err(error) =
+                        crate::services::vehicle_facing::mark_stale(&pool, vehicle_id).await
+                    {
+                        tracing::warn!(vehicle_id=%vehicle_id, err=%error, "vehicle facing could not be marked stale");
+                    }
+                }
             }
         } else if let PersistenceDecision::Suppress(reason) = persistence_decision {
             counter_batch.increment("telemetry_writes_suppressed");

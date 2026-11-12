@@ -21,6 +21,13 @@
 //! or to drive, and back to park without moving therefore leaves the facing
 //! of the earlier manoeuvre in place. The bearing is flipped only when the
 //! anchor is a reverse shift.
+//!
+//! That decision changes only when telemetry arrives that moves the vehicle
+//! or its course, so it is saved with the vehicle's latest state
+//! (`vehicle_latest_status.facing_reversed`). Ingestion marks it stale with
+//! [`mark_stale`] after storing such telemetry ([`FacingInputs`] decides), and
+//! the next status read works it out once and saves it. A parked vehicle's
+//! status therefore reads one saved value instead of its telemetry.
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
@@ -85,20 +92,66 @@ pub struct FacingEvidence {
 
 /// The vehicle's facing in compass degrees `[0, 360)`, or `None` without a bearing.
 pub fn facing_deg(bearing_deg: Option<f64>, evidence: &FacingEvidence) -> Option<f64> {
+    apply_facing(bearing_deg, backed_into_position(evidence))
+}
+
+/// The bearing, turned 180° when it is a reverse course.
+fn apply_facing(bearing_deg: Option<f64>, reversed: bool) -> Option<f64> {
     let bearing = normalize(bearing_deg?)?;
-    Some(if backed_into_position(evidence) {
+    Some(if reversed {
         normalize(bearing + 180.0).unwrap_or(bearing)
     } else {
         bearing
     })
 }
 
-fn backed_into_position(evidence: &FacingEvidence) -> bool {
+/// Whether the latest bearing is a reverse course: the newest shift the
+/// vehicle moved after was reverse.
+pub fn backed_into_position(evidence: &FacingEvidence) -> bool {
     evidence
         .shifts
         .iter()
         .find_map(GearShift::course_points_backwards)
         .unwrap_or(false)
+}
+
+/// Tracks the stored telemetry that can change the saved facing, for one
+/// vehicle's ingestion worker.
+///
+/// The evidence reads drive/reverse rows, the speed after a drive shift, and
+/// bearings after a shift. A stored row can therefore change the answer only
+/// when it is in drive or reverse, reports a moving speed, or carries a
+/// bearing different from the last one stored. A parked vehicle repeating its
+/// bearing changes nothing. The first bearing after a worker starts always
+/// counts, since the last one stored before it is unknown.
+#[derive(Debug, Default)]
+pub struct FacingInputs {
+    last_bearing: Option<f64>,
+}
+
+impl FacingInputs {
+    /// Record a telemetry row that was stored, and return whether it can
+    /// change the saved facing. Call it only for rows actually written, so a
+    /// row that failed to store is not mistaken for one already counted.
+    pub fn stored(
+        &mut self,
+        gear_status: Option<&str>,
+        speed_mph: Option<f64>,
+        bearing_deg: Option<f64>,
+    ) -> bool {
+        let motion_gear = gear_status.is_some_and(|gear| {
+            gear.eq_ignore_ascii_case("drive") || gear.eq_ignore_ascii_case("reverse")
+        });
+        let moving = speed_mph.is_some_and(|speed| speed >= MOVING_SPEED_MPH);
+        let new_bearing = match bearing_deg {
+            Some(bearing) if self.last_bearing != Some(bearing) => {
+                self.last_bearing = Some(bearing);
+                true
+            }
+            _ => false,
+        };
+        motion_gear || moving || new_bearing
+    }
 }
 
 fn normalize(degrees: f64) -> Option<f64> {
@@ -120,9 +173,9 @@ fn normalize(degrees: f64) -> Option<f64> {
 /// index of its own is needed: `motion` stops after the budget or 30 days of
 /// the vehicle's rows, the bearing probes take the first matching row, the
 /// turn probe stops at the first turned bearing, and the speed probe reads at
-/// most 15 minutes after a drive shift. About 4 ms on 30 days of recorded
-/// telemetry; partial gear and bearing indexes did not change that and would
-/// add a write on most telemetry inserts.
+/// most 15 minutes after a drive shift. It runs only when no saved answer is
+/// current (see [`reversed_course`]): about 4 ms on 30 days of recorded
+/// telemetry, which partial gear and bearing indexes did not improve.
 const FACING_EVIDENCE_SQL: &str = r#"WITH motion AS (
                SELECT ts, lower(gear_status) AS gear
                FROM timeseries.telemetry
@@ -222,20 +275,83 @@ pub async fn load_facing_evidence(pool: &PgPool, vehicle_id: Uuid) -> sqlx::Resu
     Ok(FacingEvidence { shifts })
 }
 
-/// [`facing_deg`] for a status response. Evidence that cannot be loaded leaves
-/// the raw course in place rather than failing the status read.
+/// Forget the saved facing after storing telemetry that can change it, and
+/// bump the epoch so a status read already working it out from older
+/// telemetry does not save its answer. Call it after the telemetry commits.
+pub async fn mark_stale(pool: &PgPool, vehicle_id: Uuid) -> sqlx::Result<()> {
+    sqlx::query(
+        "UPDATE riviamigo.vehicle_latest_status
+         SET facing_reversed = NULL, facing_epoch = facing_epoch + 1
+         WHERE vehicle_id = $1",
+    )
+    .bind(vehicle_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Save a worked-out facing, unless telemetry stored since `epoch` was read
+/// could have changed it. Returns whether it was saved.
+pub async fn save_facing(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    epoch: i64,
+    reversed: bool,
+) -> sqlx::Result<bool> {
+    let result = sqlx::query(
+        "UPDATE riviamigo.vehicle_latest_status
+         SET facing_reversed = $2
+         WHERE vehicle_id = $1 AND facing_epoch = $3 AND facing_reversed IS NULL",
+    )
+    .bind(vehicle_id)
+    .bind(reversed)
+    .bind(epoch)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Whether the vehicle's current bearing is a reverse course: the saved
+/// answer, or one worked out from telemetry and saved when nothing changed
+/// while it was worked out.
+pub async fn reversed_course(pool: &PgPool, vehicle_id: Uuid) -> sqlx::Result<bool> {
+    let saved = sqlx::query_as::<_, (Option<bool>, i64)>(
+        "SELECT facing_reversed, facing_epoch
+         FROM riviamigo.vehicle_latest_status
+         WHERE vehicle_id = $1",
+    )
+    .bind(vehicle_id)
+    .fetch_optional(pool)
+    .await?;
+    if let Some((Some(reversed), _)) = saved {
+        return Ok(reversed);
+    }
+    // The epoch was read before the evidence, so telemetry stored after it
+    // started is either seen by the evidence query or has bumped the epoch.
+    let reversed = backed_into_position(&load_facing_evidence(pool, vehicle_id).await?);
+    if let Some((None, epoch)) = saved {
+        if let Err(error) = save_facing(pool, vehicle_id, epoch, reversed).await {
+            tracing::warn!(vehicle_id=%vehicle_id, err=%error, "vehicle facing could not be saved");
+        }
+    }
+    Ok(reversed)
+}
+
+/// The facing for a status response. A facing that cannot be worked out
+/// leaves the raw course in place rather than failing the status read.
 pub async fn resolve_facing_deg(
     pool: &PgPool,
     vehicle_id: Uuid,
     bearing_deg: Option<f64>,
 ) -> Option<f64> {
-    let evidence = load_facing_evidence(pool, vehicle_id)
+    bearing_deg?;
+    let reversed = reversed_course(pool, vehicle_id)
         .await
         .unwrap_or_else(|error| {
             tracing::warn!(vehicle_id=%vehicle_id, err=%error, "vehicle facing evidence unavailable");
-            FacingEvidence::default()
+            false
         });
-    facing_deg(bearing_deg, &evidence)
+    apply_facing(bearing_deg, reversed)
 }
 
 #[cfg(test)]
@@ -333,6 +449,23 @@ mod tests {
             shift("REVERSE", 41, true, false),
         ]);
         assert_eq!(facing_deg(Some(0.0), &backed_in), Some(180.0));
+    }
+
+    #[test]
+    fn only_motion_speed_or_a_new_bearing_can_change_the_saved_facing() {
+        let mut inputs = FacingInputs::default();
+        // The first bearing a worker stores always counts.
+        assert!(inputs.stored(Some("park"), Some(0.0), Some(118.0)));
+        // A parked vehicle repeating its course, or reporting no bearing.
+        assert!(!inputs.stored(Some("park"), Some(0.0), Some(118.0)));
+        assert!(!inputs.stored(None, None, None));
+        assert!(!inputs.stored(Some("park"), Some(0.4), None));
+        // Motion gears in any case, a moving speed, or a changed course.
+        assert!(inputs.stored(Some("Reverse"), Some(0.0), Some(118.0)));
+        assert!(inputs.stored(Some("DRIVE"), None, None));
+        assert!(inputs.stored(None, Some(MOVING_SPEED_MPH), None));
+        assert!(inputs.stored(Some("park"), Some(0.0), Some(298.0)));
+        assert!(!inputs.stored(Some("park"), Some(0.0), Some(298.0)));
     }
 
     #[test]
