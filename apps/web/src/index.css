@@ -1,6 +1,13 @@
 @import '../../../packages/ui/src/tokens/globals.css';
 @import "tailwindcss";
 
+/*
+ * `dark:` follows the app's selected theme, not the OS. The theme runtime
+ * (packages/ui/src/lib/themeRuntime.ts) puts the effective mode on <html> as
+ * `.light` or `.dark`, resolving System mode from prefers-color-scheme itself.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* Scan the shared UI package — outside auto-detection root */
 @source "../../../packages/ui/src/**/*.{ts,tsx}";
 @source "../../../packages/dashboards/src/**/*.{ts,tsx}";
