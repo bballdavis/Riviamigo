@@ -208,6 +208,24 @@ export interface BackfillStatus {
   missing_source_count?: number | null;
 }
 
+/** Latest run of a manual maintenance job from Settings > Jobs. */
+export interface MaintenanceJobStatus {
+  kind: string;
+  title: string;
+  description: string;
+  /** What the counts refer to, such as "sessions". */
+  subject: string;
+  /** What `changed_count` means, such as "changed" or "queued". */
+  changed_label: string;
+  status: 'running' | 'done' | 'error' | null;
+  started_at: string | null;
+  finished_at: string | null;
+  processed_count: number | null;
+  changed_count: number | null;
+  failed_count: number | null;
+  error: string | null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 function isLoopbackHostname(hostname: string) {
@@ -1873,6 +1891,14 @@ export class AuthenticatedTransport {
 
   async triggerBackfill(vehicleId: string): Promise<void> {
     return this.request('POST', `/v1/vehicles/${vehicleId}/backfill`);
+  }
+
+  async listMaintenanceJobs(vehicleId: string): Promise<MaintenanceJobStatus[]> {
+    return this.request('GET', `/v1/vehicles/${vehicleId}/maintenance-jobs`);
+  }
+
+  async startMaintenanceJob(vehicleId: string, kind: string): Promise<MaintenanceJobStatus> {
+    return this.request('POST', `/v1/vehicles/${vehicleId}/maintenance-jobs/${encodeURIComponent(kind)}`);
   }
 
   // ── Efficiency ────────────────────────────────────────────────────────────

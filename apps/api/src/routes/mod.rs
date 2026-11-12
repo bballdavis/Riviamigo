@@ -43,6 +43,7 @@ pub mod health;
 pub mod idle_drain;
 pub mod live;
 pub mod locations;
+pub mod maintenance_jobs;
 pub mod metrics;
 pub mod overview;
 pub mod ownership;
@@ -258,6 +259,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(api_keys::router())
         .merge(backups::router())
         .merge(backfill::router())
+        .merge(maintenance_jobs::router())
         .merge(vehicles::router())
         .merge(battery::router())
         .merge(trips::router())

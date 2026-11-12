@@ -11,14 +11,26 @@ import {
 } from '@riviamigo/ui/charts';
 import { resolveIconId } from '../../editor/iconMigration';
 import { useDocumentPalette, useDocumentTheme } from '@riviamigo/ui/hooks';
-import { resolveSensorValueColor, type SensorDataAccent, type SensorIconKey, type SensorValueColor } from './sensorDefinitions';
+import {
+  getSensorDefinition,
+  resolveSensorValueColor,
+  type SensorDataAccent,
+  type SensorIconKey,
+  type SensorValueColor,
+} from './sensorDefinitions';
 
 type SensorChipHistoryPoint = { ts?: string; value: number | null | undefined };
 type SensorValueTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
 
 export interface SensorChipSummaryProps {
   title: string;
-  value: string;
+  value: React.ReactNode;
+  /**
+   * Shared sensor definition to inherit icon, data accent, value color, and
+   * accent border from, so page headline chips match their dashboard twins.
+   * Explicit props still win.
+   */
+  definitionId?: string;
   icon?: SensorIconKey;
   secondary?: string | undefined;
   labelSuffix?: string;
@@ -37,13 +49,14 @@ export interface SensorChipSummaryProps {
 export function SensorChipSummary({
   title,
   value,
-  icon = 'lucide:activity',
+  definitionId,
+  icon: iconProp,
   secondary,
   labelSuffix,
   subtitle,
-  accentBorder = false,
-  dataAccent,
-  valueColor = 'accent',
+  accentBorder: accentBorderProp,
+  dataAccent: dataAccentProp,
+  valueColor: valueColorProp,
   valueTone,
   valueSize = 'md',
   history,
@@ -51,6 +64,11 @@ export function SensorChipSummary({
   historyDomain,
   historyTimeFilter,
 }: SensorChipSummaryProps) {
+  const definition = getSensorDefinition(definitionId);
+  const icon = iconProp ?? definition?.icon ?? 'lucide:activity';
+  const dataAccent = dataAccentProp ?? definition?.dataAccent;
+  const valueColor = valueColorProp ?? definition?.valueColor ?? 'accent';
+  const accentBorder = accentBorderProp ?? definition?.accent ?? false;
   const palette = useDocumentPalette();
   const metricColor = getChartColor(palette === 'rad' && dataAccent ? dataAccent : 'accent');
   const isDark = useDocumentTheme();

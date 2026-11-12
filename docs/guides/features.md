@@ -43,6 +43,17 @@ Eight reference vehicles are built in: Kia EV9, Tesla Model Y, Chevrolet Tahoe, 
 
 Fuel prices and vehicle search are optional [external connections](../guides/external-connections.md). With **Fuel prices** disabled, months already stored keep their price and the rest use your flat gas price. With **Vehicle lookup** disabled, vehicles can still be added by hand.
 
+## Maintenance jobs
+
+**Settings > Jobs** lists repair jobs you can run for each vehicle without a terminal. Each job shows when it last ran, whether it finished, and what it touched, and you can run it again at any time. Only a vehicle's owner or manager can start a job; other members can see the list.
+
+- **Charging history backfill** downloads the vehicle's full charging history from Rivian and merges it with the sessions Riviamigo recorded.
+- **Recalculate charging costs** prices every charging session again with its current cost profile, charging-network settings, and any corrections you made. Costs are normally worked out once, when a session ends or when you edit a cost profile; run this after an update that changes how costs are calculated, so older sessions pick up the fix. When it finishes, the page shows how many sessions it checked and how many changed.
+- **Recover missed charging sessions** adds sessions that the vehicle's charging telemetry shows but Riviamigo never recorded, and closes a session left open when Riviamigo restarted during a charge. It only adds sessions where nothing is recorded and only fills in values an open session is missing: it never changes, merges, or removes a recorded session or your corrections. Charges that ended in the last two hours are left for the normal charging tracker.
+- **Recalculate trip energy** works out each trip's energy use and efficiency again from its starting and ending battery levels, the same way new trips are calculated.
+- **Fill missing outside temperatures** queues a weather lookup for every trip that has no outside temperature, including trips whose earlier lookup failed. Temperatures fill in over the next few minutes as the weather service answers; trips that already have one are not changed.
+- **Fill missing addresses** looks up street addresses for trip starts and ends and for charging spots that have none, up to 100 trips and 100 sessions per run, so run it again if more remain. It uses the address lookup service only when that is turned on in **Settings > External Connections**, and lookups that fail are counted on the page.
+
 ## Vehicle images
 
 Settings, Overview, Charging, and Vehicle Health use artwork associated with the
