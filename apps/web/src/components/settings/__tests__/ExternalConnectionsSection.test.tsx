@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExternalConnectionsResponse } from '@riviamigo/types';
 
@@ -20,6 +20,7 @@ vi.mock('@riviamigo/hooks', () => ({
   queryKeys: {
     appVersion: { current: ['app-version'] },
     updateCheck: { current: ['update-check-settings'] },
+    externalConnections: { all: ['external-connections'] },
   },
   BASEMAP_CONFIG_QUERY_KEY: ['external', 'basemap', 'config', 'v2'],
 }));
@@ -197,12 +198,16 @@ describe('ExternalConnectionsSection', () => {
     const disabled = { ...initial, connections: initial.connections.map((item) => ({ ...item, enabled: false, mode: 'disabled' })) };
     apiMocks.getExternalConnections.mockResolvedValue(initial);
     apiMocks.disableOptionalExternalConnections.mockResolvedValue(disabled);
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     const { client } = renderSection();
     const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
 
     fireEvent.click(await screen.findByRole('button', { name: 'Disable optional' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Disable every optional external connection?' })).toBeInTheDocument();
+    expect(apiMocks.disableOptionalExternalConnections).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Disable optional' }));
     await waitFor(() => expect(apiMocks.disableOptionalExternalConnections).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['external', 'basemap', 'config', 'v2'] });
   });
 
@@ -213,11 +218,14 @@ describe('ExternalConnectionsSection', () => {
     connection.name = 'OpenStreetMap Nominatim';
     apiMocks.getExternalConnections.mockResolvedValue(data);
     apiMocks.purgeExternalConnectionCache.mockResolvedValue({ purged_entries: 24, message: 'Persistent cache purged.' });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderSection();
 
     expect(await screen.findByText(/24 entries/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Purge cache' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Purge the OpenStreetMap Nominatim cache?' })).toBeInTheDocument();
+    expect(apiMocks.purgeExternalConnectionCache).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Purge cache' }));
     await waitFor(() => expect(apiMocks.purgeExternalConnectionCache).toHaveBeenCalledWith('nominatim'));
   });
 
@@ -260,6 +268,25 @@ describe('ExternalConnectionsSection', () => {
       mode: 'remote',
     })));
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['external', 'basemap', 'config', 'v2'] });
+  });
+
+  it('stages and saves an EIA API key typed for fuel prices', async () => {
+    const data = response(true);
+    const connection = data.connections[0]!;
+    connection.id = 'fuel_prices';
+    connection.name = 'Fuel prices';
+    connection.mode = 'remote';
+    apiMocks.getExternalConnections.mockResolvedValue(data);
+    apiMocks.updateExternalConnection.mockResolvedValue(data);
+    renderSection();
+
+    const apiKey = await screen.findByLabelText('EIA API key');
+    fireEvent.change(apiKey, { target: { value: 'eia-secret' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('fuel_prices', expect.objectContaining({
+      api_key: 'eia-secret',
+    })));
   });
 
   it('lets administrators pin OpenFreeMap without exposing CARTO key controls', async () => {
@@ -440,6 +467,93 @@ describe('ExternalConnectionsSection', () => {
     expect(apiMocks.updateExternalConnection).not.toHaveBeenCalled();
   });
 
+  it('keeps a non-secret edit made while the save is in flight', async () => {
+    apiMocks.getExternalConnections.mockResolvedValue(response(true));
+    let finish!: (value: ExternalConnectionsResponse) => void;
+    apiMocks.updateExternalConnection.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    renderSection();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Weather location precision' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Exact route samples' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Weather location precision' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Approximate (~1 km)' }));
+    const saved = response(true);
+    saved.connections[0]!.weather_precision = 'exact';
+    await act(async () => finish(saved));
+
+    expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('open_meteo', expect.objectContaining({ weather_precision: 'exact' }));
+    expect(screen.getByRole('button', { name: 'Weather location precision' })).toHaveTextContent('Approximate');
+    expect(screen.getByRole('region', { name: 'Unsaved changes' })).toBeInTheDocument();
+  });
+
+  it('keeps a secret typed while the save is in flight and clears only the submitted one', async () => {
+    const data = basemapResponse({ has_api_key: false, basemap_provider: 'auto' });
+    apiMocks.getExternalConnections.mockResolvedValue(data);
+    let finish!: (value: ExternalConnectionsResponse) => void;
+    apiMocks.updateExternalConnection.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    renderSection();
+
+    fireEvent.change(await screen.findByLabelText('CARTO Basemap key'), { target: { value: 'first-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByLabelText('CARTO Basemap key'), { target: { value: 'second-key' } });
+    await act(async () => finish(data));
+
+    expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('basemap', expect.objectContaining({ api_key: 'first-key' }));
+    expect(screen.getByLabelText('CARTO Basemap key')).toHaveValue('second-key');
+    expect(screen.getByRole('region', { name: 'Unsaved changes' })).toBeInTheDocument();
+  });
+
+  it('clears the submitted secret once the save succeeds', async () => {
+    const data = basemapResponse({ has_api_key: false, basemap_provider: 'auto' });
+    apiMocks.getExternalConnections.mockResolvedValue(data);
+    apiMocks.updateExternalConnection.mockResolvedValue(data);
+    renderSection();
+
+    fireEvent.change(await screen.findByLabelText('CARTO Basemap key'), { target: { value: 'first-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Unsaved changes' })).not.toBeInTheDocument());
+    expect(screen.getByLabelText('CARTO Basemap key')).toHaveValue('');
+  });
+
+  it('keeps the connection staged with the API message when the save is rejected', async () => {
+    apiMocks.getExternalConnections.mockResolvedValue(response(true));
+    apiMocks.updateExternalConnection.mockRejectedValueOnce(Object.assign(new Error('400 validation_failed: Endpoint is not allowed'), {
+      code: 'validation_failed',
+      detail: { status: 400, code: 'validation_failed', message: 'Endpoint is not allowed', method: 'PUT', path: '/v1/external-connections/open_meteo' },
+    }));
+    renderSection();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Weather location precision' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Exact route samples' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Endpoint is not allowed');
+    expect(alert).not.toHaveTextContent('400');
+    expect(screen.getByRole('button', { name: 'Weather location precision' })).toHaveTextContent('Exact');
+    expect(screen.getByRole('region', { name: 'Unsaved changes' })).toBeInTheDocument();
+  });
+
+  it('shows the connection fallback instead of a raw transport message when the save fails without an API message', async () => {
+    apiMocks.getExternalConnections.mockResolvedValue(response(true));
+    apiMocks.updateExternalConnection.mockRejectedValueOnce(new Error('400 code: raw transport text'));
+    renderSection();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Weather location precision' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Exact route samples' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not save connection.');
+    expect(alert).not.toHaveTextContent('raw transport text');
+  });
+
   it('keeps unsaved CARTO key edits when the connection refetches', async () => {
     apiMocks.getExternalConnections.mockResolvedValue(basemapResponse({ has_api_key: false, basemap_provider: 'auto' }));
     const { client } = renderSection();
@@ -470,19 +584,41 @@ describe('ExternalConnectionsSection', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('confirms a disable on save and keeps the change staged when the user cancels', async () => {
+  it('asks before staging a disable of a live connection and stages nothing when the user cancels', async () => {
     apiMocks.getExternalConnections.mockResolvedValue(response(true));
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderSection();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open-Meteo weather mode' }));
     fireEvent.click(screen.getByRole('option', { name: 'Disabled' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Disable Open-Meteo weather?' })).toBeInTheDocument();
+    expect(within(dialog).getByText('No new estimated exterior temperatures; stored history remains.')).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Unsaved changes' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open-Meteo weather mode' })).toHaveTextContent('Remote Open-Meteo');
+    expect(apiMocks.updateExternalConnection).not.toHaveBeenCalled();
+  });
+
+  it('stages a confirmed disable and saves it without a second prompt', async () => {
+    apiMocks.getExternalConnections.mockResolvedValue(response(true));
+    const disabled = response(true);
+    disabled.connections[0] = { ...disabled.connections[0]!, enabled: false, mode: 'disabled' };
+    apiMocks.updateExternalConnection.mockResolvedValue(disabled);
+    renderSection();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open-Meteo weather mode' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Disabled' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Disable' }));
+    expect(screen.getByRole('region', { name: 'Unsaved changes' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Save cancelled.');
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Disable Open-Meteo weather?'));
-    expect(apiMocks.updateExternalConnection).not.toHaveBeenCalled();
-    expect(screen.getByRole('region', { name: 'Unsaved changes' })).toBeInTheDocument();
-    confirm.mockRestore();
+    await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('open_meteo', expect.objectContaining({
+      enabled: false,
+      mode: 'disabled',
+    })));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

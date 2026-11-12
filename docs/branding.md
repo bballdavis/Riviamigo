@@ -219,7 +219,7 @@ Common usage:
 
 ### Maps
 
-- **Follow appearance** paints OpenFreeMap vector basemaps from the active theme instead of the provider's stock palette, so maps match their cards in classic and RAD, light and dark. `packages/ui/src/lib/basemapTheme.ts` owns the transform; `TripMapChart` applies it through MapLibre's `setStyle(url, { transformStyle })`. Do not recolor maps elsewhere.
+- **Follow appearance** paints OpenFreeMap vector basemaps from the active theme instead of the provider's stock palette, so maps match their cards in classic and RAD, light and dark. `packages/ui/src/lib/basemapTheme.ts` owns the transform; `TripMapChart` applies it through MapLibre's `setStyle(url, { transformStyle })`. Do not recolor maps elsewhere. A map forced to the other light/dark mode (the Vehicle Overview's map override and the Trips table's map toggle) keeps the provider's stock style for that mode, because the theme tokens describe only the app's own mode; it is themed again once the app's mode matches.
 - Layers are matched by layer type and OpenMapTiles `source-layer`, never by provider layer IDs:
   - Background and land use the map ground. In dark themes the ground is `--rm-bg-surface`. In light themes it sits halfway from `--rm-bg-surface` toward `--rm-bg-elevated`, so white road fills stay visible.
   - `water` and `waterway` are muted tints of `--rm-status-info`. `park`, park-like `landuse`, and vegetated `landcover` are lighter tints of `--rm-status-positive`. Glaciers and ice stay neutral.

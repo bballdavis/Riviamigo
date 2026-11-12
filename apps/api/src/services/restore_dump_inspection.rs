@@ -23,7 +23,7 @@ pub async fn inspect_recovery_dump(
     root: &Path,
     limits: &RecoveryConfig,
 ) -> Result<DumpInspection, AppError> {
-    let workspace = RecoveryWorkspace::new(root, limits)?;
+    let workspace = RecoveryWorkspace::create(root, limits).await?;
     workspace.extract(package, limits).await?;
     let pg_restore = resolve_pg_restore_executable().await.ok_or_else(|| {
         AppError::DependencyUnavailable("pg_restore is unavailable for restore preflight".into())

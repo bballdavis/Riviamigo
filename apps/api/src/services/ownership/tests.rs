@@ -145,11 +145,14 @@ fn settings_validation_rejects_out_of_range_and_normalizes_custom_vehicles() {
     assert_eq!(vehicle.mpg, None);
     assert!(!vehicle.premium_fuel);
 
+    let mut multi_line = custom("custom-4", Powertrain::Gas, Some(25.0), None);
+    multi_line.label = "My\ncar".into();
     for invalid in [
         custom("kia_ev9", Powertrain::Gas, Some(25.0), None),
         custom("bad id", Powertrain::Gas, Some(25.0), None),
         custom("custom-2", Powertrain::Gas, None, None),
         custom("custom-3", Powertrain::Ev, None, None),
+        multi_line,
     ] {
         let settings = OwnershipSettings {
             comparisons: Comparisons {
@@ -175,4 +178,213 @@ fn reference_vehicles_have_unique_ids_and_the_figures_their_powertrain_needs() {
             _ => assert!(vehicle.mpg.is_some() && !vehicle.costs.maintenance.is_empty()),
         }
     }
+}
+
+#[test]
+fn labels_are_trimmed_bounded_and_single_line() {
+    assert_eq!(clean_label("  Kia ", 80).as_deref(), Some("Kia"));
+    assert_eq!(clean_label("Kia\n", 80).as_deref(), Some("Kia"));
+    assert_eq!(clean_label(&"é".repeat(60), 60).map(|l| l.len()), Some(120));
+    for rejected in ["", "   ", "Ki\na", "Ki\ta", "Ki\u{7f}a", "Ki\u{85}a"] {
+        assert_eq!(clean_label(rejected, 80), None, "{rejected:?}");
+    }
+    assert_eq!(clean_label(&"x".repeat(61), 60), None);
+}
+
+#[test]
+fn stored_labels_from_older_builds_load_in_a_saveable_form() {
+    use super::settings::{parse_comparisons, parse_maintenance};
+
+    let vehicle_id = uuid::Uuid::new_v4();
+    let comparisons = parse_comparisons(
+        vehicle_id,
+        json!({
+            "custom": [
+                { "id": "custom-1", "label": "Old\ttruck\n", "powertrain": "gas",
+                  "price_usd": 30000.0, "mpg": 18.0 },
+                { "id": "custom-2", "label": "\u{0007}", "powertrain": "gas",
+                  "price_usd": 30000.0, "mpg": 18.0 }
+            ]
+        }),
+    );
+    let labels: Vec<_> = comparisons
+        .custom
+        .iter()
+        .map(|v| v.label.as_str())
+        .collect();
+    assert_eq!(labels, ["Old truck"]);
+
+    let maintenance = parse_maintenance(
+        vehicle_id,
+        json!({
+            "own": [
+                { "id": "rotate", "label": "Rotate\r\ntires", "category": "tires",
+                  "interval_mi": 7500.0, "interval_months": null, "cost_usd": 40.0 }
+            ]
+        }),
+    );
+    assert_eq!(maintenance["own"][0].label, "Rotate tires");
+    // What loads now passes the save-time rule, so a later save succeeds.
+    for label in labels
+        .iter()
+        .copied()
+        .chain([maintenance["own"][0].label.as_str()])
+    {
+        assert_eq!(clean_label(label, 60).as_deref(), Some(label));
+    }
+}
+
+#[test]
+fn stored_settings_skip_only_the_entries_this_build_cannot_read() {
+    use super::settings::{parse_comparisons, parse_maintenance};
+
+    let vehicle_id = uuid::Uuid::new_v4();
+    let comparisons = parse_comparisons(
+        vehicle_id,
+        json!({
+            "enabled": ["kia_ev9", 7, "custom-1"],
+            "custom": [
+                { "id": "custom-1", "label": "Old truck", "powertrain": "gas",
+                  "price_usd": 30000.0, "mpg": 18.0 },
+                { "id": "custom-2", "label": "Future", "powertrain": "hydrogen",
+                  "price_usd": 1.0 },
+                { "id": "custom-3", "label": "Commuter", "powertrain": "ev",
+                  "price_usd": 25000.0, "kwh_per_mi": 0.3 }
+            ]
+        }),
+    );
+    assert_eq!(
+        comparisons.enabled,
+        Some(vec!["kia_ev9".to_string(), "custom-1".to_string()])
+    );
+    let ids: Vec<_> = comparisons.custom.iter().map(|v| v.id.as_str()).collect();
+    assert_eq!(ids, ["custom-1", "custom-3"]);
+
+    let maintenance = parse_maintenance(
+        vehicle_id,
+        json!({
+            "own": [
+                { "id": "rotate", "label": "Rotate tires", "category": "tires",
+                  "interval_mi": 7500.0, "interval_months": null, "cost_usd": 40.0 },
+                { "id": "laser", "label": "Laser alignment", "category": "lasers",
+                  "interval_mi": 1000.0, "interval_months": null, "cost_usd": 1.0 }
+            ],
+            "kia_ev9": [
+                { "id": "bad", "label": "Unreadable", "category": "unknown",
+                  "interval_mi": 1000.0, "interval_months": null, "cost_usd": 1.0 }
+            ],
+            "tesla_model_y": [],
+            "bmw_x7": "not a schedule"
+        }),
+    );
+    assert_eq!(maintenance["own"].len(), 1);
+    assert_eq!(maintenance["own"][0].id, "rotate");
+    // No readable items: fall back to the built-in schedule.
+    assert!(!maintenance.contains_key("kia_ev9"));
+    // An intentionally emptied schedule stays empty.
+    assert!(maintenance["tesla_model_y"].is_empty());
+    assert!(!maintenance.contains_key("bmw_x7"));
+
+    assert_eq!(
+        parse_comparisons(vehicle_id, json!("garbage")),
+        Comparisons::default()
+    );
+    assert!(parse_maintenance(vehicle_id, serde_json::Value::Null).is_empty());
+}
+
+#[test]
+fn fuel_price_refresh_decision_serves_fresh_or_recently_attempted_copies() {
+    use super::fuel_prices::{refresh_decision, RefreshDecision};
+    use chrono::{Duration, TimeZone, Utc};
+
+    let now = Utc.with_ymd_and_hms(2026, 11, 10, 12, 0, 0).unwrap();
+    let ago = |hours| Some(now - Duration::hours(hours));
+
+    // Stored within a day: serve it.
+    assert_eq!(
+        refresh_decision(now, ago(30), ago(30), false, ago(2)),
+        RefreshDecision::Serve {
+            refresh_failed: false
+        }
+    );
+    // Stale, but a failed attempt an hour ago holds the retry back.
+    assert_eq!(
+        refresh_decision(now, ago(1), ago(40), true, ago(40)),
+        RefreshDecision::Serve {
+            refresh_failed: true
+        }
+    );
+    // Stale and the last attempt is old: refresh, remembering the failure.
+    assert_eq!(
+        refresh_decision(now, ago(7), ago(40), true, ago(40)),
+        RefreshDecision::Refresh {
+            previously_failed: true
+        }
+    );
+    // Nothing stored yet and only a connection test recorded an attempt.
+    assert_eq!(
+        refresh_decision(now, ago(1), None, false, None),
+        RefreshDecision::Refresh {
+            previously_failed: false
+        }
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
+async fn fuel_price_refresh_claim_admits_one_refresh_per_observed_attempt() {
+    use super::fuel_prices::claim_fuel_price_refresh;
+
+    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+        .await
+        .expect("test database");
+    let mut tx = pool.begin().await.expect("test transaction");
+    // A private activity row keeps the real fuel-price connection untouched.
+    let connection_id = format!("test-fuel-claim-{}", uuid::Uuid::new_v4());
+    let last_attempt = || {
+        sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+            "SELECT last_attempt_at FROM riviamigo.external_connection_activity
+             WHERE connection_id = $1",
+        )
+        .bind(&connection_id)
+    };
+
+    // No row yet: the first claimant creates it and wins; a second claimant
+    // that read the same empty state loses.
+    assert!(claim_fuel_price_refresh(&mut *tx, &connection_id, None)
+        .await
+        .unwrap());
+    assert!(!claim_fuel_price_refresh(&mut *tx, &connection_id, None)
+        .await
+        .unwrap());
+
+    // A claimant that read the winner's attempt can claim the next refresh;
+    // anyone holding the older observation still loses.
+    let observed = last_attempt().fetch_one(&mut *tx).await.unwrap();
+    assert!(observed.is_some());
+    sqlx::query(
+        "UPDATE riviamigo.external_connection_activity
+         SET last_attempt_at = last_attempt_at - interval '1 day'
+         WHERE connection_id = $1",
+    )
+    .bind(&connection_id)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    assert!(
+        !claim_fuel_price_refresh(&mut *tx, &connection_id, observed)
+            .await
+            .unwrap()
+    );
+    let observed = last_attempt().fetch_one(&mut *tx).await.unwrap();
+    assert!(claim_fuel_price_refresh(&mut *tx, &connection_id, observed)
+        .await
+        .unwrap());
+    assert!(
+        !claim_fuel_price_refresh(&mut *tx, &connection_id, observed)
+            .await
+            .unwrap()
+    );
+
+    tx.rollback().await.expect("rollback test fixtures");
 }

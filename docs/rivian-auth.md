@@ -80,6 +80,12 @@ account, the supervisor replaces that completed worker and starts ingestion
 immediately. A successful refresh should therefore be followed by worker health
 and telemetry-timestamp checks, not only by an `authorized` database state.
 
+A vehicle whose collection a manager paused is the exception: the refresh
+stores the credentials and marks the vehicle `authorized`, but sends no
+worker-start command and does not wait for vehicle data. The response reports
+`connection_status` and `telemetry_status` as `paused`, and resuming the
+vehicle starts the worker.
+
 ## Advisory Renewal Policy
 
 Riviamigo treats the durable token bundle creation time as the most recent full
@@ -88,6 +94,14 @@ typed `renewal_state`: `healthy`, `renewal_soon`, `renewal_due`, or
 `reauth_required`. The seven-day `renewal_soon` threshold is an application
 policy informed by current unofficial-client behavior, not an official Rivian
 expiry guarantee. Observed credential rejection always overrides the timer.
+
+The Rivian account entry in `GET /v1/settings/external-connections` is
+computed per caller: the earliest credential time, the credential-rejection
+override, and the reported worker health and message cover only vehicles the
+caller is a member of (only the key's vehicle for a vehicle-scoped API key),
+and leave out vehicles whose collection is paused. One user's vehicle needing
+reauthorization therefore does not mark the connection `reauth_required` for
+members of other vehicles, and its worker message is not shown to them.
 
 A successful full login or OTP credential refresh resets the creation time.
 Automatic CSRF/app-session renewal preserves it because that rotation does not

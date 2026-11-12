@@ -61,8 +61,10 @@ every vehicle offline. A paused vehicle stays paused across restarts.
 `pnpm stop` ends this checkout's host-run dev servers: any `dev:stack`
 launcher, the Vite web server, the API, and the restore agent. It matches
 processes by this checkout's paths, so Vite servers from other repositories
-or other worktrees are left alone. Docker services keep running and keep their
-data. `pnpm dev:stack` runs the same cleanup (without the launcher step) before
+or other worktrees are left alone. On Windows, pnpm starts the launcher with a
+relative path that names no checkout, so the launcher records its process ID in
+`data/dev-launcher.pid` and `pnpm stop` matches that ID. Docker services keep
+running and keep their data. `pnpm dev:stack` runs the same cleanup (without the launcher step) before
 it allocates ports. If two stacks run at once, the second one moves to fallback
 ports, and signing in to the wrong one fails because each Compose project has
 its own users.

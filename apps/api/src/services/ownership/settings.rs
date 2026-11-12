@@ -11,6 +11,7 @@ use crate::{
     services::ownership_schedules::{validate_schedule, MaintenanceItem},
 };
 
+use super::labels::{clean_label, repair_stored_label};
 use super::reference::{reference_vehicles, Powertrain};
 
 const MAX_CUSTOM_VEHICLES: usize = 12;
@@ -164,7 +165,6 @@ pub fn validate_settings(
     let reserved: Vec<&str> = reference_vehicles().iter().map(|v| v.id).collect();
     let mut seen = std::collections::HashSet::new();
     for vehicle in custom.iter_mut() {
-        vehicle.label = vehicle.label.trim().to_string();
         if !valid_id(&vehicle.id)
             || reserved.contains(&vehicle.id.as_str())
             || !seen.insert(vehicle.id.clone())
@@ -173,11 +173,12 @@ pub fn validate_settings(
                 "custom comparison vehicle ids must be unique".into(),
             ));
         }
-        if vehicle.label.is_empty() || vehicle.label.chars().count() > 80 {
-            return Err(AppError::Validation(
-                "custom comparison vehicle name must be 1 to 80 characters".into(),
-            ));
-        }
+        vehicle.label = clean_label(&vehicle.label, 80).ok_or_else(|| {
+            AppError::Validation(
+                "custom comparison vehicle name must be 1 to 80 characters without line breaks or tabs"
+                    .into(),
+            )
+        })?;
         check_amount(
             "custom vehicle price",
             Some(vehicle.price_usd),
@@ -243,12 +244,115 @@ pub async fn load_settings(pool: &PgPool, vehicle_id: Uuid) -> Result<OwnershipS
             tire_set_cost_usd: row.tire_set_cost_usd,
             gas_price_usd_per_gallon: row.gas_price_usd_per_gallon,
             projection_years: row.projection_years,
-            // A shape this build cannot read falls back to the defaults
-            // rather than making the whole page fail.
-            comparisons: serde_json::from_value(row.comparisons).unwrap_or_default(),
-            maintenance: serde_json::from_value(row.maintenance).unwrap_or_default(),
+            // An entry this build cannot read is skipped rather than making
+            // the whole page fail. Each entry is read on its own: the next
+            // save replaces the whole record, so discarding a whole map for
+            // one bad entry would erase every other entry permanently.
+            comparisons: parse_comparisons(vehicle_id, row.comparisons),
+            maintenance: parse_maintenance(vehicle_id, row.maintenance),
         },
     })
+}
+
+/// Read stored comparison choices entry by entry, skipping only the entries
+/// this build cannot read.
+pub(super) fn parse_comparisons(vehicle_id: Uuid, value: serde_json::Value) -> Comparisons {
+    let serde_json::Value::Object(mut fields) = value else {
+        if !value.is_null() {
+            tracing::warn!(%vehicle_id, "ownership.settings.comparisons_unreadable");
+        }
+        return Comparisons::default();
+    };
+    let enabled = match fields.remove("enabled") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::Array(ids)) => Some(
+            ids.into_iter()
+                .filter_map(|id| match id {
+                    serde_json::Value::String(id) => Some(id),
+                    _ => {
+                        tracing::warn!(%vehicle_id, "ownership.settings.comparison_id_skipped");
+                        None
+                    }
+                })
+                .collect(),
+        ),
+        Some(_) => {
+            tracing::warn!(%vehicle_id, "ownership.settings.comparison_ids_unreadable");
+            None
+        }
+    };
+    let custom = match fields.remove("custom") {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(serde_json::Value::Array(entries)) => entries
+            .into_iter()
+            .filter_map(|entry| match serde_json::from_value::<CustomVehicle>(entry) {
+                Ok(mut vehicle) => match repair_stored_label(&vehicle.label, 80) {
+                    Some(label) => {
+                        vehicle.label = label;
+                        Some(vehicle)
+                    }
+                    None => {
+                        tracing::warn!(%vehicle_id, "ownership.settings.custom_vehicle_label_unreadable");
+                        None
+                    }
+                },
+                Err(error) => {
+                    tracing::warn!(%vehicle_id, %error, "ownership.settings.custom_vehicle_skipped");
+                    None
+                }
+            })
+            .collect(),
+        Some(_) => {
+            tracing::warn!(%vehicle_id, "ownership.settings.custom_vehicles_unreadable");
+            Vec::new()
+        }
+    };
+    Comparisons { enabled, custom }
+}
+
+/// Read stored maintenance schedules item by item. A schedule none of whose
+/// items can be read is dropped so the vehicle falls back to its built-in
+/// schedule instead of an empty one.
+pub(super) fn parse_maintenance(
+    vehicle_id: Uuid,
+    value: serde_json::Value,
+) -> std::collections::BTreeMap<String, Vec<MaintenanceItem>> {
+    let serde_json::Value::Object(schedules) = value else {
+        if !value.is_null() {
+            tracing::warn!(%vehicle_id, "ownership.settings.maintenance_unreadable");
+        }
+        return Default::default();
+    };
+    schedules
+        .into_iter()
+        .filter_map(|(key, schedule)| {
+            let serde_json::Value::Array(items) = schedule else {
+                tracing::warn!(%vehicle_id, schedule = %key, "ownership.settings.maintenance_schedule_skipped");
+                return None;
+            };
+            let stored = items.len();
+            let parsed: Vec<MaintenanceItem> = items
+                .into_iter()
+                .filter_map(|item| match serde_json::from_value::<MaintenanceItem>(item) {
+                    Ok(mut item) => match repair_stored_label(&item.label, 60) {
+                        Some(label) => {
+                            item.label = label;
+                            Some(item)
+                        }
+                        None => {
+                            tracing::warn!(%vehicle_id, schedule = %key, "ownership.settings.maintenance_label_unreadable");
+                            None
+                        }
+                    },
+                    Err(error) => {
+                        tracing::warn!(%vehicle_id, schedule = %key, %error, "ownership.settings.maintenance_item_skipped");
+                        None
+                    }
+                })
+                .collect();
+            (stored == 0 || !parsed.is_empty()).then_some((key, parsed))
+        })
+        .collect()
 }
 
 pub async fn save_settings(

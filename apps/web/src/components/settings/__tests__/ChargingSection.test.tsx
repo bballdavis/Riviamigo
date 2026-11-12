@@ -35,6 +35,14 @@ import { ChargingSection } from '../ChargingSection';
 
 const RIVIAN = 'Rivian Adventure Network';
 
+/** Mirrors the transport's API error: the readable server message lives on `detail`. */
+function apiError(message: string) {
+  return Object.assign(new Error(`400 validation_failed: ${message}`), {
+    code: 'validation_failed',
+    detail: { status: 400, code: 'validation_failed', message, method: 'PUT', path: '/v1/charging/network-preferences' },
+  });
+}
+
 function renderSection() {
   return render(<SettingsDraftProvider><ChargingSection /></SettingsDraftProvider>);
 }
@@ -97,15 +105,29 @@ describe('ChargingSection', () => {
   });
 
   it('keeps the bar open with the API message when a save fails', async () => {
-    hooks.mutateAsync.mockRejectedValueOnce(new Error('Vehicle is not reachable'));
+    hooks.mutateAsync.mockRejectedValueOnce(apiError('Vehicle is not reachable'));
     renderSection();
 
     fireEvent.click(screen.getByRole('button', { name: 'Free' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Vehicle is not reachable Try again.');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Vehicle is not reachable');
+    expect(alert).not.toHaveTextContent('400');
     expect(screen.getByRole('region', { name: 'Unsaved changes' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Free' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('shows the fallback instead of a raw transport message when the save fails without an API message', async () => {
+    hooks.mutateAsync.mockRejectedValueOnce(new Error('400 code: raw transport text'));
+    renderSection();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Free' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Charging policy could not be saved. Try again.');
+    expect(alert).not.toHaveTextContent('raw transport text');
   });
 
   it('keeps policies visible but read-only for a viewer', () => {

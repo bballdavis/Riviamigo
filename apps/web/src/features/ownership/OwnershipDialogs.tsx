@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 import { api, useOwnershipVehicleLookupMenu } from '@riviamigo/hooks';
 import type { OwnershipCustomVehicle, OwnershipPowertrain } from '@riviamigo/types';
 import { Button, Input, ResponsiveDialog, SelectPicker, Switch } from '@riviamigo/ui/primitives';
+import { ownershipLabelError } from './ownershipLabels';
 
 const CLOSE_BUTTON_CLASS =
   'inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-fg-tertiary transition-colors hover:bg-bg-elevated hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent';
@@ -56,7 +57,8 @@ type DraftErrors = Partial<Record<'label' | 'price' | 'mpg' | 'kwhPerMi', string
 function draftToVehicle(draft: VehicleDraft): { vehicle: OwnershipCustomVehicle | null; errors: DraftErrors } {
   const errors: DraftErrors = {};
   const label = draft.label.trim();
-  if (!label || label.length > 80) errors.label = 'Enter a name of 1 to 80 characters.';
+  const labelError = ownershipLabelError(draft.label, 80);
+  if (labelError) errors.label = labelError;
   const number = (raw: string) => Number(raw.trim().replace(/[$,\s]/g, ''));
   const price = number(draft.price);
   if (!draft.price.trim() || !Number.isFinite(price) || price <= 0 || price > 10_000_000) {

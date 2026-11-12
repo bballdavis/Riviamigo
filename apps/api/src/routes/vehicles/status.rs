@@ -2,8 +2,6 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Duration, Utc};
-
 use super::{LatestVehicleTelemetry, VehicleRuntimeStateRow};
 
 #[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
@@ -25,24 +23,28 @@ pub(super) enum StatusFieldAvailabilityReasonCode {
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub(super) struct StatusFieldAvailability {
     pub(super) ever_seen: bool,
-    pub(super) last_seen_at: Option<DateTime<Utc>>,
-    pub(super) latest_event_at: Option<DateTime<Utc>>,
+    pub(super) last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub(super) latest_event_at: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) availability: StatusFieldAvailabilityState,
     pub(super) reason_code: Option<StatusFieldAvailabilityReasonCode>,
 }
 
-const WS_RECEIVE_STALE_AFTER: Duration = Duration::minutes(10);
-const BATTERY_STATUS_STALE_AFTER: Duration = Duration::minutes(90);
-const RANGE_STATUS_STALE_AFTER: Duration = Duration::minutes(90);
-const CHARGING_STATUS_STALE_AFTER: Duration = Duration::minutes(45);
+const WS_RECEIVE_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(10);
+const BATTERY_STATUS_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(90);
+const RANGE_STATUS_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(90);
+const CHARGING_STATUS_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(45);
 
-fn timestamp_is_older_than(now: DateTime<Utc>, ts: Option<DateTime<Utc>>, threshold: Duration) -> bool {
+fn timestamp_is_older_than(
+    now: chrono::DateTime<chrono::Utc>,
+    ts: Option<chrono::DateTime<chrono::Utc>>,
+    threshold: chrono::Duration,
+) -> bool {
     ts.is_some_and(|value| now - value >= threshold)
 }
 
 pub(super) fn classify_status_field_availability(
-    latest_event_at: Option<DateTime<Utc>>,
-    last_seen_at: Option<DateTime<Utc>>,
+    latest_event_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
     reason_override: Option<StatusFieldAvailabilityReasonCode>,
 ) -> StatusFieldAvailability {
     let availability = match (latest_event_at, last_seen_at) {
@@ -73,16 +75,16 @@ pub(super) fn classify_status_field_availability(
 }
 
 pub(super) fn max_seen_at(
-    values: impl IntoIterator<Item = Option<DateTime<Utc>>>,
-) -> Option<DateTime<Utc>> {
+    values: impl IntoIterator<Item = Option<chrono::DateTime<chrono::Utc>>>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
     values.into_iter().flatten().max()
 }
 
 pub(super) fn insert_field_availability(
     availability: &mut BTreeMap<String, StatusFieldAvailability>,
     field: &str,
-    latest_event_at: Option<DateTime<Utc>>,
-    last_seen_at: Option<DateTime<Utc>>,
+    latest_event_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
     reason_override: Option<StatusFieldAvailabilityReasonCode>,
 ) {
     availability.insert(
@@ -92,7 +94,7 @@ pub(super) fn insert_field_availability(
 }
 
 pub(super) fn derive_vehicle_status_freshness(
-    now: DateTime<Utc>,
+    now: chrono::DateTime<chrono::Utc>,
     runtime: Option<&VehicleRuntimeStateRow>,
     latest: &LatestVehicleTelemetry,
 ) -> (Option<String>, bool, Option<String>) {
@@ -132,11 +134,13 @@ pub(super) fn derive_vehicle_status_freshness(
     let charging_active = latest
         .charger_state
         .as_deref()
-        .is_some_and(|state| state == "charging")
+        .map(|state| matches!(state, "charging"))
+        .unwrap_or(false)
         || latest
             .charger_status
             .as_deref()
-            .is_some_and(|status| status.eq_ignore_ascii_case("chrgr_sts_connected_charging"))
+            .map(|status| status.eq_ignore_ascii_case("chrgr_sts_connected_charging"))
+            .unwrap_or(false)
         || latest.time_to_end_of_charge_min.is_some();
 
     if charging_active

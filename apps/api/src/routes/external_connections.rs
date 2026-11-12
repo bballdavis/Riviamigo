@@ -156,11 +156,12 @@ async fn list_connections(
 ) -> Result<Json<ExternalConnectionsResponse>, AppError> {
     let role = get_user_role(&state.pool, auth.user_id).await?;
     let can_manage = matches!(role, UserRole::Admin | UserRole::SuperUser);
-    Ok(Json(build_response(&state, can_manage).await?))
+    Ok(Json(build_response(&state, &auth, can_manage).await?))
 }
 
 async fn build_response(
     state: &AppState,
+    auth: &AuthUser,
     can_manage: bool,
 ) -> Result<ExternalConnectionsResponse, AppError> {
     let rows = connections::list(&state.pool).await?;
@@ -171,7 +172,8 @@ async fn build_response(
     .await?
     .unwrap_or((false, None));
     let mut result = Vec::with_capacity(rows.len());
-    let rivian_status = connections::rivian_status(&state.pool).await?;
+    let rivian_status =
+        connections::rivian_status(&state.pool, auth.user_id, auth.api_vehicle_id).await?;
     for (settings, activity) in rows {
         let Some(definition) = DEFINITIONS.iter().find(|item| item.id == settings.id) else {
             continue;
@@ -599,7 +601,7 @@ async fn update_connection(
         _ => {}
     }
 
-    Ok(Json(build_response(&state, true).await?))
+    Ok(Json(build_response(&state, &auth, true).await?))
 }
 
 async fn disable_optional(
@@ -614,7 +616,7 @@ async fn disable_optional(
     .bind(connections::OPTIONAL_CONNECTIONS)
     .execute(&state.pool)
     .await?;
-    Ok(Json(build_response(&state, true).await?))
+    Ok(Json(build_response(&state, &auth, true).await?))
 }
 
 #[derive(Debug, Serialize)]

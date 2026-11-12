@@ -113,8 +113,8 @@ function VehicleIngestionCaptureRow({ vehicle }: { vehicle: Vehicle }) {
             Retry status check
           </button>
         )}
-        {(start.isError || stop.isError) && <p className="mt-1 text-xs text-danger">Could not change the capture. Try again.</p>}
-        {download.isError && <p className="mt-1 text-xs text-danger">Could not download the capture. Try again.</p>}
+        {(start.isError || stop.isError) && <p className="mt-1 text-xs text-status-danger">Could not change the capture. Try again.</p>}
+        {download.isError && <p className="mt-1 text-xs text-status-danger">Could not download the capture. Try again.</p>}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {state === 'stopped' && (

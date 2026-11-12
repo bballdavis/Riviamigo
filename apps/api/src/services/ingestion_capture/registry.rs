@@ -99,6 +99,36 @@ pub(super) fn unregister(vehicle_id: Uuid) -> Option<Window> {
         .and_then(|capture| capture.windows.write().ok()?.remove(&vehicle_id))
 }
 
+/// Put back a window that [`unregister`] removed when its database change
+/// failed, unless a newer capture has been registered meanwhile.
+pub(super) fn restore(vehicle_id: Uuid, window: Window) {
+    if let Some(capture) = CAPTURE.get() {
+        if let Ok(mut windows) = capture.windows.write() {
+            windows.entry(vehicle_id).or_insert(window);
+        }
+    }
+}
+
+/// The capture currently registered for a vehicle, expired or not.
+#[cfg(test)]
+pub(super) fn registered_capture(vehicle_id: Uuid) -> Option<Uuid> {
+    CAPTURE
+        .get()?
+        .windows
+        .read()
+        .ok()?
+        .get(&vehicle_id)
+        .map(|window| window.capture_id)
+}
+
+/// Install the registry without a writer, for lifecycle tests. Records sent
+/// to it are counted as dropped.
+#[cfg(test)]
+pub(super) fn install_for_tests() {
+    let (tx, _rx) = mpsc::channel(1);
+    let _ = install(tx);
+}
+
 /// Install the registry and the writer's channel. Returns false when the
 /// service was already initialised.
 pub(super) fn install(tx: mpsc::Sender<Record>) -> bool {

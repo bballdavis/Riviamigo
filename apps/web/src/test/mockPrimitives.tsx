@@ -249,6 +249,14 @@ export const UnsavedChangesBar = ({ message, error, saving, onSave, onDiscard, s
 
 export const UnsavedChangesBarSpacer = () => <div />;
 
-export const ResponsiveDialog = ({ titleId, children }: { titleId: string; onClose: () => void; children: React.ReactNode; className?: string }) => (
-  <div role="dialog" aria-modal="true" aria-labelledby={titleId}>{children}</div>
-);
+export const ResponsiveDialog = ({ titleId, onClose, children }: { titleId: string; onClose: () => void; children: React.ReactNode; className?: string }) => {
+  // Mirrors the real primitive's Escape dismissal so tests can exercise it.
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onCloseRef.current(); };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, []);
+  return <div role="dialog" aria-modal="true" aria-labelledby={titleId}>{children}</div>;
+};

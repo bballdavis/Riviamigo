@@ -1193,8 +1193,9 @@ export interface RefreshVehicleCredentialsResult {
   ok: boolean;
   vehicle_id: string;
   vehicle_saved: boolean;
-  connection_status: 'connected' | 'connected_waiting_for_vehicle_data';
-  telemetry_status: 'connected' | 'waiting_for_vehicle_data' | 'delayed';
+  /** `paused` when a manager paused data collection for this vehicle. */
+  connection_status: 'connected' | 'connected_waiting_for_vehicle_data' | 'paused';
+  telemetry_status: 'connected' | 'waiting_for_vehicle_data' | 'delayed' | 'paused';
   telemetry_error: string | null;
 }
 

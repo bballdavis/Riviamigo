@@ -211,13 +211,19 @@ A capture file contains:
 - `trip`: the trip detector's power and speed choices, GNSS and odometer
   evidence, start decision, and transition;
 - `poll`: each Rivian GraphQL fetch (vehicle-state baseline, vehicle details,
-  wallboxes, charge history, charging schedule) with its outcome. The startup
+  wallboxes, charge history, charging schedule) with its outcome. A failed
+  fetch records an error class (`auth_required`, `transport`, `http_status`
+  with the status code, `graphql`, `not_found`, or `other`) instead of the
+  error text. The startup
   fetches run when the vehicle's worker starts, so they appear only in a
   capture that spans an API restart. The baseline's fields also appear as a
   `legacy_frame` with message type `baseline`.
 
 Captures never include coordinates, credentials, the VIN, the vehicle ID, or
 vehicle and account names. GNSS frames record only that a location was present.
+Rivian error messages and close reasons are free text that can name the
+vehicle, so `legacy_connection` events keep only their type, codes, and
+Riviamigo's own classification of them.
 
 Operators can still follow API output with
 `docker compose --env-file .env -f compose/docker-compose.yml logs -f riviamigo`,

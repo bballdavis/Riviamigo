@@ -1,7 +1,7 @@
 //! Capture lifecycle: startup restore, start and stop, and the expiry and purge
 //! tasks that bound each capture's life and storage.
 
-use std::{sync::atomic::Ordering, time::Duration};
+use std::{future::Future, sync::atomic::Ordering, time::Duration};
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -14,6 +14,13 @@ use super::{
     writer::run_writer,
     Kind, StopReason, CAPTURE_DURATION, CAPTURE_RETENTION,
 };
+
+/// Serializes capture starts and stops so the in-memory registry changes in
+/// the same order as their database commits. The batch writer joins records
+/// to the committed capture row, so an out-of-order registration would make
+/// it drop every record silently. Captures are owner-started and rare, so one
+/// process-wide lock is enough.
+static LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 const CHANNEL_CAPACITY: usize = 4096;
 const EXPIRY_INTERVAL: Duration = Duration::from_secs(15);
@@ -50,9 +57,30 @@ pub async fn init(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Start a new capture, replacing the vehicle's previous one.
+/// Start a new capture, replacing the vehicle's previous one. The previous
+/// capture keeps recording until the replacement has committed, and stays
+/// registered (so expiry still closes it) when the replacement fails.
 pub async fn start(pool: &PgPool, vehicle_id: Uuid, user_id: Uuid) -> anyhow::Result<()> {
-    unregister(vehicle_id);
+    replace_capture(vehicle_id, || begin_capture(pool, vehicle_id, user_id)).await
+}
+
+/// Commit a replacement capture, then register it, under [`LIFECYCLE`].
+pub(super) async fn replace_capture<F, Fut>(vehicle_id: Uuid, commit: F) -> anyhow::Result<()>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = anyhow::Result<(Uuid, DateTime<Utc>)>>,
+{
+    let _serialized = LIFECYCLE.lock().await;
+    let (capture_id, ends_at) = commit().await?;
+    register(vehicle_id, capture_id, ends_at);
+    Ok(())
+}
+
+async fn begin_capture(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    user_id: Uuid,
+) -> anyhow::Result<(Uuid, DateTime<Utc>)> {
     let capture_id = Uuid::new_v4();
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM riviamigo.vehicle_ingestion_capture_events WHERE vehicle_id = $1")
@@ -85,17 +113,50 @@ pub async fn start(pool: &PgPool, vehicle_id: Uuid, user_id: Uuid) -> anyhow::Re
     )
     .await?;
     tx.commit().await?;
-    register(vehicle_id, capture_id, ends_at);
-    Ok(())
+    Ok((capture_id, ends_at))
 }
 
 /// Stop the running capture, keeping its events for download. Returns false
 /// when no capture was running.
 pub async fn stop(pool: &PgPool, vehicle_id: Uuid, reason: StopReason) -> anyhow::Result<bool> {
+    close_capture(vehicle_id, |dropped| {
+        end_capture(pool, vehicle_id, reason, dropped)
+    })
+    .await
+}
+
+/// Unregister the capture and close it in the database, under [`LIFECYCLE`].
+/// When the close fails nothing was committed, so the window is restored and
+/// expiry (or the owner) can retry instead of leaving an open, unregistered
+/// capture that nothing would ever close.
+pub(super) async fn close_capture<F, Fut>(vehicle_id: Uuid, close: F) -> anyhow::Result<bool>
+where
+    F: FnOnce(u64) -> Fut,
+    Fut: Future<Output = anyhow::Result<bool>>,
+{
+    let _serialized = LIFECYCLE.lock().await;
     let window = unregister(vehicle_id);
     let dropped = window
         .as_ref()
         .map_or(0, |window| window.dropped.load(Ordering::Relaxed));
+    match close(dropped).await {
+        Ok(stopped) => Ok(stopped),
+        Err(error) => {
+            if let Some(window) = window {
+                registry::restore(vehicle_id, window);
+            }
+            Err(error)
+        }
+    }
+}
+
+async fn end_capture(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    reason: StopReason,
+    dropped: u64,
+) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await?;
     let stopped = sqlx::query_as::<_, (Uuid, DateTime<Utc>)>(
         "UPDATE riviamigo.vehicle_ingestion_diagnostics \
          SET stopped_at = LEAST(now(), enabled_until), stop_reason = $2, \
@@ -106,13 +167,13 @@ pub async fn stop(pool: &PgPool, vehicle_id: Uuid, reason: StopReason) -> anyhow
     .bind(vehicle_id)
     .bind(reason.as_str())
     .bind(i64::try_from(dropped).unwrap_or(i64::MAX))
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
     let Some((capture_id, stopped_at)) = stopped else {
         return Ok(false);
     };
     insert_marker(
-        pool,
+        &mut *tx,
         vehicle_id,
         capture_id,
         stopped_at,
@@ -120,6 +181,7 @@ pub async fn stop(pool: &PgPool, vehicle_id: Uuid, reason: StopReason) -> anyhow
         serde_json::json!({ "reason": reason.as_str(), "dropped_events": dropped }),
     )
     .await?;
+    tx.commit().await?;
     Ok(true)
 }
 
