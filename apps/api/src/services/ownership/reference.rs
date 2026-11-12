@@ -61,6 +61,19 @@ pub fn own_vehicle_defaults() -> CostAssumptions {
     assumptions(0.85, 185.0, "own")
 }
 
+/// EPA combined consumption for the tracked Rivian, in kWh per mile from the
+/// wall. A typical figure for the model, not the exact trim, pack and wheel:
+/// the ledger only uses it to compare the owner's real consumption with the
+/// rating, so a comparison EV's rating can be adjusted the same way. `None`
+/// for a model without a published rating leaves the comparison unadjusted.
+pub fn own_rated_kwh_per_mi(model: &str) -> Option<f64> {
+    match model.trim().to_ascii_uppercase().as_str() {
+        "R1T" => Some(0.46),
+        "R1S" => Some(0.47),
+        _ => None,
+    }
+}
+
 /// Assumptions for a vehicle the owner adds, by powertrain.
 pub fn class_defaults() -> ClassDefaults {
     ClassDefaults {

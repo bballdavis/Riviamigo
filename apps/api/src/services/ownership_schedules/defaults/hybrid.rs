@@ -82,7 +82,7 @@ pub(super) fn toyota_camry_hybrid() -> Vec<MaintenanceItem> {
             "Tires (set of 4)",
             Tires,
             Some(50_000.0),
-            None,
+            Some(72),
             800.0,
         ),
     ]
@@ -162,7 +162,7 @@ pub(super) fn toyota_prius() -> Vec<MaintenanceItem> {
             "Tires (set of 4)",
             Tires,
             Some(50_000.0),
-            None,
+            Some(72),
             750.0,
         ),
     ]

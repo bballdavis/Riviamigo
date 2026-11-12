@@ -17,6 +17,7 @@ export function normalizeOwnershipResponse(data: OwnershipResponse): OwnershipRe
     settings: {
       ...data.settings,
       projection_years: data.settings?.projection_years ?? null,
+      purchase_odometer_mi: data.settings?.purchase_odometer_mi ?? null,
       comparisons: {
         enabled: comparisons?.enabled ?? null,
         custom: Array.isArray(comparisons?.custom) ? comparisons.custom : [],

@@ -20,13 +20,13 @@ pub use lookup::{
     lookup_json, parse_lookup_menu, parse_lookup_vehicle, LookupOption, LookupVehicle,
 };
 pub use reference::{
-    class_defaults, own_vehicle_defaults, reference_vehicles, ClassDefaults, CostAssumptions,
-    Powertrain, ReferenceVehicle,
+    class_defaults, own_rated_kwh_per_mi, own_vehicle_defaults, reference_vehicles, ClassDefaults,
+    CostAssumptions, Powertrain, ReferenceVehicle,
 };
 pub use settings::{
     load_settings, save_settings, validate_settings, Comparisons, CustomVehicle, OwnershipSettings,
 };
-pub use usage::{load_usage, Usage, UsageMonth};
+pub use usage::{load_model, load_usage, Usage, UsageMonth};
 
 #[cfg(test)]
 mod tests;

@@ -65,14 +65,15 @@ pub(super) fn rivian_own() -> Vec<MaintenanceItem> {
             "Tires (set of 4)",
             Tires,
             Some(30_000.0),
-            None,
+            Some(72),
             1_800.0,
         ),
     ]
 }
 
 /// Tesla Model Y: rotation every 6,250 mi, cabin filter every 2 years,
-/// HEPA filter every 3 years, brake fluid checked every 4 years.
+/// HEPA filter every 3 years, brake fluid checked every 4 years. Owners
+/// commonly report a tire set lasting 15,000 to 20,000 mi.
 pub(super) fn tesla_model_y() -> Vec<MaintenanceItem> {
     vec![
         item(
@@ -112,8 +113,8 @@ pub(super) fn tesla_model_y() -> Vec<MaintenanceItem> {
             "tires",
             "Tires (set of 4)",
             Tires,
-            Some(40_000.0),
-            None,
+            Some(18_000.0),
+            Some(72),
             1_300.0,
         ),
     ]
@@ -176,7 +177,7 @@ pub(super) fn kia_ev9() -> Vec<MaintenanceItem> {
             "Tires (set of 4)",
             Tires,
             Some(40_000.0),
-            None,
+            Some(72),
             1_400.0,
         ),
     ]
@@ -229,7 +230,7 @@ pub(super) fn class_ev() -> Vec<MaintenanceItem> {
             "Tires (set of 4)",
             Tires,
             Some(40_000.0),
-            None,
+            Some(72),
             1_300.0,
         ),
     ]

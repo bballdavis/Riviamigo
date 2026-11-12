@@ -7,6 +7,7 @@ import { DEFAULT_PROJECTION_YEARS, MAX_PROJECTION_YEARS } from './model';
 export interface OwnershipCostsForm {
   purchasePrice: string;
   purchaseDate: string;
+  purchaseOdometer: string;
   resaleValue: string;
   insuranceMonthly: string;
   tireSetCost: string;
@@ -22,6 +23,7 @@ export function settingsToForm(settings: OwnershipSettings): OwnershipCostsForm 
   return {
     purchasePrice: text(settings.purchase_price_usd),
     purchaseDate: settings.purchase_date ?? '',
+    purchaseOdometer: text(settings.purchase_odometer_mi ?? null),
     resaleValue: text(settings.resale_value_usd),
     insuranceMonthly: text(settings.insurance_monthly_usd),
     tireSetCost: text(settings.tire_set_cost_usd),
@@ -91,6 +93,7 @@ export function formToSettings(
     ...base,
     purchase_price_usd: amount('purchasePrice', 10_000_000),
     purchase_date: purchaseDate,
+    purchase_odometer_mi: amount('purchaseOdometer', 2_000_000),
     resale_value_usd: amount('resaleValue', 10_000_000),
     insurance_monthly_usd: amount('insuranceMonthly', 100_000),
     tire_set_cost_usd: amount('tireSetCost', 100_000),
@@ -124,6 +127,7 @@ interface OwnershipCostsFieldsProps {
 const ALL_FIELDS: Array<keyof OwnershipCostsForm> = [
   'purchasePrice',
   'purchaseDate',
+  'purchaseOdometer',
   'resaleValue',
   'insuranceMonthly',
   'tireSetCost',
@@ -152,6 +156,16 @@ export function OwnershipCostsFields({
       <Input label="Purchase price ($)" placeholder="e.g. 84000" required {...money} {...field('purchasePrice')} />
     ),
     purchaseDate: <Input label="Purchase date" type="date" max={todayIso(new Date())} {...field('purchaseDate')} />,
+    purchaseOdometer: (
+      <Input
+        label="Odometer at purchase (mi)"
+        placeholder="0 when blank"
+        hint="Leave blank for a vehicle bought new. Your miles are the odometer today minus this."
+        inputMode="decimal"
+        autoComplete="off"
+        {...field('purchaseOdometer')}
+      />
+    ),
     resaleValue: (
       <Input
         label="Resale value today ($)"

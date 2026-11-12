@@ -32,11 +32,18 @@ export function SourcesCard({ data, ledger }: { data: OwnershipResponse; ledger:
             <dd className="mt-1 text-fg-secondary">
               {ledger.mileageAssumed
                 ? `No drives are recorded yet, so every month assumes a typical ${miles}.`
-                : `Recorded since ${usage.tracked_from ? date(usage.tracked_from) : 'tracking began'}; earlier and future months use your average of ${miles}.`}
-              {ledger.startAssumed ? ' Add a purchase date to count the months before tracking began.' : ''}
+                : ledger.mileageFromOdometer
+                  ? `Your odometer shows ${Math.round(ledger.milesToDate).toLocaleString('en-US')} mi since purchase. Recorded drives place those miles by month; the rest fill the lighter months, and future months use your average of ${miles}.`
+                  : `Recorded since ${usage.tracked_from ? date(usage.tracked_from) : 'tracking began'}; earlier and future months use your average of ${miles}.`}
+              {ledger.startAssumed
+                ? ' Add a purchase date to count the months before tracking began and to take your miles from the odometer.'
+                : ''}
               {ledger.electricityRateAssumed
                 ? ` No charging cost is recorded yet, so charging assumes ${cents(ledger.electricityUsdPerKwh)} per kWh.`
                 : ` Home charging has cost you ${cents(ledger.homeUsdPerKwh)} per kWh and fast charging ${cents(ledger.fastUsdPerKwh)}, with ${Math.round(ledger.fastShare * 100)}% of your energy from fast charging. Sessions without a price use your rate for their kind.`}
+              {ledger.realWorldFactor !== 1 && ledger.ownKwhPerMi != null && ledger.ownRatedKwhPerMi != null
+                ? ` Your vehicle has taken ${ledger.ownKwhPerMi.toFixed(2)} kWh per mile from the wall against an EPA rating of ${ledger.ownRatedKwhPerMi.toFixed(2)}, so other electric vehicles' ratings are ${ledger.realWorldFactor > 1 ? 'raised' : 'lowered'} ${Math.round(Math.abs(ledger.realWorldFactor - 1) * 100)}% to match how you drive and charge.`
+                : ''}
             </dd>
           </div>
           <div>

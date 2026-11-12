@@ -16,6 +16,7 @@ export function buildVehicleLedger(
   vehicle: LedgerVehicle,
   periods: LedgerPeriod[],
   startMs: number,
+  /** What a rated kWh costs a comparison EV: the owner's rate, raised for real-world consumption. */
   electricityUsdPerKwh: number,
   ownEnergy: number[],
 ): VehicleLedger {

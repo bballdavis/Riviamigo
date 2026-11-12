@@ -45,6 +45,9 @@ pub struct Comparisons {
 pub struct OwnershipSettings {
     pub purchase_price_usd: Option<f64>,
     pub purchase_date: Option<NaiveDate>,
+    /// Odometer reading at purchase; `None` means bought new, at zero miles.
+    #[serde(default)]
+    pub purchase_odometer_mi: Option<f64>,
     pub resale_value_usd: Option<f64>,
     pub insurance_monthly_usd: Option<f64>,
     pub tire_set_cost_usd: Option<f64>,
@@ -111,6 +114,12 @@ pub fn validate_settings(
         settings.tire_set_cost_usd,
         0.0,
         100_000.0,
+    )?;
+    check_amount(
+        "purchase_odometer_mi",
+        settings.purchase_odometer_mi,
+        0.0,
+        2_000_000.0,
     )?;
     check_amount(
         "gas_price_usd_per_gallon",
@@ -214,6 +223,7 @@ pub fn validate_settings(
 struct SettingsRow {
     purchase_price_usd: Option<f64>,
     purchase_date: Option<NaiveDate>,
+    purchase_odometer_mi: Option<f64>,
     resale_value_usd: Option<f64>,
     insurance_monthly_usd: Option<f64>,
     tire_set_cost_usd: Option<f64>,
@@ -225,7 +235,7 @@ struct SettingsRow {
 
 pub async fn load_settings(pool: &PgPool, vehicle_id: Uuid) -> Result<OwnershipSettings, AppError> {
     let row = sqlx::query_as::<_, SettingsRow>(
-        "SELECT purchase_price_usd, purchase_date, resale_value_usd, insurance_monthly_usd,
+        "SELECT purchase_price_usd, purchase_date, purchase_odometer_mi, resale_value_usd, insurance_monthly_usd,
                 tire_set_cost_usd, gas_price_usd_per_gallon, projection_years, comparisons,
                 maintenance
          FROM riviamigo.vehicle_ownership_settings
@@ -239,6 +249,7 @@ pub async fn load_settings(pool: &PgPool, vehicle_id: Uuid) -> Result<OwnershipS
         Some(row) => OwnershipSettings {
             purchase_price_usd: row.purchase_price_usd,
             purchase_date: row.purchase_date,
+            purchase_odometer_mi: row.purchase_odometer_mi,
             resale_value_usd: row.resale_value_usd,
             insurance_monthly_usd: row.insurance_monthly_usd,
             tire_set_cost_usd: row.tire_set_cost_usd,
@@ -369,8 +380,9 @@ pub async fn save_settings(
         "INSERT INTO riviamigo.vehicle_ownership_settings
            (vehicle_id, purchase_price_usd, purchase_date, resale_value_usd,
             insurance_monthly_usd, tire_set_cost_usd, gas_price_usd_per_gallon,
-            projection_years, comparisons, maintenance, updated_at, updated_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11)
+            projection_years, comparisons, maintenance, purchase_odometer_mi,
+            updated_at, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $12, now(), $11)
          ON CONFLICT (vehicle_id) DO UPDATE SET
            purchase_price_usd = EXCLUDED.purchase_price_usd,
            purchase_date = EXCLUDED.purchase_date,
@@ -381,6 +393,7 @@ pub async fn save_settings(
            projection_years = EXCLUDED.projection_years,
            comparisons = EXCLUDED.comparisons,
            maintenance = EXCLUDED.maintenance,
+           purchase_odometer_mi = EXCLUDED.purchase_odometer_mi,
            updated_at = now(),
            updated_by = EXCLUDED.updated_by",
     )
@@ -395,6 +408,7 @@ pub async fn save_settings(
     .bind(comparisons)
     .bind(maintenance)
     .bind(user_id)
+    .bind(settings.purchase_odometer_mi)
     .execute(pool)
     .await?;
     Ok(())

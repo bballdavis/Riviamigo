@@ -32,7 +32,20 @@ pub struct Usage {
     /// First and last moments with recorded driving or charging.
     pub tracked_from: Option<DateTime<Utc>>,
     pub tracked_to: Option<DateTime<Utc>>,
+    /// The latest odometer reading: the live status when it is ahead of the
+    /// last recorded trip. The ledger takes total miles from this, because
+    /// recorded trips miss everything driven while nothing was collecting.
     pub odometer_mi: Option<f64>,
+}
+
+/// The tracked vehicle's model name, such as `R1S`.
+pub async fn load_model(pool: &PgPool, vehicle_id: Uuid) -> Result<Option<String>, AppError> {
+    Ok(
+        sqlx::query_scalar::<_, String>("SELECT model FROM riviamigo.vehicles WHERE id = $1")
+            .bind(vehicle_id)
+            .fetch_optional(pool)
+            .await?,
+    )
 }
 
 pub async fn load_usage(pool: &PgPool, vehicle_id: Uuid) -> Result<Usage, AppError> {
@@ -86,7 +99,8 @@ pub async fn load_usage(pool: &PgPool, vehicle_id: Uuid) -> Result<Usage, AppErr
                       (SELECT MIN(started_at) FROM riviamigo.charge_sessions WHERE vehicle_id = $1)),
                 GREATEST((SELECT MAX(ended_at) FROM riviamigo.trips WHERE vehicle_id = $1),
                          (SELECT MAX(ended_at) FROM riviamigo.charge_sessions WHERE vehicle_id = $1)),
-                (SELECT MAX(end_odometer_mi) FROM riviamigo.trips WHERE vehicle_id = $1)",
+                GREATEST((SELECT MAX(end_odometer_mi) FROM riviamigo.trips WHERE vehicle_id = $1),
+                         (SELECT odometer_miles FROM riviamigo.vehicle_latest_status WHERE vehicle_id = $1))",
     )
     .bind(vehicle_id)
     .fetch_one(pool)
