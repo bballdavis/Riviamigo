@@ -240,10 +240,30 @@ function commandNamesPath(command, path) {
  * names no checkout, so only the PID this checkout's launcher recorded is trusted
  * for it. An absolute path to another checkout never matches.
  */
-function isWindowsLauncherOfCheckout(command, { pid, launcherScript, launcherPid }) {
+/** How far a process's creation time may differ from the recorded start and still be that launcher. */
+const LAUNCHER_START_TOLERANCE_MS = 10_000;
+
+/**
+ * A CIM `CreationDate` as epoch milliseconds. Windows PowerShell serializes it
+ * as `/Date(ms)/`, PowerShell 7 as an ISO string.
+ */
+export function parseCimDate(value) {
+  if (value === null || value === undefined) return null;
+  const legacy = /\/Date\((-?\d+)/.exec(String(value));
+  if (legacy) return Number(legacy[1]);
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isWindowsLauncherOfCheckout(command, { pid, created, launcherScript, launcherPid, launcherStartedAt }) {
   if (!LAUNCHER_SCRIPT_COMMAND.test(command) || STOP_FLAG_COMMAND.test(command)) return false;
   if (commandNamesPath(command, launcherScript)) return true;
-  return launcherPid !== null && pid === launcherPid && !ABSOLUTE_LAUNCHER_COMMAND.test(command);
+  if (launcherPid === null || pid !== launcherPid || ABSOLUTE_LAUNCHER_COMMAND.test(command)) return false;
+  // A PID file left by a launcher that died without cleanup can name a PID
+  // Windows has since reused, so the process must also have started when the
+  // recorded launcher did.
+  if (launcherStartedAt === null) return true;
+  return created !== null && Math.abs(created - launcherStartedAt) <= LAUNCHER_START_TOLERANCE_MS;
 }
 
 /**
@@ -267,7 +287,7 @@ export function buildWindowsProcessQuery({ apiBin, restoreAgentBin, webDir: web,
     "  $isLauncher = $includeLaunchers -and $_.CommandLine -and $_.CommandLine -match 'dev\\.mjs'",
     '  $isApi -or $isRestoreAgent -or $isVite -or $isLauncher',
     '} |',
-    'Select-Object ProcessId, Name, ExecutablePath, CommandLine |',
+    'Select-Object ProcessId, Name, ExecutablePath, CommandLine, CreationDate |',
     'ConvertTo-Json -Compress',
   ].join('\n');
 }
@@ -285,6 +305,7 @@ export function matchWindowsRepoOwnedProcesses(
     includeLaunchers = false,
     launcherScript = null,
     launcherPid = null,
+    launcherStartedAt = null,
     selfPid = process.pid,
   },
 ) {
@@ -299,7 +320,13 @@ export function matchWindowsRepoOwnedProcesses(
     if (normalizeWindowsPath(command).includes(normalizeWindowsPath(web)) && /\bvite(?:\.cmd|\.js)?\b/i.test(command)) {
       return [{ pid, name, kind: 'vite' }];
     }
-    if (includeLaunchers && launcherScript && isWindowsLauncherOfCheckout(command, { pid, launcherScript, launcherPid })) {
+    if (includeLaunchers && launcherScript && isWindowsLauncherOfCheckout(command, {
+      pid,
+      created: parseCimDate(row.CreationDate),
+      launcherScript,
+      launcherPid,
+      launcherStartedAt,
+    })) {
       return [{ pid, name, kind: 'launcher' }];
     }
     return [];
@@ -317,10 +344,21 @@ async function launcherScriptPath(candidate) {
   return cwd ? resolve(cwd, script) : null;
 }
 
+/**
+ * The recorded launcher as `{ pid, startedAt }`, or null. `startedAt` is null
+ * for a file written by an older launcher that recorded only its PID.
+ */
+export function parseLauncherPidFile(text) {
+  const [pidText, startedText] = String(text).trim().split(/\s+/);
+  const pid = Number.parseInt(pidText ?? '', 10);
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  const startedAt = Number.parseInt(startedText ?? '', 10);
+  return { pid, startedAt: Number.isInteger(startedAt) && startedAt > 0 ? startedAt : null };
+}
+
 async function readLauncherPid() {
   try {
-    const pid = Number.parseInt((await readFile(devLauncherPidFile, 'utf8')).trim(), 10);
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
+    return parseLauncherPidFile(await readFile(devLauncherPidFile, 'utf8'));
   } catch {
     return null;
   }
@@ -328,12 +366,13 @@ async function readLauncherPid() {
 
 async function recordLauncherPid() {
   await mkdir(dirname(devLauncherPidFile), { recursive: true });
-  await writeFile(devLauncherPidFile, `${process.pid}\n`, 'utf8');
+  const startedAt = Math.round(Date.now() - process.uptime() * 1000);
+  await writeFile(devLauncherPidFile, `${process.pid} ${startedAt}\n`, 'utf8');
 }
 
 /** Removes the PID file only while it still names this launcher; a newer launcher may have replaced it. */
 async function removeOwnLauncherPid() {
-  if ((await readLauncherPid()) === process.pid) {
+  if ((await readLauncherPid())?.pid === process.pid) {
     await rm(devLauncherPidFile, { force: true });
   }
 }
@@ -346,7 +385,7 @@ async function listRepoOwnedProcesses({ includeLaunchers = false } = {}) {
     // Windows has no `lsof` to read a process's working directory, so the
     // launcher is identified from its command line and, for pnpm's relative
     // path, from the PID it recorded at startup.
-    const launcherPid = includeLaunchers ? await readLauncherPid() : null;
+    const launcher = includeLaunchers ? await readLauncherPid() : null;
     const { code, stdout, stderr } = await capture('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
@@ -365,7 +404,8 @@ async function listRepoOwnedProcesses({ includeLaunchers = false } = {}) {
         webDir,
         includeLaunchers,
         launcherScript,
-        launcherPid,
+        launcherPid: launcher?.pid ?? null,
+        launcherStartedAt: launcher?.startedAt ?? null,
       });
     } catch (error) {
       log(`[dev] Could not parse existing Windows process details; leaving occupied ports alone. ${error.message}`);
