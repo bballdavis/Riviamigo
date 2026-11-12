@@ -38,6 +38,11 @@ pub const MOVING_SPEED_MPH: f64 = 1.0;
 /// How many recent motion-gear shifts are examined for an anchor.
 const MAX_SHIFTS: i64 = 6;
 
+/// How many recent drive/reverse telemetry rows are read to find those
+/// shifts. The gear is repeated on every row while it is engaged, so a shift
+/// is the first row of a run of one gear; several days of driving fit here.
+const MOTION_ROW_BUDGET: i64 = 1000;
+
 /// One `drive` or `reverse` shift and what happened before the next one.
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct GearShift {
@@ -98,19 +103,35 @@ fn normalize(degrees: f64) -> Option<f64> {
 }
 
 /// The evidence query. `$1` vehicle, `$2` shift limit, `$3` course turn in
-/// degrees, `$4` moving speed in mph. The shift list and every bearing probe
-/// are index range scans on the `(vehicle_id, ts DESC)` partial indexes from
-/// migration 0040, whose predicates these filters repeat exactly (a test
-/// keeps them in step); the turn
-/// probe stops at the first turned bearing but reads every bearing up to the
-/// next shift when none turned, and the speed probe reads at most 15 minutes
-/// of rows after a drive shift.
-const FACING_EVIDENCE_SQL: &str = r#"WITH shifts AS (
+/// degrees, `$4` moving speed in mph, `$5` motion row budget.
+///
+/// Telemetry repeats the engaged gear on every row, so `motion` reads the
+/// newest drive/reverse rows (an index range scan on the 0040 partial index,
+/// whose predicate this repeats exactly; a test keeps them in step) and
+/// `shifts` keeps the first row of each run of one gear. A park between two
+/// runs of the same gear does not split them. Each shift's phase lasts until
+/// the next shift, so a back-in's whole reverse run, and any bearing reported
+/// after it, decides whether the course turned. The bearing probes use the
+/// heading partial index; the turn probe stops at the first turned bearing and
+/// the speed probe reads at most 15 minutes after a drive shift.
+const FACING_EVIDENCE_SQL: &str = r#"WITH motion AS (
                SELECT ts, lower(gear_status) AS gear
                FROM timeseries.telemetry
                WHERE vehicle_id = $1
                  AND ts > now() - interval '30 days'
                  AND lower(gear_status) IN ('drive', 'reverse')
+               ORDER BY ts DESC
+               LIMIT $5
+           ),
+           runs AS (
+               SELECT ts, gear,
+                      gear IS DISTINCT FROM lag(gear) OVER (ORDER BY ts) AS starts_run
+               FROM motion
+           ),
+           shifts AS (
+               SELECT ts, gear
+               FROM runs
+               WHERE starts_run
                ORDER BY ts DESC
                LIMIT $2
            ),
@@ -162,7 +183,8 @@ const FACING_EVIDENCE_SQL: &str = r#"WITH shifts AS (
            ORDER BY p.ts DESC"#;
 
 /// Loads the evidence for [`facing_deg`] from the last 30 days of telemetry:
-/// up to [`MAX_SHIFTS`] recent motion-gear shifts, and for each the bearing
+/// up to [`MAX_SHIFTS`] recent motion-gear shifts (runs of one gear within the
+/// newest [`MOTION_ROW_BUDGET`] drive/reverse rows), and for each the bearing
 /// at the shift, whether the course later turned before the next shift, and
 /// (for drive) whether a moving speed followed within 15 minutes. Gear values
 /// are compared case-insensitively, as everywhere else in ingestion.
@@ -172,6 +194,7 @@ pub async fn load_facing_evidence(pool: &PgPool, vehicle_id: Uuid) -> sqlx::Resu
         .bind(MAX_SHIFTS)
         .bind(COURSE_TURN_DEG)
         .bind(MOVING_SPEED_MPH)
+        .bind(MOTION_ROW_BUDGET)
         .fetch_all(pool)
         .await?;
     Ok(FacingEvidence { shifts })
