@@ -216,13 +216,16 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const timeframeScope = options.timeframeScope;
   const isLifetimeTimeframe = ctx.timeframe?.kind === 'lifetime';
   const allowLatestFallback = timeframeScope !== 'range' || isLifetimeTimeframe;
+  // From the shared dashboard data, a chip is loading only until its own
+  // source has data: the refresh flag also covers other widgets' background
+  // polls, which must not blank values already on screen.
   const isLoading =
     options.dataSource === 'batteryHealth'
-      ? dashboardDataAvailable ? dashboardRefreshing : healthLoading || (needsStatus && statusLoading)
+      ? dashboardDataAvailable ? dashboardRefreshing && (!health || (needsStatus && !status)) : healthLoading || (needsStatus && statusLoading)
       : options.dataSource === 'chargingSummary'
-        ? dashboardDataAvailable ? dashboardRefreshing : chargingLoading
+        ? dashboardDataAvailable ? dashboardRefreshing && !chargingSummary : chargingLoading
         : options.dataSource === 'vehicleStatus'
-          ? dashboardDataAvailable ? dashboardRefreshing : statusLoading
+          ? dashboardDataAvailable ? dashboardRefreshing && !status : statusLoading
           : false;
   const hasFiniteSeriesPoint = series.some(
     (point) => typeof point.value === 'number' && Number.isFinite(point.value)

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const chargingMocks = vi.hoisted(() => ({
   forcePluggedState: 'Disconnected' as 'Disconnected' | 'Connected' | 'Charging',
+  statusFetching: false,
   model: 'R1S' as 'R1S' | 'R1T' | 'R2' | 'R2S' | 'unknown',
   isDemo: false,
   images: null as null | {
@@ -61,6 +62,8 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         is_online: true,
         last_updated: '2026-05-12T12:00:00Z',
       },
+      isLoading: false,
+      isFetching: chargingMocks.statusFetching,
     }),
     useLiveSession: () => ({ data: chargingMocks.liveSession, isLoading: false }),
     useVehicles: () => ({ data: [{ id: 'vehicle-1', model: chargingMocks.model, images: chargingMocks.images, is_demo: chargingMocks.isDemo }] }),
@@ -266,6 +269,7 @@ function render(ui: React.ReactElement) {
 describe('charging connection custom widget', () => {
   beforeEach(() => {
     chargingMocks.forcePluggedState = 'Disconnected';
+    chargingMocks.statusFetching = false;
     chargingMocks.model = 'R1S';
     chargingMocks.isDemo = false;
     chargingMocks.images = null;
@@ -432,6 +436,44 @@ describe('charging connection custom widget', () => {
     });
   });
 
+  it('keeps charging chip values on screen while vehicle status polls in the background', () => {
+    // The connection card adds vehicle status to the dashboard's shared data,
+    // and status re-polls every 30 seconds while plugged in. That refresh must
+    // not blank chips whose own charging summary is already loaded.
+    chargingMocks.forcePluggedState = 'Charging';
+    chargingMocks.statusFetching = true;
+    const config: DashboardConfig = {
+      ...mixRowConfig,
+      widgets: [
+        ...mixRowConfig.widgets,
+        {
+          id: 'd4000004-0000-0000-0000-000000000001',
+          componentType: 'charging',
+          definitionId: 'sessions',
+          title: 'Sessions',
+          options: {},
+          layout: { x: 0, y: 0, w: 3, h: 2 },
+        },
+      ],
+    };
+
+    render(
+      <DashboardRenderer
+        config={config}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
+    const sessions = screen.getByTestId('charging-stat-chip');
+    expect(sessions).toHaveTextContent('6');
+    expect(sessions).not.toHaveTextContent('…');
+    const homeShare = document.querySelector('[data-widget-definition="charging_home_share"]')!;
+    expect(homeShare).toHaveTextContent('75');
+    expect(homeShare).toHaveTextContent('Home');
+    expect(homeShare).not.toHaveTextContent('...');
+  });
+
   it('expands the home and DC mix chips when the connection chip is hidden', () => {
     render(
       <DashboardRenderer
@@ -536,6 +578,43 @@ describe('charging connection custom widget', () => {
       left: '0px',
       width: 'calc((100% - 38px) / 20)',
     });
+  });
+
+  it('keeps each theme\'s charging art right-aligned while it is visible', () => {
+    chargingMocks.forcePluggedState = 'Charging';
+    chargingMocks.images = vehicleImageFixtures;
+
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    // jsdom has no Tailwind, so resolve the display utilities each theme
+    // applies. `justify-end` only pins the art to the card's right edge while
+    // the frame is a flex row; a `dark:block` once dropped the dark art to the
+    // left and exposed the cropped vehicle body.
+    const DISPLAYS = new Set(['flex', 'inline-flex', 'block', 'inline-block', 'inline', 'grid', 'contents', 'hidden']);
+    const displayIn = (classes: string[], theme: 'light' | 'dark') => {
+      const base = classes.filter((name) => DISPLAYS.has(name)).at(-1);
+      const dark = classes
+        .filter((name) => name.startsWith('dark:') && DISPLAYS.has(name.slice('dark:'.length)))
+        .at(-1)
+        ?.slice('dark:'.length);
+      return theme === 'dark' ? dark ?? base : base;
+    };
+
+    const frames = screen.getAllByTestId('charging-side-image-frame');
+    expect(frames.map((frame) => frame.getAttribute('data-theme-variant'))).toEqual(['light', 'dark']);
+    for (const frame of frames) {
+      const theme = frame.getAttribute('data-theme-variant') as 'light' | 'dark';
+      const other = theme === 'light' ? 'dark' : 'light';
+      const classes = Array.from(frame.classList);
+      expect(classes).toContain('justify-end');
+      expect(displayIn(classes, theme)).toBe('flex');
+      expect(displayIn(classes, other)).toBe('hidden');
+    }
   });
 
   it('finds side-charging art even when Rivian metadata stores it as a side placement', () => {
