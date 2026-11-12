@@ -193,7 +193,8 @@ Common usage:
 
 - Standard cards use the existing surface, border, and radius system.
 - Prominent cards should still look like part of Riviamigo, not a special-case microsite.
-- Compact card badges should use the shared `Badge` primitive instead of ad hoc border pills.
+- Compact card badges should use the shared `Badge` primitive instead of ad hoc border pills. `Badge` never wraps its label; give it room rather than squeezing it into a narrow table column.
+- Settings lists of jobs or tasks use stacked rows, not wide tables: title and a one-line description on the left, a muted meta line below (`schedule · Last run … · result`, errors in `text-status-danger`), and the status badge plus action button on the right, moving below the text on phones. Never-run items show a neutral `Not run yet` badge without a dot; `Running`, `Done`, `Failed`, and `Paused` use the info, success, danger, and warning variants with a dot.
 - Only show timeframe badges when the timeframe itself adds meaning. For battery and charging summary cards, omit `Current` labels and use a small `Lifetime` badge only on lifetime-scoped history cards.
 - Multi-day time-series axes use concise calendar-date labels with no repeated dates. Preserve exact timestamps in the hover tooltip; only intraday axes show clock times.
 - Range-scoped sensor cards must display a server-calculated value for the selected dashboard timeframe, never the last point from their background sparkline. Use the shared tooltip trigger beside a compact domain-specific label when a derived value needs a short explanation.

@@ -101,17 +101,26 @@ file. Production must use HTTPS and leave `COOKIE_INSECURE` unset.
 
 The launcher builds only the API and restore-supervisor binaries that it runs;
 maintenance binaries remain available through their explicit Cargo commands.
-Repairs that are safe to repeat per vehicle can also be offered in
-**Settings > Jobs**: register a kind in `apps/api/src/services/maintenance_jobs.rs`
-and its run is recorded in `riviamigo.maintenance_job_runs` (migration
-`0041_maintenance_job_runs`). Managers start one with
-`POST /v1/vehicles/{id}/maintenance-jobs/{kind}`, and members read the latest
-run of each with `GET /v1/vehicles/{id}/maintenance-jobs`. Only one run per
-vehicle and kind can be running; a run still marked running after two hours is
-recorded as interrupted.
-The registered jobs share their work with the matching binaries where one
-exists (`recompute_charging_costs`, `recompute_trip_energy`,
-`backfill_outside_temp`, `backfill_trip_addresses`). "Recover missed charging
+Repairs that are safe to repeat can also be offered in **Settings > Jobs**:
+register a kind in `apps/api/src/services/maintenance_jobs.rs` with its scope
+(site-wide or vehicle) and its runs are recorded in
+`riviamigo.maintenance_job_runs` (migrations `0041_maintenance_job_runs` and
+`0042_site_maintenance_jobs`; site-wide runs have no `vehicle_id`). Admins list
+and start site-wide jobs with `GET /v1/maintenance-jobs` and
+`POST /v1/maintenance-jobs/{kind}`. Vehicle managers start vehicle jobs with
+`POST /v1/vehicles/{id}/maintenance-jobs/{kind}`, and members read them with
+`GET /v1/vehicles/{id}/maintenance-jobs`. Only one run per job (and vehicle)
+can be running; a run still marked running after two hours is recorded as
+interrupted, and finished runs older than 90 days are pruned apart from each
+job's latest.
+Background workers can report through the same table: wrap each pass in
+`maintenance_jobs::run_automatic`, which records it with `trigger =
+'automatic'` and skips the pass while a manual run of the same job is going.
+The location and weather catch-up (`trip_enrichment::run_catch_up_pass`) and
+the security log retention worker do this. The weather lookup and scheduled
+backup rows are read from `weather_enrichment_jobs` and `backup_runs` instead.
+The manual jobs share their work with the matching binaries
+(`recompute_charging_costs`, `recompute_trip_energy`). "Recover missed charging
 sessions" (`services/charge_session_recovery.rs`) is a deliberately narrower
 version of `repair_charge_sessions_from_telemetry`: it only inserts sessions
 for unrecorded charging windows and closes open telemetry sessions, while the

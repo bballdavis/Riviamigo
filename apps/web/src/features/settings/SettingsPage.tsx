@@ -675,7 +675,9 @@ function SettingsContentInner({ initialSection, oidcFeedback, oidcFeedbackKind }
 
             {activeSection === 'backup' && canManageBackups && <BackupSection />}
 
-            {activeSection === 'jobs' && <JobsSection vehicles={vehicles ?? []} />}
+            {activeSection === 'jobs' && (
+              <JobsSection vehicles={vehicles ?? []} canManageInstallation={canManageBackups} />
+            )}
 
             {activeSection === 'raw' && (
               <div className="grid gap-6">
