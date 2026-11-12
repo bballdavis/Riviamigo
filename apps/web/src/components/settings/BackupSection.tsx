@@ -1286,6 +1286,7 @@ export function BackupSection() {
                 type="button"
                 className="rounded-md p-1 text-fg-tertiary hover:bg-bg-elevated hover:text-fg"
                 aria-label="Close restore confirmation"
+                disabled={requestRestore.isPending}
                 onClick={closeRestoreConfirmation}
               >
                 <X className="h-4 w-4" />
@@ -1350,7 +1351,7 @@ export function BackupSection() {
               />
             </label>
             <div className="mt-4 flex items-center justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={closeRestoreConfirmation}>
+              <Button variant="secondary" size="sm" disabled={requestRestore.isPending} onClick={closeRestoreConfirmation}>
                 Cancel
               </Button>
               <Button
