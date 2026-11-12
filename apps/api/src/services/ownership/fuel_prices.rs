@@ -267,8 +267,14 @@ async fn refresh_fuel_prices_if_stale(
     // Concurrent page loads all see the same stale state. Only the request
     // that records the attempt contacts the provider; the others serve the
     // stored months, exactly as if the attempt had just been made.
-    if !claim_fuel_price_refresh(pool, connections::FUEL_PRICES, last_attempt_at).await? {
-        return Ok((true, previously_failed));
+    match claim_fuel_price_refresh(pool, connections::FUEL_PRICES, last_attempt_at).await {
+        Ok(true) => {}
+        Ok(false) => return Ok((true, previously_failed)),
+        Err(error) => {
+            // A refresh failure never fails the page; serve what is stored.
+            tracing::warn!(err = %error, "ownership.fuel_prices.claim_failed");
+            return Ok((true, previously_failed));
+        }
     }
     let api_key = decrypt_api_key(age_key, settings.api_key_encrypted.as_deref());
     let fetched = tokio::time::timeout(
