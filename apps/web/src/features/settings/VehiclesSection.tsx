@@ -99,6 +99,7 @@ export function VehiclesSection({
 
   const refreshDemoVehicle = useMutation({
     mutationFn: (vehicleId: string) => api.refreshDemoVehicle(vehicleId),
+    ...rowAction('Unable to refresh demo data.'),
     onSuccess: () => {
       setDemoRefreshConfirmId(null);
       void queryClient.invalidateQueries();
