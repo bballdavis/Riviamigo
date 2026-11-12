@@ -2604,6 +2604,29 @@ async fn vehicle_facing_evidence_wraps_bearings_and_honours_a_pull_away() {
     assert_eq!(evidence.shifts[0].gear, "reverse");
     assert!(evidence.shifts[0].course_turned, "{evidence:?}");
     assert_eq!(facing_deg(Some(190.0), &evidence), Some(10.0));
+
+    // Sparse samples: the first reverse row already reports the turned
+    // course. The bearing before the shift is the reference, so the turn shows.
+    let sparse = insert_vehicle(&app.pool, user_id, "vehicle-facing-sparse", "Sparse").await;
+    insert(
+        sparse,
+        vec![
+            (0, 100.0, "drive", 10.0),
+            (60, 280.0, "reverse", 2.0),
+            (120, 280.0, "park", 0.0),
+        ],
+    )
+    .await;
+    let evidence = load_facing_evidence(&app.pool, sparse)
+        .await
+        .expect("evidence");
+    assert_eq!(
+        evidence.shifts[0].bearing_at_shift,
+        Some(100.0),
+        "{evidence:?}"
+    );
+    assert!(evidence.shifts[0].course_turned, "{evidence:?}");
+    assert_eq!(facing_deg(Some(280.0), &evidence), Some(100.0));
 }
 
 #[tokio::test]
