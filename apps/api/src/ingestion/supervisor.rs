@@ -166,12 +166,23 @@ async fn stop_worker_task(
     let _ = shutdown_tx.send(());
     if tokio::time::timeout(timeout, &mut handle).await.is_err() {
         handle.abort();
-        let _ = handle.await;
-        tracing::warn!(
-            vehicle_id = %vehicle_id,
-            timeout_seconds = timeout.as_secs(),
-            "worker did not stop in time; aborted"
-        );
+        // An abort lands at the task's next await point; a task stuck in
+        // blocking code never reaches one, so bound the wait rather than hold
+        // the vehicle's slot (and any deferred restart) forever.
+        let aborted = tokio::time::timeout(timeout, handle).await.is_ok();
+        if aborted {
+            tracing::warn!(
+                vehicle_id = %vehicle_id,
+                timeout_seconds = timeout.as_secs(),
+                "worker did not stop in time; aborted"
+            );
+        } else {
+            tracing::error!(
+                vehicle_id = %vehicle_id,
+                timeout_seconds = timeout.as_secs(),
+                "worker ignored its abort; releasing its slot while it may still run"
+            );
+        }
     }
 }
 
