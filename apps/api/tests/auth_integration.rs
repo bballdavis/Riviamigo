@@ -2400,6 +2400,11 @@ async fn vehicle_status_reports_facing_corrected_after_backing_in() {
     insert_sample(19 * 3600 + 60, -88.6, "drive", 6.0)
         .await
         .expect("drive away");
+    // The first read saved the back-in. Ingestion marks it stale after
+    // storing a moving drive row; this test writes telemetry directly.
+    riviamigo_api::services::vehicle_facing::mark_stale(&app.pool, vehicle_id)
+        .await
+        .expect("mark facing stale");
     let response = app
         .request(Method::GET, &status_path, None, Some(&token), None)
         .await;
