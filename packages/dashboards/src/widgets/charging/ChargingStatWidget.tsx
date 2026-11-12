@@ -131,7 +131,11 @@ export function ChargingStatWidget({ instance, ctx }: { instance: WidgetInstance
     ctx.to,
   );
   const summary = dashboardDataAvailable ? dashboardSummary : fetchedSummary;
-  const isLoading = dashboardDataAvailable ? dashboardRefreshing : fetchedLoading;
+  // Show the placeholder only until a summary exists. The shared dashboard
+  // refresh flag also covers other widgets' background polls (vehicle status
+  // every 30 seconds while the connection card is shown), which must not
+  // blank values that are already on screen.
+  const isLoading = dashboardDataAvailable ? dashboardRefreshing && !summary : fetchedLoading;
   const title = instance.title ?? definition?.title ?? instance.definitionId;
   const accentBorder = definition?.accentBorder ?? false;
 
