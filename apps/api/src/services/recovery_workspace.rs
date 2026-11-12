@@ -142,7 +142,10 @@ fn lock_still_linked(parent: &Dir, lock_name: &str, lock: &File) -> std::io::Res
 
 #[cfg(not(unix))]
 fn lock_still_linked(_parent: &Dir, _lock_name: &str, _lock: &File) -> std::io::Result<bool> {
-    // Windows refuses to delete a file another handle has open.
+    // Rust opens files with FILE_SHARE_DELETE, so another process can delete
+    // an open lock file here too. Windows only runs the host development
+    // stack; there, the lock-file grace period alone covers the short gap
+    // between creating a lock file and locking it.
     Ok(true)
 }
 
@@ -409,10 +412,24 @@ mod tests {
         assert!(live.path().is_dir());
     }
 
-    /// Sets `path`'s modification time to `age` plus a minute in the past.
+    /// Sets `path`'s modification time (file or directory) to `age` plus a
+    /// minute in the past.
     fn backdate(path: &Path, age: std::time::Duration) {
         let when = std::time::SystemTime::now() - age - std::time::Duration::from_secs(60);
-        File::open(path).unwrap().set_modified(when).unwrap();
+        #[cfg(windows)]
+        let handle = {
+            use std::os::windows::fs::OpenOptionsExt;
+            // FILE_WRITE_ATTRIBUTES, and FILE_FLAG_BACKUP_SEMANTICS so a
+            // directory can be opened too.
+            std::fs::OpenOptions::new()
+                .access_mode(0x0100)
+                .custom_flags(0x0200_0000)
+                .open(path)
+                .unwrap()
+        };
+        #[cfg(not(windows))]
+        let handle = File::open(path).unwrap();
+        handle.set_modified(when).unwrap();
     }
 
     #[test]

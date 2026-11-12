@@ -155,8 +155,9 @@ fn prepare_worker_start(workers: &mut HashMap<Uuid, WorkerSlot>, vehicle_id: Uui
 }
 
 /// Signal a worker to stop and wait for its task to end, aborting it after
-/// `timeout`. The abort is awaited too, so the task no longer runs when this
-/// returns.
+/// `timeout`. The abort is awaited for up to `timeout` as well; only a task
+/// stuck in blocking code can still be running when this returns, and that
+/// is logged as an error.
 async fn stop_worker_task(
     vehicle_id: Uuid,
     mut handle: JoinHandle<()>,
