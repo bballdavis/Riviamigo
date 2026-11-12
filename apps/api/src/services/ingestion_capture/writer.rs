@@ -98,8 +98,10 @@ pub(super) async fn run_writer(pool: PgPool, mut rx: mpsc::Receiver<Record>) {
                 }
             }
             _ = flush.tick() => {
+                // Prune on every tick, so a capture that keeps recording
+                // cannot keep finished captures in the ledger.
+                ledger.prune(Instant::now(), LEDGER_IDLE);
                 if batch.is_empty() {
-                    ledger.prune(Instant::now(), LEDGER_IDLE);
                     continue;
                 }
             }
