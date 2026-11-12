@@ -1763,6 +1763,8 @@ export interface OwnershipSettings {
   purchase_price_usd: number | null;
   /** Calendar date, YYYY-MM-DD. */
   purchase_date: string | null;
+  /** Odometer reading at purchase; null or missing means bought new, at zero miles. */
+  purchase_odometer_mi?: number | null;
   resale_value_usd: number | null;
   insurance_monthly_usd: number | null;
   tire_set_cost_usd: number | null;
@@ -1825,6 +1827,8 @@ export interface OwnershipResponse extends OwnershipSettingsResponse {
   reference_vehicles: OwnershipReferenceVehicle[];
   class_defaults: Record<OwnershipPowertrain, OwnershipCostAssumptions>;
   own_defaults: OwnershipCostAssumptions;
+  /** EPA combined kWh per mile for the tracked vehicle's model; null or missing when unknown. */
+  own_rated_kwh_per_mi?: number | null;
 }
 
 export interface OwnershipLookupOption {

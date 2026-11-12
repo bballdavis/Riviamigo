@@ -74,7 +74,7 @@ pub(super) fn chevrolet_tahoe() -> Vec<MaintenanceItem> {
             "Tires (set of 4)",
             Tires,
             Some(45_000.0),
-            None,
+            Some(72),
             1_500.0,
         ),
     ]
@@ -130,7 +130,7 @@ pub(super) fn bmw_x7() -> Vec<MaintenanceItem> {
             "Tires (set of 4)",
             Tires,
             Some(35_000.0),
-            None,
+            Some(72),
             2_000.0,
         ),
     ]
@@ -186,7 +186,7 @@ pub(super) fn range_rover() -> Vec<MaintenanceItem> {
             "Tires (set of 4)",
             Tires,
             Some(35_000.0),
-            None,
+            Some(72),
             2_100.0,
         ),
     ]
@@ -249,7 +249,7 @@ pub(super) fn porsche_cayenne() -> Vec<MaintenanceItem> {
             "Tires (set of 4)",
             Tires,
             Some(25_000.0),
-            None,
+            Some(72),
             2_000.0,
         ),
     ]
@@ -312,7 +312,7 @@ pub(super) fn typical_gas() -> Vec<MaintenanceItem> {
             "Tires (set of 4)",
             Tires,
             Some(45_000.0),
-            None,
+            Some(72),
             1_100.0,
         ),
     ]

@@ -21,6 +21,13 @@ export const DEFAULT_DAILY_MILES = 1000 / DAYS_PER_MONTH;
 export const DEFAULT_ELECTRICITY_USD_PER_KWH = 0.16;
 /** Typical U.S. DC fast-charging price, used only when no fast session has a price. */
 export const DEFAULT_FAST_CHARGING_USD_PER_KWH = 0.45;
+/**
+ * Bounds on how far real-world driving may move a comparison EV's rated
+ * consumption, and the charged miles needed before it moves at all.
+ */
+export const MIN_REAL_WORLD_FACTOR = 0.8;
+export const MAX_REAL_WORLD_FACTOR = 1.5;
+export const MIN_MILES_FOR_REAL_WORLD_FACTOR = 500;
 /** Used when neither stored prices nor a flat price are available. */
 export const DEFAULT_GAS_USD_PER_GALLON = 3.5;
 export const DEFAULT_PREMIUM_SURCHARGE_USD = 0.8;

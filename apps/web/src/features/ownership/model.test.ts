@@ -65,6 +65,81 @@ describe('buildLedger', () => {
     expect(find(ledger, 'own').totals.miles).toBeCloseTo(3_000 + daily * 181);
   });
 
+  describe('with an odometer reading', () => {
+    // Charging history reaches back to the purchase; drives were only recorded from July.
+    const charged = { drive_energy_kwh: 0, charged_kwh: 500, priced_kwh: 500, charging_cost_usd: 60, fast_kwh: 0, fast_priced_kwh: 0, fast_cost_usd: 0 };
+    const withOdometer = (odometer_mi: number, settings: Partial<OwnershipResponse['settings']> = {}) => {
+      const data = response();
+      data.settings = { ...data.settings, ...settings };
+      data.usage = {
+        ...data.usage,
+        tracked_from: '2025-01-01T00:00:00Z',
+        odometer_mi,
+        months: ['01', '02', '03', '04', '05', '06', '07', '08', '09'].map((month) => ({
+          ...charged,
+          month: `2025-${month}-01`,
+          miles: month >= '07' ? 1_000 : 0,
+        })),
+      };
+      return data;
+    };
+
+    it('takes total miles from the odometer and puts the unrecorded ones in the months that fall short', () => {
+      const ledger = build(withOdometer(9_000));
+      expect(ledger.mileageFromOdometer).toBe(true);
+      expect(ledger.milesToDate).toBe(9_000);
+      expect(find(ledger, 'own').totals.miles).toBeCloseTo(9_000);
+      expect(ledger.avgMonthlyMiles).toBeCloseTo((9_000 / 273) * 30.44);
+      // January had charging but no recorded drives; September already beat the average.
+      expect(ledger.periods[0]?.miles).toBeGreaterThan(900);
+      expect(ledger.periods[8]?.miles).toBe(1_000);
+    });
+
+    it('bills the tracked vehicle what its sessions cost and every other vehicle for the same miles', () => {
+      const ledger = build(withOdometer(9_000), 'to_date', ['gas_suv', 'other_ev']);
+      // Nine months of sessions at $60: no per-mile estimate is added on top.
+      expect(find(ledger, 'own').totals.fuel).toBeCloseTo(540);
+      // 9,000 mi at 0.3 kWh/mi and the owner's $0.12 per kWh.
+      expect(find(ledger, 'other_ev').totals.fuel).toBeCloseTo(9_000 * 0.3 * 0.12);
+      expect(find(ledger, 'gas_suv').totals.miles).toBeCloseTo(9_000);
+    });
+
+    it('raises a comparison EV by how far the tracked vehicle runs over its own rating', () => {
+      // 4,500 kWh over 9,000 mi is 0.5 kWh/mi from the wall, against a rated 0.4.
+      const data = { ...withOdometer(9_000), own_rated_kwh_per_mi: 0.4 };
+      const ledger = build(data, 'to_date', ['gas_suv', 'other_ev']);
+      expect(ledger.ownKwhPerMi).toBeCloseTo(0.5);
+      expect(ledger.realWorldFactor).toBeCloseTo(1.25);
+      expect(find(ledger, 'other_ev').totals.fuel).toBeCloseTo(9_000 * 0.3 * 1.25 * 0.12);
+      // The tracked vehicle still pays what its sessions cost.
+      expect(find(ledger, 'own').totals.fuel).toBeCloseTo(540);
+    });
+
+    it('bounds the adjustment and skips it without a rating', () => {
+      expect(build({ ...withOdometer(9_000), own_rated_kwh_per_mi: 0.1 }).realWorldFactor).toBe(1.5);
+      expect(build(withOdometer(9_000)).realWorldFactor).toBe(1);
+    });
+
+    it('projects future charging at the cost per odometer mile', () => {
+      const ledger = build(withOdometer(9_000), 'projected');
+      const own = find(ledger, 'own');
+      // $540 over 9,000 mi is 6 cents a mile.
+      expect(own.totals.fuel).toBeCloseTo(540 + (own.totals.miles - 9_000) * 0.06);
+    });
+
+    it('subtracts the odometer reading at purchase', () => {
+      const ledger = build(withOdometer(9_000, { purchase_odometer_mi: 3_000 }));
+      expect(find(ledger, 'own').totals.miles).toBeCloseTo(6_000);
+    });
+
+    it('keeps to recorded drives without a purchase date, or when the odometer is behind them', () => {
+      expect(build(withOdometer(9_000, { purchase_date: null })).mileageFromOdometer).toBe(false);
+      const behind = build(withOdometer(9_000, { purchase_odometer_mi: 8_000 }));
+      expect(behind.mileageFromOdometer).toBe(false);
+      expect(find(behind, 'own').totals.miles).toBeCloseTo(3_000);
+    });
+  });
+
   it('charges the tracked vehicle its recorded charging cost and estimates the rest per mile', () => {
     const ledger = build();
     const own = find(ledger, 'own');

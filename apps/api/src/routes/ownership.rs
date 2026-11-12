@@ -55,6 +55,8 @@ struct OwnershipResponse {
     reference_vehicles: Vec<ReferenceVehicle>,
     class_defaults: ClassDefaults,
     own_defaults: CostAssumptions,
+    /// EPA combined kWh per mile for the tracked vehicle's model, when known.
+    own_rated_kwh_per_mi: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -87,6 +89,9 @@ async fn get_ownership(
             Err(AppError::NotFound) => false,
             Err(error) => return Err(error),
         };
+    let own_rated_kwh_per_mi = ownership::load_model(&state.pool, vehicle_id)
+        .await?
+        .and_then(|model| ownership::own_rated_kwh_per_mi(&model));
     Ok(Json(OwnershipResponse {
         vehicle_id,
         can_edit: can_edit(&state, &auth, vehicle_id).await?,
@@ -97,6 +102,7 @@ async fn get_ownership(
         reference_vehicles: ownership::reference_vehicles(),
         class_defaults: ownership::class_defaults(),
         own_defaults: ownership::own_vehicle_defaults(),
+        own_rated_kwh_per_mi,
     }))
 }
 

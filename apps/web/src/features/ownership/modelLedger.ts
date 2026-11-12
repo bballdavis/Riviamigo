@@ -10,6 +10,9 @@ import {
   DEFAULT_DAILY_MILES,
   DEFAULT_ELECTRICITY_USD_PER_KWH,
   DEFAULT_FAST_CHARGING_USD_PER_KWH,
+  MAX_REAL_WORLD_FACTOR,
+  MIN_MILES_FOR_REAL_WORLD_FACTOR,
+  MIN_REAL_WORLD_FACTOR,
   OWN_SCHEDULE_KEY,
   OWN_VEHICLE_ID,
   YEAR_MS,
@@ -61,9 +64,6 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
   const unpricedFastKwh = (row: (typeof recorded)[number]) => Math.max(0, fastOf(row).kwh - fastOf(row).pricedKwh);
   const unpricedHomeKwh = (row: (typeof recorded)[number]) =>
     Math.max(0, row.charged_kwh - fastOf(row).kwh - (row.priced_kwh - fastOf(row).pricedKwh));
-  const trackedDays = Math.max(1, (nowMs - Math.max(trackedFromMs, startMs)) / DAY_MS);
-  const mileageAssumed = trackedMiles <= 0;
-  const avgDailyMiles = mileageAssumed ? DEFAULT_DAILY_MILES : trackedMiles / trackedDays;
   const monthEnergyCost = (row: (typeof recorded)[number]) =>
     row.charging_cost_usd + unpricedFastKwh(row) * fastUsdPerKwh + unpricedHomeKwh(row) * homeUsdPerKwh;
   const trackedEnergyCost = sum(monthEnergyCost);
@@ -74,10 +74,23 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
     ? DEFAULT_ELECTRICITY_USD_PER_KWH
     : trackedEnergyCost / trackedKwh;
   const fastShare = trackedKwh > 0 ? fastKwh / trackedKwh : 0;
-  const ownCostPerMile =
-    trackedEnergyCost > 0 && trackedMiles > 0
-      ? trackedEnergyCost / trackedMiles
-      : DEFAULT_OWN_KWH_PER_MI * electricityUsdPerKwh;
+
+  // Miles. The odometer is the total: recorded trips miss every mile driven
+  // while nothing was collecting, and every compared vehicle is charged by the
+  // mile. It needs a purchase date, because without one the ledger starts at
+  // first tracking and the odometer also counts the miles before that.
+  const ownedDays = Math.max(1, (nowMs - startMs) / DAY_MS);
+  const odometerMiles =
+    usage.odometer_mi != null ? usage.odometer_mi - (settings.purchase_odometer_mi ?? 0) : null;
+  const mileageFromOdometer = purchaseMs != null && odometerMiles != null && odometerMiles > trackedMiles;
+  const milesToDate = mileageFromOdometer ? (odometerMiles as number) : trackedMiles;
+  const trackedDays = Math.max(1, (nowMs - Math.max(trackedFromMs, startMs)) / DAY_MS);
+  const mileageAssumed = milesToDate <= 0;
+  const avgDailyMiles = mileageAssumed
+    ? DEFAULT_DAILY_MILES
+    : mileageFromOdometer
+      ? milesToDate / ownedDays
+      : trackedMiles / trackedDays;
 
   const gasPrice = createGasPriceResolver(
     data.fuel_prices.months,
@@ -86,32 +99,95 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
   const usageByMonth = new Map(recorded.map((row) => [row.month.slice(0, 7), row]));
 
   // Periods: one per calendar month, clipped to the ledger window.
-  const periods: LedgerPeriod[] = [];
-  const ownEnergy: number[] = [];
+  const spans: Array<{
+    key: string;
+    startMs: number;
+    endMs: number;
+    actual: (typeof recorded)[number] | undefined;
+    pastDays: number;
+    futureDays: number;
+    untrackedDays: number;
+  }> = [];
   for (let cursor = monthStart(startMs); cursor < endMs; cursor = nextMonth(cursor)) {
     const periodStart = Math.max(cursor, startMs);
     const periodEnd = Math.min(nextMonth(cursor), endMs);
     if (periodEnd <= periodStart) continue;
     const key = monthKey(cursor);
-    const actual = usageByMonth.get(key);
-    const estimatedDays =
-      (overlapMs(periodStart, periodEnd, startMs, trackedFromMs) +
-        overlapMs(periodStart, periodEnd, nowMs, endMs)) /
-      DAY_MS;
-    const estimatedMiles = avgDailyMiles * estimatedDays;
-    const price = gasPrice(key);
-    periods.push({
+    spans.push({
+      key,
       startMs: periodStart,
       endMs: periodEnd,
+      actual: usageByMonth.get(key),
+      pastDays: overlapMs(periodStart, periodEnd, startMs, nowMs) / DAY_MS,
+      futureDays: overlapMs(periodStart, periodEnd, nowMs, endMs) / DAY_MS,
+      untrackedDays: overlapMs(periodStart, periodEnd, startMs, trackedFromMs) / DAY_MS,
+    });
+  }
+
+  // Miles driven but not recorded as trips. With an odometer total, the
+  // shortfall goes to the months that fall short of the owner's average, in
+  // proportion to how far short. Without one, only the months before tracking
+  // began can be estimated.
+  const shortBy = spans.map((span) =>
+    mileageFromOdometer ? Math.max(0, avgDailyMiles * span.pastDays - (span.actual?.miles ?? 0)) : 0,
+  );
+  const shortTotal = shortBy.reduce((total, value) => total + value, 0);
+  const unrecordedMiles = spans.map((span, index) =>
+    mileageFromOdometer
+      ? shortTotal > 0
+        ? ((milesToDate - trackedMiles) * (shortBy[index] as number)) / shortTotal
+        : 0
+      : avgDailyMiles * span.untrackedDays,
+  );
+
+  // Charging is billed from the sessions themselves, so months with charging
+  // history cost what was paid however many miles were recorded. Only months
+  // before the first session, and the projection, are priced by the mile.
+  const firstChargeMonth = recorded.find((row) => row.charged_kwh > 0)?.month.slice(0, 7) ?? null;
+  const hasChargeHistory = (key: string) => firstChargeMonth != null && key >= firstChargeMonth;
+  const chargedMiles = spans.reduce(
+    (total, span, index) =>
+      hasChargeHistory(span.key) ? total + (span.actual?.miles ?? 0) + (unrecordedMiles[index] as number) : total,
+    0,
+  );
+  const ownCostPerMile =
+    trackedEnergyCost > 0 && chargedMiles > 0
+      ? trackedEnergyCost / chargedMiles
+      : DEFAULT_OWN_KWH_PER_MI * electricityUsdPerKwh;
+
+  // Rated consumption is measured on a test cycle; real driving, weather,
+  // charging losses and idle drain all add to it. The owner's energy from the
+  // wall per mile, against their own vehicle's rating, says by how much for
+  // the way they drive, and a comparison EV's rating is raised by the same
+  // share. Bounded, and left alone until there are enough miles to trust.
+  const ownKwhPerMi = trackedKwh > 0 && chargedMiles > 0 ? trackedKwh / chargedMiles : null;
+  const ownRatedKwhPerMi = data.own_rated_kwh_per_mi ?? null;
+  const realWorldFactor =
+    ownKwhPerMi != null && ownRatedKwhPerMi != null && chargedMiles >= MIN_MILES_FOR_REAL_WORLD_FACTOR
+      ? Math.min(MAX_REAL_WORLD_FACTOR, Math.max(MIN_REAL_WORLD_FACTOR, ownKwhPerMi / ownRatedKwhPerMi))
+      : 1;
+
+  const periods: LedgerPeriod[] = [];
+  const ownEnergy: number[] = [];
+  spans.forEach((span, index) => {
+    const unrecorded = unrecordedMiles[index] as number;
+    const projectedMiles = avgDailyMiles * span.futureDays;
+    const price = gasPrice(span.key);
+    periods.push({
+      startMs: span.startMs,
+      endMs: span.endMs,
       kind:
-        periodEnd <= trackedFromMs ? 'estimated' : periodStart >= nowMs ? 'projected' : 'actual',
-      miles: (actual?.miles ?? 0) + estimatedMiles,
+        span.endMs <= trackedFromMs ? 'estimated' : span.startMs >= nowMs ? 'projected' : 'actual',
+      miles: (span.actual?.miles ?? 0) + unrecorded + projectedMiles,
       gasRegularUsd: price.regular,
       gasPremiumUsd: price.premium,
       gasFromSeries: price.fromSeries,
     });
-    ownEnergy.push((actual ? monthEnergyCost(actual) : 0) + estimatedMiles * ownCostPerMile);
-  }
+    ownEnergy.push(
+      (span.actual ? monthEnergyCost(span.actual) : 0) +
+        ((hasChargeHistory(span.key) ? 0 : unrecorded) + projectedMiles) * ownCostPerMile,
+    );
+  });
 
   // The tracked vehicle, with the user's figures over the defaults.
   const ownPrice = settings.purchase_price_usd ?? 0;
@@ -147,7 +223,7 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
   const compared = comparisonVehicles(data).filter((vehicle) => enabled.has(vehicle.id));
 
   const vehicles = [own, ...compared].map((vehicle) =>
-    buildVehicleLedger(vehicle, periods, startMs, electricityUsdPerKwh, ownEnergy),
+    buildVehicleLedger(vehicle, periods, startMs, electricityUsdPerKwh * realWorldFactor, ownEnergy),
   );
 
   return {
@@ -160,11 +236,16 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
     vehicles,
     avgMonthlyMiles: avgDailyMiles * DAYS_PER_MONTH,
     mileageAssumed,
+    mileageFromOdometer,
+    milesToDate,
     electricityUsdPerKwh,
     homeUsdPerKwh,
     fastUsdPerKwh,
     fastShare,
     electricityRateAssumed,
+    ownKwhPerMi,
+    ownRatedKwhPerMi,
+    realWorldFactor,
     startAssumed: purchaseMs == null,
   };
 }

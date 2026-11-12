@@ -39,6 +39,7 @@ export function response(overrides: Partial<OwnershipResponse> = {}): OwnershipR
     settings: {
       purchase_price_usd: 80_000,
       purchase_date: '2025-01-01',
+      purchase_odometer_mi: null,
       resale_value_usd: null,
       insurance_monthly_usd: null,
       tire_set_cost_usd: null,
@@ -54,7 +55,8 @@ export function response(overrides: Partial<OwnershipResponse> = {}): OwnershipR
       ],
       tracked_from: '2025-07-01T00:00:00Z',
       tracked_to: '2025-09-30T00:00:00Z',
-      odometer_mi: 9_000,
+      // No odometer reading: miles come from the recorded drives alone.
+      odometer_mi: null,
     },
     fuel_prices: {
       connection_enabled: true,
@@ -78,6 +80,7 @@ export function response(overrides: Partial<OwnershipResponse> = {}): OwnershipR
     ],
     class_defaults: { ev: costs(), hybrid: gasCosts, gas: gasCosts },
     own_defaults: costs(),
+    own_rated_kwh_per_mi: null,
     ...overrides,
   } as OwnershipResponse;
 }

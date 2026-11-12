@@ -97,6 +97,10 @@ export interface Ledger {
   avgMonthlyMiles: number;
   /** True when no driving has been recorded and a typical mileage is assumed. */
   mileageAssumed: boolean;
+  /** True when total miles come from the odometer rather than recorded drives alone. */
+  mileageFromOdometer: boolean;
+  /** Miles driven from the ledger start to now. */
+  milesToDate: number;
   electricityUsdPerKwh: number;
   /** What home and other AC charging costs you per kWh. */
   homeUsdPerKwh: number;
@@ -106,6 +110,12 @@ export interface Ledger {
   fastShare: number;
   /** True when no charging cost has been recorded to derive the rate from. */
   electricityRateAssumed: boolean;
+  /** Energy from the wall per mile for the tracked vehicle; null until both are recorded. */
+  ownKwhPerMi: number | null;
+  /** The tracked vehicle's EPA rating in kWh per mile, when its model is known. */
+  ownRatedKwhPerMi: number | null;
+  /** What a comparison EV's rated consumption is multiplied by; 1 when unadjusted. */
+  realWorldFactor: number;
   /** True when the ledger starts at first tracking because no purchase date is set. */
   startAssumed: boolean;
 }

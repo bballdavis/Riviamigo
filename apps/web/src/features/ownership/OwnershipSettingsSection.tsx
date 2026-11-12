@@ -201,7 +201,7 @@ function VehicleOwnershipEditor({
         color: CHART_COLORS.emerald,
         title: 'Purchase and value',
         description: 'What you paid and when. The dashboard starts every vehicle at its purchase price on this date.',
-        fields: ['purchasePrice', 'purchaseDate', 'resaleValue'],
+        fields: ['purchasePrice', 'purchaseDate', 'purchaseOdometer', 'resaleValue'],
       })}
       {card({
         icon: <Receipt />,
