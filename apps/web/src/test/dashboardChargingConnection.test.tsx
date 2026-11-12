@@ -538,6 +538,43 @@ describe('charging connection custom widget', () => {
     });
   });
 
+  it('keeps each theme\'s charging art right-aligned while it is visible', () => {
+    chargingMocks.forcePluggedState = 'Charging';
+    chargingMocks.images = vehicleImageFixtures;
+
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    // jsdom has no Tailwind, so resolve the display utilities each theme
+    // applies. `justify-end` only pins the art to the card's right edge while
+    // the frame is a flex row; a `dark:block` once dropped the dark art to the
+    // left and exposed the cropped vehicle body.
+    const DISPLAYS = new Set(['flex', 'inline-flex', 'block', 'inline-block', 'inline', 'grid', 'contents', 'hidden']);
+    const displayIn = (classes: string[], theme: 'light' | 'dark') => {
+      const base = classes.filter((name) => DISPLAYS.has(name)).at(-1);
+      const dark = classes
+        .filter((name) => name.startsWith('dark:') && DISPLAYS.has(name.slice('dark:'.length)))
+        .at(-1)
+        ?.slice('dark:'.length);
+      return theme === 'dark' ? dark ?? base : base;
+    };
+
+    const frames = screen.getAllByTestId('charging-side-image-frame');
+    expect(frames.map((frame) => frame.getAttribute('data-theme-variant'))).toEqual(['light', 'dark']);
+    for (const frame of frames) {
+      const theme = frame.getAttribute('data-theme-variant') as 'light' | 'dark';
+      const other = theme === 'light' ? 'dark' : 'light';
+      const classes = Array.from(frame.classList);
+      expect(classes).toContain('justify-end');
+      expect(displayIn(classes, theme)).toBe('flex');
+      expect(displayIn(classes, other)).toBe('hidden');
+    }
+  });
+
   it('finds side-charging art even when Rivian metadata stores it as a side placement', () => {
     chargingMocks.forcePluggedState = 'Charging';
     chargingMocks.images = vehicleImageUrlOnlyChargingFixtures;
