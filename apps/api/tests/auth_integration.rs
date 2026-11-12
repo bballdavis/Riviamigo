@@ -1685,7 +1685,8 @@ async fn external_connections_rivian_status_covers_only_the_callers_active_vehic
     let viewer_email = "rivian-status-viewer@example.com";
     let other_email = "rivian-status-other@example.com";
     let viewer_token = register_and_login(&app, viewer_email).await;
-    register_and_login(&app, other_email).await;
+    // Registration closes after the first account, so seed the second directly.
+    insert_user_and_login(&app, other_email, "hunter2hunter2").await;
     let user_id = |email: &'static str| {
         let pool = app.pool.clone();
         async move {
