@@ -17,7 +17,9 @@ describe('ownershipLabelError', () => {
 
   it('rejects inner control characters but trims surrounding whitespace', () => {
     expect(ownershipLabelError('Oil\tchange', 60)).toMatch(/control characters/);
-    expect(ownershipLabelError('Tires\u0085', 60)).toMatch(/control characters/);
+    expect(ownershipLabelError('Tir\u0085es', 60)).toMatch(/control characters/);
+    // Trailing NEXT LINE is whitespace to the API's trim, as here.
+    expect(ownershipLabelError('Tires\u0085', 60)).toBeNull();
     expect(ownershipLabelError('Brakes\n', 60)).toBeNull();
   });
 });
