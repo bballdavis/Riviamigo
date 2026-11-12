@@ -1,6 +1,5 @@
 import React from 'react';
 import type { ChartColorDefinition, ChartColorToken } from '@riviamigo/types';
-import { Icon } from '@iconify/react';
 import { CircleHelp } from 'lucide-react';
 import {
   useBatteryHealth,
@@ -14,16 +13,15 @@ import {
   DEFAULT_CURVE_SMOOTHNESS,
   DEFAULT_SPRITE_TIME_FILTER,
   getChartColor,
-  MiniSparkline,
   normalizeCurveSmoothness,
   normalizeTimeFilter,
   type CurveSmoothness,
   type MiniSparklineType,
   type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
-import { Badge, Card, Tooltip } from '@riviamigo/ui/primitives';
+import { Badge, Tooltip } from '@riviamigo/ui/primitives';
 import { useDocumentPalette, useDocumentTheme } from '@riviamigo/ui/hooks';
-import { cn, formatMiles } from '@riviamigo/ui/lib/utils';
+import { formatMiles } from '@riviamigo/ui/lib/utils';
 import { presentVehicleStatusDefinition, type StatusTone } from '@riviamigo/ui/lib/vehicleStatus';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
@@ -33,7 +31,6 @@ import {
   useDashboardMetric,
   type DashboardDataRequirements,
 } from '../../dashboardData';
-import { resolveIconId } from '../../editor/iconMigration';
 import { seriesToDailyDeltas, seriesToDailyTotals } from '../../editor/dailyDelta';
 import type { TripRow } from '@riviamigo/ui/tables';
 import { useTripSelection } from '../table/tripSelectionStore';
@@ -54,6 +51,7 @@ import {
   type SensorIconKey,
   type SensorValueColor,
 } from './sensorDefinitions';
+import { SensorChipCard, SensorChipValue } from './SensorChipCard';
 import {
   buildSourceValues,
   formatMetricValue,
@@ -211,7 +209,6 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const chargingSummary = dashboardDataAvailable ? dashboardCharging : fetchedChargingSummary;
   const status = dashboardDataAvailable ? dashboardStatus : fetchedStatus;
   const title = instance.title ?? definition?.title ?? value?.label ?? options.metric;
-  const iconId = resolveIconId(options.icon);
   const sourceValues = buildSourceValues(options.dataSource, health, chargingSummary, efficiencySummary, status);
   const timeframeScope = options.timeframeScope;
   const isLifetimeTimeframe = ctx.timeframe?.kind === 'lifetime';
@@ -291,106 +288,67 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const spriteColor = metricColor;
 
   return (
-    <Card
-      padding="none"
-      className={cn(
-        'relative flex h-full min-h-[72px] flex-col overflow-hidden border p-3',
-        options.accentBorder
-          ? 'shadow-[inset_0_0_0_1px_var(--rm-border-accent)]'
-          : 'border-border'
-      )}
-      style={options.accentBorder ? { borderColor: metricColor } : undefined}
-      data-testid="sensor-chip"
-    >
-      {showSprite ? (
-        <div
-          className="pointer-events-none absolute h-9"
-          style={{ left: 0, right: 0, bottom: 0, zIndex: 0, opacity: 0.82 }}
-          data-testid="sensor-sprite-layer"
-        >
-          <MiniSparkline
-            data={spriteData}
-            type={sparklineType}
-            height={36}
-            color={spriteColor}
-            showFallback
-            timeFilter={options.timeFilter}
-            smoothness={options.smoothness}
-          />
-          <div
-            className="absolute inset-x-0 bottom-[2px] h-px"
-            style={{ backgroundColor: spriteColor, opacity: 0.35 }}
-            aria-hidden="true"
-          />
-        </div>
-      ) : null}
-
-      <div className={cn('relative z-10 flex flex-col', !activeTripSelectionStat && !showSprite && 'flex-1 justify-center')}>
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <p className="min-w-0 truncate text-xs font-medium uppercase tracking-wider text-fg-tertiary">
-                {title}
-                {options.labelSuffix ? (
-                  <span className="ml-1 text-[10px] font-normal normal-case tracking-normal">
-                    ({options.labelSuffix})
-                  </span>
-                ) : null}
-              </p>
-              {helpContent ? (
-                <Tooltip content={helpContent} align="start">
-                  <button
-                    type="button"
-                    aria-label={`${title} help`}
-                    className="inline-flex shrink-0 rounded text-fg-tertiary transition-colors hover:text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
-                  >
-                    <CircleHelp className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
-                </Tooltip>
-              ) : null}
-              {timeframeScope === 'lifetime' ? (
-                <Badge
-                  size="sm"
-                  variant="default"
-                  className="shrink-0 rounded-md px-1.5 py-0.5 font-semibold"
-                >
-                  Lifetime
-                </Badge>
-              ) : null}
-            </div>
-            {options.showSubtitle && options.subtitle ? (
-              <p className="mt-1 truncate text-xs text-fg-tertiary">{options.subtitle}</p>
-            ) : null}
-          </div>
-          <Icon
-            icon={iconId}
-            className={cn('h-4 w-4 shrink-0', hasVisualMetricColor ? 'text-fg' : 'text-accent')}
-            style={hasVisualMetricColor ? { color: metricColor } : undefined}
-          />
-        </div>
-
-        <div className="mt-1.5 flex items-baseline gap-1">
-          {renderStatusValue({
-            presentation: statusPresentation,
-            displayValue,
-            valueToneClass,
-            ...(valueToneStyle ? { valueToneStyle } : {}),
-            valueSize: options.valueSize,
-          })}
-          {inlineSecondary ? (
-            <span className="font-mono text-sm tabular-nums text-fg-tertiary">
-              {inlineSecondary}
-            </span>
+    <SensorChipCard
+      title={title}
+      {...(options.labelSuffix ? { labelSuffix: options.labelSuffix } : {})}
+      titleAddons={
+        <>
+          {helpContent ? (
+            <Tooltip content={helpContent} align="start">
+              <button
+                type="button"
+                aria-label={`${title} help`}
+                className="inline-flex shrink-0 rounded text-fg-tertiary transition-colors hover:text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+              >
+                <CircleHelp className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </Tooltip>
           ) : null}
-        </div>
-        {selectionLabel ? (
+          {timeframeScope === 'lifetime' ? (
+            <Badge
+              size="sm"
+              variant="default"
+              className="shrink-0 rounded-md px-1.5 py-0.5 font-semibold"
+            >
+              Lifetime
+            </Badge>
+          ) : null}
+        </>
+      }
+      {...(options.showSubtitle && options.subtitle ? { subtitle: options.subtitle } : {})}
+      icon={options.icon}
+      {...(hasVisualMetricColor ? { iconColor: metricColor } : {})}
+      accentBorder={options.accentBorder}
+      accentColor={metricColor}
+      {...(showSprite
+        ? {
+            sprite: {
+              data: spriteData,
+              type: sparklineType,
+              color: spriteColor,
+              timeFilter: options.timeFilter,
+              smoothness: options.smoothness,
+            },
+          }
+        : {})}
+      centered={!activeTripSelectionStat && !showSprite}
+      value={renderStatusValue({
+        presentation: statusPresentation,
+        displayValue,
+        valueToneClass,
+        ...(valueToneStyle ? { valueToneStyle } : {}),
+        valueSize: options.valueSize,
+      })}
+      {...(inlineSecondary ? { inlineSecondary } : {})}
+      footnote={
+        selectionLabel ? (
           <p className="mt-0.5 text-[10px] text-fg-tertiary">{selectionLabel}</p>
         ) : lastUpdatedLabel ? (
           <p className="mt-0.5 truncate text-[11px] text-fg-tertiary">{lastUpdatedLabel}</p>
-        ) : null}
-        {secondary ? <p className="mt-0.5 truncate text-xs text-fg-tertiary">{secondary}</p> : null}
-      </div>
-    </Card>
+        ) : null
+      }
+      secondary={secondary || null}
+    />
   );
 }
 
@@ -494,16 +452,13 @@ function renderStatusValue({
   }
 
   const valueNode = (
-    <span
-      className={cn(
-        'font-mono font-semibold tabular-nums tracking-tight',
-        valueToneClass,
-        valueSize === 'sm' ? 'text-xl' : valueSize === 'lg' ? 'text-3xl' : 'text-2xl'
-      )}
-      style={{ textShadow: 'var(--rm-value-halo)', ...valueToneStyle }}
+    <SensorChipValue
+      toneClass={valueToneClass}
+      {...(valueToneStyle ? { style: valueToneStyle } : {})}
+      size={valueSize}
     >
       {displayValue}
-    </span>
+    </SensorChipValue>
   );
 
   return presentation?.tooltip ? (

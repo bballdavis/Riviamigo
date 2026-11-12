@@ -1,5 +1,5 @@
 import React from 'react';
-import { Icon } from '@iconify/react';
+import { AppIcon as Icon } from '../../icons/AppIcon';
 import type { BatteryHealthSummary, VehicleStatus } from '@riviamigo/types';
 import { getChartColor } from '@riviamigo/ui/charts';
 import { presentVehicleStatusDefinition } from '@riviamigo/ui/lib/vehicleStatus';
