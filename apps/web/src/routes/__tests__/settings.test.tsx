@@ -2288,7 +2288,13 @@ describe('Settings page', () => {
     fireEvent.change(restorePicker, { target: { value: 'artifact-1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Restore selected backup' }));
     await waitFor(() => {
-      expect(screen.getByText('Restore this backup?')).toBeInTheDocument();
+      expect(screen.getByRole('dialog', { name: 'Restore this backup?' })).toBeInTheDocument();
+    });
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Restore this backup?' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore selected backup' }));
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: 'Restore this backup?' })).toBeInTheDocument();
     });
     fireEvent.change(screen.getByLabelText('Type RESTORE to continue'), {
       target: { value: 'RESTORE' },
