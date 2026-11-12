@@ -7,6 +7,8 @@ import {
   buildWindowsProcessQuery,
   matchRepoOwnedProcesses,
   matchWindowsRepoOwnedProcesses,
+  parseCimDate,
+  parseLauncherPidFile,
   parseComposeIdentityMetadata,
   parseComposePortMetadata,
 } from './dev.mjs';
@@ -245,6 +247,33 @@ test('Windows stop matches this checkout\'s launcher by absolute path or by its 
       .map((entry) => entry.pid),
     [101, 102, 103, 201, 202],
   );
+});
+
+test('Windows stop trusts a recorded launcher PID only for the process that started then', () => {
+  const startedAt = Date.parse('2026-11-11T10:00:00Z');
+  const rows = [
+    { ProcessId: 205, Name: 'node.exe', CommandLine: 'node ./scripts/dev.mjs', CreationDate: `/Date(${startedAt + 300})/` },
+    { ProcessId: 206, Name: 'node.exe', CommandLine: 'node ./scripts/dev.mjs', CreationDate: '2026-11-11T13:00:00Z' },
+  ];
+  const options = { ...WINDOWS_OPTIONS, includeLaunchers: true, launcherStartedAt: startedAt, selfPid: 999 };
+  // The recorded launcher, by PID and start time (Windows PowerShell date form).
+  assert.deepEqual(matchWindowsRepoOwnedProcesses(rows, { ...options, launcherPid: 205 }).map((entry) => entry.pid), [205]);
+  // Same PID reused by a later process (PowerShell 7 date form): not ours.
+  assert.deepEqual(matchWindowsRepoOwnedProcesses(rows, { ...options, launcherPid: 206 }), []);
+  // A PID file from an older launcher has no start time and falls back to the PID.
+  assert.deepEqual(
+    matchWindowsRepoOwnedProcesses(rows, { ...options, launcherPid: 206, launcherStartedAt: null }).map((entry) => entry.pid),
+    [206],
+  );
+});
+
+test('launcher PID files round-trip with and without a start time', () => {
+  assert.deepEqual(parseLauncherPidFile('4242 1762855200000\n'), { pid: 4242, startedAt: 1762855200000 });
+  assert.deepEqual(parseLauncherPidFile('4242\n'), { pid: 4242, startedAt: null });
+  assert.equal(parseLauncherPidFile('not-a-pid'), null);
+  assert.equal(parseCimDate('/Date(1762855200000)/'), 1762855200000);
+  assert.equal(parseCimDate('2026-11-11T10:00:00Z'), Date.parse('2026-11-11T10:00:00Z'));
+  assert.equal(parseCimDate(null), null);
 });
 
 test('Windows stop never takes a launcher that another checkout owns, even on a recorded PID', () => {
