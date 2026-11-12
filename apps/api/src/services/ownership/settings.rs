@@ -11,7 +11,7 @@ use crate::{
     services::ownership_schedules::{validate_schedule, MaintenanceItem},
 };
 
-use super::labels::clean_label;
+use super::labels::{clean_label, repair_stored_label};
 use super::reference::{reference_vehicles, Powertrain};
 
 const MAX_CUSTOM_VEHICLES: usize = 12;
@@ -286,7 +286,16 @@ pub(super) fn parse_comparisons(vehicle_id: Uuid, value: serde_json::Value) -> C
         Some(serde_json::Value::Array(entries)) => entries
             .into_iter()
             .filter_map(|entry| match serde_json::from_value::<CustomVehicle>(entry) {
-                Ok(vehicle) => Some(vehicle),
+                Ok(mut vehicle) => match repair_stored_label(&vehicle.label, 80) {
+                    Some(label) => {
+                        vehicle.label = label;
+                        Some(vehicle)
+                    }
+                    None => {
+                        tracing::warn!(%vehicle_id, "ownership.settings.custom_vehicle_label_unreadable");
+                        None
+                    }
+                },
                 Err(error) => {
                     tracing::warn!(%vehicle_id, %error, "ownership.settings.custom_vehicle_skipped");
                     None
@@ -324,8 +333,17 @@ pub(super) fn parse_maintenance(
             let stored = items.len();
             let parsed: Vec<MaintenanceItem> = items
                 .into_iter()
-                .filter_map(|item| match serde_json::from_value(item) {
-                    Ok(item) => Some(item),
+                .filter_map(|item| match serde_json::from_value::<MaintenanceItem>(item) {
+                    Ok(mut item) => match repair_stored_label(&item.label, 60) {
+                        Some(label) => {
+                            item.label = label;
+                            Some(item)
+                        }
+                        None => {
+                            tracing::warn!(%vehicle_id, schedule = %key, "ownership.settings.maintenance_label_unreadable");
+                            None
+                        }
+                    },
                     Err(error) => {
                         tracing::warn!(%vehicle_id, schedule = %key, %error, "ownership.settings.maintenance_item_skipped");
                         None
