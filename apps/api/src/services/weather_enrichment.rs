@@ -16,7 +16,7 @@ use crate::{
 
 const SAMPLE_INTERVAL_SECONDS: i64 = 15 * 60;
 const MAX_LOCATIONS_PER_REQUEST: usize = 50;
-const DAILY_REQUEST_BUDGET: i32 = 8_000;
+pub(crate) const DAILY_REQUEST_BUDGET: i32 = 8_000;
 
 #[derive(Debug)]
 struct WeatherFetchError {

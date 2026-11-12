@@ -49,6 +49,7 @@ export const chargingClient = client(
   'putChargingSchedule', 'listDepartureSchedules', 'createDepartureSchedule',
   'updateDepartureSchedule', 'deleteDepartureSchedule', 'getLiveSession',
   'getBackfillStatus', 'triggerBackfill', 'listMaintenanceJobs', 'startMaintenanceJob',
+  'listSiteMaintenanceJobs', 'startSiteMaintenanceJob',
 );
 
 export const telemetryClient = client(

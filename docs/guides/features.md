@@ -45,14 +45,30 @@ Fuel prices and vehicle search are optional [external connections](../guides/ext
 
 ## Maintenance jobs
 
-**Settings > Jobs** lists repair jobs you can run for each vehicle without a terminal. Each job shows when it last ran, whether it finished, and what it touched, and you can run it again at any time. Only a vehicle's owner or manager can start a job; other members can see the list.
+**Settings > Jobs** shows the background work Riviamigo does on its own and the repairs you can run without a terminal. Each job shows its status, when it last ran, and what that run did.
+
+### Site-wide jobs
+
+Site-wide jobs cover every vehicle, so only admins see this section.
+
+**Automatic** jobs run on their own schedule:
+
+- **Location and weather catch-up** runs every 6 hours, and once when Riviamigo starts. It fills in missing coordinates, saved places, and street addresses for trips and charging sessions, up to 100 addresses per pass, then queues a weather lookup for every trip without an outside temperature, including trips whose earlier lookup failed. **Run now** starts a pass straight away; a scheduled pass is skipped while yours is still going. Addresses and weather are looked up only when those services are turned on in **Settings > External Connections**.
+- **Weather lookups** works through the queued weather lookups one at a time and retries failed ones. Its row shows how many are waiting and how many finished in the last day. It shows **Paused** when the weather service is turned off or has reached its daily limit.
+- **Scheduled backups** shows the backup schedule and how the latest scheduled backup went. Change the schedule, back up now, or restore in **Settings > Backups**.
+- **Security log cleanup** runs daily and removes security log events older than a year.
+
+**Manual** jobs are repairs to run after an update that changes how something is calculated:
+
+- **Recalculate charging costs** prices every vehicle's charging sessions again with their current cost profiles, charging-network settings, and any corrections you made. Costs are normally worked out once, when a session ends or when you edit a cost profile; run this after an update that changes how costs are calculated, so older sessions pick up the fix.
+- **Recalculate trip energy** works out every trip's energy use and efficiency again from its starting and ending battery levels, the same way new trips are calculated.
+
+### Vehicle jobs
+
+Pick a vehicle from the list to see its jobs. Only the vehicle's owner or manager can start one; other members can see them.
 
 - **Charging history backfill** downloads the vehicle's full charging history from Rivian and merges it with the sessions Riviamigo recorded.
-- **Recalculate charging costs** prices every charging session again with its current cost profile, charging-network settings, and any corrections you made. Costs are normally worked out once, when a session ends or when you edit a cost profile; run this after an update that changes how costs are calculated, so older sessions pick up the fix. When it finishes, the page shows how many sessions it checked and how many changed.
 - **Recover missed charging sessions** adds sessions that the vehicle's charging telemetry shows but Riviamigo never recorded, and closes a session left open when Riviamigo restarted during a charge. It only adds sessions where nothing is recorded and only fills in values an open session is missing: it never changes, merges, or removes a recorded session or your corrections. Charges that ended in the last two hours are left for the normal charging tracker.
-- **Recalculate trip energy** works out each trip's energy use and efficiency again from its starting and ending battery levels, the same way new trips are calculated.
-- **Fill missing outside temperatures** queues a weather lookup for every trip that has no outside temperature, including trips whose earlier lookup failed. Temperatures fill in over the next few minutes as the weather service answers; trips that already have one are not changed.
-- **Fill missing addresses** looks up street addresses for trip starts and ends and for charging spots that have none, up to 100 trips and 100 sessions per run, so run it again if more remain. It uses the address lookup service only when that is turned on in **Settings > External Connections**, and lookups that fail are counted on the page.
 
 ## Vehicle images
 

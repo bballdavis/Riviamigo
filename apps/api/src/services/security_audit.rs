@@ -10,7 +10,10 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use crate::errors::AppError;
+use crate::{
+    errors::AppError,
+    services::maintenance_jobs::{self, MaintenanceJobKind},
+};
 
 pub const SECURITY_EVENT_RETENTION_DAYS: i32 = 365;
 
@@ -109,18 +112,31 @@ pub async fn prune_expired(pool: &PgPool) -> Result<u64, AppError> {
     Ok(result.rows_affected())
 }
 
+/// Daily retention pass, recorded as the "Security log cleanup" job on
+/// Settings > Jobs.
 pub fn start_retention_worker(pool: PgPool) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            match prune_expired(&pool).await {
-                Ok(removed) if removed > 0 => {
-                    tracing::info!(removed, "expired security audit events pruned")
+            let outcome = maintenance_jobs::run_automatic(
+                &pool,
+                MaintenanceJobKind::SecurityLogCleanup,
+                || maintenance_jobs::security_log_cleanup(&pool),
+            )
+            .await;
+            match outcome {
+                Some(Ok(outcome)) if outcome.changed > 0 => {
+                    tracing::info!(
+                        removed = outcome.changed,
+                        "expired security audit events pruned"
+                    )
                 }
-                Ok(_) => {}
-                Err(error) => tracing::error!(error = ?error, "security audit retention failed"),
+                Some(Err(error)) => {
+                    tracing::error!(error = ?error, "security audit retention failed")
+                }
+                _ => {}
             }
         }
     })
