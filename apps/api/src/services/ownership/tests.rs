@@ -192,6 +192,49 @@ fn labels_are_trimmed_bounded_and_single_line() {
 }
 
 #[test]
+fn stored_labels_from_older_builds_load_in_a_saveable_form() {
+    use super::settings::{parse_comparisons, parse_maintenance};
+
+    let vehicle_id = uuid::Uuid::new_v4();
+    let comparisons = parse_comparisons(
+        vehicle_id,
+        json!({
+            "custom": [
+                { "id": "custom-1", "label": "Old\ttruck\n", "powertrain": "gas",
+                  "price_usd": 30000.0, "mpg": 18.0 },
+                { "id": "custom-2", "label": "\u{0007}", "powertrain": "gas",
+                  "price_usd": 30000.0, "mpg": 18.0 }
+            ]
+        }),
+    );
+    let labels: Vec<_> = comparisons
+        .custom
+        .iter()
+        .map(|v| v.label.as_str())
+        .collect();
+    assert_eq!(labels, ["Old truck"]);
+
+    let maintenance = parse_maintenance(
+        vehicle_id,
+        json!({
+            "own": [
+                { "id": "rotate", "label": "Rotate\r\ntires", "category": "tires",
+                  "interval_mi": 7500.0, "interval_months": null, "cost_usd": 40.0 }
+            ]
+        }),
+    );
+    assert_eq!(maintenance["own"][0].label, "Rotate tires");
+    // What loads now passes the save-time rule, so a later save succeeds.
+    for label in labels
+        .iter()
+        .copied()
+        .chain([maintenance["own"][0].label.as_str()])
+    {
+        assert_eq!(clean_label(label, 60).as_deref(), Some(label));
+    }
+}
+
+#[test]
 fn stored_settings_skip_only_the_entries_this_build_cannot_read() {
     use super::settings::{parse_comparisons, parse_maintenance};
 
