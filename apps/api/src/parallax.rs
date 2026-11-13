@@ -536,9 +536,8 @@ struct TireState {
     status: Option<i32>,
     #[prost(double, optional, tag = "3")]
     pressure_bar: Option<f64>,
-    /// 0 unspecified, 1 valid, 2 invalid: the same layout as the status enum
-    /// beside it and the charging-time estimate's validity. Proto3 leaves 0
-    /// off the wire, so an absent value says nothing about the sensor.
+    /// The app's validity enum: 0 valid, 1 invalid. Proto3 leaves 0 off the
+    /// wire, so an absent value means valid.
     #[prost(int32, optional, tag = "4")]
     validity: Option<i32>,
 }
@@ -904,20 +903,18 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
                     continue;
                 };
                 // An invalid reading's pressure and status are stale: record
-                // only that the sensor is invalid. An unstated validity keeps
-                // the reading but leaves the stored validity alone.
-                let valid = match state.validity.unwrap_or(0) {
-                    0 => None,
-                    1 => Some(true),
-                    2 => {
-                        meaningful |= set_tire(&mut event, position, None, None, Some(false))?;
+                // only that the sensor is invalid.
+                match state.validity.unwrap_or(0) {
+                    0 => {}
+                    1 => {
+                        meaningful |= set_tire(&mut event, position, None, None, false)?;
                         continue;
                     }
                     other => {
                         notes.push(format!("skipped tire {position} with validity {other}"));
                         continue;
                     }
-                };
+                }
                 let pressure_bar = state
                     .pressure_bar
                     .filter(|bar| bar.is_finite() && (0.0..=10.0).contains(bar));
@@ -937,7 +934,7 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
                 if pressure_bar.is_none() && status.is_none() {
                     continue;
                 }
-                meaningful |= set_tire(&mut event, position, pressure_bar, status, valid)?;
+                meaningful |= set_tire(&mut event, position, pressure_bar, status, true)?;
             }
         }
         "comfort.cabin.cabin_temperatures" => {
@@ -1136,7 +1133,7 @@ fn set_tire(
     position: i32,
     pressure_bar: Option<f64>,
     status: Option<&str>,
-    valid: Option<bool>,
+    valid: bool,
 ) -> Result<bool> {
     let pressure_psi = pressure_bar.map(|bar| bar * 14.503_773_8);
     let status = status.map(str::to_owned);
@@ -1169,9 +1166,7 @@ fn set_tire(
     if status.is_some() {
         *label = status;
     }
-    if valid.is_some() {
-        *validity = valid;
-    }
+    *validity = Some(valid);
     Ok(true)
 }
 
@@ -3359,18 +3354,12 @@ mod tests {
                     position: Some(1),
                     status: Some(1),
                     pressure_bar: Some(2.8),
-                    validity: Some(2),
+                    validity: Some(1),
                 },
                 TireState {
                     position: Some(2),
                     status: Some(2),
                     pressure_bar: Some(2.1),
-                    validity: Some(1),
-                },
-                TireState {
-                    position: Some(3),
-                    status: Some(1),
-                    pressure_bar: Some(3.3),
                     validity: None,
                 },
             ],
@@ -3384,11 +3373,6 @@ mod tests {
         assert_eq!(event.tire_fl_status, None);
         assert_eq!(event.tire_fr_valid, Some(true));
         assert_eq!(event.tire_fr_status.as_deref(), Some("warning_hard"));
-        // Rivian's valid enum value is 1, not 0: a valid sensor keeps its pressure.
-        assert!((event.tire_fr_psi.unwrap() - 2.1 * 14.503_773_8).abs() < 0.001);
-        // An unstated validity keeps the reading and leaves validity unset.
-        assert!(event.tire_rl_psi.is_some());
-        assert_eq!(event.tire_rl_valid, None);
     }
 
     #[test]
@@ -3791,7 +3775,7 @@ mod tests {
                     position: Some(1),
                     status: Some(1),
                     pressure_bar: Some(2.5),
-                    validity: Some(1),
+                    ..Default::default()
                 }],
             }
             .encode_to_vec(),
