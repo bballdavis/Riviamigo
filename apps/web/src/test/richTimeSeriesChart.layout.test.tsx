@@ -2,7 +2,7 @@ import React from 'react';
 import { render, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { carryForwardTooltipValues, formatAxisDateForSpan, formatAxisDateValuesForScale, formatChartNumber, getAdaptiveDecimalPrecision, getCalendarDateSplits, getResponsiveCalendarTickMaximum, isZoomedXRange, RichTimeSeriesChart } from '@riviamigo/ui/charts';
-import { buildRichTimeSeriesAlignedData } from '../../../../packages/ui/src/charts/RichTimeSeriesChart';
+import { buildRichTimeSeriesAlignedData, getPlottedXExtent } from '../../../../packages/ui/src/charts/RichTimeSeriesChart';
 
 describe('RichTimeSeriesChart aligned data', () => {
   it('drops invalid x values and reorders every series with the same stable permutation', () => {
@@ -14,6 +14,29 @@ describe('RichTimeSeriesChart aligned data', () => {
         false,
       ),
     ).toEqual([[1, 2, 3], [10, 20, 30]]);
+  });
+});
+
+describe('getPlottedXExtent', () => {
+  const series = [
+    { key: 'power', label: 'Power' },
+    { key: 'speed', label: 'Speed' },
+    { key: 'tip', label: 'Tip', tooltipOnly: true },
+  ];
+  const aligned = [
+    [0, 10, 20, 30, 40],
+    [null, 5, 6, null, null],
+    [null, null, 30, 31, null],
+    [1, 1, 1, 1, 1],
+  ] as never;
+
+  it('runs from the first to the last point a drawn series has a value', () => {
+    expect(getPlottedXExtent(aligned, series)).toEqual([10, 30]);
+  });
+
+  it('ignores hidden series and falls back to the whole range when nothing is drawn', () => {
+    expect(getPlottedXExtent(aligned, series, new Set(['speed']))).toEqual([10, 20]);
+    expect(getPlottedXExtent(aligned, series, new Set(['power', 'speed']))).toEqual([0, 40]);
   });
 });
 
