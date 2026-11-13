@@ -24,6 +24,8 @@
     ],
     "extensions": [".ts", ".tsx", ".rs"],
     "existingExceptions": {
+      "apps/api/src/services/maintenance_jobs.rs": "Settings > Jobs runner, ledger and job bodies in one file; split into a module directory next.",
+      "apps/web/src/features/settings/VehiclesSection.tsx": "Vehicle cards with pause, battery and sharing controls; extract the card body next.",
       "apps/api/src/routes/vehicles.rs": "Existing route hotspot; split in A3.",
       "apps/api/src/services/backups.rs": "Existing lifecycle hotspot; split in A6.",
       "packages/hooks/src/api/transport.ts": "Existing transport facade; split in D1.",
