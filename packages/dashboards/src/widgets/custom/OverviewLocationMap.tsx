@@ -26,6 +26,7 @@ export function OverviewLocationMap({
   artwork,
   options,
   heightPx,
+  onRenderFrame,
 }: {
   latitude: number | null | undefined;
   longitude: number | null | undefined;
@@ -33,6 +34,8 @@ export function OverviewLocationMap({
   artwork?: OverviewMarkerArtwork | undefined;
   options: OverviewMapOptions;
   heightPx: number;
+  /** Receives the map canvas after each frame, for overlays that blur what is beneath them. */
+  onRenderFrame?: ((canvas: HTMLCanvasElement) => void) | undefined;
 }) {
   const isDark = useDocumentTheme();
   const accessToken = useAuth((state) => state.accessToken);
@@ -77,6 +80,9 @@ export function OverviewLocationMap({
         // The loading pill stays level; only the vehicle turns to its heading.
         focusRotation={markerLoading ? null : headingDeg}
         compactAttribution
+        onRenderFrame={onRenderFrame}
+        // The drive wave runs along the bottom edge, so credits go top-left.
+        compactAttributionPlacement="top-left"
         height={Math.max(160, Math.round(heightPx))}
         mapStyle={mapStyle}
         mapStylePreference={mapStylePreference}

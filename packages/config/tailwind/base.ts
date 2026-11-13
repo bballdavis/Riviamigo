@@ -81,6 +81,10 @@ export const tailwindBase: Partial<Config> = {
           towing: 'var(--rm-dm-towing)',
           unknown: 'var(--rm-dm-unknown)',
         },
+        'drive-wave': {
+          line: 'var(--rm-drive-wave-line)',
+          crest: 'var(--rm-drive-wave-crest)',
+        },
         'map-route': {
           0: 'var(--rm-map-route-0)',
           1: 'var(--rm-map-route-1)',

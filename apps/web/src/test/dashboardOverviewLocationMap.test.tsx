@@ -19,6 +19,7 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
       focusRotation?: number | null;
       mapStyle?: string;
       mapStylePreference?: string;
+      compactAttributionPlacement?: string;
     }) => (
       <div
         data-testid="trip-map"
@@ -26,6 +27,7 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
         data-rotation={props.focusRotation ?? 'none'}
         data-mode={props.mapStyle}
         data-style={props.mapStylePreference}
+        data-attribution={props.compactAttributionPlacement ?? 'bottom-right'}
       >
         {props.focusMarker}
       </div>
@@ -83,6 +85,7 @@ import { DashboardRenderer } from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 import { WidgetEditForm } from '../../../../packages/dashboards/src/editor/WidgetEditForm';
 import { resolveOverviewMapOptions, resolveVehicleFacingDeg } from '../../../../packages/dashboards/src/widgets/custom/overviewMap';
+import { DRIVE_WAVE_HEIGHT, layoutDriveWave, resolveDriveWaveState } from '../../../../packages/dashboards/src/widgets/custom/overviewDriveWaveLayout';
 
 type Widget = DashboardConfig['widgets'][number];
 
@@ -316,6 +319,82 @@ describe('vehicle overview map expansion', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));
     expect(screen.getByTestId('overview-layout')).toHaveAttribute('data-map-expanded', 'true');
+  });
+});
+
+describe('overview map drive wave', () => {
+  function openMap() {
+    renderOverview();
+    fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));
+    return within(screen.getByTestId('overview-location-panel')).getByTestId('overview-drive-wave');
+  }
+
+  it('reads Parked while the vehicle is in park', () => {
+    vehicleStatus.current = { ...vehicleStatus.current, gear_status: 'park', speed_mph: 0 };
+    const wave = openMap();
+    expect(wave).toHaveAttribute('data-state', 'parked');
+    expect(within(wave).getAllByText('Parked').length).toBeGreaterThan(0);
+  });
+
+  it('shows the gear and speed once the vehicle is in drive', () => {
+    vehicleStatus.current = { ...vehicleStatus.current, gear_status: 'drive', speed_mph: 41.6 };
+    const wave = openMap();
+    expect(wave).toHaveAttribute('data-state', 'moving-D');
+    expect(within(wave).getByText('Drive, 42 mph')).toHaveClass('sr-only');
+    expect(within(wave).getByText('42')).toBeInTheDocument();
+    expect(within(wave).getByText('mph')).toBeInTheDocument();
+  });
+
+  it('moves the map credits off the bottom edge the wave runs along', () => {
+    openMap();
+    expect(screen.getByTestId('trip-map')).toHaveAttribute('data-attribution', 'top-left');
+  });
+});
+
+describe('resolveDriveWaveState', () => {
+  it('maps the reported gear to a letter and treats park and sleep as parked', () => {
+    expect(resolveDriveWaveState({ gear_status: 'Drive', speed_mph: 30 } as never)).toEqual({ kind: 'moving', gear: 'D', speedMph: 30 });
+    expect(resolveDriveWaveState({ gear_status: 'reverse', speed_mph: 3 } as never)).toEqual({ kind: 'moving', gear: 'R', speedMph: 3 });
+    expect(resolveDriveWaveState({ gear_status: 'neutral', speed_mph: null } as never)).toEqual({ kind: 'moving', gear: 'N', speedMph: null });
+    expect(resolveDriveWaveState({ gear_status: 'park', speed_mph: 0 } as never)).toEqual({ kind: 'parked' });
+    expect(resolveDriveWaveState({ gear_status: 'drive', speed_mph: 0, power_state: 'sleep' } as never)).toEqual({ kind: 'parked' });
+  });
+
+  it('falls back to speed when no gear is reported, and to nothing without a status', () => {
+    expect(resolveDriveWaveState({ gear_status: null, speed_mph: 25 } as never)).toEqual({ kind: 'moving', gear: null, speedMph: 25 });
+    expect(resolveDriveWaveState({ gear_status: null, speed_mph: 0.5 } as never)).toEqual({ kind: 'parked' });
+    expect(resolveDriveWaveState(null)).toBeNull();
+  });
+});
+
+describe('layoutDriveWave', () => {
+  const speed = { width: 30, height: 36 };
+  const gear = { width: 10, height: 14 };
+
+  it('centers the speed hump with the gear hump beside it, crests clearing the text', () => {
+    expect(layoutDriveWave(288, speed, null).center.x).toBe(144);
+    const layout = layoutDriveWave(288, speed, gear);
+    // The gear hump nudges the pair right only as far as the flat lead-in needs.
+    expect(Math.abs(layout.center.x - 144)).toBeLessThan(10);
+    expect(layout.gear.b).toBeCloseTo(layout.center.a);
+    expect(layout.gear.x).toBeLessThan(layout.center.x);
+    expect(layout.center.crest).toBeLessThan(DRIVE_WAVE_HEIGHT - 4 - speed.height);
+    expect(layout.gear.crest).toBeGreaterThan(layout.center.crest);
+  });
+
+  it('runs the line past both edges and keeps the humps off the corners', () => {
+    for (const width of [140, 288, 343, 452]) {
+      const layout = layoutDriveWave(width, speed, gear);
+      expect(layout.line).toMatch(/^M-\d/);
+      expect(Number(layout.line.split(' ').at(-1)!.slice(1).split(',')[0])).toBeGreaterThan(width);
+      expect(layout.gear.a).toBeGreaterThanOrEqual(12);
+      expect(layout.center.b).toBeLessThanOrEqual(width - 12);
+    }
+  });
+
+  it('keeps one command list with or without the gear so the line can animate', () => {
+    const commands = (path: string) => path.replace(/[^A-Z]/g, '');
+    expect(commands(layoutDriveWave(288, speed, null).line)).toBe(commands(layoutDriveWave(288, speed, gear).line));
   });
 });
 

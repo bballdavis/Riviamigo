@@ -78,6 +78,9 @@
   --rm-map-route-3:      #F472B6;
   --rm-map-route-4:      #F59E0B;
   --rm-map-route-5:      #F87171;
+  /* Overview map drive cluster: teal along the line, gold over the speed */
+  --rm-drive-wave-line:  #14A394;
+  --rm-drive-wave-crest: #FDB515;
 
   --rm-value-halo:
     -2px -2px 0 var(--rm-bg-surface),  0 -2px 0 var(--rm-bg-surface),  2px -2px 0 var(--rm-bg-surface),
@@ -120,6 +123,8 @@
   --rm-map-route-3: #F472B6;
   --rm-map-route-4: #F59E0B;
   --rm-map-route-5: #F87171;
+  --rm-drive-wave-line:  #0E8C80;
+  --rm-drive-wave-crest: #E9A300;
 
   --rm-glow-sm:        0 0 0 1px rgba(253, 131, 4, 0.10);
   --rm-glow-md:        0 1px 2px rgba(253, 131, 4, 0.15);

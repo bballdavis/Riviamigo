@@ -8,7 +8,7 @@ slug: /overview/features/
 
 Riviamigo is a private dashboard for the Rivian data you already have access to. It focuses on making that data useful on your own hardware.
 
-- **Overview:** current battery, range, lock state, tire pressure, cabin and vehicle information, plus configurable charts.
+- **Overview:** current battery, range, lock state, tire pressure, cabin and vehicle information, plus configurable charts. The overview's location map shows the current gear and speed along its bottom edge while driving, and "Parked" otherwise.
 - **Battery and health:** battery history, state of charge, charging limits, and available health signals.
 - **Charging:** charging sessions and energy history.
 - **Trips and efficiency:** trip history, route context where available, mileage, efficiency trends, signed net power (direct when available or averaged from SoC updates), and route-aware estimated exterior temperature with explicit provenance.
