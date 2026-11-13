@@ -41,6 +41,11 @@ export interface TripMapChartProps {
   routes?: TripMapRoute[];
   selectedRouteIds?: string[];
   onRouteClick?: (routeId: string) => void;
+  /**
+   * Called with the map's canvas right after each frame is drawn, while the
+   * drawing buffer is still intact, so an overlay can copy what is beneath it.
+   */
+  onRenderFrame?: ((canvas: HTMLCanvasElement) => void) | undefined;
   activePoint?: LatLng | null;
   /**
    * Keeps the map centered on one marked point, such as the vehicle's current
@@ -65,6 +70,11 @@ export interface TripMapChartProps {
    * narrow to show the full line without covering the map.
    */
   compactAttribution?: boolean;
+  /**
+   * Corner for the compact credits button. Top-left keeps the bottom edge free
+   * for an overlay drawn along it.
+   */
+  compactAttributionPlacement?: 'bottom-right' | 'top-left';
   startPoint?: LatLng;
   endPoint?: LatLng;
   height?: number;
@@ -115,7 +125,7 @@ interface MapApi {
   getLayer(id: string): unknown;
   removeLayer(id: string): void;
   setPaintProperty(layerId: string, name: string, value: unknown): void;
-  getCanvas(): { style: CSSStyleDeclaration };
+  getCanvas(): HTMLCanvasElement;
   setStyle(style: unknown, options?: BasemapStyleOptions): void;
   triggerRepaint?(): void;
   setPitch?(pitch: number): void;
@@ -303,6 +313,7 @@ export function TripMapChart({
   routes,
   selectedRouteIds = [],
   onRouteClick,
+  onRenderFrame,
   activePoint,
   focusPoint = null,
   focusZoom = DEFAULT_FOCUS_ZOOM,
@@ -310,6 +321,7 @@ export function TripMapChart({
   focusRotation = null,
   emptyLabel = 'No route points in this period',
   compactAttribution = false,
+  compactAttributionPlacement = 'bottom-right',
   height = 320,
   className,
   mapStyle = 'dark',
@@ -325,6 +337,7 @@ export function TripMapChart({
   const isLoadedRef = React.useRef(false);
   const lastRouteSignatureRef = React.useRef<string>('');
   const onRouteClickRef = React.useRef(onRouteClick);
+  const onRenderFrameRef = React.useRef(onRenderFrame);
   const latestRoutesRef = React.useRef<TripMapRoute[]>([]);
   const latestSelectedRouteIdsRef = React.useRef<string[]>([]);
   const markerConstructorRef = React.useRef<MarkerConstructor | null>(null);
@@ -409,6 +422,10 @@ export function TripMapChart({
   React.useEffect(() => {
     onRouteClickRef.current = onRouteClick;
   }, [onRouteClick]);
+
+  React.useEffect(() => {
+    onRenderFrameRef.current = onRenderFrame;
+  }, [onRenderFrame]);
 
   React.useEffect(() => {
     latestRoutesRef.current = visibleRoutes;
@@ -564,6 +581,10 @@ export function TripMapChart({
 
         map.on('idle', () => {
           finishTileLoad();
+        });
+
+        map.on('render', () => {
+          onRenderFrameRef.current?.(map.getCanvas());
         });
 
         map.on('load', () => {
@@ -892,7 +913,10 @@ export function TripMapChart({
         />
         {basemap.enabled && ((basemap.attributions?.length ?? 0) > 0 || basemap.attribution) ? (
           compactAttribution ? (
-            <div className="absolute bottom-1 right-1 flex max-w-[calc(100%-0.5rem)] items-end justify-end gap-1">
+            <div className={compactAttributionPlacement === 'top-left'
+              ? 'absolute left-1 top-1 flex max-w-[calc(100%-0.5rem)] flex-row-reverse items-start justify-end gap-1'
+              : 'absolute bottom-1 right-1 flex max-w-[calc(100%-0.5rem)] items-end justify-end gap-1'}
+            >
               {attributionOpen ? (
                 <div id={attributionId} className="rounded bg-bg/90 px-1.5 py-0.5 text-right text-[10px] leading-snug text-fg-tertiary">
                   {attributionLinks}

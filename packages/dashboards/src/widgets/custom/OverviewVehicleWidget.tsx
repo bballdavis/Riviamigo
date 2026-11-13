@@ -16,6 +16,7 @@ import { getOverviewStatRequirements, presentOverviewStat, type OverviewStatData
 import { useOverviewStatData, useUnitPreferencesVersion } from './useOverviewStatData';
 import { resolveOverviewMapOptions, resolveVehicleFacingDeg, type OverviewMapOptions, type OverviewView } from './overviewMap';
 import { OverviewLocationMap } from './OverviewLocationMap';
+import { createMapFrameSource, OverviewDriveWave } from './OverviewDriveWave';
 
 type AnchorSet = {
   tire: { rl: string; fl: string; rr: string; fr: string };
@@ -181,6 +182,7 @@ export function CurrentVehicleStatePanel({
   const overlaysDark = getDoorOverlayUrls(images?.all, openDoorStates, 'dark');
   const imageStageRef = useRef<HTMLDivElement | null>(null);
   const [locationPanelRef, locationPanelHeight] = useObservedHeight();
+  const [mapFrames] = useState(createMapFrameSource);
   const [imageStageHeight, setImageStageHeight] = useState(0);
   const [imageStageWidth, setImageStageWidth] = useState(0);
   const locksKnown = [
@@ -354,8 +356,10 @@ export function CurrentVehicleStatePanel({
                 artwork={resolvedOverhead}
                 options={mapOptions}
                 heightPx={locationPanelHeight - 2}
+                onRenderFrame={mapFrames.publish}
               />
             </div>
+            <OverviewDriveWave status={status} mapFrames={mapFrames} />
           </div>
         ) : (
         <div data-testid="overview-stats" className="grid auto-rows-fr gap-2 @min-[34rem]/overview:gap-1.5 @min-[58rem]/overview:gap-2">
