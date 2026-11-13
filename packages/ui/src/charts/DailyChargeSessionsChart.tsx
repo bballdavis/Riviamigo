@@ -10,6 +10,21 @@ import {
   selectValueLabelIndices,
 } from './chartLabelLayout';
 
+/** A bar outline rounded at the top only: bars stand flat on the axis. */
+export function topRoundedBarPath(x: number, y: number, width: number, height: number, radius: number): string {
+  const r = Math.max(0, Math.min(radius, width / 2, height));
+  const bottom = y + height;
+  return [
+    `M${x},${bottom}`,
+    `V${y + r}`,
+    `Q${x},${y} ${x + r},${y}`,
+    `H${x + width - r}`,
+    `Q${x + width},${y} ${x + width},${y + r}`,
+    `V${bottom}`,
+    'Z',
+  ].join(' ');
+}
+
 export interface DailyChargeSessionsDay {
   day_local: string;
   day_start: string;
@@ -524,7 +539,7 @@ export function DailyChargingBarChart({
             const clipId = `${clipPathPrefix}-daily-charge-stack-${dayIndex}`;
             return (
               <clipPath key={clipId} id={clipId}>
-                <rect x={x} y={y} width={barWidth} height={barHeight} rx={8} ry={8} />
+                <path d={topRoundedBarPath(x, y, barWidth, barHeight, CHART_BAR_STYLE.radius)} />
               </clipPath>
             );
           })}
