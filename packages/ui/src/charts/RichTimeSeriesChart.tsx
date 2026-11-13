@@ -6,6 +6,7 @@ import 'uplot/dist/uPlot.min.css';
 import { cn } from '../lib/utils';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT, resolveChartColor } from './ChartProvider';
+import { measureChartText } from './chartLabelLayout';
 import { formatNumber, formatSmartNumber } from '../lib/utils';
 import { formatAppDate, formatAppDateTime, formatAppTime } from '../lib/dateTime';
 import { filterTimeSeriesValues, type TimeFilterWindow } from './timeFilter';
@@ -226,6 +227,35 @@ export function clampExplorationRange(
 export function isZoomedXRange(current: [number, number], full: [number, number]) {
   const tolerance = Math.max(1e-9, Math.abs(full[1] - full[0]) * 1e-6);
   return Math.abs(current[0] - full[0]) > tolerance || Math.abs(current[1] - full[1]) > tolerance;
+}
+
+/**
+ * The x span where at least one drawn series has a value. Trailing points that
+ * only carry hidden or tooltip-only values would otherwise leave empty space
+ * at the chart's edges. Falls back to the whole x range.
+ */
+export function getPlottedXExtent(
+  aligned: AlignedData,
+  series: ReadonlyArray<Pick<RichSeries, 'key' | 'tooltipOnly'>>,
+  hiddenKeys: ReadonlySet<string> = new Set(),
+): [number, number] | null {
+  const xs = aligned[0] as ArrayLike<number>;
+  if (!xs || xs.length === 0) return null;
+  const drawn = series
+    .map((item, index) => ({ item, values: aligned[index + 1] as ArrayLike<number | null | undefined> | undefined }))
+    .filter(({ item, values }) => values && !item.tooltipOnly && !hiddenKeys.has(item.key));
+  const hasValue = (index: number) => drawn.some(({ values }) => {
+    const value = values![index];
+    return value != null && Number.isFinite(value);
+  });
+  let first = 0;
+  while (first < xs.length - 1 && !hasValue(first)) first += 1;
+  let last = xs.length - 1;
+  while (last > first && !hasValue(last)) last -= 1;
+  if (!hasValue(first)) return [xs[0]!, xs[xs.length - 1]!];
+  const start = xs[first]!;
+  const end = xs[last]!;
+  return end > start ? [start, end] : [xs[0]!, xs[xs.length - 1]!];
 }
 
 function attachTouchExploration(root: HTMLDivElement, chart: uPlot, bounds: [number, number]) {
@@ -524,12 +554,23 @@ function buildStackedBarPaths(
   );
 }
 
+/**
+ * The narrowest the chart draws. A phone card is often under 320px wide, so a
+ * higher floor pushed the right axis past the card's edge.
+ */
+const MIN_CHART_WIDTH = 240;
+
+/**
+ * Width of a Y axis from its measured labels: the widest label, the 4px gap
+ * to the plot, and a 12px margin to the outer edge. Both axes use it, so the
+ * right labels sit as far from the edge as the left ones.
+ */
 function estimateYLabelWidth(labels: string[]): number {
-  let maxLen = 4;
+  let widest = 0;
   for (const label of labels) {
-    if (label.length > maxLen) maxLen = label.length;
+    widest = Math.max(widest, measureChartText(String(label)));
   }
-  return Math.min(maxLen * 7 + 16, 110);
+  return Math.min(Math.ceil(Math.max(widest, 24)) + 16, 110);
 }
 
 export function buildRichTimeSeriesUPlotSeries(
@@ -793,16 +834,21 @@ export function RichTimeSeriesChart({
     const resolveColor = (value: string) => resolveChartColor(value, root);
     const chartMuted = resolveColor(CHART_COLORS.muted);
     const chartGrid = resolveColor(CHART_COLORS.grid);
-    const width = Math.max(320, root.clientWidth || 320);
+    const width = Math.max(MIN_CHART_WIDTH, root.clientWidth || 320);
 
     const xValues = alignedDataRef.current[0] as number[];
     const xSpan = xValues.length > 1 ? (xValues[xValues.length - 1]! - xValues[0]!) : 86400;
     const usesCalendarDateSplits = xTime && !xSplits && xSpan > 24 * 3600;
-    const fullXRange: [number, number] = xRange ?? [xValues[0]!, xValues[xValues.length - 1]!];
-
     const hasRightDataAxis = seriesRef.current.some((s) => !s.tooltipOnly && s.yScale === 'y2');
 
     const isBarChart = series.some((s) => (s.mode ?? mode) === 'bar');
+
+    // Lines run edge to edge: without an explicit range the x scale covers only
+    // where a drawn series has values. Bars keep their slot padding.
+    const plottedXRange = !xRange && !isBarChart && xValues.length > 1
+      ? getPlottedXExtent(alignedDataRef.current, series, hiddenKeys)
+      : null;
+    const fullXRange: [number, number] = xRange ?? plottedXRange ?? [xValues[0]!, xValues[xValues.length - 1]!];
 
     const yScaleConfig: uPlot.Scale = yRange
       ? getExplicitScaleConfig(yRange)
@@ -810,7 +856,22 @@ export function RichTimeSeriesChart({
         ? { auto: true, range: (_u: uPlot, dmin: number, dmax: number) => [Math.min(0, dmin), Math.max(0, dmax)] as [number, number] }
         : { auto: true };
 
-    const xScaleConfig = getExplicitScaleConfig(xRange, { time: xTime });
+    const dataXMin = xValues[0];
+    const dataXMax = xValues[xValues.length - 1];
+    const xScaleConfig: uPlot.Scale = plottedXRange
+      ? {
+          auto: true,
+          time: xTime,
+          // uPlot passes the whole data span when it autoscales and the
+          // selected span when the user zooms; only the former is narrowed.
+          range: (_u: uPlot, min: number, max: number) => (
+            min == null || max == null || !Number.isFinite(min) || !Number.isFinite(max)
+            || (dataXMin != null && dataXMax != null && min <= dataXMin && max >= dataXMax)
+              ? plottedXRange
+              : [min, max]
+          ) as [number, number],
+        }
+      : getExplicitScaleConfig(xRange, { time: xTime });
 
     const rightYScaleConfig: uPlot.Scale | undefined = hasRightDataAxis
       ? getExplicitScaleConfig(yRightRange)
@@ -880,7 +941,7 @@ export function RichTimeSeriesChart({
         if (!values || values.length === 0) return 50;
         return estimateYLabelWidth(values as string[]);
       },
-      gap: 8,
+      gap: 4,
       ...(yAxisLabel ? { label: yAxisLabel, labelSize: 24, labelGap: 4 } : {}),
       values: (_u, vals) => {
         const precision = getAdaptiveDecimalPrecision(vals);
@@ -905,10 +966,13 @@ export function RichTimeSeriesChart({
           stroke: chartMuted,
           grid: { show: false },
           font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
-          // uPlot supplies raw numeric splits here rather than our formatted
-          // labels, so reserve enough room for values such as "19,200 mi".
-          size: 86,
-          gap: 8,
+          // Sized to its labels like the left axis, so the right labels sit as
+          // far from the edge as the left ones and the plot keeps the rest.
+          size: (_self, values) => {
+            if (!values || values.length === 0) return 86;
+            return estimateYLabelWidth(values as string[]);
+          },
+          gap: 4,
           ...(yRightAxisLabel ? { label: yRightAxisLabel, labelSize: 24, labelGap: 4 } : {}),
           values: (_u, vals) => {
             const precision = getAdaptiveDecimalPrecision(vals);
@@ -983,9 +1047,8 @@ export function RichTimeSeriesChart({
       width,
       height: chartHeight,
       data: alignedDataRef.current,
-      // Keep a small left gutter so y-axis labels are not clipped at narrow widths.
-      // Right gutter grows when a right axis is present so its labels aren't clipped.
-      padding: [topPadding, hasRightDataAxis ? 4 : 14, 0, 10],
+      // Matching gutters on both sides, so a right axis mirrors the left one.
+      padding: [topPadding, hasRightDataAxis ? 10 : 14, 0, 10],
       cursor: {
         drag: { x: interactionMode !== 'touch-explore', y: false },
         points: { size: 6 },
@@ -1107,7 +1170,7 @@ export function RichTimeSeriesChart({
     const observer =
       typeof ResizeObserver !== 'undefined'
         ? new ResizeObserver(() => {
-            chartRef.current?.setSize({ width: Math.max(320, root.clientWidth || 320), height: chartHeight });
+            chartRef.current?.setSize({ width: Math.max(MIN_CHART_WIDTH, root.clientWidth || 320), height: chartHeight });
             requestAnimationFrame(updateOverlay);
           })
         : null;

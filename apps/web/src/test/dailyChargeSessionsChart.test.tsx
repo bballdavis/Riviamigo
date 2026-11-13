@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
-import { DailyChargeSessionsChart, DailyEnergyBarChart } from '../../../../packages/ui/src/charts/DailyChargeSessionsChart';
+import { DailyChargeSessionsChart, DailyEnergyBarChart, topRoundedBarPath } from '../../../../packages/ui/src/charts/DailyChargeSessionsChart';
 
 function makeDays(count: number) {
   return Array.from({ length: count }, (_, index) => {
@@ -17,8 +17,18 @@ function makeDays(count: number) {
   });
 }
 
+describe('topRoundedBarPath', () => {
+  it('rounds the top corners and keeps the bottom flat on the axis', () => {
+    expect(topRoundedBarPath(10, 20, 30, 50, 8)).toBe('M10,70 V28 Q10,20 18,20 H32 Q40,20 40,28 V70 Z');
+  });
+
+  it('never rounds more than half the width or the full height', () => {
+    expect(topRoundedBarPath(0, 0, 6, 2, 8)).toBe('M0,2 V2 Q0,0 2,0 H4 Q6,0 6,2 V2 Z');
+  });
+});
+
 describe('DailyChargeSessionsChart', () => {
-  it('groups sessions into stable legend categories and rounds the outer stack shape', () => {
+  it('groups sessions into stable legend categories and rounds the top of the outer stack shape', () => {
     const { container } = render(
       <DailyChargeSessionsChart
         daily={[
@@ -97,8 +107,12 @@ describe('DailyChargeSessionsChart', () => {
     expect(hitAreaHeight).toBeGreaterThan(0);
     expect(hitAreaY + hitAreaHeight).toBeCloseTo(216, 3);
 
-    const clipRect = container.querySelector('clipPath rect');
-    expect(clipRect?.getAttribute('rx')).toBe('8');
+    // The stack is rounded at the top and stands flat on the axis.
+    const clipShape = container.querySelector('clipPath path');
+    const outline = clipShape?.getAttribute('d') ?? '';
+    expect(outline).toMatch(/^M[\d.]+,216 V/);
+    expect(outline.match(/Q/g)).toHaveLength(2);
+    expect(container.querySelector('clipPath rect')).toBeNull();
   });
 
   it('shows hover details for the active day stack', () => {
