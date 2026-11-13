@@ -3,6 +3,7 @@ import { Car, MapPinOff } from 'lucide-react';
 import { useAuth, useBasemapConfig, useUserPreferences, useVehicleArtwork } from '@riviamigo/hooks';
 import { TripMapChart, type MapStyleMode } from '@riviamigo/ui/charts';
 import { useDocumentTheme } from '@riviamigo/ui/hooks';
+import { AssistantWave } from '@riviamigo/ui/primitives';
 import type { OverviewMapOptions } from './overviewMap';
 
 /** Overhead artwork already resolved for the overview frame (API light/dark, then packaged fallback). */
@@ -53,9 +54,10 @@ export function OverviewLocationMap({
     : artwork?.light ?? artwork?.dark;
   const markerArtwork = useVehicleArtwork(markerSource);
   const fallbackMarkerArtwork = useVehicleArtwork(artwork?.fallback);
-  // While the real artwork loads the marker shows its plain car icon, never
-  // the packaged fallback art.
-  const markerSrc = markerArtwork.isLoading ? null : markerArtwork.src ?? fallbackMarkerArtwork.src ?? null;
+  // While the real artwork loads the marker shows the loading wave, never the
+  // packaged fallback art.
+  const markerLoading = markerArtwork.isLoading;
+  const markerSrc = markerLoading ? null : markerArtwork.src ?? fallbackMarkerArtwork.src ?? null;
 
   if (!focusPoint) {
     return (
@@ -71,8 +73,9 @@ export function OverviewLocationMap({
       <TripMapChart
         track={[]}
         focusPoint={focusPoint}
-        focusMarker={<VehicleMapMarker src={markerSrc} />}
-        focusRotation={headingDeg}
+        focusMarker={<VehicleMapMarker src={markerSrc} loading={markerLoading} />}
+        // The loading pill stays level; only the vehicle turns to its heading.
+        focusRotation={markerLoading ? null : headingDeg}
         compactAttribution
         height={Math.max(160, Math.round(heightPx))}
         mapStyle={mapStyle}
@@ -100,10 +103,14 @@ const VEHICLE_OUTLINE_FILTER = [
 ].join(' ');
 
 /** Small overhead view of the vehicle, outlined in the accent color. The artwork's front faces up (north) before rotation. */
-function VehicleMapMarker({ src }: { src: string | null }) {
+function VehicleMapMarker({ src, loading = false }: { src: string | null; loading?: boolean }) {
   return (
     <span data-testid="overview-map-vehicle-marker" className="flex items-center justify-center">
-      {src ? (
+      {loading ? (
+        <span className="flex h-9 w-16 items-center rounded-full border-2 border-accent bg-bg-surface px-2 shadow-lg animate-assistant-wave-in">
+          <AssistantWave size="sm" label="Loading vehicle picture" className="h-5" />
+        </span>
+      ) : src ? (
         <img
           src={src}
           alt=""

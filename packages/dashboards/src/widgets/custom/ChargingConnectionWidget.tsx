@@ -2,6 +2,7 @@ import React from 'react';
 import { Zap } from 'lucide-react';
 import { AuthenticatedVehicleArtwork, getVehicleArtworkFallback, useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
 import { formatKwh, formatNumber, formatPercent as formatDashboardPercent } from '@riviamigo/ui/lib/utils';
+import { AssistantWave } from '@riviamigo/ui/primitives';
 import { isVehicleCharging } from '@riviamigo/types';
 import type { VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
@@ -308,6 +309,12 @@ function VehicleSideImage({
       <AuthenticatedVehicleArtwork
         source={source}
         fallbackSource={fallbackSource}
+        loadingIndicator={
+          // Sits where the vehicle will appear: the right half of the card.
+          <div className="absolute inset-y-0 right-0 flex w-3/5 items-center pr-[6%]">
+            <AssistantWave label="Loading vehicle picture" />
+          </div>
+        }
         fallbackProps={{
           className: 'h-full w-full max-w-none object-contain object-right',
           style: {

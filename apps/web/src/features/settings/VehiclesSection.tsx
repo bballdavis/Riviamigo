@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, queryKeys, useAuth } from '@riviamigo/hooks';
+import { api, clearVehicleArtworkCache, queryKeys, useAuth } from '@riviamigo/hooks';
 import type { Vehicle } from '@riviamigo/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Tooltip } from '@riviamigo/ui/primitives';
 import { Car, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Star, Trash2, Users } from 'lucide-react';
@@ -74,6 +74,8 @@ export function VehiclesSection({
     mutationFn: (vehicleId: string) => api.refreshVehicleArtwork(vehicleId),
     ...rowAction('Unable to refresh vehicle artwork.'),
     onSuccess: (result) => {
+      // The artwork was replaced on the server; drop this browser's copies too.
+      void clearVehicleArtworkCache();
       void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
       void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.images(result.vehicle_id) });
     },
@@ -92,6 +94,8 @@ export function VehiclesSection({
     mutationFn: (vehicleId: string) => api.purgeVehicleArtworkCache(vehicleId),
     ...rowAction('Unable to clear the artwork cache.'),
     onSuccess: (result) => {
+      // The artwork was replaced on the server; drop this browser's copies too.
+      void clearVehicleArtworkCache();
       void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all, exact: true });
       void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.images(result.vehicle_id) });
     },

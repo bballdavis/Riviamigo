@@ -36,6 +36,7 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
 const vehicleStatus = vi.hoisted(() => ({
   current: {} as Record<string, unknown>,
 }));
+const artworkState = vi.hoisted(() => ({ loading: false }));
 const savedPreferences = vi.hoisted(() => ({
   overviewView: undefined as string | undefined,
   updateOverviewView: { mutate: (() => undefined) as (view: string) => void },
@@ -63,6 +64,9 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     useUpdateOverviewMapExpanded: () => savedPreferences.updateOverviewMapExpanded,
     useCurrentVehicleStatus: () => ({ data: vehicleStatus.current }),
     useVehicles: () => ({ data: [{ id: 'vehicle-1', model: 'R1S', images: null }] }),
+    useVehicleArtwork: (source: string | null | undefined) => (artworkState.loading
+      ? { src: null, restoring: false, isLoading: true, isError: false }
+      : actual.useVehicleArtwork(source)),
   };
 });
 
@@ -172,6 +176,21 @@ describe('vehicle overview location map', () => {
     expect(art).toHaveClass('h-12');
     expect(art.style.filter).toContain('drop-shadow(2px 0 0 var(--rm-accent))');
     expect(art.style.filter).toContain('drop-shadow(0 -2px 0 var(--rm-accent))');
+  });
+
+  it('shows a level loading wave on the marker until the vehicle artwork is ready', () => {
+    artworkState.loading = true;
+    try {
+      renderOverview();
+      fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));
+      const map = screen.getByTestId('trip-map');
+      expect(map).toHaveAttribute('data-rotation', 'none');
+      const marker = within(map).getByTestId('overview-map-vehicle-marker');
+      expect(within(marker).getByRole('status')).toHaveTextContent('Loading vehicle picture');
+      expect(within(marker).queryByTestId('overview-map-vehicle-art')).toBeNull();
+    } finally {
+      artworkState.loading = false;
+    }
   });
 
   it('applies the widget map type and light/dark overrides', () => {
