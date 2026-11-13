@@ -88,6 +88,20 @@ restored backup on a test machine. Two servers polling one Rivian account
 interfere with each other, and Rivian requests start failing with
 `User is unauthenticated`.
 
+## Several vehicles on one Rivian account
+
+Rivian reports charging history for the whole account, so each session is
+matched to a vehicle before it is stored. A session Rivian ties to one of your
+vehicles goes to that vehicle, and a session tied to a different vehicle is
+never stored against yours. A session Rivian reports without a vehicle is kept
+only when your vehicle is the only one on the account; once a second vehicle or
+a second user shares the Rivian login, those sessions are skipped rather than
+guessed. Charge-history backfill and the history repairs also move a session
+that an earlier release stored against the wrong one of your vehicles, when
+Rivian's record names the right one. For the details and the repair commands,
+see the
+[vehicle history rebuild runbook](../runbooks/vehicle-history-rebuild.md).
+
 ## Troubleshooting
 
 - Watch the app logs with `docker compose --env-file .env -f compose/docker-compose.yml logs -f riviamigo`.
