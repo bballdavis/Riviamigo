@@ -86,6 +86,7 @@ import type { DashboardConfig } from '@riviamigo/dashboards';
 import { WidgetEditForm } from '../../../../packages/dashboards/src/editor/WidgetEditForm';
 import { resolveOverviewMapOptions, resolveVehicleFacingDeg } from '../../../../packages/dashboards/src/widgets/custom/overviewMap';
 import { DRIVE_WAVE_HEIGHT, layoutDriveWave, resolveDriveWaveState } from '../../../../packages/dashboards/src/widgets/custom/overviewDriveWaveLayout';
+import { getUnitPreferences, setUnitPreferences } from '@riviamigo/ui/lib/utils';
 
 type Widget = DashboardConfig['widgets'][number];
 
@@ -131,24 +132,13 @@ beforeEach(() => {
 });
 
 describe('vehicle overview location map', () => {
-  it('starts on the cluster view with an icon-only telemetry indicator', () => {
+  it('starts on the cluster view without a telemetry indicator', () => {
     renderOverview();
-    const freshness = screen.getByTestId('overview-telemetry-freshness');
-    expect(freshness).toHaveAttribute('aria-label', expect.stringMatching(/^Updated /));
-    expect(freshness).toHaveAttribute('data-tone', 'fresh');
-    expect(freshness.textContent).toBe('');
+    expect(screen.queryByTestId('overview-telemetry-freshness')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Vehicle cluster' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('overview-stats').children).toHaveLength(5);
     expect(screen.queryByTestId('overview-location-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('trip-map')).not.toBeInTheDocument();
-  });
-
-  it('marks stale telemetry with the warning tone', () => {
-    vehicleStatus.current = { ...vehicleStatus.current, telemetry_stale: true };
-    renderOverview();
-    const freshness = screen.getByTestId('overview-telemetry-freshness');
-    expect(freshness).toHaveAttribute('aria-label', 'Telemetry stale');
-    expect(freshness).toHaveAttribute('data-tone', 'stale');
   });
 
   it('swaps the stat column for the current-location map and keeps the vehicle image', () => {
@@ -215,7 +205,6 @@ describe('vehicle overview location map', () => {
   it('offers no view toggle when the map is turned off for the widget', () => {
     renderOverview({ locationMap: false });
     expect(screen.queryByRole('group', { name: 'Overview view' })).not.toBeInTheDocument();
-    expect(screen.getByTestId('overview-telemetry-freshness')).toBeInTheDocument();
   });
 
   it('bleeds the outer panels to the card edge in the three-column tiers', () => {
@@ -343,6 +332,20 @@ describe('overview map drive wave', () => {
     expect(within(wave).getByText('Drive, 42 mph')).toHaveClass('sr-only');
     expect(within(wave).getByText('42')).toBeInTheDocument();
     expect(within(wave).getByText('mph')).toBeInTheDocument();
+  });
+
+  it('shows the speed in the custom speed unit from settings', () => {
+    const previous = getUnitPreferences();
+    setUnitPreferences({ ...previous, mode: 'custom', distance_unit: 'miles', speed_unit: 'kmh' }, { suppressEvent: true });
+    try {
+      vehicleStatus.current = { ...vehicleStatus.current, gear_status: 'drive', speed_mph: 41.6 };
+      const wave = openMap();
+      expect(within(wave).getByText('67')).toBeInTheDocument();
+      expect(within(wave).getByText('km/h')).toBeInTheDocument();
+      expect(within(wave).getByText('Drive, 67 km/h')).toHaveClass('sr-only');
+    } finally {
+      setUnitPreferences(previous, { suppressEvent: true });
+    }
   });
 
   it('moves the map credits off the bottom edge the wave runs along', () => {

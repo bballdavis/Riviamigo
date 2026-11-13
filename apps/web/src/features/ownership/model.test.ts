@@ -6,7 +6,9 @@ import { formToSettings, settingsToForm } from './OwnershipCostsFields';
 import {
   buildLedger,
   createGasPriceResolver,
+  describeHomePlan,
   enabledComparisonIds,
+  formatCents,
   impliedRetention,
   horizonSpan,
   insightSentence,
@@ -40,6 +42,29 @@ describe('createGasPriceResolver', () => {
     expect(createGasPriceResolver(months, 5)('2030-01')).toMatchObject({ regular: 5, fromSeries: false });
     expect(createGasPriceResolver(months, null)('2030-01').regular).toBeCloseTo(3.1);
     expect(createGasPriceResolver([], null)('2030-01').regular).toBe(3.5);
+  });
+});
+
+describe('describeHomePlan', () => {
+  it('joins time-of-use windows that share a rate, across midnight too', () => {
+    const plan = {
+      name: 'Home',
+      billing_type: 'tou' as const,
+      rate: 0.13,
+      tou_periods: [
+        { label: 'Night 1', start_minute: 0, end_minute: 360, rate: 0 },
+        { label: 'Day', start_minute: 360, end_minute: 1200, rate: 0.322499 },
+        { label: 'Night 2', start_minute: 1200, end_minute: 1440, rate: 0 },
+      ],
+    };
+    expect(describeHomePlan(plan)).toBe('free 8 PM–6 AM, 32¢ 6 AM–8 PM');
+  });
+
+  it('gives a single price for the other plan types', () => {
+    const base = { name: 'Home', tou_periods: [] };
+    expect(describeHomePlan({ ...base, billing_type: 'per_kwh', rate: 0.14 })).toBe('14¢/kWh');
+    expect(describeHomePlan({ ...base, billing_type: 'free', rate: 0 })).toBe('free');
+    expect(formatCents(0.019)).toBe('1.9¢');
   });
 });
 
@@ -127,6 +152,24 @@ describe('buildLedger', () => {
       expect(own.totals.fuel).toBeCloseTo(540 + (own.totals.miles - 9_000) * 0.06);
     });
 
+    it('takes a month the odometer covers from its readings, and efficiency only from whole covered months', () => {
+      const data = withOdometer(9_000);
+      // Readings start mid-July. August and September continue from the month
+      // before, so they are covered whole: 1,500 mi each against 1,000 recorded.
+      const odometer: Record<string, [number, number]> = { '07': [6_000, 6_200], '08': [6_200, 7_700], '09': [7_700, 9_000] };
+      data.usage.months = data.usage.months.map((row) => {
+        const reading = odometer[row.month.slice(5, 7)];
+        return reading ? { ...row, odometer_start_mi: reading[0], odometer_end_mi: reading[1] } : row;
+      });
+      const ledger = build({ ...data, own_rated_kwh_per_mi: 0.3 });
+      expect(ledger.periods[7]?.miles).toBeCloseTo(1_500);
+      expect(ledger.periods[8]?.miles).toBeCloseTo(1_300);
+      expect(find(ledger, 'own').totals.miles).toBeCloseTo(9_000);
+      // 1,000 kWh over the 2,800 covered miles.
+      expect(ledger.ownKwhPerMi).toBeCloseTo(1_000 / 2_800);
+      expect(ledger.realWorldFactor).toBeCloseTo(1_000 / 2_800 / 0.3);
+    });
+
     it('subtracts the odometer reading at purchase', () => {
       const ledger = build(withOdometer(9_000, { purchase_odometer_mi: 3_000 }));
       expect(find(ledger, 'own').totals.miles).toBeCloseTo(6_000);
@@ -138,6 +181,39 @@ describe('buildLedger', () => {
       expect(behind.mileageFromOdometer).toBe(false);
       expect(find(behind, 'own').totals.miles).toBeCloseTo(3_000);
     });
+  });
+
+  it('gives each month its own home and fast rates, and the averages where it had none', () => {
+    const data = response();
+    data.usage.months[1] = {
+      ...data.usage.months[1]!,
+      charged_kwh: 600, priced_kwh: 600, charging_cost_usd: 60 + 50, fast_kwh: 100, fast_priced_kwh: 100, fast_cost_usd: 50,
+    };
+    const ledger = build(data);
+    // July: home only, at $60 for 500 kWh.
+    expect(ledger.periods[6]).toMatchObject({ homeFromSessions: true, fastFromSessions: false });
+    expect(ledger.periods[6]?.homeUsdPerKwh).toBeCloseTo(0.12);
+    expect(ledger.periods[6]?.fastUsdPerKwh).toBeCloseTo(0.5);
+    // August: its own fast sessions at 50 cents.
+    expect(ledger.periods[7]).toMatchObject({ fastFromSessions: true });
+    expect(ledger.periods[7]?.fastUsdPerKwh).toBeCloseTo(0.5);
+    // Months before tracking use the averages.
+    expect(ledger.periods[0]).toMatchObject({ homeFromSessions: false, fastFromSessions: false });
+    expect(ledger.periods[0]?.homeUsdPerKwh).toBeCloseTo(ledger.homeUsdPerKwh);
+  });
+
+  it('charges an electric comparison vehicle what the tracked vehicle paid per kWh that month', () => {
+    const data = response();
+    data.usage.months[1] = {
+      ...data.usage.months[1]!,
+      charged_kwh: 600, priced_kwh: 600, charging_cost_usd: 110, fast_kwh: 100, fast_priced_kwh: 100, fast_cost_usd: 50,
+    };
+    const ledger = build(data, 'to_date', ['other_ev']);
+    const other = find(ledger, 'other_ev');
+    // August: $110 over 600 kWh; July: $60 over 500 kWh.
+    expect(ledger.periods[7]?.chargingUsdPerKwh).toBeCloseTo(110 / 600);
+    expect(other.months[7]?.fuel).toBeCloseTo(1_000 * 0.3 * (110 / 600));
+    expect(other.months[6]?.fuel).toBeCloseTo(1_000 * 0.3 * 0.12);
   });
 
   it('charges the tracked vehicle its recorded charging cost and estimates the rest per mile', () => {

@@ -17,7 +17,7 @@ import {
   OWN_VEHICLE_ID,
   YEAR_MS,
 } from './modelConstants';
-import { addYears, monthKey, monthStart, nextMonth, overlapMs, parseDay } from './modelDates';
+import { addMonths, addYears, monthKey, monthStart, nextMonth, overlapMs, parseDay } from './modelDates';
 import { normalizeOwnershipResponse } from './modelNormalize';
 import { projectionYearsOf } from './modelPresentation';
 import { ownBuiltInSchedule, scheduleFor } from './modelSchedules';
@@ -41,7 +41,24 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
   // Averages from everything recorded so far.
   const startMonth = monthKey(startMs);
   const recorded = usage.months.filter((row) => row.month.slice(0, 7) >= startMonth);
-  const trackedMiles = recorded.reduce((sum, row) => sum + row.miles, 0);
+  // A month's miles: its odometer movement where its trips carry readings,
+  // since drives that were not recorded still move the odometer. A month whose
+  // reading continues from the month before covers the whole month; the first
+  // month with readings covers only the part after its first trip.
+  const odometerByMonth = new Map<string, { miles: number; wholeMonth: boolean }>();
+  let previousEnd: { key: string; mi: number } | null = null;
+  for (const row of recorded) {
+    const key = row.month.slice(0, 7);
+    const end = row.odometer_end_mi ?? null;
+    if (end == null) continue;
+    const continues = previousEnd != null && previousEnd.key === monthKey(addMonths(Date.parse(`${key}-01T00:00:00Z`), -1));
+    const start = continues ? (previousEnd as { mi: number }).mi : (row.odometer_start_mi ?? null);
+    if (start != null) odometerByMonth.set(key, { miles: Math.max(0, end - start), wholeMonth: continues });
+    previousEnd = { key, mi: end };
+  }
+  const monthMiles = (row: (typeof recorded)[number]) =>
+    Math.max(row.miles, odometerByMonth.get(row.month.slice(0, 7))?.miles ?? 0);
+  const trackedMiles = recorded.reduce((sum, row) => sum + monthMiles(row), 0);
   // Home and fast charging are priced apart: a fast session can cost ten times
   // a night at home, so one average would bill home energy at fast-charge rates.
   // A session without a price is charged at the owner's own rate for its kind.
@@ -128,8 +145,12 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
   // shortfall goes to the months that fall short of the owner's average, in
   // proportion to how far short. Without one, only the months before tracking
   // began can be estimated.
+  // A month the odometer covers whole already has every mile it drove.
+  const recordedMiles = (span: (typeof spans)[number]) => (span.actual ? monthMiles(span.actual) : 0);
   const shortBy = spans.map((span) =>
-    mileageFromOdometer ? Math.max(0, avgDailyMiles * span.pastDays - (span.actual?.miles ?? 0)) : 0,
+    mileageFromOdometer && !odometerByMonth.get(span.key)?.wholeMonth
+      ? Math.max(0, avgDailyMiles * span.pastDays - recordedMiles(span))
+      : 0,
   );
   const shortTotal = shortBy.reduce((total, value) => total + value, 0);
   const unrecordedMiles = spans.map((span, index) =>
@@ -147,12 +168,26 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
   const hasChargeHistory = (key: string) => firstChargeMonth != null && key >= firstChargeMonth;
   const chargedMiles = spans.reduce(
     (total, span, index) =>
-      hasChargeHistory(span.key) ? total + (span.actual?.miles ?? 0) + (unrecordedMiles[index] as number) : total,
+      hasChargeHistory(span.key) ? total + recordedMiles(span) + (unrecordedMiles[index] as number) : total,
     0,
   );
+  // Months the odometer covers whole are the ones where both the miles and
+  // the charging are known. Before tracking began, charging history can miss
+  // sessions and the miles are only an estimate, so per-mile figures come
+  // from the covered months once they hold enough miles.
+  const covered = recorded.filter((row) => odometerByMonth.get(row.month.slice(0, 7))?.wholeMonth);
+  const coveredMiles = covered.reduce((total, row) => total + monthMiles(row), 0);
+  const useCovered = coveredMiles >= MIN_MILES_FOR_REAL_WORLD_FACTOR;
+  const perMileBase = useCovered
+    ? {
+        miles: coveredMiles,
+        kwh: covered.reduce((total, row) => total + row.charged_kwh, 0),
+        cost: covered.reduce((total, row) => total + monthEnergyCost(row), 0),
+      }
+    : { miles: chargedMiles, kwh: trackedKwh, cost: trackedEnergyCost };
   const ownCostPerMile =
-    trackedEnergyCost > 0 && chargedMiles > 0
-      ? trackedEnergyCost / chargedMiles
+    perMileBase.cost > 0 && perMileBase.miles > 0
+      ? perMileBase.cost / perMileBase.miles
       : DEFAULT_OWN_KWH_PER_MI * electricityUsdPerKwh;
 
   // Rated consumption is measured on a test cycle; real driving, weather,
@@ -160,12 +195,16 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
   // wall per mile, against their own vehicle's rating, says by how much for
   // the way they drive, and a comparison EV's rating is raised by the same
   // share. Bounded, and left alone until there are enough miles to trust.
-  const ownKwhPerMi = trackedKwh > 0 && chargedMiles > 0 ? trackedKwh / chargedMiles : null;
+  const ownKwhPerMi = perMileBase.kwh > 0 && perMileBase.miles > 0 ? perMileBase.kwh / perMileBase.miles : null;
   const ownRatedKwhPerMi = data.own_rated_kwh_per_mi ?? null;
   const realWorldFactor =
-    ownKwhPerMi != null && ownRatedKwhPerMi != null && chargedMiles >= MIN_MILES_FOR_REAL_WORLD_FACTOR
+    ownKwhPerMi != null && ownRatedKwhPerMi != null && perMileBase.miles >= MIN_MILES_FOR_REAL_WORLD_FACTOR
       ? Math.min(MAX_REAL_WORLD_FACTOR, Math.max(MIN_REAL_WORLD_FACTOR, ownKwhPerMi / ownRatedKwhPerMi))
       : 1;
+
+  // What a kWh costs in months without charging sessions, and in the
+  // projection: the same months the tracked vehicle's per-mile cost comes from.
+  const projectedUsdPerKwh = perMileBase.kwh > 0 && perMileBase.cost > 0 ? perMileBase.cost / perMileBase.kwh : electricityUsdPerKwh;
 
   const periods: LedgerPeriod[] = [];
   const ownEnergy: number[] = [];
@@ -173,15 +212,27 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
     const unrecorded = unrecordedMiles[index] as number;
     const projectedMiles = avgDailyMiles * span.futureDays;
     const price = gasPrice(span.key);
+    // That month's own rates where it had priced sessions of the kind, else the averages.
+    const row = span.actual;
+    const monthFastPriced = row ? fastOf(row).pricedKwh : 0;
+    const monthHomePriced = row ? row.priced_kwh - monthFastPriced : 0;
+    const monthHomeRate =
+      row && monthHomePriced > 0 ? Math.max(0, row.charging_cost_usd - fastOf(row).cost) / monthHomePriced : null;
+    const monthFastRate = row && monthFastPriced > 0 ? fastOf(row).cost / monthFastPriced : null;
     periods.push({
       startMs: span.startMs,
       endMs: span.endMs,
       kind:
         span.endMs <= trackedFromMs ? 'estimated' : span.startMs >= nowMs ? 'projected' : 'actual',
-      miles: (span.actual?.miles ?? 0) + unrecorded + projectedMiles,
+      miles: recordedMiles(span) + unrecorded + projectedMiles,
       gasRegularUsd: price.regular,
       gasPremiumUsd: price.premium,
       gasFromSeries: price.fromSeries,
+      homeUsdPerKwh: monthHomeRate ?? homeUsdPerKwh,
+      fastUsdPerKwh: monthFastRate ?? fastUsdPerKwh,
+      homeFromSessions: monthHomeRate != null,
+      fastFromSessions: monthFastRate != null,
+      chargingUsdPerKwh: row && row.charged_kwh > 0 ? monthEnergyCost(row) / row.charged_kwh : projectedUsdPerKwh,
     });
     ownEnergy.push(
       (span.actual ? monthEnergyCost(span.actual) : 0) +
@@ -223,7 +274,7 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
   const compared = comparisonVehicles(data).filter((vehicle) => enabled.has(vehicle.id));
 
   const vehicles = [own, ...compared].map((vehicle) =>
-    buildVehicleLedger(vehicle, periods, startMs, electricityUsdPerKwh * realWorldFactor, ownEnergy),
+    buildVehicleLedger(vehicle, periods, startMs, realWorldFactor, ownEnergy),
   );
 
   return {
@@ -243,6 +294,7 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
     fastUsdPerKwh,
     fastShare,
     electricityRateAssumed,
+    homePlan: data.home_plan ?? null,
     ownKwhPerMi,
     ownRatedKwhPerMi,
     realWorldFactor,

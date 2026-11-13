@@ -45,4 +45,4 @@ export { scheduleFor, scheduleTargets } from './modelSchedules';
 export { createGasPriceResolver } from './modelGas';
 export { comparisonVehicles, enabledComparisonIds, impliedRetention, isComparisonEnabled } from './modelVehicles';
 export { buildLedger } from './modelLedger';
-export { formatUsd, horizonSpan, insightSentence, ordinal, ownRank, projectionYearsOf } from './modelPresentation';
+export { describeHomePlan, formatCents, formatUsd, horizonSpan, insightSentence, ordinal, ownRank, projectionYearsOf } from './modelPresentation';

@@ -16,8 +16,8 @@ export function buildVehicleLedger(
   vehicle: LedgerVehicle,
   periods: LedgerPeriod[],
   startMs: number,
-  /** What a rated kWh costs a comparison EV: the owner's rate, raised for real-world consumption. */
-  electricityUsdPerKwh: number,
+  /** What a comparison EV's rated consumption is multiplied by for real-world driving. */
+  realWorldFactor: number,
   ownEnergy: number[],
 ): VehicleLedger {
   const { costs } = vehicle;
@@ -67,7 +67,8 @@ export function buildVehicleLedger(
     if (vehicle.isOwn) {
       fuel = ownEnergy[index] ?? 0;
     } else if (vehicle.powertrain === 'ev') {
-      fuel = period.miles * (vehicle.kwhPerMi ?? 0) * electricityUsdPerKwh;
+      // The owner's own price per kWh that month, so both pay for the same charging habits.
+      fuel = period.miles * (vehicle.kwhPerMi ?? 0) * realWorldFactor * period.chargingUsdPerKwh;
     } else {
       const price = vehicle.premiumFuel ? period.gasPremiumUsd : period.gasRegularUsd;
       fuel = vehicle.mpg ? (period.miles / vehicle.mpg) * price : 0;

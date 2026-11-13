@@ -1,5 +1,6 @@
 /** Presentation helpers: horizon labels, projection years, ranking, money and ordinal formatting, and the insight sentence. */
 import { DEFAULT_PROJECTION_YEARS } from './modelConstants';
+import type { OwnershipHomePlan } from '@riviamigo/types';
 import type { Horizon, Ledger, VehicleLedger } from './modelTypes';
 
 export function projectionYearsOf(settings: { projection_years: number | null }): number {
@@ -27,6 +28,62 @@ export function formatUsd(value: number, options: { cents?: boolean } = {}): str
     minimumFractionDigits: options.cents ? 2 : 0,
     maximumFractionDigits: options.cents ? 2 : 0,
   }).format(value);
+}
+
+/** A per-kWh price in cents under a dollar, for example 1.9¢ or 49¢. */
+export function formatCents(usd: number): string {
+  if (usd >= 1) return formatUsd(usd, { cents: true });
+  const value = usd * 100;
+  if (value === 0) return '0¢';
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)}¢`;
+}
+
+function clockLabel(minute: number): string {
+  const hour = Math.floor((minute % 1440) / 60);
+  const minutes = minute % 60;
+  const suffix = hour < 12 ? 'AM' : 'PM';
+  const display = hour % 12 === 0 ? 12 : hour % 12;
+  return minutes ? `${display}:${String(minutes).padStart(2, '0')} ${suffix}` : `${display} ${suffix}`;
+}
+
+/**
+ * A plan in a few words: "free 8 PM–6 AM, 32¢ 6 AM–8 PM" for time of use,
+ * otherwise its one price. Windows with the same rate that meet, including
+ * across midnight, read as one.
+ */
+export function describeHomePlan(plan: OwnershipHomePlan): string {
+  const price = (rate: number) => (rate === 0 ? 'free' : `${formatCents(rate)}/kWh`);
+  switch (plan.billing_type) {
+    case 'free':
+      return 'free';
+    case 'flat':
+      return `${formatUsd(plan.rate, { cents: true })} a session`;
+    case 'per_minute':
+      return `${formatCents(plan.rate)} a minute`;
+    case 'per_kwh':
+      return price(plan.rate);
+    case 'tou': {
+      const periods = [...plan.tou_periods].sort((a, b) => a.start_minute - b.start_minute);
+      if (!periods.length) return price(plan.rate);
+      const merged: Array<{ start: number; end: number; rate: number }> = [];
+      for (const period of periods) {
+        const last = merged[merged.length - 1];
+        if (last && last.rate === period.rate && last.end === period.start_minute) last.end = period.end_minute;
+        else merged.push({ start: period.start_minute, end: period.end_minute, rate: period.rate });
+      }
+      const first = merged[0];
+      const last = merged[merged.length - 1];
+      if (merged.length > 1 && first && last && first.start === 0 && last.end === 1440 && first.rate === last.rate) {
+        merged.pop();
+        first.start = last.start;
+      }
+      return merged
+        .map((window) => `${window.rate === 0 ? 'free' : formatCents(window.rate)} ${clockLabel(window.start)}–${clockLabel(window.end)}`)
+        .join(', ');
+    }
+    default:
+      return price(plan.rate);
+  }
 }
 
 export function ordinal(value: number): string {

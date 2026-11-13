@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Battery, Car, CheckCircle2, CircleAlert, Gauge, LocateFixed, Lock, Maximize2, Minimize2, Package, PackageOpen, RadioTower, TriangleAlert, Unlock } from 'lucide-react';
+import { Battery, Car, CheckCircle2, CircleAlert, Gauge, LocateFixed, Lock, Maximize2, Minimize2, Package, PackageOpen, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
 import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useUpdateOverviewMapExpanded, useUpdateOverviewView, useUserPreferences, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
 import { formatMiles } from '@riviamigo/ui/lib/utils';
@@ -198,11 +198,6 @@ export function CurrentVehicleStatePanel({
     rr: makeTireDisplay(status?.tire_rr_psi, status?.tire_rr_status, targetTirePressurePsi),
   };
   const stats = resolveOverviewStatIds(statIds).map((id) => ({ id, ...presentOverviewStat(id, status, statData) }));
-  const freshness: TelemetryFreshness = status?.telemetry_stale
-    ? { tone: 'stale', label: 'Telemetry stale' }
-    : status?.last_updated
-      ? { tone: 'fresh', label: `Updated ${new Date(status.last_updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` }
-      : { tone: 'pending', label: 'Awaiting telemetry' };
   const rearGateLock = vehicleModel === 'R1T'
     ? status?.closure_tailgate_locked
     : status?.closure_liftgate_locked ?? status?.closure_tailgate_locked;
@@ -229,7 +224,6 @@ export function CurrentVehicleStatePanel({
       <div className="mb-4 flex shrink-0 items-center justify-between gap-3">
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-fg-tertiary">Vehicle overview</p>
         <div className="flex items-center gap-2">
-          <TelemetryFreshnessIndicator freshness={freshness} />
           {mapAvailable ? <OverviewViewToggle view={view} onChange={setView} /> : null}
         </div>
       </div>
@@ -400,36 +394,6 @@ function useObservedHeight(): [(element: HTMLDivElement | null) => void, number]
     return () => observer.disconnect();
   }, [element]);
   return [setElement, height];
-}
-
-type TelemetryFreshness = { tone: 'fresh' | 'stale' | 'pending'; label: string };
-
-const FRESHNESS_TONE_CLASS: Record<TelemetryFreshness['tone'], string> = {
-  fresh: 'text-status-positive',
-  stale: 'text-status-warning',
-  pending: 'text-fg-tertiary',
-};
-
-function TelemetryFreshnessIndicator({ freshness }: { freshness: TelemetryFreshness }) {
-  return (
-    <Tooltip
-      align="end"
-      side="bottom"
-      content={<span className="text-xs text-fg">{freshness.label}</span>}
-      contentClassName="whitespace-nowrap rounded-lg px-2 py-1"
-    >
-      <span
-        role="img"
-        tabIndex={0}
-        aria-label={freshness.label}
-        data-testid="overview-telemetry-freshness"
-        data-tone={freshness.tone}
-        className={`inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border bg-bg-elevated focus:outline-none @min-[34rem]/overview:h-8 @min-[34rem]/overview:w-8 focus-visible:ring-1 focus-visible:ring-accent ${FRESHNESS_TONE_CLASS[freshness.tone]}`}
-      >
-        <RadioTower className="h-4 w-4" aria-hidden="true" />
-      </span>
-    </Tooltip>
-  );
 }
 
 const OVERVIEW_VIEW_CHOICES: ReadonlyArray<{ value: OverviewView; label: string; icon: React.ComponentType<{ className?: string }> }> = [

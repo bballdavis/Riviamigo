@@ -1,6 +1,5 @@
 import React from 'react';
 import { useBatteryHealth } from '@riviamigo/hooks';
-import { getUnitPreferences } from '@riviamigo/ui/lib/utils';
 import { useDashboardDataAvailable, useDashboardDataSelector } from '../../dashboardData';
 import { overviewStatsNeedBatteryHealth, type OverviewStatData } from './overviewStatDisplay';
 
@@ -18,24 +17,4 @@ export function useOverviewStatData(statIds: readonly string[], vehicleId: strin
   return React.useMemo(() => ({ batteryHealth }), [batteryHealth]);
 }
 
-function subscribeToUnits(onChange: () => void) {
-  window.addEventListener('rm-units-change', onChange);
-  window.addEventListener('storage', onChange);
-  return () => {
-    window.removeEventListener('rm-units-change', onChange);
-    window.removeEventListener('storage', onChange);
-  };
-}
-
-/**
- * Re-renders when the user changes their unit preferences (including a custom
- * mix such as metric distance with Fahrenheit), so every row is re-formatted
- * and converted to match.
- */
-export function useUnitPreferencesVersion() {
-  return React.useSyncExternalStore(
-    subscribeToUnits,
-    () => JSON.stringify(getUnitPreferences()),
-    () => '',
-  );
-}
+export { useUnitPreferencesVersion } from '@riviamigo/ui/lib/useUnitPreferencesVersion';

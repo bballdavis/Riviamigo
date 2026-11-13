@@ -20,7 +20,7 @@ const METHOD_ITEMS: InfoItem[] = [
     title: 'Fuel or charging',
     icon: <Fuel />,
     color: CHART_COLORS.amber,
-    body: "Every vehicle drives your miles each month. Gas uses that month's U.S. pump price. Your Rivian uses its recorded charging, with home and fast charging priced apart; other EVs pay your blended rate.",
+    body: "Every vehicle drives your miles each month. Gas uses that month's U.S. pump price. Your Rivian uses its recorded charging, with home and fast charging priced apart; other EVs pay what your charging cost per kWh that month.",
   },
   {
     key: 'maintenance',

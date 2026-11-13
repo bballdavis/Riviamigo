@@ -3,7 +3,7 @@ import React from 'react';
 import { CarFront, Fuel } from 'lucide-react';
 import { formatMonth, type ValueMode } from './OwnershipChart';
 import { Dot } from './OwnershipPrimitives';
-import { formatUsd, type Ledger, type VehicleLedger } from './model';
+import { formatCents, formatUsd, type Ledger, type VehicleLedger } from './model';
 
 const PERIOD_KIND_LABEL = { estimated: 'Estimated', actual: 'Recorded', projected: 'Projected' } as const;
 
@@ -133,10 +133,20 @@ export function CursorReadout({
             label={period.gasFromSeries ? 'Gas' : 'Gas, est.'}
             value={`${formatUsd(period.gasRegularUsd, { cents: true })}/gal`}
           />
-          <ReadoutRow
-            label={ledger.electricityRateAssumed ? 'Charging, typical' : 'Your charging'}
-            value={`${formatUsd(ledger.electricityUsdPerKwh, { cents: true })}/kWh`}
-          />
+          {ledger.electricityRateAssumed ? (
+            <ReadoutRow label="Charging, typical" value={`${formatCents(ledger.electricityUsdPerKwh)}/kWh`} />
+          ) : (
+            <>
+              <ReadoutRow
+                label={period.homeFromSessions ? 'Home charging' : 'Home, avg.'}
+                value={`${formatCents(period.homeUsdPerKwh)}/kWh`}
+              />
+              <ReadoutRow
+                label={period.fastFromSessions ? 'Fast charging' : 'Fast, avg.'}
+                value={`${formatCents(period.fastUsdPerKwh)}/kWh`}
+              />
+            </>
+          )}
           </dl>
         </div>
       </div>

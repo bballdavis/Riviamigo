@@ -248,7 +248,12 @@ export function VehiclesSection({
                   : (isActive ? 'Active' : 'Offline');
             const hasGlow = isDemo || collectionPaused || needsReauth || v.worker_health != null;
 
-            const modelLine = [v.model, v.year, v.trim].filter(Boolean).join(' · ') || 'Vehicle details pending';
+            // A trim like "R1S Dual" already names the model; do not repeat it.
+            const trimRepeatsModel =
+              !!v.model && !!v.trim && v.trim.toLowerCase().startsWith(v.model.toLowerCase());
+            const modelLine =
+              [trimRepeatsModel ? null : v.model, v.year, v.trim].filter(Boolean).join(' · ') ||
+              'Vehicle details pending';
             const batteryLabel = v.battery_capacity_kwh != null ? ` · ${v.battery_capacity_kwh} kWh` : '';
 
             return (

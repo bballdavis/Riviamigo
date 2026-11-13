@@ -2,17 +2,10 @@
 import { Database } from 'lucide-react';
 import type { OwnershipResponse } from '@riviamigo/types';
 import { Card, CardContent, CardHeader } from '@riviamigo/ui/primitives';
-import { formatUsd, type Ledger } from './model';
+import { describeHomePlan, formatCents as cents, type Ledger } from './model';
 import { formatMonth } from './OwnershipChart';
 import { ExternalConnectionsLink } from './OwnershipDialogs';
 import { SectionTitle } from './OwnershipPrimitives';
-
-/** A per-kWh price in cents under a dollar, for example 1.9¢ or 49¢. */
-function cents(usdPerKwh: number): string {
-  if (usdPerKwh >= 1) return formatUsd(usdPerKwh, { cents: true });
-  const value = usdPerKwh * 100;
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)}¢`;
-}
 
 export function SourcesCard({ data, ledger }: { data: OwnershipResponse; ledger: Ledger }) {
   const { fuel_prices: fuel, usage } = data;
@@ -40,7 +33,11 @@ export function SourcesCard({ data, ledger }: { data: OwnershipResponse; ledger:
                 : ''}
               {ledger.electricityRateAssumed
                 ? ` No charging cost is recorded yet, so charging assumes ${cents(ledger.electricityUsdPerKwh)} per kWh.`
-                : ` Home charging has cost you ${cents(ledger.homeUsdPerKwh)} per kWh and fast charging ${cents(ledger.fastUsdPerKwh)}, with ${Math.round(ledger.fastShare * 100)}% of your energy from fast charging. Sessions without a price use your rate for their kind.`}
+                : `${
+                    ledger.homePlan
+                      ? ` Home charging is priced by your ${ledger.homePlan.name} plan (${describeHomePlan(ledger.homePlan)}); at the times you charge it has averaged ${cents(ledger.homeUsdPerKwh)} per kWh.`
+                      : ` Home charging has averaged ${cents(ledger.homeUsdPerKwh)} per kWh. Set a price on your home in Settings > Places to price it by your electricity plan.`
+                  } Fast charging has averaged ${cents(ledger.fastUsdPerKwh)} per kWh, what the networks billed you, and is ${Math.round(ledger.fastShare * 100)}% of your energy. Sessions without a price, such as older ones Rivian reported without a location, use your average for their kind.`}
               {ledger.realWorldFactor !== 1 && ledger.ownKwhPerMi != null && ledger.ownRatedKwhPerMi != null
                 ? ` Your vehicle has taken ${ledger.ownKwhPerMi.toFixed(2)} kWh per mile from the wall against an EPA rating of ${ledger.ownRatedKwhPerMi.toFixed(2)}, so other electric vehicles' ratings are ${ledger.realWorldFactor > 1 ? 'raised' : 'lowered'} ${Math.round(Math.abs(ledger.realWorldFactor - 1) * 100)}% to match how you drive and charge.`
                 : ''}

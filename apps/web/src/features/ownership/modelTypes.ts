@@ -1,6 +1,7 @@
 /** Ownership ledger types: the shapes the cost math and the page share. */
 import type {
   OwnershipCostAssumptions,
+  OwnershipHomePlan,
   OwnershipMaintenanceCategory,
   OwnershipMaintenanceItem,
   OwnershipPowertrain,
@@ -35,6 +36,18 @@ export interface LedgerPeriod {
   gasPremiumUsd: number;
   /** False when the month's gas price is a flat or averaged stand-in. */
   gasFromSeries: boolean;
+  /** What the tracked vehicle's home and fast charging cost per kWh this month. */
+  homeUsdPerKwh: number;
+  fastUsdPerKwh: number;
+  /** False when the month had no priced session of that kind and the average stands in. */
+  homeFromSessions: boolean;
+  fastFromSessions: boolean;
+  /**
+   * What the tracked vehicle's charging cost per kWh this month, home and fast
+   * together; the projected rate in months without sessions. Electric
+   * comparison vehicles pay it too.
+   */
+  chargingUsdPerKwh: number;
 }
 
 export interface LedgerPoint {
@@ -110,6 +123,8 @@ export interface Ledger {
   fastShare: number;
   /** True when no charging cost has been recorded to derive the rate from. */
   electricityRateAssumed: boolean;
+  /** The electricity plan home charging is priced by, when one applies. */
+  homePlan: OwnershipHomePlan | null;
   /** Energy from the wall per mile for the tracked vehicle; null until both are recorded. */
   ownKwhPerMi: number | null;
   /** The tracked vehicle's EPA rating in kWh per mile, when its model is known. */

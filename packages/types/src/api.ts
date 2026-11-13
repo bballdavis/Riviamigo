@@ -1792,6 +1792,9 @@ export interface OwnershipUsageMonth {
   fast_priced_kwh: number;
   fast_cost_usd: number;
   charging_cost_usd: number;
+  /** Lowest and highest odometer readings on the month's recorded trips; missing on older responses. */
+  odometer_start_mi?: number | null;
+  odometer_end_mi?: number | null;
 }
 
 export interface OwnershipUsage {
@@ -1829,6 +1832,17 @@ export interface OwnershipResponse extends OwnershipSettingsResponse {
   own_defaults: OwnershipCostAssumptions;
   /** EPA combined kWh per mile for the tracked vehicle's model; null or missing when unknown. */
   own_rated_kwh_per_mi?: number | null;
+  /** The electricity plan home charging is priced by; null or missing when none applies. */
+  home_plan?: OwnershipHomePlan | null;
+}
+
+export interface OwnershipHomePlan {
+  name: string;
+  billing_type: 'per_kwh' | 'tou' | 'flat' | 'per_minute' | 'free';
+  /** Base rate: per kWh, per minute, or per session, by billing type. */
+  rate: number;
+  /** Time-of-use windows in minutes after local midnight; empty unless billing_type is 'tou'. */
+  tou_periods: Array<{ label: string; start_minute: number; end_minute: number; rate: number }>;
 }
 
 export interface OwnershipLookupOption {

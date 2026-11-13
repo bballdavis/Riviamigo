@@ -57,6 +57,8 @@ struct OwnershipResponse {
     own_defaults: CostAssumptions,
     /// EPA combined kWh per mile for the tracked vehicle's model, when known.
     own_rated_kwh_per_mi: Option<f64>,
+    /// The electricity plan home charging is priced by, when one applies.
+    home_plan: Option<ownership::HomePlan>,
 }
 
 #[derive(Serialize)]
@@ -92,6 +94,7 @@ async fn get_ownership(
     let own_rated_kwh_per_mi = ownership::load_model(&state.pool, vehicle_id)
         .await?
         .and_then(|model| ownership::own_rated_kwh_per_mi(&model));
+    let home_plan = ownership::load_home_plan(&state.pool, vehicle_id).await?;
     Ok(Json(OwnershipResponse {
         vehicle_id,
         can_edit: can_edit(&state, &auth, vehicle_id).await?,
@@ -103,6 +106,7 @@ async fn get_ownership(
         class_defaults: ownership::class_defaults(),
         own_defaults: ownership::own_vehicle_defaults(),
         own_rated_kwh_per_mi,
+        home_plan,
     }))
 }
 

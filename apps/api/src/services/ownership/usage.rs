@@ -24,6 +24,11 @@ pub struct UsageMonth {
     pub fast_kwh: f64,
     pub fast_priced_kwh: f64,
     pub fast_cost_usd: f64,
+    /// Lowest and highest odometer readings on the month's recorded trips.
+    /// The ledger takes a month's miles from these where it has them, since
+    /// trips that were not recorded still move the odometer.
+    pub odometer_start_mi: Option<f64>,
+    pub odometer_end_mi: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -38,6 +43,58 @@ pub struct Usage {
     pub odometer_mi: Option<f64>,
 }
 
+/// One time-of-use window of an electricity plan, in minutes after local midnight.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct HomePlanPeriod {
+    pub label: String,
+    pub start_minute: u16,
+    pub end_minute: u16,
+    pub rate: f64,
+}
+
+/// The electricity plan the tracked vehicle's home charging is priced by.
+#[derive(Debug, Clone, Serialize)]
+pub struct HomePlan {
+    pub name: String,
+    /// `per_kwh`, `tou`, `flat`, `per_minute` or `free`.
+    pub billing_type: String,
+    /// The plan's base rate: per kWh, per minute, or per session by type.
+    pub rate: f64,
+    pub tou_periods: Vec<HomePlanPeriod>,
+}
+
+#[derive(FromRow)]
+struct HomePlanRow {
+    name: String,
+    billing_type: String,
+    rate: f64,
+    tou_periods: serde_json::Value,
+}
+
+/// The plan that priced the vehicle's most recent home session, else the
+/// vehicle's default plan.
+pub async fn load_home_plan(pool: &PgPool, vehicle_id: Uuid) -> Result<Option<HomePlan>, AppError> {
+    let row = sqlx::query_as::<_, HomePlanRow>(
+        "SELECT cp.name, cp.billing_type, cp.rate, cp.tou_periods
+         FROM riviamigo.cost_profiles cp
+         WHERE cp.id = COALESCE(
+           (SELECT cs.cost_profile_id FROM riviamigo.charge_sessions cs
+            WHERE cs.vehicle_id = $1 AND cs.is_home AND cs.cost_profile_id IS NOT NULL
+            ORDER BY cs.started_at DESC LIMIT 1),
+           (SELECT v.cost_profile_id FROM riviamigo.vehicles v WHERE v.id = $1))",
+    )
+    .bind(vehicle_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|row| HomePlan {
+        name: row.name,
+        billing_type: row.billing_type,
+        rate: row.rate,
+        // A malformed period list only loses the window detail, not the plan.
+        tou_periods: serde_json::from_value(row.tou_periods).unwrap_or_default(),
+    }))
+}
+
 /// The tracked vehicle's model name, such as `R1S`.
 pub async fn load_model(pool: &PgPool, vehicle_id: Uuid) -> Result<Option<String>, AppError> {
     Ok(
@@ -48,12 +105,17 @@ pub async fn load_model(pool: &PgPool, vehicle_id: Uuid) -> Result<Option<String
     )
 }
 
+/// Odometer readings above this are sensor glitches.
+const MAX_ODOMETER_MI: f64 = 2_000_000.0;
+
 pub async fn load_usage(pool: &PgPool, vehicle_id: Uuid) -> Result<Usage, AppError> {
     let months = sqlx::query_as::<_, UsageMonth>(
         "WITH drive AS (
            SELECT date_trunc('month', started_at AT TIME ZONE 'UTC')::date AS month,
                   COALESCE(SUM(distance_miles), 0)::float8 AS miles,
-                  (COALESCE(SUM(energy_wh), 0) / 1000.0)::float8 AS drive_energy_kwh
+                  (COALESCE(SUM(energy_wh), 0) / 1000.0)::float8 AS drive_energy_kwh,
+                  MIN(start_odometer_mi) FILTER (WHERE start_odometer_mi BETWEEN 0 AND $2)::float8 AS odometer_start_mi,
+                  MAX(end_odometer_mi) FILTER (WHERE end_odometer_mi BETWEEN 0 AND $2)::float8 AS odometer_end_mi
            FROM riviamigo.trips
            WHERE vehicle_id = $1
            GROUP BY 1
@@ -82,12 +144,15 @@ pub async fn load_usage(pool: &PgPool, vehicle_id: Uuid) -> Result<Usage, AppErr
                 COALESCE(charge.charging_cost_usd, 0)::float8 AS charging_cost_usd,
                 COALESCE(charge.fast_kwh, 0)::float8 AS fast_kwh,
                 COALESCE(charge.fast_priced_kwh, 0)::float8 AS fast_priced_kwh,
-                COALESCE(charge.fast_cost_usd, 0)::float8 AS fast_cost_usd
+                COALESCE(charge.fast_cost_usd, 0)::float8 AS fast_cost_usd,
+                drive.odometer_start_mi,
+                drive.odometer_end_mi
          FROM drive
          FULL OUTER JOIN charge ON charge.month = drive.month
          ORDER BY 1",
     )
     .bind(vehicle_id)
+    .bind(MAX_ODOMETER_MI)
     .fetch_all(pool)
     .await?;
 
@@ -99,10 +164,23 @@ pub async fn load_usage(pool: &PgPool, vehicle_id: Uuid) -> Result<Usage, AppErr
                       (SELECT MIN(started_at) FROM riviamigo.charge_sessions WHERE vehicle_id = $1)),
                 GREATEST((SELECT MAX(ended_at) FROM riviamigo.trips WHERE vehicle_id = $1),
                          (SELECT MAX(ended_at) FROM riviamigo.charge_sessions WHERE vehicle_id = $1)),
-                GREATEST((SELECT MAX(end_odometer_mi) FROM riviamigo.trips WHERE vehicle_id = $1),
-                         (SELECT odometer_miles FROM riviamigo.vehicle_latest_status WHERE vehicle_id = $1))",
+                (WITH trip AS (
+                   SELECT MAX(end_odometer_mi) AS mi FROM riviamigo.trips
+                   WHERE vehicle_id = $1 AND end_odometer_mi BETWEEN 0 AND $2
+                 ), live AS (
+                   SELECT odometer_miles AS mi FROM riviamigo.vehicle_latest_status
+                   WHERE vehicle_id = $1 AND odometer_miles BETWEEN 0 AND $2
+                 )
+                 -- A live reading far past the last trip is a glitch, not driving.
+                 SELECT CASE
+                          WHEN trip.mi IS NULL THEN live.mi
+                          WHEN live.mi IS NULL OR live.mi > trip.mi + 10000 THEN trip.mi
+                          ELSE GREATEST(trip.mi, live.mi)
+                        END
+                 FROM trip FULL OUTER JOIN live ON TRUE)",
     )
     .bind(vehicle_id)
+    .bind(MAX_ODOMETER_MI)
     .fetch_one(pool)
     .await?;
 

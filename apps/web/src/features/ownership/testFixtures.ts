@@ -81,6 +81,7 @@ export function response(overrides: Partial<OwnershipResponse> = {}): OwnershipR
     class_defaults: { ev: costs(), hybrid: gasCosts, gas: gasCosts },
     own_defaults: costs(),
     own_rated_kwh_per_mi: null,
+    home_plan: null,
     ...overrides,
   } as OwnershipResponse;
 }

@@ -26,7 +26,9 @@ pub use reference::{
 pub use settings::{
     load_settings, save_settings, validate_settings, Comparisons, CustomVehicle, OwnershipSettings,
 };
-pub use usage::{load_model, load_usage, Usage, UsageMonth};
+pub use usage::{
+    load_home_plan, load_model, load_usage, HomePlan, HomePlanPeriod, Usage, UsageMonth,
+};
 
 #[cfg(test)]
 mod tests;

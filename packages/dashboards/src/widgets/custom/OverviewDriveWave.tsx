@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { getUnitPreferences } from '@riviamigo/ui/lib/utils';
+import { formatSpeedParts, getUnitPreferences } from '@riviamigo/ui/lib/utils';
 import type { VehicleStatus } from '@riviamigo/types';
 import {
   DRIVE_WAVE_HEIGHT,
@@ -14,7 +14,6 @@ import {
 } from './overviewDriveWaveLayout';
 import { useUnitPreferencesVersion } from './useOverviewStatData';
 
-const MPH_TO_KMH = 1.609344;
 const EASE = 'cubic-bezier(.2,.8,.2,1)';
 /** Blur applied to the copied band of map under the line. */
 const GLASS_BLUR_PX = 8;
@@ -132,11 +131,11 @@ export function OverviewDriveWave({ status, mapFrames }: { status: VehicleStatus
             <div className="absolute inset-0" style={{ background: `color-mix(in srgb, var(--rm-bg-surface) ${hasGlass ? 68 : 82}%, transparent)` }} />
           </div>
           <svg aria-hidden="true" className="absolute inset-0 h-full w-full overflow-visible" viewBox={`0 0 ${width} ${DRIVE_WAVE_HEIGHT}`}>
-            <defs>{moving && !reversing ? <WaveGradient id={gradientId} width={width} layout={layout} hasGear={showGear} /> : null}</defs>
+            <defs>{!reversing ? <WaveGradient id={gradientId} width={width} layout={layout} hasGear={showGear} /> : null}</defs>
             <path
               d={layout.line}
               fill="none"
-              stroke={!moving ? 'var(--rm-text-tertiary)' : reversing ? 'var(--rm-status-warning)' : `url(#${gradientId})`}
+              stroke={reversing ? 'var(--rm-status-warning)' : `url(#${gradientId})`}
               strokeWidth={DRIVE_WAVE_STROKE}
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -174,7 +173,7 @@ export function OverviewDriveWave({ status, mapFrames }: { status: VehicleStatus
   );
 }
 
-/** Teal along the line, warming to gold over the speed hump. */
+/** Teal along the line, warming to gold over the center hump (the speed, or "Parked"). */
 function WaveGradient({ id, width, layout, hasGear }: { id: string; width: number; layout: DriveWaveLayout; hasGear: boolean }) {
   const at = (x: number) => Math.min(1, Math.max(0, x / width));
   const { center, gear } = layout;
@@ -222,11 +221,9 @@ function copyBand(source: HTMLCanvasElement, target: HTMLCanvasElement, box: HTM
   return true;
 }
 
+/** Speed in the user's unit from Settings > Units (Custom included), with a dash when the car reports none. */
 function formatSpeed(speedMph: number | null): { value: string; unit: string } {
-  const kmh = getUnitPreferences().speed_unit === 'kmh';
-  const unit = kmh ? 'km/h' : 'mph';
-  if (speedMph === null) return { value: '–', unit };
-  return { value: String(Math.round(kmh ? speedMph * MPH_TO_KMH : speedMph)), unit };
+  return formatSpeedParts(speedMph) ?? { value: '–', unit: getUnitPreferences().speed_unit === 'kmh' ? 'km/h' : 'mph' };
 }
 
 function describe(state: DriveWaveState, speed: { value: string; unit: string } | null): string {
