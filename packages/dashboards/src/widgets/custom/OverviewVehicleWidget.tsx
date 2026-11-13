@@ -4,7 +4,7 @@ import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
 import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useUpdateOverviewMapExpanded, useUpdateOverviewView, useUserPreferences, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
 import { formatMiles } from '@riviamigo/ui/lib/utils';
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI, formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
-import { FrunkIcon, LiftgateIcon, Tooltip } from '@riviamigo/ui/primitives';
+import { AssistantWave, FrunkIcon, LiftgateIcon, Tooltip } from '@riviamigo/ui/primitives';
 import { isVehicleCharging } from '@riviamigo/types';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
@@ -617,7 +617,10 @@ function VehicleArtFrame({
 }) {
   const artwork = useVehicleArtwork(source);
   const fallbackArtwork = useVehicleArtwork(fallbackSource);
-  const frameArtworkSrc = artwork.src ?? fallbackArtwork.src;
+  // Wait for the real artwork rather than flashing the packaged fallback; the
+  // fallback is only for vehicles whose own artwork is missing or broken.
+  const loading = artwork.isLoading;
+  const frameArtworkSrc = loading ? null : artwork.src ?? fallbackArtwork.src;
   const [rotatedAspectRatio, setRotatedAspectRatio] = useState(2.25);
   useEffect(() => {
     const image = new Image();
@@ -647,7 +650,11 @@ function VehicleArtFrame({
         '--vehicle-frame-width': `${frameWidth}px`,
       } as React.CSSProperties}
     >
-      {frameArtworkSrc ? children : null}
+      {loading ? (
+        <div className="absolute inset-0 flex items-center">
+          <AssistantWave label="Loading vehicle picture" />
+        </div>
+      ) : frameArtworkSrc ? children : null}
     </div>
   );
 }

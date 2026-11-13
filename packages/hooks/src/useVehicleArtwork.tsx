@@ -2,11 +2,7 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import { api } from './api';
-
-type ArtworkAsset = {
-  blob: Blob;
-  restoring: boolean;
-};
+import { isProtectedArtwork, loadVehicleArtwork, peekVehicleArtwork } from './vehicleArtworkCache';
 
 type FallbackImageProps = Omit<
   React.ImgHTMLAttributes<HTMLImageElement>,
@@ -21,11 +17,13 @@ type AuthenticatedVehicleArtworkProps = Omit<
   fallbackSource?: string | null | undefined;
   fallbackProps?: FallbackImageProps;
   onFallbackChange?: (usingFallback: boolean) => void;
+  /**
+   * Shown while the real artwork is still loading. Packaged fallback art is
+   * reserved for vehicles that have no usable artwork, so it never flashes
+   * in before the real picture.
+   */
+  loadingIndicator?: React.ReactNode;
 };
-
-function isProtectedArtwork(source: string | null | undefined): source is string {
-  return Boolean(source?.startsWith('/v1/vehicle-image-cache/'));
-}
 
 export function useVehicleArtwork(source: string | null | undefined) {
   const protectedArtwork = isProtectedArtwork(source);
@@ -33,38 +31,25 @@ export function useVehicleArtwork(source: string | null | undefined) {
     queryKey: ['vehicle-artwork-asset', source],
     enabled: protectedArtwork,
     staleTime: Infinity,
+    gcTime: Infinity,
+    // An image already loaded this visit renders on the first pass.
+    initialData: () => (protectedArtwork ? peekVehicleArtwork(source) : undefined),
     // A failed protected image should yield to packaged artwork immediately;
     // retrying here only delays a usable fallback and the cache repair path
     // already refreshes explicit 202 restoring responses.
     retry: false,
     refetchInterval: (query) => (query.state.data?.restoring ? 3_000 : false),
-    queryFn: async (): Promise<ArtworkAsset> => {
-      const response = await api.authenticatedAsset(source!);
-      return {
-        blob: await response.blob(),
-        restoring: response.status === 202,
-      };
-    },
+    queryFn: () => loadVehicleArtwork(source!, (url) => api.authenticatedAsset(url)),
   });
-
-  const [objectUrl, setObjectUrl] = React.useState<string | null>(null);
-  React.useEffect(() => {
-    if (!query.data?.blob) {
-      setObjectUrl(null);
-      return;
-    }
-    const next = URL.createObjectURL(query.data.blob);
-    setObjectUrl(next);
-    return () => URL.revokeObjectURL(next);
-  }, [query.data?.blob]);
 
   return {
     // A restoring cache endpoint deliberately returns a placeholder response.
     // Do not treat that SVG as usable vehicle art: consumers with packaged
     // artwork should show it while the protected cache repairs in the background.
-    src: protectedArtwork && query.data?.restoring ? null : protectedArtwork ? objectUrl : source ?? null,
+    src: protectedArtwork ? (query.data?.restoring ? null : query.data?.objectUrl ?? null) : source ?? null,
     restoring: query.data?.restoring ?? false,
-    isLoading: protectedArtwork && query.isLoading,
+    /** True only until the first answer for protected artwork arrives. */
+    isLoading: protectedArtwork && query.data === undefined && !query.isError,
     isError: protectedArtwork && query.isError,
   };
 }
@@ -74,6 +59,7 @@ export function AuthenticatedVehicleArtwork({
   fallbackSource,
   fallbackProps,
   onFallbackChange,
+  loadingIndicator = null,
   alt,
   className,
   style,
@@ -91,9 +77,11 @@ export function AuthenticatedVehicleArtwork({
     setPrimaryFailed(false);
   }, [source, primaryArtwork.src]);
 
+  const primaryLoading = primaryArtwork.isLoading && !primaryFailed;
   const primaryUnavailable =
     primaryArtwork.isError || !primaryArtwork.src;
   const usingFallback =
+    !primaryLoading &&
     Boolean(fallbackArtwork.src) &&
     (primaryFailed || primaryArtwork.restoring || primaryUnavailable);
   const artwork = usingFallback ? fallbackArtwork : primaryArtwork;
@@ -102,6 +90,7 @@ export function AuthenticatedVehicleArtwork({
     onFallbackChange?.(usingFallback);
   }, [onFallbackChange, usingFallback]);
 
+  if (primaryLoading) return <>{loadingIndicator}</>;
   if (!artwork.src) return null;
 
   const {

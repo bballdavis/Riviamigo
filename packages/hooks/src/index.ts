@@ -75,5 +75,6 @@ export {
 } from './useUserPreferences';
 export { useDocumentTheme } from './useDocumentTheme';
 export { AuthenticatedVehicleArtwork, useVehicleArtwork } from './useVehicleArtwork';
+export { clearVehicleArtworkCache } from './vehicleArtworkCache';
 export { getVehicleArtworkFallback, normalizeVehicleArtworkModel, resolveVehicleArtwork } from './vehicleArtworkFallback';
 export type { ResolvedVehicleArtwork, VehicleArtworkFallbackModel, VehicleArtworkUsage } from './vehicleArtworkFallback';

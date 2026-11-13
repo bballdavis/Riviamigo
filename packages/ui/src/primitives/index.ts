@@ -47,6 +47,9 @@ export type { StatusBarProps, VehicleOnlineState } from './StatusBar';
 
 export { AmbientOrbs } from './AmbientOrbs';
 
+export { AssistantWave } from './AssistantWave';
+export type { AssistantWaveProps } from './AssistantWave';
+
 export { MetricTabs } from './MetricTabs';
 export type { MetricTabsProps, MetricTab } from './MetricTabs';
 
