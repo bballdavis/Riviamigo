@@ -1329,7 +1329,7 @@ export interface UserPreferencesResponse {
   units: UnitPreferences;
   theme: ThemePreferences;
   map_style: MapStylePreference;
-  /** Whether the user shows the Ownership dashboard; missing on older servers means shown. */
+  /** Whether the user shows the Ownership dashboard; off until turned on, and missing means off. */
   ownership_enabled?: boolean;
   /** Vehicle Overview view last chosen; missing on older servers means the cluster. */
   overview_view?: OverviewViewPreference;

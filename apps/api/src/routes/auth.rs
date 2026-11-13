@@ -1719,7 +1719,8 @@ async fn get_preferences(
     let ownership_enabled = row
         .as_ref()
         .and_then(|row| row.try_get::<bool, _>("ownership_enabled").ok())
-        .unwrap_or(true);
+        // Ownership is in preview: off until the user turns it on.
+        .unwrap_or(false);
     let overview_view = row
         .as_ref()
         .and_then(|row| row.try_get::<String, _>("overview_view").ok())

@@ -1,4 +1,5 @@
 /** The "Where the numbers come from" card: driving, gas price, and vehicle-data provenance. */
+import React from 'react';
 import { Database } from 'lucide-react';
 import type { OwnershipResponse } from '@riviamigo/types';
 import { Card, CardContent, CardHeader } from '@riviamigo/ui/primitives';
@@ -9,96 +10,127 @@ import { SectionTitle } from './OwnershipPrimitives';
 
 const mi = (value: number) => `${Math.round(value).toLocaleString('en-US')} mi`;
 
-/** Where the miles come from, the pace the projection follows, and any doubt about the start. */
-function mileageSentence(ledger: Ledger, trackedFrom: string | null): string {
-  if (ledger.mileageAssumed) return `No drives are recorded yet, so every month assumes a typical ${mi(ledger.avgMonthlyMiles)} a month.`;
-  const parts: string[] = [];
-  if (ledger.mileageFromOdometer && ledger.odometerMi != null) {
-    parts.push(
-      `Your odometer reads ${mi(ledger.odometerMi)}, ${mi(ledger.milesToDate)} since purchase, an average of ${mi(ledger.avgMonthlyMiles)} a month. Months with odometer readings use them; the rest of the miles fill the lighter months.`,
-    );
-  } else {
-    parts.push(`Recorded since ${trackedFrom ?? 'tracking began'}; earlier months use your average of ${mi(ledger.avgMonthlyMiles)} a month.`);
-  }
-  if (ledger.paceSource === 'recent' && ledger.recentMonthlyMiles != null && ledger.recentDays != null) {
-    const months = Math.max(1, Math.round(ledger.recentDays / 30.44));
-    parts.push(
-      `Over the last ${months} month${months === 1 ? '' : 's'} of odometer readings you drove ${mi(ledger.recentMonthlyMiles)} a month, and future months follow that pace.`,
-    );
-  } else {
-    parts.push(`Future months follow your average of ${mi(ledger.projectedMonthlyMiles)} a month.`);
-  }
-  if (ledger.impliedPurchaseOdometerMi != null) {
-    parts.push(
-      `Your charging before tracking began covers fewer miles than the odometer moved. If it read about ${mi(ledger.impliedPurchaseOdometerMi)} when you bought it, enter that as the odometer at purchase.`,
-    );
-  }
-  return parts.join(' ');
+/** One source: what it is, the figure it gives, and a line on where that comes from. */
+function Source({ label, value, children }: { label: string; value: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1 rounded-lg border border-border/60 bg-bg-elevated/40 p-3">
+      <dt className="text-xs font-semibold uppercase tracking-wide text-fg-secondary">{label}</dt>
+      <dd className="font-mono text-lg font-semibold tabular-nums text-fg">{value}</dd>
+      <dd className="text-sm text-fg-secondary">{children}</dd>
+    </div>
+  );
 }
 
-export function SourcesCard({ data, ledger }: { data: OwnershipResponse; ledger: Ledger }) {
+export function SourcesCard({
+  data,
+  ledger,
+  onOpenSettings,
+}: {
+  data: OwnershipResponse;
+  ledger: Ledger;
+  onOpenSettings?: () => void;
+}) {
   const { fuel_prices: fuel, usage } = data;
   const date = (value: string) =>
     new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const lastMonth = fuel.months[fuel.months.length - 1];
+  const latestGas = [...fuel.months].reverse().find((row) => row.regular_usd != null)?.regular_usd ?? null;
+  const paceMonths = ledger.recentDays != null ? Math.max(1, Math.round(ledger.recentDays / 30.44)) : null;
+  const factorPercent = Math.round(Math.abs(ledger.realWorldFactor - 1) * 100);
+
   return (
     <Card>
       <CardHeader>
         <SectionTitle icon={<Database />}>Where the numbers come from</SectionTitle>
       </CardHeader>
-      <CardContent>
-        <dl className="grid gap-4 text-base md:grid-cols-3 md:gap-6">
-          <div>
-            <dt className="font-medium text-fg">Your driving and charging</dt>
-            <dd className="mt-1 text-fg-secondary">
-              {mileageSentence(ledger, usage.tracked_from ? date(usage.tracked_from) : null)}
-              {ledger.startAssumed
-                ? ' Add a purchase date to count the months before tracking began and to take your miles from the odometer.'
-                : ''}
-              {ledger.electricityRateAssumed
-                ? ` No charging cost is recorded yet, so charging assumes ${cents(ledger.electricityUsdPerKwh)} per kWh.`
-                : `${
-                    ledger.homePlan
-                      ? ` Home charging is priced by your ${ledger.homePlan.name} plan (${describeHomePlan(ledger.homePlan)}); at the times you charge it has averaged ${cents(ledger.homeUsdPerKwh)} per kWh.`
-                      : ` Home charging has averaged ${cents(ledger.homeUsdPerKwh)} per kWh. Set a price on your home in Settings > Places to price it by your electricity plan.`
-                  } Fast charging has averaged ${cents(ledger.fastUsdPerKwh)} per kWh, what the networks billed you, and is ${Math.round(ledger.fastShare * 100)}% of your energy. Sessions without a price, such as older ones Rivian reported without a location, use your average for their kind.`}
-              {ledger.realWorldFactor !== 1 && ledger.ownKwhPerMi != null && ledger.ownRatedKwhPerMi != null
-                ? ` Your vehicle has taken ${ledger.ownKwhPerMi.toFixed(2)} kWh per mile from the wall against an EPA rating of ${ledger.ownRatedKwhPerMi.toFixed(2)}, so other electric vehicles' ratings are ${ledger.realWorldFactor > 1 ? 'raised' : 'lowered'} ${Math.round(Math.abs(ledger.realWorldFactor - 1) * 100)}% to match how you drive and charge.`
-                : ''}
-            </dd>
-          </div>
-          <div>
-            <dt className="font-medium text-fg">Gas prices</dt>
-            <dd className="mt-1 text-fg-secondary">
-              {fuel.connection_enabled ? (
-                fuel.months.length ? (
-                  <>
-                    U.S. monthly averages from the Energy Information Administration
-                    {fuel.last_updated_at ? `, updated ${date(fuel.last_updated_at)}` : ''}.
-                    {fuel.refresh_failed ? ' The latest refresh failed, so stored prices are in use.' : ''}
-                  </>
-                ) : (
-                  <>Prices could not be fetched, so every month uses a flat price. Set it in Settings, under Ownership.</>
-                )
-              ) : (
+      <CardContent className="grid gap-3">
+        <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <Source
+            label="Odometer"
+            value={
+              ledger.odometerMi != null ? mi(ledger.odometerMi) : ledger.mileageAssumed ? 'No drives yet' : mi(ledger.milesToDate)
+            }
+          >
+            {ledger.mileageAssumed
+              ? `Every month assumes a typical ${mi(ledger.avgMonthlyMiles)}.`
+              : ledger.mileageFromOdometer
+                ? `${mi(ledger.milesToDate)} since purchase, ${mi(ledger.avgMonthlyMiles)} a month on average.`
+                : `Recorded drives since ${usage.tracked_from ? date(usage.tracked_from) : 'tracking began'}.`}
+            {ledger.startAssumed ? ' Add a purchase date to count from the odometer.' : ''}
+          </Source>
+          <Source label="Projected pace" value={`${mi(ledger.projectedMonthlyMiles)}/mo`}>
+            {ledger.paceSource === 'recent' && paceMonths != null
+              ? `Your last ${paceMonths} month${paceMonths === 1 ? '' : 's'} of odometer readings.`
+              : ledger.paceSource === 'assumed'
+                ? 'A typical mileage until drives are recorded.'
+                : 'Your average so far, until three months of odometer readings build up.'}
+          </Source>
+          {ledger.electricityRateAssumed ? (
+            <Source label="Charging" value={`${cents(ledger.electricityUsdPerKwh)}/kWh`}>
+              A typical price until a charging cost is recorded.
+            </Source>
+          ) : (
+            <>
+              <Source label="Home charging" value={`${cents(ledger.homeUsdPerKwh)}/kWh`}>
+                {ledger.homePlan
+                  ? `${ledger.homePlan.name}: ${describeHomePlan(ledger.homePlan)}.`
+                  : 'No plan on your home place; set one in Settings > Places.'}
+              </Source>
+              <Source label="Fast charging" value={`${cents(ledger.fastUsdPerKwh)}/kWh`}>
+                What the networks billed you; {Math.round(ledger.fastShare * 100)}% of your energy.
+              </Source>
+            </>
+          )}
+          <Source label="Efficiency" value={ledger.ownKwhPerMi != null ? `${ledger.ownKwhPerMi.toFixed(2)} kWh/mi` : 'Not yet'}>
+            {ledger.ownKwhPerMi != null && ledger.ownRatedKwhPerMi != null
+              ? `From the wall, against an EPA ${ledger.ownRatedKwhPerMi.toFixed(2)}. ${
+                  factorPercent
+                    ? `Other EVs ${ledger.realWorldFactor > 1 ? 'up' : 'down'} ${factorPercent}% to match.`
+                    : 'Other EVs use their ratings.'
+                }`
+              : 'Other EVs use their ratings until enough charging is recorded.'}
+          </Source>
+          <Source label="All charging" value={`${cents(ledger.electricityUsdPerKwh)}/kWh`}>
+            Home and fast together; other EVs pay your rate for each month.
+          </Source>
+          <Source label="Gas" value={latestGas != null ? `$${latestGas.toFixed(2)}/gal` : 'Flat price'}>
+            {fuel.connection_enabled ? (
+              fuel.months.length ? (
                 <>
-                  Fuel prices is turned off in{' '}
-                  <ExternalConnectionsLink>Settings, under External Connections</ExternalConnectionsLink>.{' '}
-                  {lastMonth
-                    ? `Stored prices through ${formatMonth(Date.parse(lastMonth.month), { long: true })} are still used; later months use a flat price.`
-                    : 'Every month uses a flat price, which you can set in Settings, under Ownership.'}
+                  U.S. monthly average (EIA){fuel.last_updated_at ? `, updated ${date(fuel.last_updated_at)}` : ''}.
+                  {fuel.refresh_failed ? ' Latest refresh failed.' : ''}
                 </>
-              )}
-            </dd>
-          </div>
-          <div>
-            <dt className="font-medium text-fg">Compared vehicles</dt>
-            <dd className="mt-1 text-fg-secondary">
-              Prices, fuel economy, and maintenance for the built-in vehicles are typical U.S. figures, not quotes.
-              {data.vehicle_lookup_enabled ? '' : ' Vehicle lookup is turned off, so added vehicles are entered by hand.'}
-            </dd>
-          </div>
+              ) : (
+                <>Prices could not be fetched; every month uses your flat price.</>
+              )
+            ) : (
+              <>
+                Turned off in <ExternalConnectionsLink>External Connections</ExternalConnectionsLink>.{' '}
+                {lastMonth
+                  ? `Stored through ${formatMonth(Date.parse(lastMonth.month), { long: true })}.`
+                  : 'Every month uses your flat price.'}
+              </>
+            )}
+          </Source>
+          <Source label="Compared vehicles" value="Typical U.S.">
+            Price, fuel economy and maintenance are estimates, not quotes.
+            {data.vehicle_lookup_enabled ? '' : ' Lookup is off; add vehicles by hand.'}
+          </Source>
         </dl>
+        {ledger.impliedPurchaseOdometerMi != null ? (
+          <p className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-3 text-sm text-fg">
+            Your charging before tracking began covers fewer miles than the odometer moved. If it read about{' '}
+            {mi(ledger.impliedPurchaseOdometerMi)} when you bought it, enter that as the odometer at purchase in{' '}
+            {onOpenSettings ? (
+              <button type="button" className="font-medium text-accent underline-offset-2 hover:underline" onClick={onOpenSettings}>
+                Ownership settings
+              </button>
+            ) : (
+              'Ownership settings'
+            )}
+            .
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   );

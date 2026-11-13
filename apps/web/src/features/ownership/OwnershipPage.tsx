@@ -72,8 +72,8 @@ export function OwnershipContent() {
         ) : !ownershipEnabled ? (
           <EmptyState
             icon={<CircleDollarSign />}
-            title="Ownership is turned off"
-            description="Turn it back on in Settings, under Ownership, to see what your Rivian costs to own."
+            title="Ownership is off"
+            description="Ownership is in preview. Turn it on in Settings, under Ownership, to see what your Rivian costs to own."
             action={{ label: 'Open Ownership settings', onClick: () => navigate({ to: '/settings', search: { section: 'ownership' } }) }}
           />
         ) : !effectiveVehicleId ? (
@@ -304,7 +304,7 @@ export function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string;
           secondary={
             horizon === 'projected'
               ? `At ${Math.round(ledger.projectedMonthlyMiles).toLocaleString('en-US')} mi a month`
-              : `${Math.round(ledger.milesToDate).toLocaleString('en-US')} mi since purchase`
+              : `${Math.round(ledger.milesToDate).toLocaleString('en-US')} since purchase`
           }
           dataAccent="series-05"
           valueColor="data"
@@ -353,7 +353,7 @@ export function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string;
 
       <OwnershipBreakdownCard ledger={ledger} colors={colors} span={span} />
       <CostTable ledger={ledger} colors={colors} />
-      <SourcesCard data={data} ledger={ledger} />
+      <SourcesCard data={data} ledger={ledger} {...(data.can_edit ? { onOpenSettings: openSettings } : {})} />
 
       {dialog === 'add' ? (
         <AddVehicleDialog

@@ -72,9 +72,9 @@ export function OwnershipSettingsSection({ vehicles }: { vehicles: Vehicle[] }) 
                 <label htmlFor="ownership-enabled">Show Ownership</label>
               </SettingsCardTitle>
               <p className="mt-1 text-sm text-fg-secondary">
-                The Ownership page adds up what your Rivian has cost and compares it with other vehicles. Turn it off
-                to hide it from your navigation. Your saved prices and schedules are kept, and this only affects your
-                own account.
+                The Ownership page adds up what your Rivian has cost and compares it with other vehicles. It is in
+                preview, so it stays off until you turn it on. Turning it off again hides it from your navigation and
+                keeps your saved prices and schedules. This only affects your own account.
               </p>
             </div>
             <Switch

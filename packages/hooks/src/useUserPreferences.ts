@@ -112,7 +112,7 @@ export function useUpdateOverviewMapExpanded() {
   });
 }
 
-/** Whether the signed-in user shows the Ownership dashboard. On until they turn it off. */
+/** Whether the signed-in user shows the Ownership dashboard. Off until they turn it on, while it is in preview. */
 export function useOwnershipEnabled(): boolean {
-  return useUserPreferences().data?.ownership_enabled !== false;
+  return useUserPreferences().data?.ownership_enabled === true;
 }
