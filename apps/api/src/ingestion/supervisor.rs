@@ -9,6 +9,11 @@
 //! A stopped worker keeps its slot until its task has ended, so a quick
 //! pause and resume never runs two workers (and two Rivian sockets) for one
 //! vehicle: the resumed worker starts only after the old one is gone.
+//!
+//! A worker that returns on its own because a dependency was unavailable
+//! (`WorkerExit::Retry`: the database, Redis, or the collector lock) is
+//! started again after a backoff, so a vehicle does not stay dark until
+//! someone restarts the API. Other exits wait for the action that fixes them.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -17,15 +22,37 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::{config::Config, ingestion::worker::run_vehicle_worker};
+use crate::{
+    config::Config,
+    ingestion::worker::{run_vehicle_worker, WorkerExit},
+};
 
 type WorkerEntry = (JoinHandle<()>, broadcast::Sender<()>);
-type WorkerFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+type WorkerFuture = Pin<Box<dyn Future<Output = WorkerExit> + Send + 'static>>;
 
 /// How long a stopping worker may take to finish before it is aborted.
 const WORKER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// First delay before restarting a worker that exited on a transient failure.
+const WORKER_RETRY_BASE: Duration = Duration::from_secs(5);
+
+/// Longest delay between restarts while the failure persists.
+const WORKER_RETRY_MAX: Duration = Duration::from_secs(300);
+
+/// A worker that ran at least this long before exiting had recovered, so its
+/// next restart starts again from the base delay.
+const WORKER_RETRY_RESET_AFTER: Duration = Duration::from_secs(600);
+
+/// The delay before restart number `attempt` (0-based): doubling from the base,
+/// capped at the maximum.
+fn worker_retry_delay(attempt: u32) -> Duration {
+    WORKER_RETRY_BASE
+        .saturating_mul(2u32.saturating_pow(attempt.min(16)))
+        .min(WORKER_RETRY_MAX)
+}
 
 /// How long a worker waits before re-reading its vehicle's collection setting
 /// after the database could not answer.
@@ -78,18 +105,20 @@ async fn collection_paused(pool: sqlx::PgPool, vehicle_id: Uuid) -> Result<bool,
 
 /// Run the worker only when its vehicle's collection is not paused. A failed
 /// read is retried (never treated as "not paused") until it succeeds or the
-/// worker is told to stop.
+/// worker is told to stop. A paused vehicle is not restarted on its own;
+/// resuming it starts the worker.
 async fn run_unless_paused<C, CF, R, RF>(
     vehicle_id: Uuid,
     mut shutdown: broadcast::Receiver<()>,
     retry: Duration,
     mut is_paused: C,
     run: R,
-) where
+) -> WorkerExit
+where
     C: FnMut() -> CF,
     CF: Future<Output = Result<bool, sqlx::Error>>,
     R: FnOnce(broadcast::Receiver<()>) -> RF,
-    RF: Future<Output = ()>,
+    RF: Future<Output = WorkerExit>,
 {
     loop {
         match is_paused().await {
@@ -99,7 +128,7 @@ async fn run_unless_paused<C, CF, R, RF>(
                     vehicle_id = %vehicle_id,
                     "worker not started: collection is paused for this vehicle"
                 );
-                return;
+                return WorkerExit::NeedsAction;
             }
             Err(error) => {
                 tracing::warn!(
@@ -110,7 +139,7 @@ async fn run_unless_paused<C, CF, R, RF>(
                 );
                 tokio::select! {
                     _ = tokio::time::sleep(retry) => {}
-                    _ = shutdown.recv() => return,
+                    _ = shutdown.recv() => return WorkerExit::Stopped,
                 }
             }
         }
@@ -126,6 +155,20 @@ enum WorkerSlot {
     Stopping {
         restart: bool,
     },
+    /// Exited on a transient failure; a restart of launch `generation` is
+    /// scheduled. A `StartWorker` meanwhile starts it at once, and a
+    /// `StopWorker` cancels the restart.
+    RetryPending {
+        generation: u64,
+    },
+}
+
+/// The latest launch of one vehicle's worker.
+struct Launch {
+    generation: u64,
+    started_at: Instant,
+    /// Transient exits in a row, which sets the next restart's delay.
+    retry_attempt: u32,
 }
 
 /// What a `StartWorker` should do for the vehicle's current slot.
@@ -149,6 +192,10 @@ fn prepare_worker_start(workers: &mut HashMap<Uuid, WorkerSlot>, vehicle_id: Uui
         Some(WorkerSlot::Stopping { restart }) => {
             *restart = true;
             StartAction::Deferred
+        }
+        Some(WorkerSlot::RetryPending { .. }) => {
+            workers.remove(&vehicle_id);
+            StartAction::Spawn
         }
         None => StartAction::Spawn,
     }
@@ -221,6 +268,14 @@ pub struct WorkerSupervisor {
     stopped_tx: mpsc::UnboundedSender<Uuid>,
     stopped_rx: mpsc::UnboundedReceiver<Uuid>,
     stop_timeout: Duration,
+    /// Workers that returned: (vehicle, launch generation, why).
+    exited_tx: mpsc::UnboundedSender<(Uuid, u64, WorkerExit)>,
+    exited_rx: mpsc::UnboundedReceiver<(Uuid, u64, WorkerExit)>,
+    /// Scheduled restarts that are due: (vehicle, generation that exited).
+    retry_tx: mpsc::UnboundedSender<(Uuid, u64)>,
+    retry_rx: mpsc::UnboundedReceiver<(Uuid, u64)>,
+    launches: HashMap<Uuid, Launch>,
+    next_generation: u64,
 }
 
 impl WorkerSupervisor {
@@ -251,6 +306,8 @@ impl WorkerSupervisor {
         cmd_rx: mpsc::Receiver<SupervisorCommand>,
     ) -> Self {
         let (stopped_tx, stopped_rx) = mpsc::unbounded_channel();
+        let (exited_tx, exited_rx) = mpsc::unbounded_channel();
+        let (retry_tx, retry_rx) = mpsc::unbounded_channel();
         WorkerSupervisor {
             launcher,
             workers_enabled,
@@ -259,6 +316,12 @@ impl WorkerSupervisor {
             stopped_tx,
             stopped_rx,
             stop_timeout: WORKER_STOP_TIMEOUT,
+            exited_tx,
+            exited_rx,
+            retry_tx,
+            retry_rx,
+            launches: HashMap::new(),
+            next_generation: 0,
         }
     }
 
@@ -272,6 +335,12 @@ impl WorkerSupervisor {
                     }
                 }
                 Some(vehicle_id) = self.stopped_rx.recv() => self.worker_stopped(vehicle_id),
+                Some((vehicle_id, generation, exit)) = self.exited_rx.recv() => {
+                    self.worker_exited(vehicle_id, generation, exit);
+                }
+                Some((vehicle_id, generation)) = self.retry_rx.recv() => {
+                    self.retry_due(vehicle_id, generation);
+                }
             }
         }
     }
@@ -314,6 +383,11 @@ impl WorkerSupervisor {
                         self.workers
                             .insert(vehicle_id, WorkerSlot::Stopping { restart: false });
                     }
+                    Some(WorkerSlot::RetryPending { .. }) => {
+                        // Removing the slot is enough: the scheduled restart
+                        // finds no pending slot and does nothing.
+                        tracing::info!(vehicle_id = %vehicle_id, "scheduled worker restart cancelled");
+                    }
                     None => {}
                 }
             }
@@ -332,10 +406,84 @@ impl WorkerSupervisor {
 
     fn spawn_worker(&mut self, vehicle_id: Uuid) {
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
-        let handle = tokio::spawn(self.launcher.launch(vehicle_id, shutdown_rx));
+        self.next_generation += 1;
+        let generation = self.next_generation;
+        let retry_attempt = self
+            .launches
+            .get(&vehicle_id)
+            .map_or(0, |launch| launch.retry_attempt);
+        self.launches.insert(
+            vehicle_id,
+            Launch {
+                generation,
+                started_at: Instant::now(),
+                retry_attempt,
+            },
+        );
+        let worker = self.launcher.launch(vehicle_id, shutdown_rx);
+        let exited_tx = self.exited_tx.clone();
+        let handle = tokio::spawn(async move {
+            let exit = worker.await;
+            let _ = exited_tx.send((vehicle_id, generation, exit));
+        });
         self.workers
             .insert(vehicle_id, WorkerSlot::Running((handle, shutdown_tx)));
         tracing::info!(vehicle_id = %vehicle_id, "worker started");
+    }
+
+    /// A worker returned without being told to stop. A transient failure is
+    /// restarted after a backoff; any other exit frees the slot until the
+    /// action that fixes it (a resume, a reconnect) sends `StartWorker`.
+    fn worker_exited(&mut self, vehicle_id: Uuid, generation: u64, exit: WorkerExit) {
+        let Some(launch) = self
+            .launches
+            .get_mut(&vehicle_id)
+            .filter(|launch| launch.generation == generation)
+        else {
+            return;
+        };
+        if !matches!(self.workers.get(&vehicle_id), Some(WorkerSlot::Running(_))) {
+            // A stop already owns the slot; `worker_stopped` handles it.
+            return;
+        }
+        if exit != WorkerExit::Retry || !self.workers_enabled {
+            self.workers.remove(&vehicle_id);
+            tracing::info!(vehicle_id = %vehicle_id, ?exit, "worker exited");
+            return;
+        }
+        if launch.started_at.elapsed() >= WORKER_RETRY_RESET_AFTER {
+            launch.retry_attempt = 0;
+        }
+        let delay = worker_retry_delay(launch.retry_attempt);
+        launch.retry_attempt = launch.retry_attempt.saturating_add(1);
+        self.workers
+            .insert(vehicle_id, WorkerSlot::RetryPending { generation });
+        let retry_tx = self.retry_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            let _ = retry_tx.send((vehicle_id, generation));
+        });
+        tracing::warn!(
+            vehicle_id = %vehicle_id,
+            retry_seconds = delay.as_secs(),
+            "worker exited on a transient failure; restarting it after a delay"
+        );
+    }
+
+    /// A scheduled restart is due. It runs only if nothing (a start, a stop, a
+    /// newer exit) has replaced the pending slot since it was scheduled.
+    fn retry_due(&mut self, vehicle_id: Uuid, generation: u64) {
+        let pending = matches!(
+            self.workers.get(&vehicle_id),
+            Some(WorkerSlot::RetryPending { generation: pending }) if *pending == generation
+        );
+        if !pending {
+            return;
+        }
+        self.workers.remove(&vehicle_id);
+        if self.workers_enabled {
+            self.spawn_worker(vehicle_id);
+        }
     }
 
     /// The stopping worker's task has ended: free the slot and run a start
@@ -369,6 +517,7 @@ mod tests {
         fn launch(&self, _vehicle_id: Uuid, mut shutdown: broadcast::Receiver<()>) -> WorkerFuture {
             Box::pin(async move {
                 let _ = shutdown.recv().await;
+                WorkerExit::Stopped
             })
         }
     }
@@ -408,7 +557,10 @@ mod tests {
             rx,
             Duration::from_millis(1),
             || async { Ok(true) },
-            move |_| async move { ran_clone.store(true, Ordering::SeqCst) },
+            move |_| async move {
+                ran_clone.store(true, Ordering::SeqCst);
+                WorkerExit::Stopped
+            },
         )
         .await;
         assert!(!ran.load(Ordering::SeqCst));
@@ -424,7 +576,10 @@ mod tests {
             rx,
             Duration::from_millis(1),
             || async { Ok(false) },
-            move |_| async move { ran_clone.store(true, Ordering::SeqCst) },
+            move |_| async move {
+                ran_clone.store(true, Ordering::SeqCst);
+                WorkerExit::Stopped
+            },
         )
         .await;
         assert!(ran.load(Ordering::SeqCst));
@@ -451,7 +606,10 @@ mod tests {
                     }
                 }
             },
-            move |_| async move { ran_clone.store(true, Ordering::SeqCst) },
+            move |_| async move {
+                ran_clone.store(true, Ordering::SeqCst);
+                WorkerExit::Stopped
+            },
         )
         .await;
         assert_eq!(checks.load(Ordering::SeqCst), 3);
@@ -474,7 +632,10 @@ mod tests {
                 rx,
                 Duration::from_secs(3600),
                 || async { Err(sqlx::Error::PoolTimedOut) },
-                move |_| async move { ran_clone.store(true, Ordering::SeqCst) },
+                move |_| async move {
+                    ran_clone.store(true, Ordering::SeqCst);
+                    WorkerExit::Stopped
+                },
             ),
         )
         .await
@@ -671,6 +832,7 @@ mod tests {
                 let _ = shutdown.recv().await;
                 tokio::time::sleep(stop_delay).await;
                 active.fetch_sub(1, Ordering::SeqCst);
+                WorkerExit::Stopped
             })
         }
     }
@@ -808,5 +970,224 @@ mod tests {
         })
         .await
         .expect("all workers should receive shutdown within 2s");
+    }
+
+    // ── A worker that exits on its own ────────────────────────────────────────
+
+    /// What one launch of a scripted worker does.
+    #[derive(Clone, Copy)]
+    enum Step {
+        /// Run for this long, then return this exit.
+        ExitAfter(Duration, WorkerExit),
+        /// Run until told to stop.
+        Park,
+    }
+
+    /// Workers that follow `steps` in order, one step per launch; launches
+    /// past the end park.
+    struct ScriptedLauncher {
+        steps: Vec<Step>,
+        launched: AtomicU32,
+    }
+
+    impl ScriptedLauncher {
+        fn new(steps: Vec<Step>) -> Arc<Self> {
+            Arc::new(Self {
+                steps,
+                launched: AtomicU32::new(0),
+            })
+        }
+
+        fn launched(&self) -> u32 {
+            self.launched.load(Ordering::SeqCst)
+        }
+    }
+
+    impl WorkerLauncher for ScriptedLauncher {
+        fn launch(&self, _vehicle_id: Uuid, mut shutdown: broadcast::Receiver<()>) -> WorkerFuture {
+            let index = self.launched.fetch_add(1, Ordering::SeqCst) as usize;
+            let step = self.steps.get(index).copied().unwrap_or(Step::Park);
+            Box::pin(async move {
+                match step {
+                    Step::ExitAfter(ran_for, exit) => {
+                        tokio::time::sleep(ran_for).await;
+                        exit
+                    }
+                    Step::Park => {
+                        let _ = shutdown.recv().await;
+                        WorkerExit::Stopped
+                    }
+                }
+            })
+        }
+    }
+
+    fn start_supervisor(launcher: Arc<ScriptedLauncher>) -> SupervisorHandle {
+        let (handle, mut sup) = make_supervisor(launcher, HashMap::new());
+        tokio::spawn(async move { sup.run().await });
+        handle
+    }
+
+    const RETRY_NOW: Step = Step::ExitAfter(Duration::ZERO, WorkerExit::Retry);
+
+    #[test]
+    fn retry_delay_doubles_from_the_base_and_is_capped() {
+        let delays: Vec<u64> = (0..8).map(|n| worker_retry_delay(n).as_secs()).collect();
+        assert_eq!(delays, [5, 10, 20, 40, 80, 160, 300, 300]);
+        assert_eq!(worker_retry_delay(u32::MAX), WORKER_RETRY_MAX);
+    }
+
+    #[tokio::test]
+    async fn a_paused_vehicle_reports_that_it_needs_a_resume() {
+        let (_tx, rx) = broadcast::channel(1);
+        let exit = run_unless_paused(
+            Uuid::new_v4(),
+            rx,
+            Duration::from_millis(1),
+            || async { Ok(true) },
+            |_| async { WorkerExit::Stopped },
+        )
+        .await;
+        assert_eq!(exit, WorkerExit::NeedsAction);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_transient_exit_is_restarted_with_a_growing_delay() {
+        let vehicle_id = Uuid::new_v4();
+        let launcher = ScriptedLauncher::new(vec![RETRY_NOW, RETRY_NOW]);
+        let handle = start_supervisor(launcher.clone());
+
+        handle
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
+        wait_until(|| launcher.launched() == 1).await;
+
+        // First restart after the 5s base delay, not before.
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        assert_eq!(launcher.launched(), 1);
+        wait_until(|| launcher.launched() == 2).await;
+
+        // The second exit in a row waits twice as long.
+        tokio::time::sleep(Duration::from_secs(9)).await;
+        assert_eq!(launcher.launched(), 2);
+        wait_until(|| launcher.launched() == 3).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_delay_resets_after_a_worker_ran_for_a_while() {
+        let vehicle_id = Uuid::new_v4();
+        let ran_long = Step::ExitAfter(WORKER_RETRY_RESET_AFTER, WorkerExit::Retry);
+        let launcher = ScriptedLauncher::new(vec![RETRY_NOW, RETRY_NOW, ran_long]);
+        let handle = start_supervisor(launcher.clone());
+
+        handle
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
+        // Two quick exits: restarts after 5s, then 10s.
+        wait_until(|| launcher.launched() == 3).await;
+
+        // The third launch ran long enough to count as recovered, so its
+        // restart comes after the base delay again, not 20s.
+        tokio::time::sleep(WORKER_RETRY_RESET_AFTER + Duration::from_secs(4)).await;
+        assert_eq!(launcher.launched(), 3);
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(launcher.launched(), 4);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_exit_that_needs_action_is_not_restarted() {
+        let vehicle_id = Uuid::new_v4();
+        let launcher = ScriptedLauncher::new(vec![Step::ExitAfter(
+            Duration::ZERO,
+            WorkerExit::NeedsAction,
+        )]);
+        let handle = start_supervisor(launcher.clone());
+
+        handle
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
+        wait_until(|| launcher.launched() == 1).await;
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        assert_eq!(launcher.launched(), 1);
+
+        // The action that fixes it (a resume, a reconnect) starts it again.
+        handle
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
+        wait_until(|| launcher.launched() == 2).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_cancels_a_scheduled_restart() {
+        let vehicle_id = Uuid::new_v4();
+        let launcher = ScriptedLauncher::new(vec![RETRY_NOW]);
+        let handle = start_supervisor(launcher.clone());
+
+        handle
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
+        wait_until(|| launcher.launched() == 1).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        handle
+            .send(SupervisorCommand::StopWorker { vehicle_id })
+            .await;
+
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        assert_eq!(launcher.launched(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_start_during_the_delay_runs_at_once_and_only_once() {
+        let vehicle_id = Uuid::new_v4();
+        let launcher = ScriptedLauncher::new(vec![RETRY_NOW]);
+        let handle = start_supervisor(launcher.clone());
+
+        handle
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
+        wait_until(|| launcher.launched() == 1).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        handle
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
+        wait_until(|| launcher.launched() == 2).await;
+
+        // The restart that was scheduled for the first exit must not start a
+        // second worker next to the one just started.
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        assert_eq!(launcher.launched(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_worker_stopped_on_request_is_not_restarted() {
+        let vehicle_id = Uuid::new_v4();
+        let launcher = ScriptedLauncher::new(vec![Step::Park]);
+        let handle = start_supervisor(launcher.clone());
+
+        handle
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
+        wait_until(|| launcher.launched() == 1).await;
+        handle
+            .send(SupervisorCommand::StopWorker { vehicle_id })
+            .await;
+
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        assert_eq!(launcher.launched(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn no_restart_once_the_rivian_connection_is_off() {
+        let vehicle_id = Uuid::new_v4();
+        let launcher = ScriptedLauncher::new(vec![RETRY_NOW]);
+        let (handle, mut sup) = make_supervisor(launcher.clone(), HashMap::new());
+        assert!(sup.handle_command(SupervisorCommand::StartWorker { vehicle_id }));
+        sup.workers_enabled = false;
+        // Keep `handle` alive so the loop runs and sees the worker's exit.
+        tokio::spawn(async move { sup.run().await });
+
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        assert_eq!(launcher.launched(), 1);
+        drop(handle);
     }
 }
