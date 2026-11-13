@@ -269,7 +269,7 @@ export function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string;
         ) : null}
       </div>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <SensorChipSummary
           title="Total Spent"
           value={formatUsd(own.totals.spent)}
@@ -294,13 +294,32 @@ export function OwnershipDashboard({ vehicleId, ownLabel }: { vehicleId: string;
           valueColor="data"
         />
         <SensorChipSummary
-          title="Rank"
-          value={rank.of > 1 ? ordinal(rank.rank) : 'N/A'}
-          icon="lucide:trophy"
-          secondary={rank.of > 1 ? `Of ${rank.of} by net cost` : 'Turn on a vehicle to compare'}
-          dataAccent="series-02"
+          title={horizon === 'projected' ? 'Odometer at End' : 'Odometer'}
+          value={
+            ledger.odometerAtEndMi == null
+              ? 'N/A'
+              : `${Math.round(horizon === 'projected' ? ledger.odometerAtEndMi : (ledger.odometerMi ?? 0)).toLocaleString('en-US')} mi`
+          }
+          icon="lucide:gauge"
+          secondary={
+            horizon === 'projected'
+              ? `At ${Math.round(ledger.projectedMonthlyMiles).toLocaleString('en-US')} mi a month`
+              : `${Math.round(ledger.milesToDate).toLocaleString('en-US')} mi since purchase`
+          }
+          dataAccent="series-05"
           valueColor="data"
         />
+        {/* Phones show two tiles a row, so the fifth takes the whole row. */}
+        <div className="col-span-2 grid lg:col-span-1">
+          <SensorChipSummary
+            title="Rank"
+            value={rank.of > 1 ? ordinal(rank.rank) : 'N/A'}
+            icon="lucide:trophy"
+            secondary={rank.of > 1 ? `Of ${rank.of} by net cost` : 'Turn on a vehicle to compare'}
+            dataAccent="series-02"
+            valueColor="data"
+          />
+        </div>
       </div>
 
       <OwnershipCompareCard

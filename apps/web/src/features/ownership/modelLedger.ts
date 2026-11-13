@@ -12,6 +12,7 @@ import {
   DEFAULT_FAST_CHARGING_USD_PER_KWH,
   MAX_REAL_WORLD_FACTOR,
   MIN_MILES_FOR_REAL_WORLD_FACTOR,
+  MIN_PACE_DAYS,
   MIN_REAL_WORLD_FACTOR,
   OWN_SCHEDULE_KEY,
   OWN_VEHICLE_ID,
@@ -109,6 +110,18 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
       ? milesToDate / ownedDays
       : trackedMiles / trackedDays;
 
+  // The projection's pace. Odometer readings across at least a few months
+  // say how much the vehicle is driven now, measured rather than inferred, so
+  // they lead. The average since purchase stands in until there are enough,
+  // and it depends on the odometer at purchase being right.
+  const readings = usage.odometer_readings ?? null;
+  const readingDays = readings ? (Date.parse(readings.last_at) - Date.parse(readings.first_at)) / DAY_MS : 0;
+  const recentDailyMiles =
+    readings && readingDays >= MIN_PACE_DAYS ? Math.max(0, readings.last_mi - readings.first_mi) / readingDays : null;
+  const projectedDailyMiles = recentDailyMiles ?? avgDailyMiles;
+  const paceSource: Ledger['paceSource'] =
+    recentDailyMiles != null ? 'recent' : mileageAssumed ? 'assumed' : mileageFromOdometer ? 'since_purchase' : 'recorded';
+
   const gasPrice = createGasPriceResolver(
     data.fuel_prices.months,
     settings.gas_price_usd_per_gallon,
@@ -202,6 +215,28 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
       ? Math.min(MAX_REAL_WORLD_FACTOR, Math.max(MIN_REAL_WORLD_FACTOR, ownKwhPerMi / ownRatedKwhPerMi))
       : 1;
 
+  // Before readings began, charging energy says roughly how far the vehicle
+  // went. Far fewer miles than the odometer moved suggests it had miles on it
+  // when bought (or that some charging went unrecorded), which the owner can
+  // settle by entering the odometer at purchase.
+  let impliedPurchaseOdometerMi: number | null = null;
+  if (readings && settings.purchase_odometer_mi == null && purchaseMs != null && useCovered && ownKwhPerMi) {
+    const firstAt = Date.parse(readings.first_at);
+    const firstKey = monthKey(firstAt);
+    const monthStartMs = monthStart(firstAt);
+    const firstMonthShare = (firstAt - monthStartMs) / Math.max(1, nextMonth(monthStartMs) - monthStartMs);
+    const kwhBefore = recorded.reduce((total, row) => {
+      const key = row.month.slice(0, 7);
+      if (key < firstKey) return total + row.charged_kwh;
+      return key === firstKey ? total + row.charged_kwh * firstMonthShare : total;
+    }, 0);
+    const chargedMilesBefore = kwhBefore / ownKwhPerMi;
+    const gap = readings.first_mi - chargedMilesBefore;
+    if (firstAt > startMs && gap > 1_000 && gap > readings.first_mi * 0.2) {
+      impliedPurchaseOdometerMi = Math.round(gap / 100) * 100;
+    }
+  }
+
   // What a kWh costs in months without charging sessions, and in the
   // projection: the same months the tracked vehicle's per-mile cost comes from.
   const projectedUsdPerKwh = perMileBase.kwh > 0 && perMileBase.cost > 0 ? perMileBase.cost / perMileBase.kwh : electricityUsdPerKwh;
@@ -210,7 +245,7 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
   const ownEnergy: number[] = [];
   spans.forEach((span, index) => {
     const unrecorded = unrecordedMiles[index] as number;
-    const projectedMiles = avgDailyMiles * span.futureDays;
+    const projectedMiles = projectedDailyMiles * span.futureDays;
     const price = gasPrice(span.key);
     // That month's own rates where it had priced sessions of the kind, else the averages.
     const row = span.actual;
@@ -286,6 +321,14 @@ export function buildLedger(input: OwnershipResponse, options: BuildLedgerOption
     periods,
     vehicles,
     avgMonthlyMiles: avgDailyMiles * DAYS_PER_MONTH,
+    projectedMonthlyMiles: projectedDailyMiles * DAYS_PER_MONTH,
+    recentMonthlyMiles: recentDailyMiles != null ? recentDailyMiles * DAYS_PER_MONTH : null,
+    recentDays: recentDailyMiles != null ? readingDays : null,
+    paceSource,
+    odometerMi: usage.odometer_mi ?? null,
+    odometerAtEndMi:
+      usage.odometer_mi != null ? usage.odometer_mi + projectedDailyMiles * (Math.max(0, endMs - nowMs) / DAY_MS) : null,
+    impliedPurchaseOdometerMi,
     mileageAssumed,
     mileageFromOdometer,
     milesToDate,

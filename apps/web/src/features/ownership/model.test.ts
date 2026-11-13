@@ -170,6 +170,44 @@ describe('buildLedger', () => {
       expect(ledger.realWorldFactor).toBeCloseTo(1_000 / 2_800 / 0.3);
     });
 
+    it('projects at the pace of the last year of odometer readings once they span enough days', () => {
+      const data = withOdometer(9_000);
+      // 1,830 mi from July 1 to October 1: 92 days.
+      data.usage.odometer_readings = { first_at: '2025-07-01T00:00:00Z', first_mi: 7_170, last_at: '2025-10-01T00:00:00Z', last_mi: 9_000 };
+      const ledger = build(data, 'projected');
+      expect(ledger.paceSource).toBe('recent');
+      expect(ledger.recentMonthlyMiles).toBeCloseTo((1_830 / 92) * 30.44);
+      expect(ledger.projectedMonthlyMiles).toBeCloseTo((1_830 / 92) * 30.44);
+      // The past still uses the average since purchase.
+      expect(ledger.avgMonthlyMiles).toBeCloseTo((9_000 / 273) * 30.44);
+      const futureDays = (ledger.endMs - ledger.nowMs) / 86_400_000;
+      expect(find(ledger, 'own').totals.miles).toBeCloseTo(9_000 + (1_830 / 92) * futureDays);
+      expect(ledger.odometerAtEndMi).toBeCloseTo(9_000 + (1_830 / 92) * futureDays);
+    });
+
+    it('keeps the average since purchase until the readings span enough days', () => {
+      const data = withOdometer(9_000);
+      data.usage.odometer_readings = { first_at: '2025-08-01T00:00:00Z', first_mi: 8_000, last_at: '2025-10-01T00:00:00Z', last_mi: 9_000 };
+      const ledger = build(data, 'projected');
+      expect(ledger.paceSource).toBe('since_purchase');
+      expect(ledger.projectedMonthlyMiles).toBeCloseTo(ledger.avgMonthlyMiles);
+    });
+
+    it('suggests an odometer at purchase when charging before tracking covers far fewer miles', () => {
+      const data = withOdometer(9_000);
+      // Whole-month readings from July; before that only 3,000 kWh (6,000 mi at 0.5 kWh/mi) against 6,000 on the odometer.
+      const odometer: Record<string, [number, number]> = { '07': [6_000, 7_000], '08': [7_000, 8_000], '09': [8_000, 9_000] };
+      data.usage.months = data.usage.months.map((row) => {
+        const reading = odometer[row.month.slice(5, 7)];
+        return reading ? { ...row, odometer_start_mi: reading[0], odometer_end_mi: reading[1] } : row;
+      });
+      data.usage.odometer_readings = { first_at: '2025-07-01T00:00:00Z', first_mi: 6_000, last_at: '2025-10-01T00:00:00Z', last_mi: 9_000 };
+      const halfCharged = { ...data, usage: { ...data.usage, months: data.usage.months.map((row) => (row.month < '2025-07' ? { ...row, charged_kwh: 250, priced_kwh: 250, charging_cost_usd: 30 } : row)) } };
+      // Covered months: 1,500 kWh over 3,000 mi is 0.5 kWh/mi; before July 1,500 kWh is 3,000 mi.
+      expect(build(halfCharged).impliedPurchaseOdometerMi).toBe(3_000);
+      expect(build(data).impliedPurchaseOdometerMi).toBeNull();
+    });
+
     it('subtracts the odometer reading at purchase', () => {
       const ledger = build(withOdometer(9_000, { purchase_odometer_mi: 3_000 }));
       expect(find(ledger, 'own').totals.miles).toBeCloseTo(6_000);

@@ -133,6 +133,14 @@ interface MapApi {
   dragRotate?: { enable(): void; disable(): void };
 }
 
+/**
+ * Edge overlays (the credits) sit 0.25rem in from the visible edge. A host that
+ * draws the map wider than the frame showing it, and clips the overflow, sets
+ * `--rm-map-overlay-inset-x` to the clipped width on each side.
+ */
+const OVERLAY_EDGE_INSET = 'calc(var(--rm-map-overlay-inset-x, 0px) + 0.25rem)';
+const OVERLAY_MAX_WIDTH = 'calc(100% - 2 * var(--rm-map-overlay-inset-x, 0px) - 0.5rem)';
+
 const FALLBACK_ROUTE_COLORS = [
   CHART_COLORS.sky,
   CHART_COLORS.emerald,
@@ -913,9 +921,13 @@ export function TripMapChart({
         />
         {basemap.enabled && ((basemap.attributions?.length ?? 0) > 0 || basemap.attribution) ? (
           compactAttribution ? (
-            <div className={compactAttributionPlacement === 'top-left'
-              ? 'absolute left-1 top-1 flex max-w-[calc(100%-0.5rem)] flex-row-reverse items-start justify-end gap-1'
-              : 'absolute bottom-1 right-1 flex max-w-[calc(100%-0.5rem)] items-end justify-end gap-1'}
+            <div
+              className={compactAttributionPlacement === 'top-left'
+                ? 'absolute top-1 flex flex-row-reverse items-start justify-end gap-1'
+                : 'absolute bottom-1 flex items-end justify-end gap-1'}
+              style={compactAttributionPlacement === 'top-left'
+                ? { left: OVERLAY_EDGE_INSET, maxWidth: OVERLAY_MAX_WIDTH }
+                : { right: OVERLAY_EDGE_INSET, maxWidth: OVERLAY_MAX_WIDTH }}
             >
               {attributionOpen ? (
                 <div id={attributionId} className="rounded bg-bg/90 px-1.5 py-0.5 text-right text-[10px] leading-snug text-fg-tertiary">
@@ -934,7 +946,7 @@ export function TripMapChart({
               </button>
             </div>
           ) : (
-            <div className="absolute bottom-1 right-1 max-w-[calc(100%-0.5rem)] rounded bg-bg/80 px-1.5 py-0.5 text-right text-[10px] text-fg-tertiary">
+            <div className="absolute bottom-1 rounded bg-bg/80 px-1.5 py-0.5 text-right text-[10px] text-fg-tertiary" style={{ right: OVERLAY_EDGE_INSET, maxWidth: OVERLAY_MAX_WIDTH }}>
               {attributionLinks}
             </div>
           )

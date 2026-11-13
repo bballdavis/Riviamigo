@@ -41,6 +41,17 @@ pub struct Usage {
     /// last recorded trip. The ledger takes total miles from this, because
     /// recorded trips miss everything driven while nothing was collecting.
     pub odometer_mi: Option<f64>,
+    /// The earliest and latest odometer readings of the last 365 days, which
+    /// set the pace the projection extrapolates.
+    pub odometer_readings: Option<OdometerReadings>,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct OdometerReadings {
+    pub first_at: DateTime<Utc>,
+    pub first_mi: f64,
+    pub last_at: DateTime<Utc>,
+    pub last_mi: f64,
 }
 
 /// One time-of-use window of an electricity plan, in minutes after local midnight.
@@ -184,10 +195,46 @@ pub async fn load_usage(pool: &PgPool, vehicle_id: Uuid) -> Result<Usage, AppErr
     .fetch_one(pool)
     .await?;
 
+    let odometer_readings = sqlx::query_as::<_, OdometerReadings>(
+        "WITH readings AS (
+           SELECT started_at AS at, start_odometer_mi AS mi FROM riviamigo.trips
+           WHERE vehicle_id = $1 AND started_at > now() - interval '365 days'
+             AND start_odometer_mi BETWEEN 0 AND $2
+           UNION ALL
+           SELECT ended_at, end_odometer_mi FROM riviamigo.trips
+           WHERE vehicle_id = $1 AND ended_at > now() - interval '365 days'
+             AND end_odometer_mi BETWEEN 0 AND $2
+         ), first AS (
+           SELECT at, mi FROM readings ORDER BY at LIMIT 1
+         ), last_trip AS (
+           SELECT at, mi FROM readings ORDER BY at DESC LIMIT 1
+         ), live AS (
+           SELECT odometer_miles_ts AS at, odometer_miles AS mi
+           FROM riviamigo.vehicle_latest_status
+           WHERE vehicle_id = $1 AND odometer_miles_ts IS NOT NULL
+             AND odometer_miles BETWEEN 0 AND $2
+         ), last AS (
+           -- The live reading when it is newer and not a glitch far past the trips.
+           SELECT CASE WHEN live.at > last_trip.at AND live.mi BETWEEN last_trip.mi AND last_trip.mi + 10000
+                       THEN live.at ELSE last_trip.at END AS at,
+                  CASE WHEN live.at > last_trip.at AND live.mi BETWEEN last_trip.mi AND last_trip.mi + 10000
+                       THEN live.mi ELSE last_trip.mi END AS mi
+           FROM last_trip LEFT JOIN live ON TRUE
+         )
+         SELECT first.at AS first_at, first.mi AS first_mi, last.at AS last_at, last.mi AS last_mi
+         FROM first, last
+         WHERE last.at > first.at AND last.mi >= first.mi",
+    )
+    .bind(vehicle_id)
+    .bind(MAX_ODOMETER_MI)
+    .fetch_optional(pool)
+    .await?;
+
     Ok(Usage {
         months,
         tracked_from,
         tracked_to,
         odometer_mi,
+        odometer_readings,
     })
 }

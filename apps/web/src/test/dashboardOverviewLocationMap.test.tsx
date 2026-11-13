@@ -157,6 +157,20 @@ describe('vehicle overview location map', () => {
     expect(screen.getByTestId('overview-stats').children).toHaveLength(5);
   });
 
+  it('keeps the map canvas at the expanded width so expanding never resizes it', () => {
+    renderOverview();
+    fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));
+    const canvas = screen.getByTestId('overview-map-canvas');
+    const collapsedClass = canvas.className;
+    expect(collapsedClass).toContain('@min-[58rem]/overview:w-[28.25rem]');
+    expect(collapsedClass).toContain('-translate-x-1/2');
+    expect(canvas.style.getPropertyValue('--rm-map-overlay-inset-x')).toBe('calc((100% - 100cqw) / 2)');
+    const expand = screen.getByTestId('overview-map-expand');
+    expect(expand.className).toContain('text-accent');
+    fireEvent.click(expand);
+    expect(screen.getByTestId('overview-map-canvas').className).toBe(collapsedClass);
+  });
+
   it('marks the vehicle with its own artwork outlined in the accent color, turned to its heading', () => {
     renderOverview();
     fireEvent.click(screen.getByRole('button', { name: 'Current location map' }));

@@ -7,11 +7,39 @@ import { formatMonth } from './OwnershipChart';
 import { ExternalConnectionsLink } from './OwnershipDialogs';
 import { SectionTitle } from './OwnershipPrimitives';
 
+const mi = (value: number) => `${Math.round(value).toLocaleString('en-US')} mi`;
+
+/** Where the miles come from, the pace the projection follows, and any doubt about the start. */
+function mileageSentence(ledger: Ledger, trackedFrom: string | null): string {
+  if (ledger.mileageAssumed) return `No drives are recorded yet, so every month assumes a typical ${mi(ledger.avgMonthlyMiles)} a month.`;
+  const parts: string[] = [];
+  if (ledger.mileageFromOdometer && ledger.odometerMi != null) {
+    parts.push(
+      `Your odometer reads ${mi(ledger.odometerMi)}, ${mi(ledger.milesToDate)} since purchase, an average of ${mi(ledger.avgMonthlyMiles)} a month. Months with odometer readings use them; the rest of the miles fill the lighter months.`,
+    );
+  } else {
+    parts.push(`Recorded since ${trackedFrom ?? 'tracking began'}; earlier months use your average of ${mi(ledger.avgMonthlyMiles)} a month.`);
+  }
+  if (ledger.paceSource === 'recent' && ledger.recentMonthlyMiles != null && ledger.recentDays != null) {
+    const months = Math.max(1, Math.round(ledger.recentDays / 30.44));
+    parts.push(
+      `Over the last ${months} month${months === 1 ? '' : 's'} of odometer readings you drove ${mi(ledger.recentMonthlyMiles)} a month, and future months follow that pace.`,
+    );
+  } else {
+    parts.push(`Future months follow your average of ${mi(ledger.projectedMonthlyMiles)} a month.`);
+  }
+  if (ledger.impliedPurchaseOdometerMi != null) {
+    parts.push(
+      `Your charging before tracking began covers fewer miles than the odometer moved. If it read about ${mi(ledger.impliedPurchaseOdometerMi)} when you bought it, enter that as the odometer at purchase.`,
+    );
+  }
+  return parts.join(' ');
+}
+
 export function SourcesCard({ data, ledger }: { data: OwnershipResponse; ledger: Ledger }) {
   const { fuel_prices: fuel, usage } = data;
   const date = (value: string) =>
     new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  const miles = `${Math.round(ledger.avgMonthlyMiles).toLocaleString('en-US')} mi a month`;
   const lastMonth = fuel.months[fuel.months.length - 1];
   return (
     <Card>
@@ -23,11 +51,7 @@ export function SourcesCard({ data, ledger }: { data: OwnershipResponse; ledger:
           <div>
             <dt className="font-medium text-fg">Your driving and charging</dt>
             <dd className="mt-1 text-fg-secondary">
-              {ledger.mileageAssumed
-                ? `No drives are recorded yet, so every month assumes a typical ${miles}.`
-                : ledger.mileageFromOdometer
-                  ? `Your odometer shows ${Math.round(ledger.milesToDate).toLocaleString('en-US')} mi since purchase. Recorded drives place those miles by month; the rest fill the lighter months, and future months use your average of ${miles}.`
-                  : `Recorded since ${usage.tracked_from ? date(usage.tracked_from) : 'tracking began'}; earlier and future months use your average of ${miles}.`}
+              {mileageSentence(ledger, usage.tracked_from ? date(usage.tracked_from) : null)}
               {ledger.startAssumed
                 ? ' Add a purchase date to count the months before tracking began and to take your miles from the odometer.'
                 : ''}

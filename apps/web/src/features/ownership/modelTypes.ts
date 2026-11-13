@@ -107,7 +107,23 @@ export interface Ledger {
   projectedFromMs: number | null;
   periods: LedgerPeriod[];
   vehicles: VehicleLedger[];
+  /** Average miles a month since the ledger start; fills the months before tracking. */
   avgMonthlyMiles: number;
+  /** Miles a month the projection drives. */
+  projectedMonthlyMiles: number;
+  /** Pace over the last year of odometer readings, once they span enough days. */
+  recentMonthlyMiles: number | null;
+  recentDays: number | null;
+  /** Where the projection's pace comes from. */
+  paceSource: 'recent' | 'since_purchase' | 'recorded' | 'assumed';
+  /** The latest odometer reading, and where the projection takes it by the ledger's end. */
+  odometerMi: number | null;
+  odometerAtEndMi: number | null;
+  /**
+   * The odometer at purchase that charging history before tracking suggests,
+   * when none is entered and it differs a lot from zero.
+   */
+  impliedPurchaseOdometerMi: number | null;
   /** True when no driving has been recorded and a typical mileage is assumed. */
   mileageAssumed: boolean;
   /** True when total miles come from the odometer rather than recorded drives alone. */

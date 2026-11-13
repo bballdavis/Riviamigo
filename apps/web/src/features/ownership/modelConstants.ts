@@ -28,6 +28,8 @@ export const DEFAULT_FAST_CHARGING_USD_PER_KWH = 0.45;
 export const MIN_REAL_WORLD_FACTOR = 0.8;
 export const MAX_REAL_WORLD_FACTOR = 1.5;
 export const MIN_MILES_FOR_REAL_WORLD_FACTOR = 500;
+/** Days of odometer readings needed before the projection follows their pace. */
+export const MIN_PACE_DAYS = 90;
 /** Used when neither stored prices nor a flat price are available. */
 export const DEFAULT_GAS_USD_PER_GALLON = 3.5;
 export const DEFAULT_PREMIUM_SURCHARGE_USD = 0.8;

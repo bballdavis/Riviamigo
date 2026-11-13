@@ -1802,6 +1802,8 @@ export interface OwnershipUsage {
   tracked_from: string | null;
   tracked_to: string | null;
   odometer_mi: number | null;
+  /** Earliest and latest odometer readings of the last 365 days; missing on older responses. */
+  odometer_readings?: { first_at: string; first_mi: number; last_at: string; last_mi: number } | null;
 }
 
 export interface OwnershipFuelPriceMonth {

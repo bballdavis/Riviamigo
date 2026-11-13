@@ -65,6 +65,14 @@ const DEFAULT_LAYOUT_COLUMNS = '@min-[34rem]/overview:grid-cols-[11.25rem_minmax
 // The SoC column shrinks to its battery rail (rail width plus panel padding)
 // and the map column takes the freed width; the vehicle column keeps `1fr`.
 const EXPANDED_LAYOUT_COLUMNS = '@min-[34rem]/overview:grid-cols-[3.75rem_minmax(0,1fr)_16.25rem] @min-[58rem]/overview:grid-cols-[5.75rem_minmax(22rem,1fr)_28.25rem]';
+// The map canvas always keeps the expanded map column's width (the last
+// track above) and sits centered in its panel, which clips the overflow.
+// Expanding then only reveals more of a map that is already drawn, instead of
+// resizing and redrawing the WebGL canvas on every frame of the transition.
+const MAP_CANVAS_WIDTH = 'w-full @min-[34rem]/overview:w-[16.25rem] @min-[58rem]/overview:w-[28.25rem]';
+// Edge overlays drawn by the map (its credits) shift in by the clipped
+// overflow so they stay inside the panel. `100cqw` is the panel's width.
+const MAP_CANVAS_STYLE = { '--rm-map-overlay-inset-x': 'calc((100% - 100cqw) / 2)' } as React.CSSProperties;
 const SOC_DEFAULT_COLUMNS = '@min-[34rem]/overview:grid-cols-[2.25rem_minmax(0,1fr)] @min-[58rem]/overview:grid-cols-[3.75rem_minmax(0,1fr)]';
 const SOC_RAIL_ONLY_COLUMNS = '@min-[34rem]/overview:grid-cols-[minmax(0,1fr)]';
 
@@ -329,7 +337,7 @@ export function CurrentVehicleStatePanel({
           <div
             ref={locationPanelRef}
             data-testid="overview-location-panel"
-            className={`relative overflow-hidden rounded-xl border border-border bg-bg-surface transition-[min-height] duration-300 motion-reduce:transition-none @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-r-none @min-[34rem]/overview:border-r-0 ${mapExpanded ? 'min-h-96' : 'min-h-60'}`}
+            className={`@container relative overflow-hidden rounded-xl border border-border bg-bg-surface @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-r-none @min-[34rem]/overview:border-r-0 ${mapExpanded ? 'min-h-96' : 'min-h-60'}`}
           >
             <button
               type="button"
@@ -338,11 +346,11 @@ export function CurrentVehicleStatePanel({
               aria-pressed={mapExpanded}
               title={mapExpanded ? 'Collapse map' : 'Expand map'}
               onClick={() => setMapExpanded(!mapExpanded)}
-              className="absolute right-0 top-0 z-20 inline-flex h-11 w-11 items-center justify-center rounded-bl-xl border-b border-l border-border/60 bg-bg-elevated/50 text-fg-secondary backdrop-blur-sm transition-colors hover:bg-bg-elevated/85 hover:text-accent focus-visible:bg-bg-elevated/85 focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent @min-[34rem]/overview:h-8 @min-[34rem]/overview:w-8 @min-[34rem]/overview:rounded-bl-lg"
+              className="absolute right-0 top-0 z-20 inline-flex h-11 w-11 items-center justify-center rounded-bl-xl border-b border-l border-border/60 bg-bg-elevated/50 text-accent backdrop-blur-sm transition-colors hover:bg-bg-elevated/85 focus-visible:bg-bg-elevated/85 focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent @min-[34rem]/overview:h-8 @min-[34rem]/overview:w-8 @min-[34rem]/overview:rounded-bl-lg"
             >
               {mapExpanded ? <Minimize2 className="h-4 w-4" aria-hidden="true" /> : <Maximize2 className="h-4 w-4" aria-hidden="true" />}
             </button>
-            <div className="absolute inset-0">
+            <div data-testid="overview-map-canvas" className={`absolute inset-y-0 left-1/2 min-w-full -translate-x-1/2 ${MAP_CANVAS_WIDTH}`} style={MAP_CANVAS_STYLE}>
               <OverviewLocationMap
                 latitude={status?.latitude}
                 longitude={status?.longitude}
