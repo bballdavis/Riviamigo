@@ -4,8 +4,20 @@ import { cn } from '../lib/utils';
 export interface AssistantWaveProps {
   /** What is loading, for screen readers. */
   label?: string;
+  /**
+   * `md` for picture-sized spots (40px tall, bold line); `sm` for small chips
+   * and map markers (24px tall, finer line). Override the height or width
+   * with `className` to fit the spot; the line keeps its weight either way.
+   */
+  size?: 'sm' | 'md';
   className?: string;
 }
+
+// Small spots are narrow, so they get fewer, longer ripples to stay readable.
+const SIZES = {
+  sm: { box: 'h-6', line: 2.5, glow: 6, wavelength: 110 },
+  md: { box: 'h-10', line: 4, glow: 10, wavelength: 46 },
+} as const;
 
 const WIDTH = 400;
 const HEIGHT = 40;
@@ -13,8 +25,6 @@ const BASELINE = HEIGHT / 2;
 const POINTS = 120;
 /** Peak height of the centre wave, in viewBox units. */
 const AMPLITUDE = 15;
-/** Ripples across the band; higher is busier. */
-const WAVE_NUMBER = (Math.PI * 2) / 46;
 /** Radians per millisecond: how fast ripples travel out from the centre. */
 const SPEED = 0.0075;
 /** Rounds the meeting point of the two ripple trains, in viewBox units. */
@@ -37,7 +47,8 @@ const GRADIENT_STOPS = [
  * Builds the waveform at a moment in time: ripples travel outward from the
  * centre, tallest in the middle and fading to a flat line at both edges.
  */
-export function assistantWavePath(timeMs: number, grow = 1): string {
+export function assistantWavePath(timeMs: number, grow = 1, wavelength: number = SIZES.md.wavelength): string {
+  const waveNumber = (Math.PI * 2) / wavelength;
   const centre = WIDTH / 2;
   let path = '';
   for (let index = 0; index <= POINTS; index += 1) {
@@ -48,7 +59,7 @@ export function assistantWavePath(timeMs: number, grow = 1): string {
     // where the ripples on either side meet.
     const radius = Math.hypot(x - centre, CENTRE_SOFTENING);
     const y = BASELINE - grow * AMPLITUDE * envelope
-      * Math.sin(WAVE_NUMBER * radius - SPEED * timeMs);
+      * Math.sin(waveNumber * radius - SPEED * timeMs);
     path += `${index === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(2)}`;
   }
   return path;
@@ -66,11 +77,13 @@ function prefersReducedMotion() {
  * travel outward. It stays invisible for its first 250ms so quick loads never
  * flash it, and shows a still waveform when reduced motion is requested.
  */
-export function AssistantWave({ label = 'Loading', className }: AssistantWaveProps) {
+export function AssistantWave({ label = 'Loading', size = 'md', className }: AssistantWaveProps) {
+  const sizing = SIZES[size];
   const gradientId = `rm-assistant-wave-${React.useId().replace(/:/g, '')}`;
   const glowRef = React.useRef<SVGPathElement>(null);
   const lineRef = React.useRef<SVGPathElement>(null);
-  const [stillPath] = React.useState(() => assistantWavePath(0));
+  const wavelength = sizing.wavelength;
+  const stillPath = React.useMemo(() => assistantWavePath(0, 1, wavelength), [wavelength]);
 
   React.useEffect(() => {
     if (prefersReducedMotion() || typeof window.requestAnimationFrame !== 'function') return;
@@ -80,20 +93,20 @@ export function AssistantWave({ label = 'Loading', className }: AssistantWavePro
       start ??= now;
       const elapsed = now - start;
       const grow = Math.min(1, elapsed / GROW_MS);
-      const path = assistantWavePath(elapsed, grow * (2 - grow)); // ease out
+      const path = assistantWavePath(elapsed, grow * (2 - grow), wavelength); // ease out
       glowRef.current?.setAttribute('d', path);
       lineRef.current?.setAttribute('d', path);
       frame = window.requestAnimationFrame(draw);
     };
     frame = window.requestAnimationFrame(draw);
     return () => window.cancelAnimationFrame(frame);
-  }, []);
+  }, [wavelength]);
 
   return (
     <div
       role="status"
       data-testid="assistant-wave"
-      className={cn('relative h-10 w-full overflow-hidden animate-assistant-wave-in', className)}
+      className={cn('relative w-full overflow-hidden animate-assistant-wave-in', sizing.box, className)}
     >
       <span className="sr-only">{label}</span>
       <svg
@@ -114,7 +127,7 @@ export function AssistantWave({ label = 'Loading', className }: AssistantWavePro
           d={stillPath}
           fill="none"
           stroke={`url(#${gradientId})`}
-          strokeWidth={10}
+          strokeWidth={sizing.glow}
           strokeLinecap="round"
           strokeLinejoin="round"
           opacity={0.22}
@@ -125,7 +138,7 @@ export function AssistantWave({ label = 'Loading', className }: AssistantWavePro
           d={stillPath}
           fill="none"
           stroke={`url(#${gradientId})`}
-          strokeWidth={4}
+          strokeWidth={sizing.line}
           strokeLinecap="round"
           strokeLinejoin="round"
           vectorEffect="non-scaling-stroke"

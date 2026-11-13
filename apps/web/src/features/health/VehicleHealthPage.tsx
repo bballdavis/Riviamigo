@@ -59,6 +59,7 @@ import {
   type BadgeProps,
   FrunkIcon,
   LiftgateIcon,
+  AssistantWave,
 } from '@riviamigo/ui/primitives';
 import {
   DEFAULT_TARGET_TIRE_PRESSURE_PSI,
@@ -257,6 +258,11 @@ export function VehicleHealthContent() {
                         <AuthenticatedVehicleArtwork
                           source={heroImageUrl}
                           fallbackSource={fallbackHeroImageUrl}
+                          loadingIndicator={
+                            <div className="absolute inset-0 flex items-center justify-center min-[1200px]:justify-end">
+                              <AssistantWave label="Loading vehicle picture" className="w-2/3 max-w-sm" />
+                            </div>
+                          }
                           fallbackProps={{
                             className:
                               'absolute inset-0 h-full w-full object-contain object-center min-[1200px]:object-right-bottom',

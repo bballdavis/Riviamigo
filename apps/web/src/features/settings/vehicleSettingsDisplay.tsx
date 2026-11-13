@@ -1,6 +1,7 @@
 import React from 'react';
 import { AuthenticatedVehicleArtwork, resolveVehicleArtwork } from '@riviamigo/hooks';
 import type { VehicleImages, VehicleMember } from '@riviamigo/types';
+import { AssistantWave } from '@riviamigo/ui/primitives';
 
 export function formatMembershipRole(role: VehicleMember['role'] | undefined) {
   if (role === 'owner') return 'Owner';
@@ -35,8 +36,8 @@ export function ThemeVehicleImage({
 
   return (
     <>
-      <AuthenticatedVehicleArtwork source={light} fallbackSource={resolved.fallback} fallbackProps={{ className: `${className ?? ''} dark:hidden` }} alt="" className={`${className ?? ''} dark:hidden`} loading="lazy" />
-      <AuthenticatedVehicleArtwork source={dark} fallbackSource={resolved.fallback} fallbackProps={{ className: `${className ?? ''} hidden dark:block` }} alt="" className={`${className ?? ''} hidden dark:block`} loading="lazy" />
+      <AuthenticatedVehicleArtwork source={light} fallbackSource={resolved.fallback} fallbackProps={{ className: `${className ?? ''} dark:hidden` }} alt="" className={`${className ?? ''} dark:hidden`} loading="lazy" loadingIndicator={<AssistantWave size="sm" label="Loading vehicle picture" className="my-2 h-8 px-1 dark:hidden" />} />
+      <AuthenticatedVehicleArtwork source={dark} fallbackSource={resolved.fallback} fallbackProps={{ className: `${className ?? ''} hidden dark:block` }} alt="" className={`${className ?? ''} hidden dark:block`} loading="lazy" loadingIndicator={<AssistantWave size="sm" label="Loading vehicle picture" className="my-2 h-8 px-1 hidden dark:block" />} />
     </>
   );
 }

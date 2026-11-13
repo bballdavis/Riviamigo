@@ -274,3 +274,7 @@ export function SegmentedControl<TValue extends string>({ label, value, options,
     </div>
   );
 }
+
+export function AssistantWave({ label = 'Loading' }: { label?: string; size?: 'sm' | 'md'; className?: string }) {
+  return <div role="status" data-testid="assistant-wave">{label}</div>;
+}
