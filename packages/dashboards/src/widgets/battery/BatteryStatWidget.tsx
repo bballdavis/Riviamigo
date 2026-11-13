@@ -1,5 +1,5 @@
 import React from 'react';
-import { Icon } from '@iconify/react';
+import { AppIcon as Icon } from '../../icons/AppIcon';
 import { useBatteryHealth, useCurrentVehicleStatus } from '@riviamigo/hooks';
 import { Card } from '@riviamigo/ui/primitives';
 import { cn, formatKwh, formatNumber, formatPercent } from '@riviamigo/ui/lib/utils';

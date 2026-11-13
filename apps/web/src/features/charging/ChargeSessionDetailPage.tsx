@@ -3,7 +3,7 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { useChargeSession, useResolvedVehicleSelection, useSavedPlaces, useUpdateChargeSession, useVehicles } from '@riviamigo/hooks';
 import type { ChargeSessionUpdate, Place } from '@riviamigo/types';
 import {
-  PageLayout, Card, CardContent, CardHeader, CardTitle, Button, Input, SelectPicker,
+  PageLayout, Card, CardContent, CardHeader, CardTitle, Button, Input, SegmentedControl, SelectPicker,
 } from '@riviamigo/ui/primitives';
 import { ChargeSessionCurveDetail, SensorChipSummary } from '@riviamigo/dashboards';
 import { AppLayout } from '../../components/layout/AppLayout';
@@ -399,13 +399,15 @@ function ChargeSessionCorrectionPanel({
 
 function ModeSegments<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: Array<{ value: T; label: string }>; onChange: (value: T) => void }) {
   return (
-    <div role="group" aria-label={label} className="mt-3 grid grid-cols-3 gap-1 rounded-xl border border-border bg-bg-page/60 p-1">
-      {options.map((option) => (
-        <button key={option.value} type="button" aria-pressed={value === option.value} onClick={() => onChange(option.value)} className={`min-h-11 rounded-lg px-2 text-xs font-medium transition-colors focus:outline-none focus:ring-1 focus:ring-accent ${value === option.value ? 'bg-bg-elevated text-fg shadow-sm' : 'text-fg-secondary hover:bg-bg-elevated/70 hover:text-fg'}`}>
-          {option.label}
-        </button>
-      ))}
-    </div>
+    <SegmentedControl
+      label={label}
+      value={value}
+      options={options}
+      onChange={onChange}
+      fullWidth
+      className="mt-3"
+      optionClassName="px-2 sm:min-h-11"
+    />
   );
 }
 

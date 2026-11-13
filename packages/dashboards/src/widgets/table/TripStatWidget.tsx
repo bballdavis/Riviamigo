@@ -1,5 +1,5 @@
 import React from 'react';
-import { Icon } from '@iconify/react';
+import { AppIcon as Icon } from '../../icons/AppIcon';
 import { useEfficiencySummary, useMetricValue, useMetricSeries } from '@riviamigo/hooks';
 import { getChartColor, MiniSparkline } from '@riviamigo/ui/charts';
 import { Card } from '@riviamigo/ui/primitives';

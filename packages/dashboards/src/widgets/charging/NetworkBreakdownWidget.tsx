@@ -8,7 +8,7 @@
  *   - Named DC networks (Rivian, Electrify America, EVgo, …)
  */
 import React from 'react';
-import { Icon } from '@iconify/react';
+import { AppIcon as Icon } from '../../icons/AppIcon';
 import { useChargingSummary } from '@riviamigo/hooks';
 import { formatKwh, formatCurrency, formatNumber } from '@riviamigo/ui/lib/utils';
 import { DASHBOARD_ROW_HEIGHT } from '../../dashboardModel';

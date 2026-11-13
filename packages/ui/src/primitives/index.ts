@@ -50,6 +50,9 @@ export { AmbientOrbs } from './AmbientOrbs';
 export { MetricTabs } from './MetricTabs';
 export type { MetricTabsProps, MetricTab } from './MetricTabs';
 
+export { SegmentedControl } from './SegmentedControl';
+export type { SegmentedControlProps, SegmentedControlOption } from './SegmentedControl';
+
 export { Switch } from './Switch';
 export type { SwitchProps } from './Switch';
 
