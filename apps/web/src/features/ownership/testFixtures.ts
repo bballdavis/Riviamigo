@@ -85,4 +85,3 @@ export function response(overrides: Partial<OwnershipResponse> = {}): OwnershipR
     ...overrides,
   } as OwnershipResponse;
 }
-
