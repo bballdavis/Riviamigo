@@ -2,6 +2,7 @@ import React from 'react';
 import { Zap } from 'lucide-react';
 import { AuthenticatedVehicleArtwork, getVehicleArtworkFallback, useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
 import { formatKwh, formatNumber, formatPercent as formatDashboardPercent } from '@riviamigo/ui/lib/utils';
+import { AssistantWave } from '@riviamigo/ui/primitives';
 import { isVehicleCharging } from '@riviamigo/types';
 import type { VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
@@ -17,6 +18,15 @@ interface ChargingCropConfig {
   translateY?: number;
   objectPosition?: string;
 }
+
+// Each theme's artwork frame must stay a flex row while it is visible:
+// `justify-end` is what pins the artwork's right edge to the card's right
+// edge, where Rivian's charging art crops the vehicle body. A `block` display
+// in either theme drops the artwork to the card's left and exposes that cut.
+const CHARGING_ART_DISPLAY: Record<'light' | 'dark', string> = {
+  light: 'flex dark:hidden',
+  dark: 'hidden dark:flex',
+};
 
 // The image element spans the whole card, while object-contain places the
 // artwork on its right. Anchor at the visible vehicle's lower-left position in
@@ -138,8 +148,8 @@ function ChargingConnectionWidget({
       className="relative h-full min-h-0 overflow-hidden rounded-2xl border border-border bg-[linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] shadow-lg"
     >
       <div className="absolute inset-0 flex items-stretch justify-end">
-        {displaySideLight ? <VehicleSideImage source={chargingSideLight} fallbackSource={fallbackChargingSource} darkClassName="dark:hidden" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} /> : null}
-        {displaySideDark ? <VehicleSideImage source={chargingSideDark} fallbackSource={fallbackChargingSource} darkClassName="hidden dark:block" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} /> : null}
+        {displaySideLight ? <VehicleSideImage source={chargingSideLight} fallbackSource={fallbackChargingSource} theme="light" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} /> : null}
+        {displaySideDark ? <VehicleSideImage source={chargingSideDark} fallbackSource={fallbackChargingSource} theme="dark" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} /> : null}
       </div>
 
       <div className="pointer-events-none absolute inset-y-0 left-0 w-[62%] bg-gradient-to-r from-bg via-bg/88 to-transparent" />
@@ -277,12 +287,12 @@ function ChargingBatteryLedBar({
 function VehicleSideImage({
   source,
   fallbackSource,
-  darkClassName,
+  theme,
   cropConfig,
 }: {
   source: string | null | undefined;
   fallbackSource?: string | null | undefined;
-  darkClassName: string;
+  theme: 'light' | 'dark';
   cropConfig: ChargingCropConfig;
 }) {
   const translateY = cropConfig.translateY ?? 0;
@@ -291,10 +301,20 @@ function VehicleSideImage({
       ? `translateX(${cropConfig.translateX}%) scale(${cropConfig.scale})`
       : `translate(${cropConfig.translateX}%, ${translateY}%) scale(${cropConfig.scale})`;
   return (
-    <div className={`absolute inset-y-0 right-0 flex h-full w-full items-center justify-end ${darkClassName}`}>
+    <div
+      data-testid="charging-side-image-frame"
+      data-theme-variant={theme}
+      className={`absolute inset-y-0 right-0 h-full w-full items-center justify-end ${CHARGING_ART_DISPLAY[theme]}`}
+    >
       <AuthenticatedVehicleArtwork
         source={source}
         fallbackSource={fallbackSource}
+        loadingIndicator={
+          // Sits where the vehicle will appear: the right half of the card.
+          <div className="absolute inset-y-0 right-0 flex w-3/5 items-center pr-[6%]">
+            <AssistantWave label="Loading vehicle picture" />
+          </div>
+        }
         fallbackProps={{
           className: 'h-full w-full max-w-none object-contain object-right',
           style: {

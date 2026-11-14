@@ -34,6 +34,17 @@ import {
   type SensorDataSource,
   type SensorValueColor,
 } from '../widgets/sensor/sensorDefinitions';
+import {
+  getOverviewStatOptions,
+  resolveOverviewStatIds,
+} from '../widgets/custom/overviewStats';
+import {
+  OVERVIEW_MAP_MODE_OPTIONS,
+  OVERVIEW_MAP_STYLE_OPTIONS,
+  resolveOverviewMapOptions,
+  type OverviewMapMode,
+  type OverviewMapStyle,
+} from '../widgets/custom/overviewMap';
 import { IconPicker } from './IconPicker';
 import { resolveIconId } from './iconMigration';
 
@@ -61,6 +72,10 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
   const sensorDefinition = sensorMode ? getSensorDefinition(widget.definitionId) : undefined;
 
   const options = (widget.options ?? {}) as Record<string, unknown>;
+  const overviewVehicleMode = customMode && widget.definitionId === 'overview.vehicle';
+  const overviewStatIds = resolveOverviewStatIds(options.stats);
+  const overviewStatOptions = useMemo(() => getOverviewStatOptions(), []);
+  const overviewMap = resolveOverviewMapOptions(options);
   const title = widget.title ?? '';
   const connectionVisibility = getWidgetVisibilityRules(widget)
     .find((rule) => rule.type === 'vehicle-connection')?.value ?? 'always';
@@ -619,6 +634,79 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                 ))}
               </div>
             </div>
+          </Section>
+        ) : null}
+
+        {overviewVehicleMode ? (
+          <Section title="Stat rows">
+            <p className="text-[11px] text-fg-tertiary">
+              Choose the five current readings shown beside the vehicle. Search by name. A reading can only appear once. Distances, speeds, temperatures and pressures follow your unit settings.
+            </p>
+            {overviewStatIds.map((statId, slot) => (
+              <Field key={slot} label={`Row ${slot + 1}`}>
+                <SelectPicker
+                  className="w-full"
+                  value={statId}
+                  onChange={(next) => {
+                    const nextIds = [...overviewStatIds];
+                    nextIds[slot] = next;
+                    patch({ stats: nextIds });
+                  }}
+                  aria-label={`Stat row ${slot + 1}`}
+                  searchable
+                  searchPlaceholder="Search readings"
+                  menuClassName="min-w-64"
+                  options={overviewStatOptions
+                    .filter((option) => option.id === statId || !overviewStatIds.includes(option.id))
+                    .map((option) => ({ value: option.id, label: option.label, group: option.group, keywords: option.keywords }))}
+                />
+              </Field>
+            ))}
+            <button
+              type="button"
+              onClick={() => clearOption('stats')}
+              className="self-start text-[11px] font-medium text-fg-tertiary underline-offset-2 hover:text-fg hover:underline"
+            >
+              Reset to defaults
+            </button>
+          </Section>
+        ) : null}
+
+        {overviewVehicleMode ? (
+          <Section title="Location map">
+            <p className="text-[11px] text-fg-tertiary">
+              Adds a cluster and map toggle to the overview header. The cluster view stays the default; the map view replaces the vehicle image with its current location.
+            </p>
+            <ToggleSwitch
+              label="Offer location map"
+              checked={overviewMap.enabled}
+              onChange={(checked) => (checked ? clearOption('locationMap') : patch({ locationMap: false }))}
+            />
+            {overviewMap.enabled ? (
+              <>
+                <Field label="Light or dark">
+                  <SelectPicker
+                    className="w-full"
+                    value={overviewMap.mode}
+                    onChange={(next) => patch({ mapMode: next as OverviewMapMode })}
+                    aria-label="Map light or dark mode"
+                    options={OVERVIEW_MAP_MODE_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                  />
+                </Field>
+                <Field label="Map type">
+                  <SelectPicker
+                    className="w-full"
+                    value={overviewMap.style}
+                    onChange={(next) => patch({ mapStyle: next as OverviewMapStyle })}
+                    aria-label="Map type"
+                    options={OVERVIEW_MAP_STYLE_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                  />
+                </Field>
+                <p className="text-[11px] text-fg-tertiary">
+                  App setting uses the map style chosen in Settings &gt; Appearance.
+                </p>
+              </>
+            ) : null}
           </Section>
         ) : null}
 

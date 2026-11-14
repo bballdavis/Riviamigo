@@ -1,7 +1,7 @@
 export { api, themeClient, setApiBaseUrl, resolveApiBaseUrl } from './api';
 export { authClient, vehicleClient, tripClient, chargingClient, telemetryClient, analyticsClient, systemClient } from './api';
 export { queryKeys } from './queryKeys';
-export type { ChargingSchedule, ChargingScheduleInput, DepartureSchedule, DepartureScheduleInput, DepartureOccurrence, DepartureComfortSettings, LiveSession, BackfillStatus } from './api';
+export type { ChargingSchedule, ChargingScheduleInput, DepartureSchedule, DepartureScheduleInput, DepartureOccurrence, DepartureComfortSettings, LiveSession, BackfillStatus, MaintenanceJobStatus } from './api';
 export { consumeExplicitLogoutIntent, recordExplicitLogoutIntent, useAuth } from './useAuth';
 export { useAuthReady, useResolvedVehicleSelection } from './useAuthState';
 export { useDashboardChartFavorites, useUpdateDashboardChartFavorite } from './useDashboardChartFavorites';
@@ -56,11 +56,25 @@ export { useSummaryStats } from './useStats';
 export { useMetricCatalog, useMetricValue, useMetricSeries, useMetricBatch } from './useMetrics';
 export { useVehicles, useDefaultVehicleId } from './useVehicles';
 export { useVehicleHealth } from './useHealth';
+export {
+  useOwnership,
+  useOwnershipSettings,
+  useOwnershipVehicleLookupMenu,
+  useUpdateOwnershipSettings,
+} from './useOwnership';
 export { useTelemetryLanes } from './useTelemetryLanes';
 export { BASEMAP_CONFIG_QUERY_KEY, useBasemapConfig } from './useBasemapConfig';
 export type { BasemapConfigPayload } from './useBasemapConfig';
-export { useUserPreferences, useUpdateMapStyle } from './useUserPreferences';
+export {
+  useOwnershipEnabled,
+  useUpdateMapStyle,
+  useUpdateOverviewMapExpanded,
+  useUpdateOverviewView,
+  useUpdateOwnershipPreference,
+  useUserPreferences,
+} from './useUserPreferences';
 export { useDocumentTheme } from './useDocumentTheme';
 export { AuthenticatedVehicleArtwork, useVehicleArtwork } from './useVehicleArtwork';
+export { clearVehicleArtworkCache } from './vehicleArtworkCache';
 export { getVehicleArtworkFallback, normalizeVehicleArtworkModel, resolveVehicleArtwork } from './vehicleArtworkFallback';
 export type { ResolvedVehicleArtwork, VehicleArtworkFallbackModel, VehicleArtworkUsage } from './vehicleArtworkFallback';

@@ -49,9 +49,26 @@ function leaseTransaction(db: IDBDatabase, owner: string, release: boolean): Pro
   });
 }
 
+/**
+ * Identify this tab's lease. Uniqueness across tabs is all that matters; this
+ * is not a secret. `crypto.randomUUID` and `navigator.locks` are both limited
+ * to secure contexts, so a LAN deployment served over plain HTTP reaches this
+ * IndexedDB fallback without `randomUUID`. `getRandomValues` is available in
+ * every context.
+ */
+export function createLeaseOwner(): string {
+  const cryptoApi = typeof globalThis.crypto !== 'undefined' ? globalThis.crypto : undefined;
+  if (typeof cryptoApi?.randomUUID === 'function') return cryptoApi.randomUUID();
+  if (typeof cryptoApi?.getRandomValues === 'function') {
+    const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+}
+
 async function withLease<T>(operation: () => Promise<T>): Promise<T> {
   let db: IDBDatabase | undefined;
-  const owner = crypto.randomUUID();
+  const owner = createLeaseOwner();
   try {
     db = await openLeaseDatabase();
     const deadline = Date.now() + LEASE_MS;

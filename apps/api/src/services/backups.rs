@@ -858,10 +858,11 @@ async fn execute_recovery_package(
     trigger: BackupRunTrigger,
     created_at: DateTime<Utc>,
 ) -> Result<serde_json::Value, AppError> {
-    let workspace = crate::services::recovery_workspace::RecoveryWorkspace::new(
+    let workspace = crate::services::recovery_workspace::RecoveryWorkspace::create(
         Path::new(&config.backup_artifact_dir),
         &config.recovery,
-    )?;
+    )
+    .await?;
     let temp_root = workspace.path();
     let dump_path = temp_root.join("database.dump");
     let settings_path = temp_root.join("backup-settings.json");

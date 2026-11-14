@@ -2,35 +2,39 @@ import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Check, Edit3, Plus } from 'lucide-react';
-import { BUILT_IN_THEMES, resolveTheme, type ThemeOverride } from '@riviamigo/themes';
+import { BUILT_IN_THEMES, resolveTheme, type ResolvedTheme, type ThemeOverride } from '@riviamigo/themes';
 import { queryKeys, themeClient, useAuth } from '@riviamigo/hooks';
-import type { ThemeCatalogResponse, ThemePalette, ThemePreferencesResponse, ThemePreferencesV2 } from '@riviamigo/types';
+import type { ThemeCatalogResponse, ThemePalette, ThemeRef } from '@riviamigo/types';
 import { Button, Input, Skeleton } from '@riviamigo/ui/primitives';
 import { cn } from '@riviamigo/ui/lib/utils';
 
-export function ThemeGallery() {
+export interface ThemeGalleryChoice {
+  selection: ThemeRef;
+  /** Resolved custom definition, used to preview the theme before it is saved. Null for built-in themes. */
+  resolvedTheme: ResolvedTheme | null;
+}
+
+/**
+ * Theme picker. The selected theme is owned by the parent, which stages it in
+ * the Settings draft; picking a card never saves on its own. Creating a theme is
+ * a one-shot action and still runs immediately.
+ */
+export function ThemeGallery({ selected, loading, disabled, onSelect }: {
+  /** The staged selection, so the active card reflects unsaved picks. */
+  selected: ThemeRef | undefined;
+  loading: boolean;
+  disabled: boolean;
+  onSelect: (choice: ThemeGalleryChoice) => void;
+}) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const userId = useAuth((state) => state.userId);
-  const preferenceKey = queryKeys.themePreferences.forUser(userId ?? 'signed-out');
   const catalogKey = queryKeys.themes.catalog(userId ?? 'signed-out');
   const [creating, setCreating] = React.useState(false);
   const [name, setName] = React.useState('');
   const [baseThemeId, setBaseThemeId] = React.useState<ThemePalette>('classic');
   const catalog = useQuery({ queryKey: catalogKey, queryFn: () => themeClient.getCatalog() as Promise<ThemeCatalogResponse>, enabled: !!userId });
-  const preference = useQuery({ queryKey: preferenceKey, queryFn: () => themeClient.getPreferences(), enabled: !!userId });
 
-  const selectTheme = useMutation({
-    mutationFn: async (selection: ThemePreferencesV2['selection']) => {
-      const current = preference.data;
-      if (!current?.etag) throw new Error('Appearance preferences are still loading.');
-      return themeClient.updatePreferences({ schemaVersion: 2, mode: current.preferences.mode, selection }, current.etag);
-    },
-    onSuccess: (response: ThemePreferencesResponse) => {
-      queryClient.setQueryData(preferenceKey, response);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.unitPreferences.current });
-    },
-  });
   const createTheme = useMutation({
     mutationFn: () => themeClient.create(name.trim(), baseThemeId),
     onSuccess: (result: { themeId: string }) => {
@@ -39,20 +43,19 @@ export function ThemeGallery() {
     },
   });
 
-  const selected = preference.data?.preferences.selection;
-  if (catalog.isLoading || preference.isLoading) return <div className="grid gap-3 sm:grid-cols-2"><Skeleton className="h-44 rounded-xl" /><Skeleton className="h-44 rounded-xl" /></div>;
+  if (catalog.isLoading || loading) return <div className="grid gap-3 sm:grid-cols-2"><Skeleton className="h-44 rounded-xl" /><Skeleton className="h-44 rounded-xl" /></div>;
 
   return <div className="grid gap-4">
     <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Themes">
       {(['classic', 'rad'] as const).map((themeId) => {
         const theme = BUILT_IN_THEMES[themeId];
         const active = selected?.kind === 'builtin' && selected.themeId === themeId;
-        return <ThemeCard key={themeId} name={theme.name} description={themeId === 'classic' ? 'The original Riviamigo visual system.' : 'Bright gold, vivid vermilion, and adventure teal.'} colors={theme.series} surface={theme.tokens.dark['bg-page']} panel={theme.tokens.dark['bg-surface']} foreground={theme.tokens.dark['text-primary']} accent={theme.tokens.dark.accent} brandAsset={theme.brandAssets.wordmark.dark} active={active} disabled={selectTheme.isPending} onSelect={() => selectTheme.mutate({ kind: 'builtin', themeId })} />;
+        return <ThemeCard key={themeId} name={theme.name} description={themeId === 'classic' ? 'The original Riviamigo visual system.' : 'Bright gold, vivid vermilion, and adventure teal.'} colors={theme.series} surface={theme.tokens.dark['bg-page']} panel={theme.tokens.dark['bg-surface']} foreground={theme.tokens.dark['text-primary']} accent={theme.tokens.dark.accent} brandAsset={theme.brandAssets.wordmark.dark} active={active} disabled={disabled} onSelect={() => onSelect({ selection: { kind: 'builtin', themeId }, resolvedTheme: null })} />;
       })}
       {(catalog.data?.customThemes ?? []).filter((theme) => theme.publishedRevision !== null).map((theme) => {
         const definition = resolveTheme((theme.publishedDefinition ?? { theme: theme.baseThemeId }) as ThemeOverride);
         const active = selected?.kind === 'custom' && selected.themeId === theme.themeId && selected.revision === theme.publishedRevision;
-        return <ThemeCard key={theme.themeId} name={theme.name} description={`Private custom theme · based on ${definition.name}`} colors={definition.series} surface={definition.tokens.dark['bg-page']} panel={definition.tokens.dark['bg-surface']} foreground={definition.tokens.dark['text-primary']} accent={definition.tokens.dark.accent} brandAsset={definition.brandAssets.wordmark.dark} active={active} disabled={selectTheme.isPending} onSelect={() => selectTheme.mutate({ kind: 'custom', themeId: theme.themeId, revision: theme.publishedRevision! })} onEdit={() => void navigate({ to: '/settings/themes/$themeId', params: { themeId: theme.themeId } })} />;
+        return <ThemeCard key={theme.themeId} name={theme.name} description={`Private custom theme · based on ${definition.name}`} colors={definition.series} surface={definition.tokens.dark['bg-page']} panel={definition.tokens.dark['bg-surface']} foreground={definition.tokens.dark['text-primary']} accent={definition.tokens.dark.accent} brandAsset={definition.brandAssets.wordmark.dark} active={active} disabled={disabled} onSelect={() => onSelect({ selection: { kind: 'custom', themeId: theme.themeId, revision: theme.publishedRevision! }, resolvedTheme: definition })} onEdit={() => void navigate({ to: '/settings/themes/$themeId', params: { themeId: theme.themeId } })} />;
       })}
     </div>
 
@@ -63,7 +66,6 @@ export function ThemeGallery() {
       {createTheme.isError ? <p className="text-xs text-status-danger sm:col-span-3" role="alert">Unable to create the theme. Check the name and try again.</p> : null}
     </div> : <Button variant="secondary" className="justify-self-start" iconLeft={<Plus className="h-4 w-4" />} onClick={() => setCreating(true)}>Create custom theme</Button>}
 
-    {selectTheme.isError ? <p className="text-xs text-status-danger" role="alert">The theme changed elsewhere or could not be saved. Refresh and try again.</p> : null}
     <p className="text-xs text-fg-tertiary">Custom themes are private to your account. You can keep up to 20.</p>
   </div>;
 }

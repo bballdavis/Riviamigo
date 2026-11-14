@@ -3,7 +3,7 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { useChargeSession, useResolvedVehicleSelection, useSavedPlaces, useUpdateChargeSession, useVehicles } from '@riviamigo/hooks';
 import type { ChargeSessionUpdate, Place } from '@riviamigo/types';
 import {
-  PageLayout, Card, CardContent, CardHeader, CardTitle, Button, Input, SelectPicker,
+  PageLayout, Card, CardContent, CardHeader, CardTitle, Button, Input, SegmentedControl, SelectPicker,
 } from '@riviamigo/ui/primitives';
 import { ChargeSessionCurveDetail, SensorChipSummary } from '@riviamigo/dashboards';
 import { AppLayout } from '../../components/layout/AppLayout';
@@ -11,7 +11,7 @@ import { NoVehicleState } from '../../components/layout/NoVehicleState';
 import { formatKwh, formatDuration, formatCurrency, formatDistanceKm, formatPercent } from '@riviamigo/ui/lib/utils';
 import { formatAppDate, formatAppTime } from '@riviamigo/ui/lib/dateTime';
 import { parseISO } from 'date-fns';
-import { ArrowLeft, Edit2, Info, MapPin, RotateCcw, Save } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Edit2, Info, MapPin, RotateCcw, Save } from 'lucide-react';
 
 export function ChargeSessionContent() {
   return <ChargeSessionContentInner />;
@@ -145,33 +145,33 @@ function ChargeSessionContentInner() {
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <SensorChipSummary
+                definitionId="charging_total_energy"
                 title="Energy Added"
                 value={session ? displayedEnergy != null ? formatKwh(displayedEnergy) : isActiveSession ? 'Pending' : '-' : '-'}
                 secondary={liveRange != null ? `Range added: ${formatDistanceKm(liveRange)} · Live` : session?.range_added_km != null ? `Range added: ${formatDistanceKm(session.range_added_km)}` : undefined}
-                icon="lucide:bolt"
-                dataAccent="series-01"
-                valueColor="data"
-                accentBorder
               />
               <SensorChipSummary
+                definitionId="charging_max_limit"
                 title="SoC"
                 value={
                   session?.soc_start != null && (liveSoc != null || session.soc_end != null)
-                    ? `${formatPercent(session.soc_start, 0)} -> ${formatPercent(liveSoc ?? session.soc_end!, 0)}${isActiveSession && liveSoc != null ? ' · Live' : ''}`
+                    ? <SocChange start={session.soc_start} end={liveSoc ?? session.soc_end!} />
                     : '-'
                 }
-                icon="lucide:battery"
+                secondary={isActiveSession && liveSoc != null ? 'Live' : undefined}
               />
               <SensorChipSummary
                 title="Duration"
                 value={session ? displayedDuration != null ? formatDuration(displayedDuration) : isActiveSession ? 'Pending' : '-' : '-'}
                 icon="lucide:clock-3"
+                dataAccent="series-14"
+                valueColor="data"
               />
               <SensorChipSummary
+                definitionId="charging_total_cost"
                 title="Cost"
                 value={session?.cost_usd != null ? formatCurrency(session.cost_usd) : isActiveSession ? 'Pending' : '-'}
                 secondary={isActiveSession && session?.live_current_price != null ? `Current estimate: ${formatCurrency(session.live_current_price)}` : undefined}
-                icon="lucide:receipt"
               />
             </div>
 
@@ -399,13 +399,15 @@ function ChargeSessionCorrectionPanel({
 
 function ModeSegments<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: Array<{ value: T; label: string }>; onChange: (value: T) => void }) {
   return (
-    <div role="group" aria-label={label} className="mt-3 grid grid-cols-3 gap-1 rounded-xl border border-border bg-bg-page/60 p-1">
-      {options.map((option) => (
-        <button key={option.value} type="button" aria-pressed={value === option.value} onClick={() => onChange(option.value)} className={`min-h-11 rounded-lg px-2 text-xs font-medium transition-colors focus:outline-none focus:ring-1 focus:ring-accent ${value === option.value ? 'bg-bg-elevated text-fg shadow-sm' : 'text-fg-secondary hover:bg-bg-elevated/70 hover:text-fg'}`}>
-          {option.label}
-        </button>
-      ))}
-    </div>
+    <SegmentedControl
+      label={label}
+      value={value}
+      options={options}
+      onChange={onChange}
+      fullWidth
+      className="mt-3"
+      optionClassName="px-2 sm:min-h-11"
+    />
   );
 }
 
@@ -461,6 +463,17 @@ function SessionSourcePanel({ session }: { session: ChargeSessionDetail }) {
         ))}
       </div>
     </section>
+  );
+}
+
+function SocChange({ start, end }: { start: number; end: number }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span>{formatPercent(start, 0)}</span>
+      <ArrowRight aria-hidden="true" className="h-[0.8em] w-[0.8em] shrink-0 opacity-70" strokeWidth={2.5} />
+      <span className="sr-only"> to </span>
+      <span>{formatPercent(end, 0)}</span>
+    </span>
   );
 }
 

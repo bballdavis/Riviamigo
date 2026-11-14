@@ -105,6 +105,7 @@ if (!catalogsOnly) {
     ['apps/api/Cargo.toml', `rust-version = "${baseline.rust.split('.').slice(0, 2).join('.')}"`],
     ['compose/Dockerfile', `rust:${baseline.rust}-slim`],
     ['compose/Dockerfile', `node:${baseline.node}-alpine`],
+    ['compose/Dockerfile', `pnpm@${baseline.pnpm}`],
     ['compose/Dockerfile', `postgres:${baseline.postgres}-bookworm`],
     ['apps/api/Dockerfile', `rust:${baseline.rust}-slim`],
     ['apps/api/Dockerfile', `postgres:${baseline.postgres}-bookworm`],

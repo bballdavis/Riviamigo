@@ -1661,6 +1661,8 @@ async fn external_connections_loads_without_rivian_credentials() {
             "nominatim",
             "basemap",
             "iconify",
+            "fuel_prices",
+            "vehicle_lookup",
             "s3_backup",
         ]
     );
@@ -1672,6 +1674,117 @@ async fn external_connections_loads_without_rivian_credentials() {
     assert!(rivian["credential_issued_at"].is_null());
     assert!(rivian["expected_renewal_at"].is_null());
     assert!(rivian["renewal_state"].is_null());
+}
+
+#[tokio::test]
+async fn external_connections_rivian_status_covers_only_the_callers_active_vehicles() {
+    let app = TestApp::new().await;
+    riviamigo_api::services::external_connections::ensure_defaults(&app.pool)
+        .await
+        .expect("seed external connection defaults");
+    let viewer_email = "rivian-status-viewer@example.com";
+    let other_email = "rivian-status-other@example.com";
+    let viewer_token = register_and_login(&app, viewer_email).await;
+    // Registration closes after the first account, so seed the second directly.
+    insert_user_and_login(&app, other_email, "hunter2hunter2").await;
+    let user_id = |email: &'static str| {
+        let pool = app.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM riviamigo.users WHERE email = $1")
+                .bind(email)
+                .fetch_one(&pool)
+                .await
+                .expect("user id")
+        }
+    };
+    let viewer_id = user_id(viewer_email).await;
+    let other_id = user_id(other_email).await;
+
+    let own = insert_vehicle(&app.pool, viewer_id, "rivian-status-own", "Own").await;
+    let paused = insert_vehicle(&app.pool, viewer_id, "rivian-status-paused", "Paused").await;
+    let foreign = insert_vehicle(&app.pool, other_id, "rivian-status-foreign", "Foreign").await;
+    sqlx::query("UPDATE riviamigo.vehicles SET collection_paused = TRUE WHERE id = $1")
+        .bind(paused)
+        .execute(&app.pool)
+        .await
+        .expect("pause vehicle");
+
+    let own_issued = chrono::Utc::now() - chrono::Duration::days(10);
+    for (vehicle_id, issued_at, health, message, auth_state) in [
+        (own, own_issued, "connected", "own vehicle connected", None),
+        (
+            paused,
+            chrono::Utc::now() - chrono::Duration::days(170),
+            "error",
+            "paused vehicle detail",
+            Some("needs_reauth"),
+        ),
+        (
+            foreign,
+            chrono::Utc::now() - chrono::Duration::days(175),
+            "error",
+            "foreign vehicle detail",
+            Some("needs_reauth"),
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_credentials (vehicle_id, encrypted_tokens, token_created_at)
+             VALUES ($1, '\\x00', $2)",
+        )
+        .bind(vehicle_id)
+        .bind(issued_at)
+        .execute(&app.pool)
+        .await
+        .expect("seed credentials");
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_runtime_state
+                 (vehicle_id, worker_health, worker_health_msg, auth_state)
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(vehicle_id)
+        .bind(health)
+        .bind(message)
+        .bind(auth_state)
+        .execute(&app.pool)
+        .await
+        .expect("seed runtime state");
+    }
+
+    let response = app
+        .request(
+            Method::GET,
+            "/v1/settings/external-connections",
+            None,
+            Some(&viewer_token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        response.status,
+        StatusCode::OK,
+        "response: {}",
+        response.body
+    );
+    let rivian = response.body["connections"]
+        .as_array()
+        .expect("connections array")
+        .iter()
+        .find(|connection| connection["id"] == "rivian_account")
+        .expect("Rivian account connection")
+        .clone();
+    assert_eq!(rivian["renewal_state"], json!("healthy"), "{rivian}");
+    assert_eq!(rivian["observed_health"], json!("connected"), "{rivian}");
+    assert_eq!(
+        rivian["observed_error"],
+        json!("own vehicle connected"),
+        "{rivian}"
+    );
+    let issued_at: chrono::DateTime<chrono::Utc> =
+        serde_json::from_value(rivian["credential_issued_at"].clone()).expect("issued at");
+    assert!((issued_at - own_issued).num_seconds().abs() < 1, "{rivian}");
+    let text = rivian.to_string();
+    assert!(!text.contains("foreign vehicle detail"), "{text}");
+    assert!(!text.contains("paused vehicle detail"), "{text}");
 }
 
 #[tokio::test]
@@ -2207,6 +2320,628 @@ async fn stats_summary_returns_aggregated_trip_and_charge_values() {
     assert_eq!(res.body["total_kwh"], json!(40.0));
     assert_eq!(res.body["session_count"], json!(1));
     assert_eq!(res.body["total_cost_usd"], json!(5.2));
+}
+
+#[tokio::test]
+async fn vehicle_status_reports_facing_corrected_after_backing_in() {
+    let app = TestApp::new().await;
+    let email = "vehicle-facing@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id: Uuid = sqlx::query_scalar("SELECT id FROM riviamigo.users WHERE email = $1")
+        .bind(email)
+        .fetch_one(&app.pool)
+        .await
+        .expect("user id");
+    let vehicle_id = insert_vehicle(&app.pool, user_id, "vehicle-facing", "Facing Truck").await;
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+         VALUES ($1, $2, 'owner', TRUE)
+         ON CONFLICT (vehicle_id, user_id) DO UPDATE SET role = EXCLUDED.role",
+    )
+    .bind(vehicle_id)
+    .bind(user_id)
+    .execute(&app.pool)
+    .await
+    .expect("seed vehicle membership");
+
+    // Recorded shape: east-bound in drive, reverse engaged, and the parked
+    // course later reads west because the vehicle backed into its space.
+    let arrived = chrono::Utc::now() - chrono::Duration::hours(20);
+    let insert_sample = |offset_seconds: i64, heading: f64, gear: &'static str, speed: f64| {
+        sqlx::query(
+            "INSERT INTO timeseries.telemetry (ts, vehicle_id, heading_deg, gear_status, speed_mph)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(arrived + chrono::Duration::seconds(offset_seconds))
+        .bind(vehicle_id)
+        .bind(heading)
+        .bind(gear)
+        .bind(speed)
+        .execute(&app.pool)
+    };
+    insert_sample(0, 103.6, "drive", 12.0)
+        .await
+        .expect("drive sample");
+    insert_sample(180, 103.6, "reverse", 0.0)
+        .await
+        .expect("reverse sample");
+    insert_sample(19 * 3600, -88.6, "park", 0.0)
+        .await
+        .expect("parked sample");
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_latest_status (vehicle_id, ts, heading_deg, gear_status, speed_mph)
+         VALUES ($1, $2, -88.6, 'park', 0)",
+    )
+    .bind(vehicle_id)
+    .bind(arrived + chrono::Duration::hours(19))
+    .execute(&app.pool)
+    .await
+    .expect("seed latest status");
+
+    let facing = |body: &Value| body["facing_deg"].as_f64().expect("facing_deg");
+    let status_path = format!("/v1/vehicles/{vehicle_id}/status");
+    let response = app
+        .request(Method::GET, &status_path, None, Some(&token), None)
+        .await;
+    assert_eq!(
+        response.status,
+        StatusCode::OK,
+        "response: {}",
+        response.body
+    );
+    assert_eq!(response.body["heading_deg"].as_f64(), Some(-88.6));
+    assert!(
+        (facing(&response.body) - 91.4).abs() < 1e-6,
+        "{}",
+        response.body["facing_deg"]
+    );
+
+    // Pulling forward again: the course is the facing direction.
+    insert_sample(19 * 3600 + 60, -88.6, "drive", 6.0)
+        .await
+        .expect("drive away");
+    // The first read saved the back-in. Ingestion marks it stale after
+    // storing a moving drive row; this test writes telemetry directly.
+    riviamigo_api::services::vehicle_facing::mark_stale(&app.pool, vehicle_id)
+        .await
+        .expect("mark facing stale");
+    let response = app
+        .request(Method::GET, &status_path, None, Some(&token), None)
+        .await;
+    assert_eq!(
+        response.status,
+        StatusCode::OK,
+        "response: {}",
+        response.body
+    );
+    assert!(
+        (facing(&response.body) - 271.4).abs() < 1e-6,
+        "{}",
+        response.body["facing_deg"]
+    );
+}
+
+#[tokio::test]
+async fn vehicle_facing_survives_a_drive_shift_without_moving() {
+    let app = TestApp::new().await;
+    let email = "vehicle-facing-still@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id: Uuid = sqlx::query_scalar("SELECT id FROM riviamigo.users WHERE email = $1")
+        .bind(email)
+        .fetch_one(&app.pool)
+        .await
+        .expect("user id");
+    let vehicle_id =
+        insert_vehicle(&app.pool, user_id, "vehicle-facing-still", "Facing Truck").await;
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+         VALUES ($1, $2, 'owner', TRUE)
+         ON CONFLICT (vehicle_id, user_id) DO UPDATE SET role = EXCLUDED.role",
+    )
+    .bind(vehicle_id)
+    .bind(user_id)
+    .execute(&app.pool)
+    .await
+    .expect("seed vehicle membership");
+
+    // Back in (reverse reported in another casing), then shift to drive and
+    // park again without moving: the course still points out of the space.
+    let arrived = chrono::Utc::now() - chrono::Duration::hours(20);
+    for (offset_seconds, heading, gear, speed) in [
+        (0_i64, 103.6, "drive", 12.0),
+        (180, 103.6, "Reverse", 0.0),
+        (600, -88.6, "park", 0.0),
+        (19 * 3600, -88.6, "drive", 0.0),
+        (19 * 3600 + 60, -88.6, "park", 0.0),
+    ] {
+        sqlx::query(
+            "INSERT INTO timeseries.telemetry (ts, vehicle_id, heading_deg, gear_status, speed_mph)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(arrived + chrono::Duration::seconds(offset_seconds))
+        .bind(vehicle_id)
+        .bind(heading)
+        .bind(gear)
+        .bind(speed)
+        .execute(&app.pool)
+        .await
+        .expect("telemetry sample");
+    }
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_latest_status (vehicle_id, ts, heading_deg, gear_status, speed_mph)
+         VALUES ($1, $2, -88.6, 'park', 0)",
+    )
+    .bind(vehicle_id)
+    .bind(arrived + chrono::Duration::hours(19))
+    .execute(&app.pool)
+    .await
+    .expect("seed latest status");
+
+    let response = app
+        .request(
+            Method::GET,
+            &format!("/v1/vehicles/{vehicle_id}/status"),
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        response.status,
+        StatusCode::OK,
+        "response: {}",
+        response.body
+    );
+    let facing = response.body["facing_deg"].as_f64().expect("facing_deg");
+    assert!((facing - 91.4).abs() < 1e-6, "{facing}");
+}
+
+#[tokio::test]
+async fn vehicle_facing_evidence_wraps_bearings_and_honours_a_pull_away() {
+    use riviamigo_api::services::vehicle_facing::{facing_deg, load_facing_evidence};
+
+    let app = TestApp::new().await;
+    let email = "vehicle-facing-sql@example.com";
+    register_and_login(&app, email).await;
+    let user_id: Uuid = sqlx::query_scalar("SELECT id FROM riviamigo.users WHERE email = $1")
+        .bind(email)
+        .fetch_one(&app.pool)
+        .await
+        .expect("user id");
+    let insert = |vehicle_id: Uuid, rows: Vec<(i64, f64, &'static str, f64)>| {
+        let pool = app.pool.clone();
+        async move {
+            let start = chrono::Utc::now() - chrono::Duration::hours(2);
+            for (offset_seconds, heading, gear, speed) in rows {
+                sqlx::query(
+                    "INSERT INTO timeseries.telemetry (ts, vehicle_id, heading_deg, gear_status, speed_mph)
+                     VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind(start + chrono::Duration::seconds(offset_seconds))
+                .bind(vehicle_id)
+                .bind(heading)
+                .bind(gear)
+                .bind(speed)
+                .execute(&pool)
+                .await
+                .expect("telemetry sample");
+            }
+        }
+    };
+
+    // Reverse while creeping across north (350 to 20 degrees) is a 30 degree
+    // turn, not 330: the reverse shift does not count, so the earlier moving
+    // drive anchors the course and the bearing is not flipped.
+    let wrap = insert_vehicle(&app.pool, user_id, "vehicle-facing-wrap", "Wrap").await;
+    insert(
+        wrap,
+        vec![
+            (0, 350.0, "DRIVE", 20.0),
+            (60, 350.0, "Reverse", 0.0),
+            (120, 20.0, "reverse", 1.0),
+            (180, 20.0, "park", 0.0),
+        ],
+    )
+    .await;
+    let evidence = load_facing_evidence(&app.pool, wrap)
+        .await
+        .expect("evidence");
+    assert_eq!(evidence.shifts.len(), 2, "{evidence:?}");
+    assert_eq!(evidence.shifts[0].gear, "reverse");
+    assert!(!evidence.shifts[0].course_turned, "{evidence:?}");
+    assert!(evidence.shifts[1].moved, "{evidence:?}");
+    assert_eq!(facing_deg(Some(20.0), &evidence), Some(20.0));
+
+    // Back into a space with a real turn, then pull away in drive: the moving
+    // drive shift is newest, so the bearing is the facing again.
+    let pull_away = insert_vehicle(&app.pool, user_id, "vehicle-facing-pull", "Pull").await;
+    insert(
+        pull_away,
+        vec![
+            (0, 100.0, "drive", 15.0),
+            (60, 100.0, "reverse", 0.0),
+            (90, 190.0, "reverse", 3.0),
+            (120, 190.0, "park", 0.0),
+            (3600, 190.0, "drive", 0.0),
+            (3660, 10.0, "drive", 6.0),
+        ],
+    )
+    .await;
+    let evidence = load_facing_evidence(&app.pool, pull_away)
+        .await
+        .expect("evidence");
+    assert_eq!(evidence.shifts[0].gear, "drive");
+    assert!(evidence.shifts[0].moved, "{evidence:?}");
+    assert_eq!(evidence.shifts[1].gear, "reverse");
+    assert!(evidence.shifts[1].course_turned, "{evidence:?}");
+    assert_eq!(facing_deg(Some(10.0), &evidence), Some(10.0));
+    // Before pulling away, the back-in would flip the same bearing.
+    let parked = riviamigo_api::services::vehicle_facing::FacingEvidence {
+        shifts: evidence.shifts[1..].to_vec(),
+    };
+    assert_eq!(facing_deg(Some(190.0), &parked), Some(10.0));
+
+    // Real telemetry repeats the engaged gear on every row: a back-in is a run
+    // of reverse rows whose bearing turns gradually, then park rows. The run
+    // as a whole turned, so the parked bearing is flipped.
+    let realistic = insert_vehicle(&app.pool, user_id, "vehicle-facing-rows", "Rows").await;
+    insert(
+        realistic,
+        vec![
+            (0, 95.0, "drive", 18.0),
+            (5, 98.0, "drive", 12.0),
+            (10, 100.0, "drive", 4.0),
+            (15, 100.0, "reverse", 0.0),
+            (20, 112.0, "reverse", 2.0),
+            (25, 131.0, "reverse", 3.0),
+            (30, 160.0, "reverse", 3.0),
+            (35, 187.0, "reverse", 2.0),
+            (40, 190.0, "reverse", 0.0),
+            (45, 190.0, "park", 0.0),
+            (600, 190.0, "park", 0.0),
+        ],
+    )
+    .await;
+    let evidence = load_facing_evidence(&app.pool, realistic)
+        .await
+        .expect("evidence");
+    assert_eq!(evidence.shifts.len(), 2, "{evidence:?}");
+    assert_eq!(evidence.shifts[0].gear, "reverse");
+    assert!(evidence.shifts[0].course_turned, "{evidence:?}");
+    assert_eq!(facing_deg(Some(190.0), &evidence), Some(10.0));
+
+    // Sparse samples: the first reverse row already reports the turned
+    // course. The bearing before the shift is the reference, so the turn shows.
+    let sparse = insert_vehicle(&app.pool, user_id, "vehicle-facing-sparse", "Sparse").await;
+    insert(
+        sparse,
+        vec![
+            (0, 100.0, "drive", 10.0),
+            (60, 280.0, "reverse", 2.0),
+            (120, 280.0, "park", 0.0),
+        ],
+    )
+    .await;
+    let evidence = load_facing_evidence(&app.pool, sparse)
+        .await
+        .expect("evidence");
+    assert_eq!(
+        evidence.shifts[0].bearing_at_shift,
+        Some(100.0),
+        "{evidence:?}"
+    );
+    assert!(evidence.shifts[0].course_turned, "{evidence:?}");
+    assert_eq!(facing_deg(Some(280.0), &evidence), Some(100.0));
+}
+
+#[tokio::test]
+async fn vehicle_facing_is_saved_until_telemetry_can_change_it() {
+    use riviamigo_api::services::vehicle_facing::{mark_stale, resolve_facing_deg, save_facing};
+
+    let app = TestApp::new().await;
+    let email = "vehicle-facing-saved@example.com";
+    register_and_login(&app, email).await;
+    let user_id: Uuid = sqlx::query_scalar("SELECT id FROM riviamigo.users WHERE email = $1")
+        .bind(email)
+        .fetch_one(&app.pool)
+        .await
+        .expect("user id");
+    let vehicle = insert_vehicle(&app.pool, user_id, "vehicle-facing-saved", "Saved").await;
+    let start = chrono::Utc::now() - chrono::Duration::hours(2);
+    let insert = |rows: Vec<(i64, f64, &'static str, f64)>| {
+        let pool = app.pool.clone();
+        async move {
+            for (offset_seconds, heading, gear, speed) in rows {
+                sqlx::query(
+                    "INSERT INTO timeseries.telemetry (ts, vehicle_id, heading_deg, gear_status, speed_mph)
+                     VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind(start + chrono::Duration::seconds(offset_seconds))
+                .bind(vehicle)
+                .bind(heading)
+                .bind(gear)
+                .bind(speed)
+                .execute(&pool)
+                .await
+                .expect("telemetry sample");
+            }
+        }
+    };
+    let saved = || {
+        let pool = app.pool.clone();
+        async move {
+            sqlx::query_as::<_, (Option<bool>, i64)>(
+                "SELECT facing_reversed, facing_epoch
+                 FROM riviamigo.vehicle_latest_status WHERE vehicle_id = $1",
+            )
+            .bind(vehicle)
+            .fetch_one(&pool)
+            .await
+            .expect("saved facing")
+        }
+    };
+
+    // Without a latest-status row the facing is still worked out, just not saved.
+    insert(vec![
+        (0, 100.0, "drive", 10.0),
+        (60, 280.0, "reverse", 2.0),
+        (120, 280.0, "park", 0.0),
+    ])
+    .await;
+    assert_eq!(
+        resolve_facing_deg(&app.pool, vehicle, Some(280.0)).await,
+        Some(100.0)
+    );
+    assert_eq!(resolve_facing_deg(&app.pool, vehicle, None).await, None);
+
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_latest_status (vehicle_id, ts, heading_deg, gear_status)
+         VALUES ($1, now(), 280, 'park')",
+    )
+    .bind(vehicle)
+    .execute(&app.pool)
+    .await
+    .expect("latest status");
+    assert_eq!(saved().await, (None, 0));
+
+    // The first read works out the back-in and saves it.
+    assert_eq!(
+        resolve_facing_deg(&app.pool, vehicle, Some(280.0)).await,
+        Some(100.0)
+    );
+    assert_eq!(saved().await, (Some(true), 0));
+
+    // Later reads use the saved answer and do not read telemetry again: rows
+    // added without marking the facing stale do not change it.
+    insert(vec![
+        (3600, 280.0, "drive", 0.0),
+        (3660, 10.0, "drive", 6.0),
+    ])
+    .await;
+    assert_eq!(
+        resolve_facing_deg(&app.pool, vehicle, Some(10.0)).await,
+        Some(190.0)
+    );
+
+    // Ingestion marks it stale after storing such rows; the next read works
+    // out the pull-away and saves that.
+    mark_stale(&app.pool, vehicle).await.expect("mark stale");
+    assert_eq!(saved().await, (None, 1));
+    assert_eq!(
+        resolve_facing_deg(&app.pool, vehicle, Some(10.0)).await,
+        Some(10.0)
+    );
+    assert_eq!(saved().await, (Some(false), 1));
+
+    // A read that began before telemetry was stored cannot save its answer:
+    // the epoch it read is no longer current.
+    mark_stale(&app.pool, vehicle).await.expect("mark stale");
+    mark_stale(&app.pool, vehicle).await.expect("mark stale");
+    assert!(!save_facing(&app.pool, vehicle, 2, true)
+        .await
+        .expect("save"));
+    assert_eq!(saved().await, (None, 3));
+    assert!(save_facing(&app.pool, vehicle, 3, false)
+        .await
+        .expect("save"));
+    assert!(!save_facing(&app.pool, vehicle, 3, true)
+        .await
+        .expect("save"));
+    assert_eq!(saved().await, (Some(false), 3));
+}
+
+#[tokio::test]
+async fn overview_view_preference_is_saved_per_user() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "overview-view@example.com").await;
+    // Registration closes after the first account; add the second directly.
+    let other = insert_user_and_login(
+        &app,
+        "overview-view-other@example.com",
+        "correctpassword123",
+    )
+    .await;
+    let view = |body: &Value| body["overview_view"].as_str().map(str::to_owned);
+
+    let defaults = app
+        .request(
+            Method::GET,
+            "/v1/auth/preferences",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        defaults.status,
+        StatusCode::OK,
+        "response: {}",
+        defaults.body
+    );
+    assert_eq!(view(&defaults.body).as_deref(), Some("cluster"));
+
+    let saved = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences/overview-view",
+            Some(json!({ "overview_view": "map" })),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "response: {}", saved.body);
+    assert_eq!(view(&saved.body).as_deref(), Some("map"));
+
+    let reread = app
+        .request(
+            Method::GET,
+            "/v1/auth/preferences",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(view(&reread.body).as_deref(), Some("map"));
+
+    // Another user's choice is untouched.
+    let others = app
+        .request(
+            Method::GET,
+            "/v1/auth/preferences",
+            None,
+            Some(&other),
+            None,
+        )
+        .await;
+    assert_eq!(view(&others.body).as_deref(), Some("cluster"));
+
+    let invalid = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences/overview-view",
+            Some(json!({ "overview_view": "satellite" })),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        invalid.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "response: {}",
+        invalid.body
+    );
+    let unchanged = app
+        .request(
+            Method::GET,
+            "/v1/auth/preferences",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(view(&unchanged.body).as_deref(), Some("map"));
+}
+
+#[tokio::test]
+async fn overview_map_expansion_is_saved_per_user() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "overview-expanded@example.com").await;
+    // Registration closes after the first account; add the second directly.
+    let other = insert_user_and_login(
+        &app,
+        "overview-expanded-other@example.com",
+        "correctpassword123",
+    )
+    .await;
+    let expanded = |body: &Value| body["overview_map_expanded"].as_bool();
+    let preferences = |token: String| {
+        let app = &app;
+        async move {
+            app.request(
+                Method::GET,
+                "/v1/auth/preferences",
+                None,
+                Some(&token),
+                None,
+            )
+            .await
+        }
+    };
+
+    let defaults = preferences(token.clone()).await;
+    assert_eq!(
+        defaults.status,
+        StatusCode::OK,
+        "response: {}",
+        defaults.body
+    );
+    assert_eq!(expanded(&defaults.body), Some(false));
+
+    // Saving the view first proves the two overview choices are independent.
+    let view = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences/overview-view",
+            Some(json!({ "overview_view": "map" })),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(view.status, StatusCode::OK, "response: {}", view.body);
+
+    let saved = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences/overview-map-expanded",
+            Some(json!({ "overview_map_expanded": true })),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "response: {}", saved.body);
+    assert_eq!(expanded(&saved.body), Some(true));
+
+    let reread = preferences(token.clone()).await;
+    assert_eq!(expanded(&reread.body), Some(true));
+    assert_eq!(reread.body["overview_view"].as_str(), Some("map"));
+
+    // Another user's choice is untouched.
+    let others = preferences(other).await;
+    assert_eq!(expanded(&others.body), Some(false));
+
+    let invalid = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences/overview-map-expanded",
+            Some(json!({ "overview_map_expanded": "yes" })),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        invalid.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "response: {}",
+        invalid.body
+    );
+    assert_eq!(expanded(&preferences(token.clone()).await.body), Some(true));
+
+    let collapsed = app
+        .request(
+            Method::PUT,
+            "/v1/auth/preferences/overview-map-expanded",
+            Some(json!({ "overview_map_expanded": false })),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        collapsed.status,
+        StatusCode::OK,
+        "response: {}",
+        collapsed.body
+    );
+    assert_eq!(expanded(&preferences(token).await.body), Some(false));
 }
 
 #[tokio::test]

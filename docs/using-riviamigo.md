@@ -21,6 +21,9 @@ Use this section after the installation is healthy and receiving vehicle data. I
 | Review weather, map, geocoding, or proxy access | [External connections](./guides/external-connections.md) |
 | Explore development-only Rivian-reported parked energy and extended readings | [Extended Vehicle Telemetry](./guides/extended-vehicle-telemetry.md) |
 | Minimize optional external requests | [External connections](./guides/external-connections.md) and [Privacy](./privacy.md) |
+| See what your Rivian costs to own next to other vehicles (preview, off by default) | [Ownership costs](./guides/features.md#ownership-costs) |
+| Pause Rivian collection for one vehicle | [Pausing data collection](./guides/rivian-account.md#pausing-data-collection) |
+| Run repair jobs without a terminal | [Maintenance jobs](./guides/features.md#maintenance-jobs) |
 
 ## Where to go next
 

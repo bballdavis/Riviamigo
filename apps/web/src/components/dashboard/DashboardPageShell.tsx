@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useAuth, useMe, useResolvedVehicleSelection } from '@riviamigo/hooks';
 import { DateRangePicker, EfficiencyDisplayToggle, PageLayout, SelectPicker } from '@riviamigo/ui/primitives';
 import { getUnitPreferences } from '@riviamigo/ui/lib/utils';
+import { useUnitPreferencesVersion } from '@riviamigo/ui/lib/useUnitPreferencesVersion';
 import {
   DashboardRenderer,
   findOwnedDashboardBySlug,
@@ -199,6 +200,8 @@ function DashboardPageShellContent({
   );
   const [chargeSessionDayLocal, setChargeSessionDayLocal] = useState<string | null>(null);
   const [unitMode, setUnitMode] = useState(() => getUnitPreferences().mode);
+  // Widgets format numbers at render time; re-render on any unit change.
+  const unitsVersion = useUnitPreferencesVersion();
   const range = useMemo(() => getTimeframeRange(timeframe), [timeframe]);
   const { from, to } = useMemo(() => timeframeToQuery(timeframe), [timeframe]);
 
@@ -440,6 +443,7 @@ function DashboardPageShellContent({
             ) : null}
             {shouldRenderDashboard ? (
               <DashboardRenderer
+                key={unitsVersion}
                 config={activeConfig}
                 ctx={ctx}
                 mode={currentEditMode ? 'edit' : 'view'}

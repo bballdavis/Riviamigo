@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  NODE_VERSION: '24.18.0'
+  NODE_VERSION: '26.13.0'
 
 concurrency:
   group: vehicle-artwork-${{ github.event.pull_request.number || github.ref }}
@@ -54,7 +54,7 @@ jobs:
 
       - name: Enable pnpm
         if: steps.changes.outputs.run == 'true'
-        run: corepack enable
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
 
       - name: Install image tooling
         if: steps.changes.outputs.run == 'true'

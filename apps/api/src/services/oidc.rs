@@ -10,14 +10,15 @@ use openidconnect::{
         CoreTokenType,
     },
     AdditionalClaims, AsyncHttpClient, AuthType, AuthorizationCode, Client, ClientId, ClientSecret,
-    EmptyExtraTokenFields, HttpRequest, HttpResponse, IdTokenFields, IssuerUrl, Nonce,
-    OAuth2TokenResponse, PkceCodeVerifier, RedirectUrl, StandardErrorResponse,
+    DiscoveryError, EmptyExtraTokenFields, HttpRequest, HttpResponse, IdTokenFields, IssuerUrl,
+    Nonce, OAuth2TokenResponse, PkceCodeVerifier, RedirectUrl, StandardErrorResponse,
     StandardTokenResponse, SubjectIdentifier, UserInfoClaims,
 };
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::sync::{LazyLock, Mutex};
 use std::{future::Future, pin::Pin};
 use url::Url;
 
@@ -327,6 +328,98 @@ fn validate_client_configuration(
     }
 }
 
+/// The configured issuer is stored canonically, without a trailing slash
+/// (`authentication_settings::canonicalize_issuer`), but openidconnect compares
+/// the discovered `issuer` with the requested one exactly (OIDC Discovery 1.0
+/// §4.3). Providers such as Authentik publish their issuer with a trailing
+/// slash, so try the canonical form first and the slash form only when the
+/// first attempt fails on that exact issuer comparison. After a successful
+/// discovery the matching form is tried first (see
+/// [`ordered_issuer_variants`]).
+fn issuer_variants(issuer: &str) -> Vec<String> {
+    let canonical = issuer.trim().trim_end_matches('/').to_owned();
+    vec![canonical.clone(), format!("{canonical}/")]
+}
+
+/// The issuer form that last passed discovery, keyed by the canonical issuer.
+/// A provider that publishes a trailing-slash issuer then costs one discovery
+/// round trip per login instead of a failed one first. Only one provider is
+/// configured at a time, so one slot is enough.
+static MATCHED_ISSUER_FORM: LazyLock<Mutex<Option<(String, String)>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+/// [`issuer_variants`] with the form that last matched tried first.
+fn ordered_issuer_variants(issuer: &str) -> Vec<String> {
+    let mut variants = issuer_variants(issuer);
+    let matched = MATCHED_ISSUER_FORM
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .filter(|(canonical, _)| *canonical == variants[0])
+        .map(|(_, form)| form.clone());
+    if let Some(position) = matched.and_then(|form| variants.iter().position(|v| *v == form)) {
+        let form = variants.remove(position);
+        variants.insert(0, form);
+    }
+    variants
+}
+
+fn remember_matched_issuer_form(issuer: &str, form: &str) {
+    let canonical = issuer.trim().trim_end_matches('/').to_owned();
+    *MATCHED_ISSUER_FORM
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((canonical, form.to_owned()));
+}
+
+async fn discover_with_issuer_variants(
+    issuer: &str,
+    http: &HttpsOnlyClient,
+) -> Result<CoreProviderMetadata, AppError> {
+    let discovery_failed =
+        || AppError::Validation("OIDC provider discovery or JWKS retrieval failed".into());
+    let mut last_mismatch = None;
+    for candidate in ordered_issuer_variants(issuer) {
+        let issuer_url = IssuerUrl::new(candidate.clone())
+            .map_err(|_| AppError::Validation("OIDC issuer is invalid".into()))?;
+        if issuer_url.url().scheme() != "https" {
+            return Err(AppError::Validation("OIDC issuer must use HTTPS".into()));
+        }
+        match CoreProviderMetadata::discover_async(issuer_url, http).await {
+            Ok(metadata) => {
+                remember_matched_issuer_form(issuer, &candidate);
+                return Ok(metadata);
+            }
+            Err(DiscoveryError::Validation(reason)) => {
+                tracing::debug!(
+                    target = "auth.oidc",
+                    stage = "discovery",
+                    %reason,
+                    "OIDC discovery issuer did not match this form; trying the next"
+                );
+                last_mismatch = Some(reason);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target = "auth.oidc",
+                    stage = "discovery",
+                    error = %error,
+                    "OIDC provider discovery or JWKS retrieval failed"
+                );
+                return Err(discovery_failed());
+            }
+        }
+    }
+    tracing::warn!(
+        target = "auth.oidc",
+        stage = "discovery",
+        reason = "issuer_mismatch",
+        configured_issuer = %issuer,
+        detail = last_mismatch.as_deref().unwrap_or("unknown"),
+        "OIDC provider discovery failed: the published issuer matches neither form of the configured issuer"
+    );
+    Err(discovery_failed())
+}
+
 async fn secure_metadata(
     settings: &EffectiveAuthenticationSettings,
 ) -> Result<CoreProviderMetadata, AppError> {
@@ -337,17 +430,8 @@ async fn secure_metadata(
         .issuer_url
         .as_deref()
         .ok_or_else(|| AppError::Validation("OIDC issuer is not configured".into()))?;
-    let issuer = IssuerUrl::new(issuer.to_owned())
-        .map_err(|_| AppError::Validation("OIDC issuer is invalid".into()))?;
-    if issuer.url().scheme() != "https" {
-        return Err(AppError::Validation("OIDC issuer must use HTTPS".into()));
-    }
     let http = https_only_client()?;
-    let metadata = CoreProviderMetadata::discover_async(issuer, &http)
-        .await
-        .map_err(|_| {
-            AppError::Validation("OIDC provider discovery or JWKS retrieval failed".into())
-        })?;
+    let metadata = discover_with_issuer_variants(issuer, &http).await?;
     validate_https_provider_endpoint(
         "authorization",
         metadata.authorization_endpoint().url().as_str(),
@@ -563,6 +647,66 @@ pub fn authorization_url(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn issuer_variants_try_canonical_then_trailing_slash() {
+        let expected = vec![
+            "https://auth.example/application/o/app".to_owned(),
+            "https://auth.example/application/o/app/".to_owned(),
+        ];
+        assert_eq!(
+            issuer_variants("https://auth.example/application/o/app"),
+            expected
+        );
+        assert_eq!(
+            issuer_variants(" https://auth.example/application/o/app/ "),
+            expected
+        );
+    }
+
+    #[test]
+    fn the_issuer_form_that_matched_is_tried_first_next_time() {
+        let issuer = "https://matched-form.example/application/o/app";
+        let slash = format!("{issuer}/");
+        assert_eq!(ordered_issuer_variants(issuer)[0], issuer);
+
+        remember_matched_issuer_form(issuer, &slash);
+        assert_eq!(
+            ordered_issuer_variants(issuer),
+            vec![slash.clone(), issuer.to_owned()]
+        );
+        assert_eq!(ordered_issuer_variants(&slash)[0], slash);
+        // Another issuer is unaffected by the remembered form.
+        let other = "https://other-form.example/application/o/app";
+        assert_eq!(ordered_issuer_variants(other)[0], other);
+
+        remember_matched_issuer_form(issuer, issuer);
+        assert_eq!(ordered_issuer_variants(issuer)[0], issuer);
+    }
+
+    /// Authentik-shaped discovery: the published issuer ends in `/`. The
+    /// canonical (stored) issuer must be rejected by openidconnect's exact
+    /// comparison and the slash variant accepted, which is why
+    /// `discover_with_issuer_variants` tries both.
+    #[test]
+    fn trailing_slash_issuer_matches_only_the_slash_variant() {
+        let document = serde_json::json!({
+            "issuer": "https://auth.example/application/o/app/",
+            "authorization_endpoint": "https://auth.example/application/o/authorize/",
+            "token_endpoint": "https://auth.example/application/o/token/",
+            "jwks_uri": "https://auth.example/application/o/app/jwks/",
+            "response_types_supported": ["code"],
+            "subject_types_supported": ["public"],
+            "id_token_signing_alg_values_supported": ["RS256"]
+        });
+        let metadata: CoreProviderMetadata = serde_json::from_value(document).unwrap();
+        let [canonical, slash]: [String; 2] =
+            issuer_variants("https://auth.example/application/o/app")
+                .try_into()
+                .unwrap();
+        assert_ne!(metadata.issuer(), &IssuerUrl::new(canonical).unwrap());
+        assert_eq!(metadata.issuer(), &IssuerUrl::new(slash).unwrap());
+    }
+
     #[test]
     fn pkce_is_url_safe_and_deterministic() {
         assert_eq!(pkce_challenge("abc"), pkce_challenge("abc"));

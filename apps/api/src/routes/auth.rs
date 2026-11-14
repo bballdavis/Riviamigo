@@ -59,6 +59,18 @@ pub fn metadata_router() -> Router<AppState> {
             axum::routing::put(update_map_style),
         )
         .route(
+            "/auth/preferences/ownership",
+            axum::routing::put(update_ownership_preference),
+        )
+        .route(
+            "/auth/preferences/overview-view",
+            axum::routing::put(update_overview_view),
+        )
+        .route(
+            "/auth/preferences/overview-map-expanded",
+            axum::routing::put(update_overview_map_expanded),
+        )
+        .route(
             "/auth/preferences/chart-favorites",
             axum::routing::get(get_chart_favorites).put(update_chart_favorite),
         )
@@ -1023,6 +1035,12 @@ struct PreferencesResponse {
     units: UnitPreferencesPayload,
     theme: ThemePreferencesPayload,
     map_style: String,
+    /// Whether the user shows the Ownership dashboard; on unless turned off.
+    ownership_enabled: bool,
+    /// The Vehicle Overview view last chosen: `cluster` (default) or `map`.
+    overview_view: String,
+    /// Whether the Vehicle Overview's location map is expanded; off by default.
+    overview_map_expanded: bool,
 }
 
 #[derive(Deserialize)]
@@ -1039,6 +1057,25 @@ struct MapStyleUpdateBody {
 #[derive(Serialize)]
 struct MapStyleResponse {
     map_style: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct OwnershipPreferenceBody {
+    ownership_enabled: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+struct OverviewViewBody {
+    overview_view: String,
+}
+
+fn is_valid_overview_view(value: &str) -> bool {
+    matches!(value, "cluster" | "map")
+}
+
+#[derive(Deserialize, Serialize)]
+struct OverviewMapExpandedBody {
+    overview_map_expanded: bool,
 }
 
 #[derive(Serialize)]
@@ -1666,7 +1703,8 @@ async fn get_preferences(
         "SELECT unit_mode, distance_unit, temperature_unit, \
                 custom_distance_unit, custom_speed_unit, custom_temperature_unit, \
                 custom_pressure_unit, custom_altitude_unit, custom_place_radius_unit, \
-                custom_efficiency_display, theme_mode, theme_palette, map_style \
+                custom_efficiency_display, theme_mode, theme_palette, map_style, \
+                ownership_enabled, overview_view, overview_map_expanded \
          FROM riviamigo.user_preferences WHERE user_id = $1",
     )
     .bind(auth.user_id)
@@ -1678,6 +1716,20 @@ async fn get_preferences(
         .and_then(|row| row.try_get::<String, _>("map_style").ok())
         .filter(|value| is_valid_map_style(value))
         .unwrap_or_else(|| "follow-theme".to_string());
+    let ownership_enabled = row
+        .as_ref()
+        .and_then(|row| row.try_get::<bool, _>("ownership_enabled").ok())
+        // Ownership is in preview: off until the user turns it on.
+        .unwrap_or(false);
+    let overview_view = row
+        .as_ref()
+        .and_then(|row| row.try_get::<String, _>("overview_view").ok())
+        .filter(|value| is_valid_overview_view(value))
+        .unwrap_or_else(|| "cluster".to_string());
+    let overview_map_expanded = row
+        .as_ref()
+        .and_then(|row| row.try_get::<bool, _>("overview_map_expanded").ok())
+        .unwrap_or(false);
 
     let theme = row
         .as_ref()
@@ -1754,6 +1806,9 @@ async fn get_preferences(
         units,
         theme,
         map_style,
+        ownership_enabled,
+        overview_view,
+        overview_map_expanded,
     }))
 }
 
@@ -1882,6 +1937,60 @@ async fn update_map_style(
     Ok(Json(MapStyleResponse {
         map_style: body.map_style,
     }))
+}
+
+async fn update_ownership_preference(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<OwnershipPreferenceBody>,
+) -> Result<Json<OwnershipPreferenceBody>, AppError> {
+    sqlx::query(
+        "INSERT INTO riviamigo.user_preferences (user_id, ownership_enabled, updated_at) \
+         VALUES ($1, $2, now()) \
+         ON CONFLICT (user_id) DO UPDATE SET ownership_enabled = EXCLUDED.ownership_enabled, updated_at = now()",
+    )
+    .bind(auth.user_id)
+    .bind(body.ownership_enabled)
+    .execute(&state.pool)
+    .await?;
+    Ok(Json(body))
+}
+
+async fn update_overview_view(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<OverviewViewBody>,
+) -> Result<Json<OverviewViewBody>, AppError> {
+    if !is_valid_overview_view(&body.overview_view) {
+        return Err(AppError::Validation("invalid overview view".into()));
+    }
+    sqlx::query(
+        "INSERT INTO riviamigo.user_preferences (user_id, overview_view, updated_at) \
+         VALUES ($1, $2, now()) \
+         ON CONFLICT (user_id) DO UPDATE SET overview_view = EXCLUDED.overview_view, updated_at = now()",
+    )
+    .bind(auth.user_id)
+    .bind(&body.overview_view)
+    .execute(&state.pool)
+    .await?;
+    Ok(Json(body))
+}
+
+async fn update_overview_map_expanded(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<OverviewMapExpandedBody>,
+) -> Result<Json<OverviewMapExpandedBody>, AppError> {
+    sqlx::query(
+        "INSERT INTO riviamigo.user_preferences (user_id, overview_map_expanded, updated_at) \
+         VALUES ($1, $2, now()) \
+         ON CONFLICT (user_id) DO UPDATE SET overview_map_expanded = EXCLUDED.overview_map_expanded, updated_at = now()",
+    )
+    .bind(auth.user_id)
+    .bind(body.overview_map_expanded)
+    .execute(&state.pool)
+    .await?;
+    Ok(Json(body))
 }
 
 async fn get_chart_favorites(

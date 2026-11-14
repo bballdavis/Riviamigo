@@ -71,8 +71,9 @@ RUN touch src/lib.rs src/main.rs src/bin/riviamigo-restore-agent.rs src/bin/reba
     && if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then rebaseline_binary_path=target/aarch64-unknown-linux-gnu/container/rebaseline_db; fi \
     && cp "$rebaseline_binary_path" /build/apps/api/rebaseline_db
 
-FROM --platform=$BUILDPLATFORM node:24.18.0-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS web-builder
-RUN corepack enable
+FROM --platform=$BUILDPLATFORM node:26.13.0-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216 AS web-builder
+# Node 25+ no longer bundles corepack; install the baseline pnpm directly.
+RUN npm install --global pnpm@11.15.1
 WORKDIR /build
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/

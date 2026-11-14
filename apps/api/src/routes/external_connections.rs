@@ -145,6 +145,8 @@ const DEFINITIONS: &[ConnectionDefinition] = &[
     ConnectionDefinition { id: connections::NOMINATIM, name: "OpenStreetMap Nominatim", purpose: "Address search and readable trip endpoint labels.", data_shared: &["Exact coordinate for reverse geocoding", "Search text after explicit submit"], disabled_effect: "Address search and new automatic trip labels stop. Coordinates, saved places, and cached labels remain.", execution: "Server", privacy_url: Some("https://osmfoundation.org/wiki/Privacy_Policy"), terms_url: Some("https://operations.osmfoundation.org/policies/nominatim/"), editable: true },
     ConnectionDefinition { id: connections::BASEMAP, name: "Map basemap", purpose: "Street and geographic context behind exact trip routes.", data_shared: &["Requested map areas and resource paths", "Riviamigo server IP"], disabled_effect: "Routes remain visible on a neutral background, without streets or place context.", execution: "Server proxy", privacy_url: Some("https://carto.com/privacy/"), terms_url: Some("https://carto.com/legal/"), editable: true },
     ConnectionDefinition { id: connections::ICONIFY, name: "Iconify catalog", purpose: "Search and load dashboard icons not bundled locally.", data_shared: &["Icon names", "Explicit icon search text"], disabled_effect: "Remote icon search stops; bundled icons and local fallbacks remain.", execution: "Server proxy", privacy_url: Some("https://iconify.design/privacy/"), terms_url: Some("https://iconify.design/terms/"), editable: true },
+    ConnectionDefinition { id: connections::FUEL_PRICES, name: "Fuel prices", purpose: "Download monthly U.S. average gasoline prices for Ownership cost comparisons.", data_shared: &["Server IP address", "Fixed request for national average price series", "Your EIA API key, when one is saved"], disabled_effect: "Ownership comparisons stop downloading prices. Months already stored keep working, and the rest use your flat gas price.", execution: "Server request, at most daily", privacy_url: Some("https://www.eia.gov/about/privacy_security_policy.php"), terms_url: Some("https://www.eia.gov/about/copyrights_reuse.php"), editable: true },
+    ConnectionDefinition { id: connections::VEHICLE_LOOKUP, name: "Vehicle lookup", purpose: "Search fueleconomy.gov by year, make, and model when adding a comparison vehicle to Ownership.", data_shared: &["Server IP address", "Year, make, and model you look up"], disabled_effect: "Vehicle search is unavailable. Comparison vehicles can still be added by entering their figures manually.", execution: "Server proxy", privacy_url: Some("https://www.energy.gov/privacy-program"), terms_url: Some("https://www.fueleconomy.gov/feg/ws/"), editable: true },
     ConnectionDefinition { id: connections::S3_BACKUP, name: "S3-compatible backups", purpose: "Optional off-site backup storage managed in Backups.", data_shared: &["Backup artifact", "Configured object-store credentials"], disabled_effect: "New off-site backups stop; local backup behavior and existing objects remain.", execution: "Server", privacy_url: None, terms_url: None, editable: false },
 ];
 
@@ -154,11 +156,12 @@ async fn list_connections(
 ) -> Result<Json<ExternalConnectionsResponse>, AppError> {
     let role = get_user_role(&state.pool, auth.user_id).await?;
     let can_manage = matches!(role, UserRole::Admin | UserRole::SuperUser);
-    Ok(Json(build_response(&state, can_manage).await?))
+    Ok(Json(build_response(&state, &auth, can_manage).await?))
 }
 
 async fn build_response(
     state: &AppState,
+    auth: &AuthUser,
     can_manage: bool,
 ) -> Result<ExternalConnectionsResponse, AppError> {
     let rows = connections::list(&state.pool).await?;
@@ -169,7 +172,8 @@ async fn build_response(
     .await?
     .unwrap_or((false, None));
     let mut result = Vec::with_capacity(rows.len());
-    let rivian_status = connections::rivian_status(&state.pool).await?;
+    let rivian_status =
+        connections::rivian_status(&state.pool, auth.user_id, auth.api_vehicle_id).await?;
     for (settings, activity) in rows {
         let Some(definition) = DEFINITIONS.iter().find(|item| item.id == settings.id) else {
             continue;
@@ -517,6 +521,16 @@ async fn update_connection(
                 attribution = Some("Iconify".into());
                 attribution_url = Some("https://iconify.design/".into());
             }
+            connections::FUEL_PRICES => {
+                base_url = Some(connections::FUEL_PRICES_BASE_URL.into());
+                attribution = Some("U.S. Energy Information Administration".into());
+                attribution_url = Some("https://www.eia.gov/petroleum/gasdiesel/".into());
+            }
+            connections::VEHICLE_LOOKUP => {
+                base_url = Some(connections::VEHICLE_LOOKUP_BASE_URL.into());
+                attribution = Some("U.S. EPA and DOE, fueleconomy.gov".into());
+                attribution_url = Some("https://www.fueleconomy.gov/".into());
+            }
             _ => {}
         }
     }
@@ -587,7 +601,7 @@ async fn update_connection(
         _ => {}
     }
 
-    Ok(Json(build_response(&state, true).await?))
+    Ok(Json(build_response(&state, &auth, true).await?))
 }
 
 async fn disable_optional(
@@ -602,7 +616,7 @@ async fn disable_optional(
     .bind(connections::OPTIONAL_CONNECTIONS)
     .execute(&state.pool)
     .await?;
-    Ok(Json(build_response(&state, true).await?))
+    Ok(Json(build_response(&state, &auth, true).await?))
 }
 
 #[derive(Debug, Serialize)]
@@ -917,6 +931,36 @@ async fn test_connection(
                 .await?
                 .get(endpoint)
                 .query(&[("query", "thermometer"), ("limit", "1")])
+                .send()
+                .await
+        }
+        connections::FUEL_PRICES => {
+            let api_key = body
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or(decrypt_secret(
+                    &state.age_key,
+                    settings.api_key_encrypted.as_deref(),
+                )?);
+            let endpoint = crate::services::ownership::fuel_price_endpoint(api_key.as_deref(), 1)?;
+            outbound_client_for_url(&endpoint, &private_network_allowlist)
+                .await?
+                .get(endpoint)
+                .send()
+                .await
+        }
+        connections::VEHICLE_LOOKUP => {
+            let endpoint = endpoint_join(
+                Some(connections::VEHICLE_LOOKUP_BASE_URL),
+                "vehicle/menu/year",
+            )?;
+            outbound_client_for_url(&endpoint, &private_network_allowlist)
+                .await?
+                .get(endpoint)
+                .header(header::ACCEPT, "application/json")
                 .send()
                 .await
         }

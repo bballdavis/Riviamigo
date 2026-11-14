@@ -13,11 +13,13 @@ export interface PageLayoutProps {
   titleActionAfter?: React.ReactNode | undefined;
   subtitle?: React.ReactNode;
   actions?: React.ReactNode | undefined;
+  /** Extra classes for the actions row, e.g. to give it its own full-width row on phones. */
+  actionsClassName?: string | undefined;
   children: React.ReactNode;
   className?: string | undefined;
 }
 
-export function PageLayout({ title, titleAction, titleActionPosition = 'right', titleActionAfter, subtitle, actions, children, className }: PageLayoutProps) {
+export function PageLayout({ title, titleAction, titleActionPosition = 'right', titleActionAfter, subtitle, actions, actionsClassName, children, className }: PageLayoutProps) {
   return (
     <div className={cn('flex flex-col gap-6', className)}>
       <div className="flex flex-wrap items-start justify-between gap-y-2">
@@ -34,7 +36,7 @@ export function PageLayout({ title, titleAction, titleActionPosition = 'right', 
               : <div className="mt-0.5 max-w-full min-w-0">{subtitle}</div>
           ) : null}
         </div>
-        {actions && <div className="flex items-center gap-2">{actions}</div>}
+        {actions && <div className={cn('flex items-center gap-2', actionsClassName)}>{actions}</div>}
       </div>
       {children}
     </div>

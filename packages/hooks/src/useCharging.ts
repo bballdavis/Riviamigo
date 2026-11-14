@@ -3,8 +3,7 @@ import { api } from './api';
 import type { DepartureScheduleInput, ChargingScheduleInput } from './api';
 import type { ChargeSession, ChargeSessionUpdate, ChargingNetworkPreference, Place } from '@riviamigo/types';
 import { useAuthReady } from './useAuthState';
-
-type PlaceQueryKey = readonly ['places'];
+import { queryKeys } from './queryKeys';
 
 type UpdateChargeSessionLocationPayload = {
   sessionId: string;
@@ -91,7 +90,7 @@ export function useChargeSession(sessionId: string | null, vehicleId: string | n
 export function useSavedPlaces() {
   const authReady = useAuthReady();
   return useQuery<Place[]>({
-    queryKey: ['places'] as PlaceQueryKey,
+    queryKey: queryKeys.places.all,
     queryFn: () => api.listPlaces(),
     enabled: authReady,
     staleTime: 60 * 60 * 1000,

@@ -1,9 +1,11 @@
 import * as React from 'react';
-import { Loader2 } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Info, Loader2 } from 'lucide-react';
 import type { BasemapStyleDescriptor, MapStylePreference } from '@riviamigo/types';
 import { CHART_COLORS } from './ChartProvider';
 import { useDocumentPalette } from '../hooks/useDocumentPalette';
 import { useDocumentTheme } from '../hooks/useDocumentTheme';
+import { resolveBasemapThemeColors, themeBasemapStyle, type BasemapStyleLike } from '../lib/basemapTheme';
 import { isAbortError, reportClientError } from '../lib/clientDiagnostics';
 import { useThemeRevision } from '../lib/themeRuntime';
 import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
@@ -39,7 +41,40 @@ export interface TripMapChartProps {
   routes?: TripMapRoute[];
   selectedRouteIds?: string[];
   onRouteClick?: (routeId: string) => void;
+  /**
+   * Called with the map's canvas right after each frame is drawn, while the
+   * drawing buffer is still intact, so an overlay can copy what is beneath it.
+   */
+  onRenderFrame?: ((canvas: HTMLCanvasElement) => void) | undefined;
   activePoint?: LatLng | null;
+  /**
+   * Keeps the map centered on one marked point, such as the vehicle's current
+   * location. With a focus point the map renders even when there are no
+   * routes; routes, when present, still decide the initial fit.
+   */
+  focusPoint?: LatLng | null;
+  /** Zoom used when centering on `focusPoint` without routes. */
+  focusZoom?: number;
+  /**
+   * Custom marker content drawn at `focusPoint` instead of the default dot,
+   * for example a small vehicle image. It is pinned to the map, so it stays
+   * on the location while the map is panned.
+   */
+  focusMarker?: React.ReactNode;
+  /** Clockwise degrees from north applied to `focusMarker` (a compass heading). */
+  focusRotation?: number | null | undefined;
+  /** Copy shown when there is neither a route nor a focus point. */
+  emptyLabel?: string;
+  /**
+   * Collapse the basemap credits behind a small info button, for maps too
+   * narrow to show the full line without covering the map.
+   */
+  compactAttribution?: boolean;
+  /**
+   * Corner for the compact credits button. Top-left keeps the bottom edge free
+   * for an overlay drawn along it.
+   */
+  compactAttributionPlacement?: 'bottom-right' | 'top-left';
   startPoint?: LatLng;
   endPoint?: LatLng;
   height?: number;
@@ -57,6 +92,20 @@ export interface TripMapChartProps {
   mapLoader?: typeof loadMapLibre;
 }
 
+interface MarkerApi {
+  setLngLat(lngLat: [number, number]): MarkerApi;
+  setRotation(rotation: number): MarkerApi;
+  addTo(map: unknown): MarkerApi;
+  remove(): void;
+}
+
+type MarkerConstructor = new (options: {
+  element: HTMLElement;
+  anchor?: 'center';
+  rotationAlignment?: 'map' | 'viewport';
+  pitchAlignment?: 'map' | 'viewport';
+}) => MarkerApi;
+
 interface MapSourceApi {
   setData(data: unknown): void;
 }
@@ -68,6 +117,7 @@ interface MapApi {
   off(event: string, cb: (event?: unknown) => void): void;
   resize(): void;
   fitBounds(bounds: [[number, number], [number, number]], options?: { padding?: number; animate?: boolean }): void;
+  jumpTo?(options: { center: [number, number]; zoom?: number }): void;
   addSource(id: string, source: unknown): void;
   getSource(id: string): MapSourceApi | undefined;
   removeSource(id: string): void;
@@ -75,13 +125,21 @@ interface MapApi {
   getLayer(id: string): unknown;
   removeLayer(id: string): void;
   setPaintProperty(layerId: string, name: string, value: unknown): void;
-  getCanvas(): { style: CSSStyleDeclaration };
-  setStyle(style: unknown): void;
+  getCanvas(): HTMLCanvasElement;
+  setStyle(style: unknown, options?: BasemapStyleOptions): void;
   triggerRepaint?(): void;
   setPitch?(pitch: number): void;
   setBearing?(bearing: number): void;
   dragRotate?: { enable(): void; disable(): void };
 }
+
+/**
+ * Edge overlays (the credits) sit 0.25rem in from the visible edge. A host that
+ * draws the map wider than the frame showing it, and clips the overflow, sets
+ * `--rm-map-overlay-inset-x` to the clipped width on each side.
+ */
+const OVERLAY_EDGE_INSET = 'calc(var(--rm-map-overlay-inset-x, 0px) + 0.25rem)';
+const OVERLAY_MAX_WIDTH = 'calc(100% - 2 * var(--rm-map-overlay-inset-x, 0px) - 0.5rem)';
 
 const FALLBACK_ROUTE_COLORS = [
   CHART_COLORS.sky,
@@ -107,6 +165,7 @@ const MAP_TILES_UNAVAILABLE = 'Map tiles unavailable';
 export const MAP_TILE_LOAD_TIMEOUT_MS = 20_000;
 /** Avoid flashing the loading indicator for fast loads and cached style swaps. */
 export const MAP_TILE_LOADING_INDICATOR_DELAY_MS = 250;
+const DEFAULT_FOCUS_ZOOM = 14;
 
 export const NEUTRAL_BASEMAP_CONFIG: BasemapConfig = {
   enabled: false,
@@ -153,9 +212,97 @@ function buildMapLibreStyle(mode: MapStyleMode, basemap: BasemapConfig, preferen
   };
 }
 
-function basemapSignature(basemap: BasemapConfig, mode: MapStyleMode, preference: MapStylePreference) {
+interface BasemapStyleOptions {
+  transformStyle: (previous: unknown, next: BasemapStyleLike) => BasemapStyleLike;
+}
+
+/**
+ * "Follow appearance" on a vector provider is repainted from the active
+ * theme's tokens. Explicitly chosen presets keep the provider's stock look,
+ * and raster providers (Carto) cannot be recolored per layer.
+ *
+ * The tokens describe the document's own theme, so a forced map mode that
+ * differs from it (the Overview's dark map in a light app) keeps the stock
+ * style for the mode it asked for instead of painting a light ground.
+ */
+function isThemedBasemap(basemap: BasemapConfig, preference: MapStylePreference, mode: MapStyleMode, documentMode: MapStyleMode) {
+  if (!basemap.enabled || mode !== documentMode) return false;
+  const { descriptor, url } = resolveStyleDescriptor(basemap, preference, mode);
+  return descriptor?.id === 'follow-theme' && descriptor.kind === 'style' && Boolean(url);
+}
+
+/** The provider style JSON a themed basemap was painted from. */
+interface StockBasemapStyle {
+  url: string;
+  mode: MapStyleMode;
+  style: BasemapStyleLike;
+}
+
+type StockBasemapListener = (stock: StockBasemapStyle) => void;
+
+function basemapStyleOptions(
+  basemap: BasemapConfig,
+  preference: MapStylePreference,
+  mode: MapStyleMode,
+  documentMode: MapStyleMode,
+  onStockStyle: StockBasemapListener,
+): BasemapStyleOptions | undefined {
+  if (!isThemedBasemap(basemap, preference, mode, documentMode)) return undefined;
+  const { url } = resolveStyleDescriptor(basemap, preference, mode);
+  // Tokens are read when the style JSON arrives, so the transform always
+  // paints from the theme that is active at that moment. The stock JSON is
+  // kept so later palette changes can repaint without reloading the style.
+  return {
+    transformStyle: (_previous, next) => {
+      onStockStyle({ url, mode, style: structuredClone(next) });
+      return themeBasemapStyle(next, resolveBasemapThemeColors(mode), mode);
+    },
+  };
+}
+
+function applyBasemapStyle(
+  map: MapApi,
+  mode: MapStyleMode,
+  basemap: BasemapConfig,
+  preference: MapStylePreference,
+  documentMode: MapStyleMode,
+  onStockStyle: StockBasemapListener,
+) {
+  const style = buildMapLibreStyle(mode, basemap, preference);
+  const options = basemapStyleOptions(basemap, preference, mode, documentMode, onStockStyle);
+  if (options) map.setStyle(style, options);
+  else map.setStyle(style);
+}
+
+/**
+ * Repaints the loaded basemap from the current tokens in place. Palette and
+ * custom-theme changes keep the same provider style, so reloading it would
+ * only drop and re-add the route overlays. A stock (forced-mismatch) style is
+ * never repainted, because the tokens do not describe its mode.
+ */
+function repaintThemedBasemap(
+  map: MapApi,
+  stock: StockBasemapStyle | null,
+  basemap: BasemapConfig,
+  preference: MapStylePreference,
+  mode: MapStyleMode,
+  documentMode: MapStyleMode,
+) {
+  if (!stock || stock.mode !== mode || !isThemedBasemap(basemap, preference, mode, documentMode)) return;
+  if (stock.url !== resolveStyleDescriptor(basemap, preference, mode).url) return;
+  const themed = themeBasemapStyle(stock.style, resolveBasemapThemeColors(mode), mode);
+  for (const layer of themed.layers ?? []) {
+    if (!layer.paint || !map.getLayer(layer.id)) continue;
+    for (const [property, value] of Object.entries(layer.paint)) {
+      map.setPaintProperty(layer.id, property, value);
+    }
+  }
+}
+
+function basemapSignature(basemap: BasemapConfig, mode: MapStyleMode, preference: MapStylePreference, documentMode: MapStyleMode) {
   const resolved = resolveStyleDescriptor(basemap, preference, mode);
-  return `${mode}|${preference}|${basemap.enabled}|${basemap.revision}|${resolved.url}|${resolved.descriptor?.kind ?? 'raster'}`;
+  const themed = isThemedBasemap(basemap, preference, mode, documentMode) ? 'themed' : 'stock';
+  return `${mode}|${preference}|${basemap.enabled}|${basemap.revision}|${resolved.url}|${resolved.descriptor?.kind ?? 'raster'}|${themed}`;
 }
 
 export async function loadMapLibre() {
@@ -174,7 +321,15 @@ export function TripMapChart({
   routes,
   selectedRouteIds = [],
   onRouteClick,
+  onRenderFrame,
   activePoint,
+  focusPoint = null,
+  focusZoom = DEFAULT_FOCUS_ZOOM,
+  focusMarker,
+  focusRotation = null,
+  emptyLabel = 'No route points in this period',
+  compactAttribution = false,
+  compactAttributionPlacement = 'bottom-right',
   height = 320,
   className,
   mapStyle = 'dark',
@@ -190,9 +345,26 @@ export function TripMapChart({
   const isLoadedRef = React.useRef(false);
   const lastRouteSignatureRef = React.useRef<string>('');
   const onRouteClickRef = React.useRef(onRouteClick);
+  const onRenderFrameRef = React.useRef(onRenderFrame);
   const latestRoutesRef = React.useRef<TripMapRoute[]>([]);
   const latestSelectedRouteIdsRef = React.useRef<string[]>([]);
-  const latestActivePointRef = React.useRef<LatLng | null | undefined>(activePoint);
+  const markerConstructorRef = React.useRef<MarkerConstructor | null>(null);
+  const focusMarkerRef = React.useRef<MarkerApi | null>(null);
+  const [focusMarkerElement] = React.useState<HTMLDivElement | null>(
+    () => (typeof document === 'undefined' ? null : document.createElement('div')),
+  );
+  const [mapLoaded, setMapLoaded] = React.useState(false);
+  const [attributionOpen, setAttributionOpen] = React.useState(false);
+  const [customFocusMarkerShown, setCustomFocusMarkerShown] = React.useState(false);
+  const hasFocusMarker = focusMarker !== undefined && focusMarker !== null;
+  // A focus point is drawn with the same dot as a scrubbed active point unless
+  // custom marker content is pinned there instead.
+  const markerPoint = activePoint ?? (customFocusMarkerShown ? null : focusPoint);
+  const latestActivePointRef = React.useRef<LatLng | null | undefined>(markerPoint);
+  const focusPointRef = React.useRef<LatLng | null>(focusPoint);
+  const focusZoomRef = React.useRef(focusZoom);
+  const focusRotationRef = React.useRef(0);
+  focusRotationRef.current = typeof focusRotation === 'number' && Number.isFinite(focusRotation) ? focusRotation : 0;
   const latestVisibleRouteSignatureRef = React.useRef<string>('');
   const activePointFrameRef = React.useRef<number | null>(null);
   const lastActivePointRef = React.useRef<LatLng | null>(null);
@@ -213,6 +385,16 @@ export function TripMapChart({
   const palette = useDocumentPalette();
   const isDark = useDocumentTheme();
   const themeRevision = useThemeRevision();
+  // The mode the document's theme tokens describe; a themed basemap needs it to match `mapStyle`.
+  const documentMode: MapStyleMode = isDark ? 'dark' : 'light';
+  const documentModeRef = React.useRef<MapStyleMode>(documentMode);
+  const stockBasemapRef = React.useRef<StockBasemapStyle | null>(null);
+  const rememberStockBasemap = React.useCallback<StockBasemapListener>((stock) => {
+    stockBasemapRef.current = stock;
+  }, []);
+  // A forced-mode map is themed only while the document shares its mode, so
+  // this flips (and the style is re-applied) when the app theme changes.
+  const themedAppearance = isThemedBasemap(basemap, mapStylePreference, mapStyle, documentMode);
 
   React.useEffect(() => {
     accessTokenRef.current = accessToken;
@@ -225,12 +407,14 @@ export function TripMapChart({
   React.useEffect(() => {
     mapStyleRef.current = mapStyle;
     mapStylePreferenceRef.current = mapStylePreference;
-  }, [mapStyle, mapStylePreference]);
+    documentModeRef.current = documentMode;
+  }, [documentMode, mapStyle, mapStylePreference]);
 
   const routeList = React.useMemo(
     () => (routes?.length ? routes : [{ id: 'trip', track }]).filter((route) => route.track.length > 1),
     [routes, track],
   );
+  const hasMapContent = routeList.length > 0 || focusPoint !== null;
   const selectedRouteIdSet = React.useMemo(() => new Set(selectedRouteIds), [selectedRouteIds]);
   const visibleRoutes = React.useMemo(
     () => (selectedRouteIds.length > 0
@@ -248,23 +432,17 @@ export function TripMapChart({
   }, [onRouteClick]);
 
   React.useEffect(() => {
-    latestRoutesRef.current = visibleRoutes;
-    latestSelectedRouteIdsRef.current = selectedRouteIds;
-    latestActivePointRef.current = activePoint;
-    latestVisibleRouteSignatureRef.current = visibleRouteSignature;
-  }, [activePoint, selectedRouteIds, visibleRouteSignature, visibleRoutes]);
+    onRenderFrameRef.current = onRenderFrame;
+  }, [onRenderFrame]);
 
   React.useEffect(() => {
-    const element = containerRef.current;
-    if (!element || typeof ResizeObserver === 'undefined') return;
-
-    const observer = new ResizeObserver(() => {
-      mapRef.current?.resize();
-    });
-
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
+    latestRoutesRef.current = visibleRoutes;
+    latestSelectedRouteIdsRef.current = selectedRouteIds;
+    latestActivePointRef.current = markerPoint;
+    latestVisibleRouteSignatureRef.current = visibleRouteSignature;
+    focusPointRef.current = focusPoint;
+    focusZoomRef.current = focusZoom;
+  }, [focusPoint, focusZoom, markerPoint, selectedRouteIds, visibleRouteSignature, visibleRoutes]);
 
   const clearTileLoadTimeout = React.useCallback(() => {
     if (tileLoadTimeoutRef.current !== null) {
@@ -321,7 +499,7 @@ export function TripMapChart({
   // rather than destroying and recreating the map, which avoids losing the
   // in-GPU tile cache and triggering a "WebGL context was lost" error.
   React.useEffect(() => {
-    if (!containerRef.current || routeList.length === 0 || mapRef.current) return;
+    if (!containerRef.current || !hasMapContent || mapRef.current) return;
 
     let cancelled = false;
     beginTileLoad();
@@ -331,19 +509,33 @@ export function TripMapChart({
         const maplibregl = await mapLoader();
 
         if (cancelled || !containerRef.current) return;
+        markerConstructorRef.current = (maplibregl as { Marker?: MarkerConstructor }).Marker ?? null;
 
-        const firstPoint = routeList[0]?.track[0];
+        const routeStart = routeList[0]?.track[0];
+        const firstPoint = routeStart ?? focusPointRef.current;
         if (!firstPoint) return;
 
         const initialBasemap = basemapRef.current;
         const initialMapStyle = mapStyleRef.current;
         const initialMapStylePreference = mapStylePreferenceRef.current;
-        appliedBasemapSignatureRef.current = basemapSignature(initialBasemap, initialMapStyle, initialMapStylePreference);
+        const initialDocumentMode = documentModeRef.current;
+        appliedBasemapSignatureRef.current = basemapSignature(initialBasemap, initialMapStyle, initialMapStylePreference, initialDocumentMode);
+        // The constructor cannot transform a fetched style, so a themed
+        // basemap is applied through setStyle() right after construction.
+        const initialStyleOptions = basemapStyleOptions(
+          initialBasemap,
+          initialMapStylePreference,
+          initialMapStyle,
+          initialDocumentMode,
+          rememberStockBasemap,
+        );
+        const initialStyle = buildMapLibreStyle(initialMapStyle, initialBasemap, initialMapStylePreference);
         const map = new maplibregl.Map({
           container: containerRef.current!,
-          style: buildMapLibreStyle(initialMapStyle, initialBasemap, initialMapStylePreference),
+          ...(initialStyleOptions ? {} : { style: initialStyle }),
           center: [firstPoint.lng, firstPoint.lat],
-          zoom: 12,
+          zoom: routeStart ? 12 : focusZoomRef.current,
+          // trackResize (default on) keeps the canvas in step with its container, even if it is replaced.
           attributionControl: false,
           transformRequest: (url: string) => {
             try {
@@ -369,6 +561,7 @@ export function TripMapChart({
         }) as MapApi;
 
         mapRef.current = map;
+        if (initialStyleOptions) map.setStyle(initialStyle, initialStyleOptions);
 
         map.on('error', (event) => {
           const details = mapLibreErrorDetails(event);
@@ -398,10 +591,15 @@ export function TripMapChart({
           finishTileLoad();
         });
 
+        map.on('render', () => {
+          onRenderFrameRef.current?.(map.getCanvas());
+        });
+
         map.on('load', () => {
           if (!mapRef.current) return;
 
           isLoadedRef.current = true;
+          setMapLoaded(true);
           lastRouteSignatureRef.current = '';
           syncRoutes(
             mapRef.current,
@@ -419,6 +617,7 @@ export function TripMapChart({
             basemapRef.current,
             mapStyleRef.current,
             mapStylePreferenceRef.current,
+            documentModeRef.current,
           );
           if (currentSignature !== appliedBasemapSignatureRef.current) {
             appliedBasemapSignatureRef.current = currentSignature;
@@ -438,12 +637,11 @@ export function TripMapChart({
             };
             map.on('style.load', restoreAfterInitialSwap);
             beginTileLoad();
-            map.setStyle(buildMapLibreStyle(
-              mapStyleRef.current,
-              basemapRef.current,
-              mapStylePreferenceRef.current,
-            ));
+            applyBasemapStyle(map, mapStyleRef.current, basemapRef.current, mapStylePreferenceRef.current, documentModeRef.current, rememberStockBasemap);
             map.triggerRepaint?.();
+          } else {
+            // The theme can change while the first style is still loading.
+            repaintThemedBasemap(map, stockBasemapRef.current, basemapRef.current, mapStylePreferenceRef.current, mapStyleRef.current, documentModeRef.current);
           }
           requestAnimationFrame(() => {
             mapRef.current?.resize();
@@ -467,16 +665,62 @@ export function TripMapChart({
       cancelled = true;
       clearTileLoadTimeout();
       isLoadedRef.current = false;
+      setMapLoaded(false);
       lastRouteSignatureRef.current = '';
+      focusMarkerRef.current?.remove();
+      focusMarkerRef.current = null;
+      setCustomFocusMarkerShown(false);
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
       }
     };
-    // Only run when the first routes arrive — NOT on mapStyle change so that
-    // toggling dark/light doesn't destroy the map instance.
+    // Only run when the first routes (or focus point) arrive — NOT on mapStyle
+    // change so that toggling dark/light doesn't destroy the map instance.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapLoader, mapRetryVersion, routeList.length === 0]);
+  }, [mapLoader, mapRetryVersion, !hasMapContent]);
+
+  // Follow the focus point when there are no routes to frame instead.
+  const focusLat = focusPoint?.lat;
+  const focusLng = focusPoint?.lng;
+  React.useEffect(() => {
+    if (!isLoadedRef.current || !mapRef.current) return;
+    if (focusLat === undefined || focusLng === undefined || routeList.length > 0) return;
+    mapRef.current.jumpTo?.({ center: [focusLng, focusLat] });
+  }, [focusLat, focusLng, routeList.length]);
+
+  // Pin custom focus marker content. DOM markers live outside the map style,
+  // so they survive light/dark and basemap swaps without re-adding.
+  const hasFocusPoint = focusLat !== undefined && focusLng !== undefined;
+  React.useEffect(() => {
+    const MarkerCtor = markerConstructorRef.current;
+    const map = mapRef.current;
+    const point = focusPointRef.current;
+    if (!mapLoaded || !map || !hasFocusMarker || !hasFocusPoint || !point || !focusMarkerElement || !MarkerCtor) return;
+    const marker = new MarkerCtor({
+      element: focusMarkerElement,
+      anchor: 'center',
+      rotationAlignment: 'map',
+      pitchAlignment: 'map',
+    });
+    marker.setLngLat([point.lng, point.lat]);
+    marker.setRotation(focusRotationRef.current);
+    marker.addTo(map);
+    focusMarkerRef.current = marker;
+    setCustomFocusMarkerShown(true);
+    return () => {
+      marker.remove();
+      if (focusMarkerRef.current === marker) focusMarkerRef.current = null;
+      setCustomFocusMarkerShown(false);
+    };
+  }, [focusMarkerElement, hasFocusMarker, hasFocusPoint, mapLoaded]);
+
+  React.useEffect(() => {
+    const marker = focusMarkerRef.current;
+    if (!marker || focusLat === undefined || focusLng === undefined) return;
+    marker.setLngLat([focusLng, focusLat]);
+    marker.setRotation(focusRotationRef.current);
+  }, [customFocusMarkerShown, focusLat, focusLng, focusRotation]);
 
   // ── Style swap — update tiles in place without destroying the map ─────────
   // setStyle() clears all sources/layers, so we re-sync routes once the new
@@ -503,9 +747,11 @@ export function TripMapChart({
     }
 
     map.on('style.load', onStyleLoad);
-    appliedBasemapSignatureRef.current = basemapSignature(basemap, mapStyle, mapStylePreference);
+    // `themedAppearance` (not the document mode itself) decides whether the
+    // style must be swapped, so a theme change never reloads a stock style.
+    appliedBasemapSignatureRef.current = basemapSignature(basemap, mapStyle, mapStylePreference, documentModeRef.current);
     beginTileLoad();
-    map.setStyle(buildMapLibreStyle(mapStyle, basemap, mapStylePreference));
+    applyBasemapStyle(map, mapStyle, basemap, mapStylePreference, documentModeRef.current, rememberStockBasemap);
     // An unchanged style diff may not schedule a frame; force one so `idle`
     // always follows and the loading state cannot wait for the timeout.
     map.triggerRepaint?.();
@@ -513,7 +759,13 @@ export function TripMapChart({
     return () => {
       map.off('style.load', onStyleLoad);
     };
-  }, [basemap, beginTileLoad, mapStyle, mapStylePreference]);
+  }, [basemap, beginTileLoad, mapStyle, mapStylePreference, rememberStockBasemap, themedAppearance]);
+
+  // Palette and custom-theme changes repaint a themed basemap in place.
+  React.useEffect(() => {
+    if (!isLoadedRef.current || !mapRef.current) return;
+    repaintThemedBasemap(mapRef.current, stockBasemapRef.current, basemapRef.current, mapStylePreferenceRef.current, mapStyleRef.current, documentModeRef.current);
+  }, [palette, themeRevision]);
 
   const retryMap = React.useCallback(() => {
     const map = mapRef.current;
@@ -524,13 +776,9 @@ export function TripMapChart({
     }
     appliedBasemapSignatureRef.current = '';
     beginTileLoad();
-    map.setStyle(buildMapLibreStyle(
-      mapStyleRef.current,
-      basemapRef.current,
-      mapStylePreferenceRef.current,
-    ));
+    applyBasemapStyle(map, mapStyleRef.current, basemapRef.current, mapStylePreferenceRef.current, documentModeRef.current, rememberStockBasemap);
     map.triggerRepaint?.();
-  }, [beginTileLoad]);
+  }, [beginTileLoad, rememberStockBasemap]);
 
   // Sync routes whenever routes or selection changes
   React.useEffect(() => {
@@ -554,7 +802,7 @@ export function TripMapChart({
       activePointFrameRef.current = null;
       const map = mapRef.current;
       if (!map) return;
-      syncActivePoint(map, activePoint, lastActivePointRef);
+      syncActivePoint(map, markerPoint, lastActivePointRef);
     });
 
     return () => {
@@ -562,7 +810,7 @@ export function TripMapChart({
         cancelAnimationFrame(activePointFrameRef.current);
       }
     };
-  }, [activePoint, isDark, palette, themeRevision]);
+  }, [markerPoint, isDark, palette, themeRevision]);
 
   function syncRoutes(
     map: MapApi,
@@ -647,26 +895,61 @@ export function TripMapChart({
 
   }
 
+  const attributionId = React.useId();
+  const attributionLinks = (
+    <>
+      {basemap.attributions?.map((item, index) => <React.Fragment key={`${item.label}-${index}`}>{index > 0 ? ' · ' : ''}{item.url ? <a href={item.url} target="_blank" rel="noopener noreferrer" className="hover:text-fg">{item.label}</a> : item.label}</React.Fragment>)}
+      {!basemap.attributions?.length && (basemap.attribution_url ? <a href={basemap.attribution_url} target="_blank" rel="noopener noreferrer" className="hover:text-fg">{basemap.attribution}</a> : basemap.attribution)}
+    </>
+  );
+
   return (
-    routeList.length === 0 ? (
+    !hasMapContent ? (
       <div
         style={{ height }}
         className={className ?? 'w-full rounded-xl border border-border bg-bg-elevated flex items-center justify-center text-sm text-fg-tertiary'}
       >
-        No route points in this period
+        {emptyLabel}
       </div>
     ) : (
       <div className="relative">
+        {focusMarkerElement && hasFocusMarker ? createPortal(focusMarker, focusMarkerElement) : null}
         <div
           ref={containerRef}
           style={{ height }}
           className={className ?? 'w-full rounded-xl overflow-hidden'}
         />
         {basemap.enabled && ((basemap.attributions?.length ?? 0) > 0 || basemap.attribution) ? (
-          <div className="absolute bottom-1 right-1 max-w-[calc(100%-0.5rem)] rounded bg-bg/80 px-1.5 py-0.5 text-right text-[10px] text-fg-tertiary">
-            {basemap.attributions?.map((item, index) => <React.Fragment key={`${item.label}-${index}`}>{index > 0 ? ' · ' : ''}{item.url ? <a href={item.url} target="_blank" rel="noopener noreferrer" className="hover:text-fg">{item.label}</a> : item.label}</React.Fragment>)}
-            {!basemap.attributions?.length && (basemap.attribution_url ? <a href={basemap.attribution_url} target="_blank" rel="noopener noreferrer" className="hover:text-fg">{basemap.attribution}</a> : basemap.attribution)}
-          </div>
+          compactAttribution ? (
+            <div
+              className={compactAttributionPlacement === 'top-left'
+                ? 'absolute top-1 flex flex-row-reverse items-start justify-end gap-1'
+                : 'absolute bottom-1 flex items-end justify-end gap-1'}
+              style={compactAttributionPlacement === 'top-left'
+                ? { left: OVERLAY_EDGE_INSET, maxWidth: OVERLAY_MAX_WIDTH }
+                : { right: OVERLAY_EDGE_INSET, maxWidth: OVERLAY_MAX_WIDTH }}
+            >
+              {attributionOpen ? (
+                <div id={attributionId} className="rounded bg-bg/90 px-1.5 py-0.5 text-right text-[10px] leading-snug text-fg-tertiary">
+                  {attributionLinks}
+                </div>
+              ) : null}
+              <button
+                type="button"
+                aria-label={attributionOpen ? 'Hide map credits' : 'Show map credits'}
+                aria-expanded={attributionOpen}
+                aria-controls={attributionOpen ? attributionId : undefined}
+                onClick={() => setAttributionOpen((open) => !open)}
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-bg/80 text-fg-tertiary hover:text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+              >
+                <Info className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          ) : (
+            <div className="absolute bottom-1 rounded bg-bg/80 px-1.5 py-0.5 text-right text-[10px] text-fg-tertiary" style={{ right: OVERLAY_EDGE_INSET, maxWidth: OVERLAY_MAX_WIDTH }}>
+              {attributionLinks}
+            </div>
+          )
         ) : null}
         {showTilesLoading && !mapError && !basemapError ? (
           <div

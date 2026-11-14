@@ -64,18 +64,24 @@ async fn main() -> anyhow::Result<()> {
     let database_url = std::env::var("DATABASE_URL")?;
 
     let pool = riviamigo_api::db::pool::create_pool(&database_url).await?;
+    // Older caches contain Rivian's account-wide manifest. Export only rows
+    // tagged with this vehicle's provider ID, matching the API's reader.
     let rows = sqlx::query_as::<_, VehicleImageRow>(
-        "SELECT placement, design, size, resolution, url, overlays, metadata
-         FROM riviamigo.vehicle_images
-         WHERE vehicle_id = $1
-         ORDER BY created_at, placement, design NULLS LAST",
+        "SELECT i.placement, i.design, i.size, i.resolution, i.url, i.overlays, i.metadata
+         FROM riviamigo.vehicle_images i
+         JOIN riviamigo.vehicles v ON v.id = i.vehicle_id
+         WHERE i.vehicle_id = $1
+           AND i.metadata->>'rivian_vehicle_id' = v.rivian_vehicle_id
+         ORDER BY i.created_at, i.placement, i.design NULLS LAST",
     )
     .bind(vehicle_id)
     .fetch_all(&pool)
     .await?;
 
     if rows.is_empty() {
-        anyhow::bail!("no cached vehicle_images rows found for {vehicle_id}");
+        anyhow::bail!(
+            "no cached vehicle_images rows tagged with the Rivian vehicle ID found for {vehicle_id}"
+        );
     }
 
     let output_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

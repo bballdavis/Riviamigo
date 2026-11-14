@@ -1,6 +1,11 @@
 @import '@riviamigo/ui/tokens/globals.css';
 
 :root {
+  /* Accent used for text: --rm-accent fails WCAG contrast on light surfaces. */
+  --rm-docs-accent-text: var(--rm-accent);
+  --rm-docs-on-accent: var(--rm-text-on-accent);
+  --ifm-link-color: var(--rm-docs-accent-text);
+  --ifm-link-hover-color: var(--rm-docs-accent-text);
   --ifm-color-primary: var(--rm-accent);
   --ifm-color-primary-dark: var(--rm-accent-active);
   --ifm-color-primary-darker: var(--rm-accent-active);
@@ -24,6 +29,12 @@
   --ifm-font-family-base: 'Inter Variable', 'Inter', system-ui, sans-serif;
   --ifm-font-family-monospace: 'JetBrains Mono', ui-monospace, monospace;
   --doc-sidebar-width: 19rem;
+}
+
+[data-theme='light'] {
+  --rm-docs-accent-text: #B04F00;
+  --rm-docs-on-accent: #18181B;
+  --ifm-color-primary: var(--rm-docs-accent-text);
 }
 
 html,
@@ -86,7 +97,7 @@ input:focus-visible,
 .menu__link--active,
 .table-of-contents__link:hover,
 .table-of-contents__link--active {
-  color: var(--rm-accent);
+  color: var(--rm-docs-accent-text);
 }
 
 .theme-doc-sidebar-container,
@@ -145,27 +156,31 @@ code {
   font-weight: 700;
 }
 
-.button--primary {
-  color: var(--rm-text-on-accent);
+.button.button--primary {
+  color: var(--rm-docs-on-accent);
   background: var(--rm-accent);
   border-color: var(--rm-accent);
   box-shadow: var(--rm-glow-button);
 }
 
-.button--primary:hover {
-  color: var(--rm-text-on-accent);
+.button.button--primary:hover {
+  color: var(--rm-docs-on-accent);
   background: var(--rm-accent-hover);
   border-color: var(--rm-accent-hover);
 }
 
-.button--secondary {
+.button.button--secondary {
+  --ifm-button-color: var(--rm-text-primary);
+  --ifm-button-background-color: var(--rm-bg-elevated);
+  --ifm-button-border-color: var(--rm-border-strong);
   color: var(--rm-text-primary);
   background: var(--rm-bg-elevated);
   border-color: var(--rm-border-strong);
 }
 
-.button--secondary:hover {
-  color: var(--rm-accent);
+.button.button--secondary:hover {
+  --ifm-button-color: var(--rm-docs-accent-text);
+  color: var(--rm-docs-accent-text);
   border-color: var(--rm-border-accent);
 }
 
@@ -197,7 +212,7 @@ code {
 }
 
 .footer__link-item:hover {
-  color: var(--rm-accent);
+  color: var(--rm-docs-accent-text);
 }
 
 .navbar__search-input,
@@ -219,7 +234,7 @@ code {
 .aa-DetachedSearchButtonIcon,
 .aa-Label svg,
 .aa-LoadingIndicator svg {
-  color: var(--rm-accent) !important;
+  color: var(--rm-docs-accent-text) !important;
 }
 
 .aa-Input {
@@ -254,7 +269,7 @@ code {
 }
 
 .aa-SourceHeaderTitle {
-  color: var(--rm-accent) !important;
+  color: var(--rm-docs-accent-text) !important;
   background: var(--rm-bg-surface) !important;
 }
 
@@ -263,7 +278,7 @@ code {
 }
 
 .aa-PanelHeader {
-  color: var(--rm-text-on-accent) !important;
+  color: var(--rm-docs-on-accent) !important;
   background: var(--rm-accent) !important;
 }
 
@@ -284,12 +299,12 @@ code {
 .aa-DetachedCancelButton:focus,
 .aa-ItemActionButton:hover,
 .aa-ItemActionButton:focus {
-  color: var(--rm-accent) !important;
+  color: var(--rm-docs-accent-text) !important;
 }
 
 .aa-ItemActionButton:hover svg,
 .aa-ItemActionButton:focus svg {
-  color: var(--rm-accent) !important;
+  color: var(--rm-docs-accent-text) !important;
 }
 
 .aa-ItemContentDescription mark,
@@ -320,7 +335,7 @@ code {
 }
 
 .rm-not-found__eyebrow {
-  color: var(--rm-accent);
+  color: var(--rm-docs-accent-text);
   font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.12em;

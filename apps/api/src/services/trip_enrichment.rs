@@ -10,7 +10,12 @@ use uuid::Uuid;
 
 use crate::{
     db::vehicles::get_vehicle_owner_id,
-    services::{cost::recompute_charge_session_cost, geofences::match_geofence, nominatim},
+    services::{
+        cost::recompute_charge_session_cost,
+        geofences::match_geofence,
+        maintenance_jobs::{self, JobOutcome, MaintenanceJobKind},
+        nominatim,
+    },
 };
 
 const ADDRESS_CACHE_RADIUS_METERS: f64 = 100.0;
@@ -23,43 +28,88 @@ const TELEMETRY_FIX_WINDOW_SECS: f64 = 600.0;
 
 /// Recover enrichment skipped while a sanitized restore or provider outage left
 /// completed trips without weather or address data. The existing provider
-/// lanes still own outbound rate limiting.
+/// lanes still own outbound rate limiting. Each pass is recorded as an
+/// automatic run of the "Location and weather catch-up" job on Settings > Jobs,
+/// and is skipped while someone's Run now pass is still going.
 pub fn start_reconciliation_worker(pool: PgPool) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let client = match Client::builder().timeout(Duration::from_secs(20)).build() {
-            Ok(client) => client,
-            Err(error) => {
-                warn!(error = %error, "trip_enrichment.reconciler_client_build_failed");
-                return;
-            }
-        };
         loop {
-            reconcile_locations(&pool, &client).await;
-            let addresses = backfill_trip_addresses(&pool, &client, None).await;
-            let weather = enqueue_trip_weather_enrichment(&pool, None).await;
-            match (addresses, weather) {
-                (Ok(addresses), Ok(weather)) => info!(
-                    address_scanned = addresses.scanned,
-                    address_filled = addresses.filled,
-                    weather_scanned = weather.scanned,
-                    weather_queued = weather.filled,
+            let outcome = maintenance_jobs::run_automatic(
+                &pool,
+                MaintenanceJobKind::LocationWeatherCatchUp,
+                || run_catch_up_pass(&pool),
+            )
+            .await;
+            match outcome {
+                Some(Ok(outcome)) => info!(
+                    summary = %outcome.summary,
+                    failed = outcome.failed,
                     "trip_enrichment.reconciler_complete"
                 ),
-                (addresses, weather) => warn!(
-                    address_error = ?addresses.err(),
-                    weather_error = ?weather.err(),
-                    "trip_enrichment.reconciler_failed"
-                ),
+                Some(Err(error)) => warn!(error = %error, "trip_enrichment.reconciler_failed"),
+                None => {}
             }
             tokio::time::sleep(RECONCILIATION_INTERVAL).await;
         }
     })
 }
 
+/// One catch-up pass over every vehicle: coordinates, saved places, and
+/// addresses for trips and charging sessions, then weather lookups for trips
+/// without an outside temperature. The 6-hourly worker and the Jobs page's
+/// Run now both use this.
+pub async fn run_catch_up_pass(pool: &PgPool) -> Result<JobOutcome> {
+    let client = Client::builder().timeout(Duration::from_secs(20)).build()?;
+    let sessions = reconcile_locations(pool, &client).await;
+    let addresses = backfill_trip_addresses(pool, &client, None).await;
+    let weather = enqueue_trip_weather_enrichment(pool, None).await;
+    let (trips, weather) = match (addresses, weather) {
+        (Ok(trips), Ok(weather)) => (trips, weather),
+        (addresses, weather) => {
+            let errors: Vec<String> = [addresses.err(), weather.err()]
+                .into_iter()
+                .flatten()
+                .map(|error| format!("{error:#}"))
+                .collect();
+            anyhow::bail!(errors.join("; "));
+        }
+    };
+    Ok(catch_up_outcome(trips, sessions, weather))
+}
+
+fn catch_up_outcome(
+    trips: BackfillStats,
+    sessions: BackfillStats,
+    weather: BackfillStats,
+) -> JobOutcome {
+    let addresses_filled = trips.filled + sessions.filled;
+    let failed = trips.failed + sessions.failed + weather.failed;
+    let mut parts = vec![
+        format!(
+            "{} filled",
+            maintenance_jobs::count(addresses_filled, "address", "addresses")
+        ),
+        format!(
+            "{} queued",
+            maintenance_jobs::count(weather.filled, "weather lookup", "weather lookups")
+        ),
+    ];
+    if failed > 0 {
+        parts.push(format!("{failed} failed"));
+    }
+    JobOutcome {
+        processed: trips.scanned + sessions.scanned + weather.scanned,
+        changed: addresses_filled + weather.filled,
+        failed,
+        summary: parts.join(" · "),
+    }
+}
+
 /// Fill missing coordinates, then saved-place matches, for trips and charge
 /// sessions. Each step logs its own failure so one bad step cannot starve the
 /// others; the address pass that follows picks up any trips still unresolved.
-async fn reconcile_locations(pool: &PgPool, client: &Client) {
+/// Returns what the charging-session address step did.
+async fn reconcile_locations(pool: &PgPool, client: &Client) -> BackfillStats {
     if let Err(error) = backfill_trip_coordinates(pool, None).await {
         warn!(error = %error, "trip_enrichment.reconciler_trip_coordinates_failed");
     }
@@ -69,8 +119,12 @@ async fn reconcile_locations(pool: &PgPool, client: &Client) {
     if let Err(error) = backfill_charge_session_coordinates(pool, None).await {
         warn!(error = %error, "trip_enrichment.reconciler_charge_coordinates_failed");
     }
-    if let Err(error) = backfill_charge_session_locations(pool, client, None).await {
-        warn!(error = %error, "trip_enrichment.reconciler_charge_locations_failed");
+    match backfill_charge_session_locations(pool, client, None).await {
+        Ok(stats) => stats,
+        Err(error) => {
+            warn!(error = %error, "trip_enrichment.reconciler_charge_locations_failed");
+            BackfillStats::default()
+        }
     }
 }
 

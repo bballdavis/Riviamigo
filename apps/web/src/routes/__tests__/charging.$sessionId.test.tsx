@@ -43,7 +43,7 @@ vi.mock('@riviamigo/hooks', () => ({
 
 vi.mock('@riviamigo/dashboards', () => ({
   ChargeSessionCurveDetail: () => <div data-testid="dashboard-chart-widget" />,
-  SensorChipSummary: ({ title, value, secondary }: { title: string; value: string; secondary?: string }) => (
+  SensorChipSummary: ({ title, value, secondary }: { title: string; value: React.ReactNode; secondary?: string }) => (
     <div data-testid={`sensor-chip-${title.toLowerCase().replace(/\s+/g, '-')}`}>
       <span>{title}</span>
       <span>{value}</span>
@@ -66,6 +66,7 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
 }));
 vi.mock('lucide-react', () => ({
   ArrowLeft: () => <svg data-testid="icon-arrow-left" />,
+  ArrowRight: () => <svg data-testid="icon-arrow-right" />,
   Info: () => <svg data-testid="icon-info" />,
   MapPin: () => <svg data-testid="icon-map-pin" />,
   Edit2: () => <svg data-testid="icon-edit" />,
@@ -93,7 +94,7 @@ describe('ChargeSessionContent', () => {
 
   it('renders the SoC range as start to end', () => {
     render(<ChargeSessionContent />);
-    expect(screen.getByText('20% -> 90%')).toBeInTheDocument();
+    expect(screen.getByTestId('sensor-chip-soc')).toHaveTextContent('20% to 90%');
   });
 
   it('renders source telemetry and network facts for telemetry sessions', () => {

@@ -29,9 +29,11 @@ export const vehicleClient = client(
   'downloadVehicleIngestionCapture',
   'deleteVehicle', 'refreshVehicleCredentials', 'connectRivian', 'connectRivianOtp',
   'updateVehicleBatteryConfig', 'updateVehicleSettings', 'updateVehicleName',
-  'setDefaultVehicle', 'listVehicleMembers', 'addVehicleMember', 'updateVehicleMember',
+  'updateVehicleCollection', 'setDefaultVehicle', 'listVehicleMembers', 'addVehicleMember', 'updateVehicleMember',
   'removeVehicleMember', 'listVehicleInvites', 'createVehicleInvite', 'revokeVehicleInvite',
   'acceptVehicleInvite', 'previewVehicleInvite', 'getVehicleHealth',
+  'getOwnership', 'getOwnershipSettings', 'updateOwnershipSettings',
+  'lookupOwnershipVehicleMenu', 'lookupOwnershipVehicle',
 );
 
 export const tripClient = client(
@@ -46,7 +48,8 @@ export const chargingClient = client(
   'getChargingSummary', 'getChargingChartSeries', 'getChargingSchedule',
   'putChargingSchedule', 'listDepartureSchedules', 'createDepartureSchedule',
   'updateDepartureSchedule', 'deleteDepartureSchedule', 'getLiveSession',
-  'getBackfillStatus', 'triggerBackfill',
+  'getBackfillStatus', 'triggerBackfill', 'listMaintenanceJobs', 'startMaintenanceJob',
+  'listSiteMaintenanceJobs', 'startSiteMaintenanceJob',
 );
 
 export const telemetryClient = client(

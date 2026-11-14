@@ -30,6 +30,34 @@ after a reload or sign-in from another browser; it does not change other chart
 widgets. The bundled Overview dashboard defaults to **Battery Capacity by
 Mileage**.
 
+## Vehicle Overview location map
+
+The Vehicle Overview header has two icons on the right: a telemetry indicator
+(hover or focus it for the last update time) and a toggle between the
+**cluster** view and the **current location** map. Your choice is saved to your
+account, so the overview opens on the view you used last, on any device. The
+cluster view is the default until you pick the map. The map view replaces the stat rows
+on the right with a map centered on the vehicle's last reported location; the
+battery panel and vehicle image stay in place. The vehicle appears on the map
+as a small overhead image outlined in the accent color, pointed the way its
+nose faces. Rivian reports the direction of travel, so after backing into a
+space Riviamigo turns that reading around to show the way the vehicle actually
+faces.
+
+The expand button in the map's top-right corner gives the map more room: the
+battery panel shrinks to its charge bar, the vehicle image slides over, and the
+map takes the space. Press it again to restore the normal layout. On a phone it
+makes the map taller instead. Whether the map is expanded is also saved to your
+account, so the map reopens at the size you left it. The cluster view always
+uses the normal layout.
+
+In edit mode, select the Vehicle Overview widget and open **Location map** in
+the editor drawer:
+
+- **Offer location map** turns the toggle on or off for that widget.
+- **Light or dark** follows the app appearance by default, or forces a light or dark map.
+- **Map type** uses the map style from **Settings > Appearance** by default, or picks a specific style for this widget.
+
 ## Reset, delete, and restore
 
 The recovery action depends on who owns the row:

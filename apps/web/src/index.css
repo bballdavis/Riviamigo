@@ -1,6 +1,13 @@
 @import '../../../packages/ui/src/tokens/globals.css';
 @import "tailwindcss";
 
+/*
+ * `dark:` follows the app's selected theme, not the OS. The theme runtime
+ * (packages/ui/src/lib/themeRuntime.ts) puts the effective mode on <html> as
+ * `.light` or `.dark`, resolving System mode from prefers-color-scheme itself.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* Scan the shared UI package — outside auto-detection root */
 @source "../../../packages/ui/src/**/*.{ts,tsx}";
 @source "../../../packages/dashboards/src/**/*.{ts,tsx}";
@@ -64,6 +71,18 @@
   --shadow-glow-md:     var(--rm-glow-md);
   --shadow-glow-lg:     var(--rm-glow-lg);
   --shadow-glow-button: var(--rm-glow-button);
+}
+
+/* Rivian-assistant style loading wave (`AssistantWave` in packages/ui draws
+   the ripples itself; this only fades it in). */
+@theme {
+  /* Short waits never flash the indicator: it fades in only after 250ms. */
+  --animate-assistant-wave-in: assistant-wave-in 300ms ease-out 250ms both;
+
+  @keyframes assistant-wave-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
 }
 
 /* Scrollbar */

@@ -51,7 +51,7 @@
 .eyebrow,
 .cardEyebrow {
   margin: 0 0 0.75rem;
-  color: var(--rm-accent);
+  color: var(--rm-docs-accent-text);
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.13em;
@@ -150,7 +150,7 @@
   display: flex;
   justify-content: space-between;
   margin-top: auto;
-  color: var(--rm-accent);
+  color: var(--rm-docs-accent-text);
   font-weight: 700;
 }
 
@@ -189,7 +189,7 @@
 
 .quickLinks a:hover,
 .quickLinks a:focus-visible {
-  color: var(--rm-accent);
+  color: var(--rm-docs-accent-text);
   background: var(--rm-accent-muted);
   text-decoration: none;
 }

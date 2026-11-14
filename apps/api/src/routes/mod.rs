@@ -43,8 +43,10 @@ pub mod health;
 pub mod idle_drain;
 pub mod live;
 pub mod locations;
+pub mod maintenance_jobs;
 pub mod metrics;
 pub mod overview;
+pub mod ownership;
 pub mod parked_energy;
 pub mod places;
 pub mod range_normalization;
@@ -257,6 +259,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(api_keys::router())
         .merge(backups::router())
         .merge(backfill::router())
+        .merge(maintenance_jobs::router())
         .merge(vehicles::router())
         .merge(battery::router())
         .merge(trips::router())
@@ -272,6 +275,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(rivian_stewardship::router())
         .merge(schedules::router())
         .merge(overview::router())
+        .merge(ownership::router())
         .merge(parked_energy::router())
         .merge(state_timeline::router())
         .merge(health::router())
