@@ -278,7 +278,10 @@ pub async fn run_vehicle_worker(
             .ok()
             .flatten();
 
-    let mut redis_conn = match redis.get_multiplexed_async_connection().await {
+    // The worker holds this connection for its whole lifetime, so it must
+    // survive a Redis restart. A bare MultiplexedConnection stays dead after
+    // the server drops it; ConnectionManager reconnects on the next command.
+    let mut redis_conn = match redis.get_connection_manager().await {
         Ok(c) => c,
         Err(e) => {
             tracing::error!(err=%e, "redis connect failed");
@@ -296,6 +299,7 @@ pub async fn run_vehicle_worker(
             return;
         }
     };
+    let mut live_publish = LivePublishHealth::default();
 
     let mut worker_shutdown = shutdown.resubscribe();
     let spawn_ws_loop = || {
@@ -726,8 +730,21 @@ pub async fn run_vehicle_worker(
         let motion = closure_motion.observe(&event, Utc::now());
         let snapshot = build_snapshot(&event, motion.as_ref());
         let topic = format!("vehicle:{vehicle_id}:status");
-        if let Err(e) = redis_conn.publish::<_, _, ()>(&topic, &snapshot).await {
-            tracing::debug!(vehicle_id=%vehicle_id, err=%e, "redis publish failed");
+        let published = redis_conn.publish::<_, _, ()>(&topic, &snapshot).await;
+        match (live_publish.observe(published.is_ok()), published) {
+            (LivePublishTransition::Failed, Err(e)) => tracing::warn!(
+                vehicle_id=%vehicle_id,
+                err=%e,
+                "redis publish failed; live status updates are paused until Redis is reachable"
+            ),
+            (LivePublishTransition::Recovered, _) => tracing::info!(
+                vehicle_id=%vehicle_id,
+                "redis publish recovered; live status updates resumed"
+            ),
+            (_, Err(e)) => {
+                tracing::debug!(vehicle_id=%vehicle_id, err=%e, "redis publish failed");
+            }
+            _ => {}
         }
 
         // Update runtime state. A re-sent snapshot is state learned again,
@@ -1094,9 +1111,40 @@ async fn ensure_active_charge_session(
     Ok(())
 }
 
+/// Tracks whether live-status publishing is currently failing, so an outage
+/// is logged once at warn (and its recovery once at info) instead of once per
+/// telemetry frame.
+#[derive(Debug, Default)]
+struct LivePublishHealth {
+    failing: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum LivePublishTransition {
+    Failed,
+    Recovered,
+    Unchanged,
+}
+
+impl LivePublishHealth {
+    fn observe(&mut self, ok: bool) -> LivePublishTransition {
+        match (self.failing, ok) {
+            (false, false) => {
+                self.failing = true;
+                LivePublishTransition::Failed
+            }
+            (true, true) => {
+                self.failing = false;
+                LivePublishTransition::Recovered
+            }
+            _ => LivePublishTransition::Unchanged,
+        }
+    }
+}
+
 async fn apply_charging_session_update(
     pool: &PgPool,
-    redis_conn: &mut redis::aio::MultiplexedConnection,
+    redis_conn: &mut redis::aio::ConnectionManager,
     vehicle_id: Uuid,
     event: &parser::ChargingSessionEvent,
     received_at: DateTime<Utc>,
@@ -4480,5 +4528,86 @@ mod diagnostic_capture_tests {
         assert_eq!(fields["persistence"], "persisted");
         assert_eq!(fields["values"]["power_state"], "ready");
         assert!(fields["values"].get("latitude").is_none());
+    }
+}
+
+#[cfg(test)]
+mod live_publish_health_tests {
+    use super::{LivePublishHealth, LivePublishTransition};
+
+    #[test]
+    fn outage_and_recovery_are_each_reported_once() {
+        let mut health = LivePublishHealth::default();
+        assert_eq!(health.observe(true), LivePublishTransition::Unchanged);
+        assert_eq!(health.observe(false), LivePublishTransition::Failed);
+        assert_eq!(health.observe(false), LivePublishTransition::Unchanged);
+        assert_eq!(health.observe(false), LivePublishTransition::Unchanged);
+        assert_eq!(health.observe(true), LivePublishTransition::Recovered);
+        assert_eq!(health.observe(true), LivePublishTransition::Unchanged);
+        assert_eq!(health.observe(false), LivePublishTransition::Failed);
+    }
+}
+
+// Needs a live Redis. Run with: cargo test -- --ignored
+#[cfg(test)]
+mod redis_reconnect_tests {
+    use redis::AsyncCommands;
+
+    fn redis_client() -> redis::Client {
+        let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
+        redis::Client::open(url).expect("redis client")
+    }
+
+    async fn kill_client(admin: &mut redis::aio::MultiplexedConnection, id: i64) {
+        let killed: i64 = redis::cmd("CLIENT")
+            .arg("KILL")
+            .arg("ID")
+            .arg(id)
+            .query_async(admin)
+            .await
+            .expect("CLIENT KILL");
+        assert_eq!(killed, 1, "expected to kill exactly one connection");
+    }
+
+    /// A Redis restart drops the worker's long-lived connection. The worker
+    /// must publish again afterwards without being restarted itself.
+    #[tokio::test]
+    #[ignore]
+    async fn worker_connection_recovers_after_server_drops_it() {
+        let client = redis_client();
+        let mut admin = client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("admin connection");
+        let mut conn = client
+            .get_connection_manager()
+            .await
+            .expect("connection manager");
+
+        let id: i64 = redis::cmd("CLIENT")
+            .arg("ID")
+            .query_async(&mut conn)
+            .await
+            .expect("CLIENT ID");
+        kill_client(&mut admin, id).await;
+
+        // The first command after the drop may fail while the manager
+        // notices; a later one must succeed on the new connection.
+        let mut recovered = false;
+        for _ in 0..20 {
+            if conn
+                .publish::<_, _, i64>("riviamigo:test:reconnect", "ping")
+                .await
+                .is_ok()
+            {
+                recovered = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(
+            recovered,
+            "ConnectionManager did not reconnect after the server dropped it"
+        );
     }
 }
