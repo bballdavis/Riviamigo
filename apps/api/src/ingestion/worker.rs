@@ -143,6 +143,21 @@ struct StateTailRow {
     is_online: Option<bool>,
 }
 
+/// Why a vehicle worker returned, so the supervisor knows whether to start it
+/// again on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerExit {
+    /// It was told to stop.
+    Stopped,
+    /// It cannot run until something changes (credentials, the server key, the
+    /// vehicle row, the collection pause). The action that changes it (a
+    /// reconnect, a resume) starts the worker again.
+    NeedsAction,
+    /// A dependency was unavailable (the database, Redis, or the collector lock
+    /// held by another instance). Starting again later can succeed.
+    Retry,
+}
+
 pub async fn run_vehicle_worker(
     vehicle_id: Uuid,
     pool: PgPool,
@@ -150,14 +165,14 @@ pub async fn run_vehicle_worker(
     age_key: String,
     config: Config,
     shutdown: broadcast::Receiver<()>,
-) {
+) -> WorkerExit {
     tracing::info!(vehicle_id = %vehicle_id, "worker starting");
 
     let identity = match age_key.parse::<age::x25519::Identity>() {
         Ok(k) => k,
         Err(e) => {
             tracing::error!(vehicle_id=%vehicle_id, err=%e, "bad age key");
-            return;
+            return WorkerExit::NeedsAction;
         }
     };
 
@@ -184,7 +199,7 @@ pub async fn run_vehicle_worker(
                     Some("credentials_invalid"),
                 )
                 .await;
-                return;
+                return WorkerExit::NeedsAction;
             }
         },
         Ok(None) => {
@@ -206,11 +221,11 @@ pub async fn run_vehicle_worker(
                 Some("credentials_missing"),
             )
             .await;
-            return;
+            return WorkerExit::NeedsAction;
         }
         Err(e) => {
             tracing::error!(vehicle_id=%vehicle_id, err=%e, "db error");
-            return;
+            return WorkerExit::Retry;
         }
     };
 
@@ -229,11 +244,11 @@ pub async fn run_vehicle_worker(
             )
             .await;
             tracing::info!(vehicle_id = %vehicle_id, "collector lock held; worker staying passive");
-            return;
+            return WorkerExit::Retry;
         }
         Err(e) => {
             tracing::error!(vehicle_id=%vehicle_id, err=%e, "collector lock failed");
-            return;
+            return WorkerExit::Retry;
         }
     };
 
@@ -252,21 +267,25 @@ pub async fn run_vehicle_worker(
     // Keep Parallax delivery bounded and independent from the legacy socket.
     let (parallax_tx, mut parallax_rx) = mpsc::channel::<crate::parallax::ForwardedTelemetry>(256);
 
-    // Get rivian_vehicle_id
-    let riv_id: Option<String> =
+    // Get rivian_vehicle_id. A failed read is not the same as a missing row:
+    // only a vehicle that is gone should stop the worker for good.
+    let riv_id: Result<Option<String>, sqlx::Error> =
         sqlx::query_scalar("SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id = $1")
             .bind(vehicle_id)
             .fetch_optional(&pool)
-            .await
-            .ok()
-            .flatten();
+            .await;
 
     let rivian_vehicle_id = match riv_id {
-        Some(id) => id,
-        None => {
+        Ok(Some(id)) => id,
+        Ok(None) => {
             tracing::error!(vehicle_id=%vehicle_id, "no rivian_vehicle_id");
             let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
-            return;
+            return WorkerExit::NeedsAction;
+        }
+        Err(e) => {
+            tracing::error!(vehicle_id=%vehicle_id, err=%e, "rivian_vehicle_id read failed");
+            let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
+            return WorkerExit::Retry;
         }
     };
     // Fetch owner user_id (needed for wallbox enrichment).
@@ -296,7 +315,7 @@ pub async fn run_vehicle_worker(
             )
             .await;
             let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
-            return;
+            return WorkerExit::Retry;
         }
     };
     let mut live_publish = LivePublishHealth::default();
@@ -494,13 +513,13 @@ pub async fn run_vehicle_worker(
     state_reconcile_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Startup reconciliation above already covered the current tail.
     state_reconcile_interval.tick().await;
-    loop {
+    let exit = loop {
         // Set (with the vehicle's original timestamp) for Parallax state
         // re-learned from a re-sent snapshot.
         let mut snapshot_source_at: Option<DateTime<Utc>> = None;
         let inbound = tokio::select! {
             _ = worker_shutdown.recv() => {
-                break;
+                break WorkerExit::Stopped;
             }
             _ = state_reconcile_interval.tick() => {
                 match reconcile_state_period_tail(&pool, vehicle_id, active_state_period.clone()).await {
@@ -534,7 +553,9 @@ pub async fn run_vehicle_worker(
             // Normal event path.
             msg = ev_rx.recv() => match msg {
                 Some(ev) => ev,
-                None => break,
+                // Unexpected: the worker keeps a sender for its websocket
+                // loop. Let the supervisor start a fresh worker.
+                None => break WorkerExit::Retry,
             },
             parallax_event = parallax_rx.recv(), if parallax_handle.is_some() && !parallax_rx.is_closed() => match parallax_event {
                 Some(forwarded) => {
@@ -958,7 +979,7 @@ pub async fn run_vehicle_worker(
                 }
             });
         }
-    }
+    };
 
     // Flush any remaining accumulated counters before the worker exits.
     counter_batch.flush(&pool).await;
@@ -983,6 +1004,7 @@ pub async fn run_vehicle_worker(
         }
     }
     let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
+    exit
 }
 
 async fn flush_legacy_charging_diagnostics(
