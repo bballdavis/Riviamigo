@@ -181,22 +181,45 @@ export interface RichTimeSeriesChartProps {
   referenceLines?: RichReferenceLine[] | undefined;
 }
 
-/** Build uPlot's aligned arrays from finite, ascending x values. */
+export interface RichTimeSeriesAlignedDataOptions {
+  /** Chart-level draw mode for series that do not set their own. */
+  mode?: RichTimeSeriesChartProps['mode'];
+  /** The chart joins lines across null samples, so smoothing runs across them too. */
+  connectGaps?: boolean | undefined;
+  /** Every line is drawn as steps, which are never smoothed. */
+  stepInterpolation?: boolean | undefined;
+}
+
+/**
+ * Build uPlot's aligned arrays from finite, ascending x values.
+ *
+ * The time filter smooths only what is drawn as a continuous line: line and
+ * area series on a time axis. Bars, scatter points and stepped lines keep their
+ * recorded values, as does any series marked `filterable: false`.
+ */
 export function buildRichTimeSeriesAlignedData(
   points: RichTimeSeriesChartProps['points'],
   series: RichSeries[],
   timeFilter: TimeFilterWindow = 'raw',
   xTime = true,
+  { mode = 'line', connectGaps = false, stepInterpolation = false }: RichTimeSeriesAlignedDataOptions = {},
 ): AlignedData {
   const entries = points
     .map((point, index) => ({ index, x: xTime ? toSeconds(point.ts) : Number(point.ts) }))
     .filter((entry) => Number.isFinite(entry.x))
     .sort((a, b) => a.x - b.x || a.index - b.index);
+  const filterTimes = xTime && timeFilter !== 'raw' ? entries.map((entry) => entry.x * 1000) : null;
   const values = series.map((item) => {
-    const source = xTime && item.filterable !== false
-      ? filterTimeSeriesValues(points.map((point) => point.ts), item.values, timeFilter)
-      : item.values.map((value) => value ?? null);
-    return entries.map(({ index }) => source[index] ?? null);
+    const ordered = entries.map(({ index }) => item.values[index] ?? null);
+    const drawnAs = item.mode ?? mode;
+    const smoothed = filterTimes != null
+      && item.filterable !== false
+      && (drawnAs === 'line' || drawnAs === 'area')
+      && item.interpolation !== 'step'
+      && !stepInterpolation;
+    return smoothed
+      ? filterTimeSeriesValues(filterTimes, ordered, timeFilter, { spanGaps: connectGaps })
+      : ordered;
   });
   return [entries.map((entry) => entry.x), ...values] as AlignedData;
 }
@@ -785,8 +808,12 @@ export function RichTimeSeriesChart({
   const laneCount = packedIntervals.reduce((max, interval) => Math.max(max, interval.lane + 1), 0);
 
   const alignedData = React.useMemo<AlignedData>(() => {
-    return buildRichTimeSeriesAlignedData(points, series, timeFilter, xTime);
-  }, [points, series, timeFilter, xTime]);
+    return buildRichTimeSeriesAlignedData(points, series, timeFilter, xTime, {
+      mode,
+      connectGaps,
+      stepInterpolation,
+    });
+  }, [points, series, timeFilter, xTime, mode, connectGaps, stepInterpolation]);
   alignedDataRef.current = alignedData;
   const tooltipValues = React.useMemo<Array<Array<number | null>>>(
     () => alignedData.slice(1).map((values) => (

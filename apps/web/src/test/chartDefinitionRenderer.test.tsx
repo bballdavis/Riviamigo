@@ -31,7 +31,7 @@ const definition: ChartDefinitionV1 = {
     y: { label: 'Primary', scale: 'linear', domain: { mode: 'fixed', min: 0, max: 10 } },
     y2: { label: 'Secondary', scale: 'linear', domain: { mode: 'fixed', min: 20, max: 40 } },
   },
-  display: { legend: 'hide', grid: false, tooltip: false, timeFilter: 'raw', curveSmoothness: 'smooth', showPoints: true, emptyTitle: 'Nothing yet', emptyDescription: 'Try another range.' },
+  display: { legend: 'hide', grid: false, tooltip: false, timeFilter: '6h', curveSmoothness: 'smooth', showPoints: true, emptyTitle: 'Nothing yet', emptyDescription: 'Try another range.' },
   interaction: { panZoom: true, touchExplore: true, connectGaps: false },
 };
 
@@ -50,7 +50,7 @@ describe('ChartDefinitionRenderer', () => {
     expect(props.series[0]!.values).toEqual([1, null, 3]);
     expect(props.series[1]!.values).toEqual([null, 20, 30]);
     expect(props.series[1]!.color).toBe('#123456');
-    expect(props).toMatchObject({ xAxisLabel: 'Recorded at', yAxisLabel: 'Primary', yRightAxisLabel: 'Secondary', yRange: [0, 10], yRightRange: [20, 40], smoothness: 'smooth', showLegend: false, showGrid: false, showTooltip: false, showPoints: true, emptyTitle: 'Nothing yet', emptyDescription: 'Try another range.' });
+    expect(props).toMatchObject({ xAxisLabel: 'Recorded at', yAxisLabel: 'Primary', yRightAxisLabel: 'Secondary', yRange: [0, 10], yRightRange: [20, 40], timeFilter: '6h', smoothness: 'smooth', showLegend: false, showGrid: false, showTooltip: false, showPoints: true, emptyTitle: 'Nothing yet', emptyDescription: 'Try another range.' });
   });
 
   it('distinguishes failed, partial, and refreshing data states', () => {
