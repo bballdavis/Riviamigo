@@ -35,7 +35,14 @@ import type {
   ChartSourceManifest,
   MetricCatalogEntry,
 } from '@riviamigo/types';
-import { ChartColorField, CHART_SERIES_TOKENS } from '@riviamigo/ui/charts';
+import {
+  ChartColorField,
+  CHART_SERIES_TOKENS,
+  chartSmoothingOptions,
+  chartSmoothingSettings,
+  resolveChartSmoothingLevel,
+  type ChartSmoothingLevel,
+} from '@riviamigo/ui/charts';
 import {
   Badge,
   Button,
@@ -1027,26 +1034,7 @@ function DisplaySection({
                 <option value="hide">Hide</option>
               </select>
             </EditorField>
-            <EditorField label="Curve smoothness">
-              <select
-                value={definition.display.curveSmoothness}
-                onChange={(event) =>
-                  onChange((current) => ({
-                    ...current,
-                    display: {
-                      ...current.display,
-                      curveSmoothness: event.target
-                        .value as ChartDefinitionV1['display']['curveSmoothness'],
-                    },
-                  }))
-                }
-                className="editor-input"
-              >
-                <option value="straight">Straight</option>
-                <option value="gentle">Gentle</option>
-                <option value="smooth">Smooth</option>
-              </select>
-            </EditorField>
+            <SmoothingField definition={definition} onChange={onChange} />
           </div>
           <ToggleRow
             label="Show grid"
@@ -1469,6 +1457,60 @@ function patchAxis(
     if (!existing) return current;
     return { ...current, axes: { ...current.axes, [axis]: { ...existing, ...patch } } };
   });
+}
+/**
+ * One smoothing choice for the chart: off, a rounded line through the recorded
+ * values, or values averaged over a time window. It applies to line and area
+ * series; bars, points and steps are always drawn from the recorded values.
+ */
+function SmoothingField({
+  definition,
+  onChange,
+}: {
+  definition: ChartDefinitionV1;
+  onChange: (mutator: (definition: ChartDefinitionV1) => ChartDefinitionV1) => void;
+}) {
+  const drawsLines = definition.series.some(
+    (series) => series.mark === 'line' || series.mark === 'area'
+  );
+  const support = { timeWindows: drawsLines && definition.x.kind === 'time', curve: drawsLines };
+  const options = chartSmoothingOptions(support);
+  const level = resolveChartSmoothingLevel(
+    definition.display.timeFilter,
+    definition.display.curveSmoothness,
+    support
+  );
+  const selected = options.find((option) => option.value === level);
+  return (
+    <EditorField
+      label="Smoothing"
+      hint={selected?.description ?? 'Available when the chart has a line or area series.'}
+    >
+      <select
+        value={selected ? level : ''}
+        disabled={options.length === 0}
+        onChange={(event) => {
+          const next = chartSmoothingSettings(event.target.value as ChartSmoothingLevel);
+          onChange((current) => ({
+            ...current,
+            display: {
+              ...current.display,
+              timeFilter: next.timeFilter,
+              curveSmoothness: next.smoothness,
+            },
+          }));
+        }}
+        className="editor-input"
+      >
+        {options.length === 0 ? <option value="">Not available</option> : null}
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </EditorField>
+  );
 }
 function AxisRangeEditor({
   axis,

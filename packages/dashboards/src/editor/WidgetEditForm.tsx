@@ -5,10 +5,12 @@ import {
   ChartColorField,
   CHART_COLOR_TOKENS,
   CHART_SERIES_TOKENS,
-  CURVE_SMOOTHNESS_OPTIONS,
+  chartSmoothingOptions,
+  chartSmoothingSettings,
+  DEFAULT_CURVE_SMOOTHNESS,
   DEFAULT_SPRITE_TIME_FILTER,
-  curveSmoothnessLabel,
   normalizeCurveSmoothness,
+  resolveChartSmoothingLevel,
   normalizeTimeFilter,
   TIME_FILTER_OPTIONS,
   timeFilterLabel,
@@ -95,7 +97,16 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
   const timeFilterIndex = Math.max(0, TIME_FILTER_OPTIONS.findIndex((option) => option.value === timeFilter));
   const smoothnessSupported = chartType === 'line' || chartType === 'area';
   const smoothness = normalizeCurveSmoothness(options.smoothness, legacyCurveSmoothingToSmoothness(options.curveSmoothing, chartType));
-  const smoothnessIndex = Math.max(0, CURVE_SMOOTHNESS_OPTIONS.findIndex((option) => option.value === smoothness));
+  // Lines and areas get one smoothing scale. Bars keep the separate time-bin
+  // control below, because a window there adds values up rather than evening
+  // them out.
+  const smoothingSupport = { timeWindows: smoothnessSupported && timeFilterSupported, curve: smoothnessSupported };
+  const smoothingOptions = chartSmoothingOptions(smoothingSupport);
+  const smoothingIndex = Math.max(
+    0,
+    smoothingOptions.findIndex((option) => option.value === resolveChartSmoothingLevel(timeFilter, smoothness, smoothingSupport)),
+  );
+  const smoothingOption = smoothingOptions[smoothingIndex];
   const valueSize = typeof options.valueSize === 'string' ? options.valueSize : 'md';
   const valueMode = typeof options.valueMode === 'string' ? options.valueMode : sensorDefinition?.valueMode ?? 'latest';
   const iconId = resolveIconId(typeof options.icon === 'string' ? options.icon : sensorDefinition?.icon);
@@ -190,7 +201,9 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
           ? timeFilter
           : DEFAULT_SPRITE_TIME_FILTER
         : 'raw',
-      smoothness: nextType === 'line' || nextType === 'area' ? smoothness : 'straight',
+      smoothness: nextType === 'line' || nextType === 'area'
+        ? smoothnessSupported ? smoothness : DEFAULT_CURVE_SMOOTHNESS
+        : 'straight',
     });
   }
 
@@ -509,9 +522,26 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                     />
                   </Field>
                 ) : null}
-                {timeFilterSupported ? (
+                {smoothingOption ? (
                   <div>
-                    <Field label={`Display filter - ${timeFilterLabel(timeFilter)}`}>
+                    <Field label={`Smoothing - ${smoothingOption.label}`}>
+                      <input
+                        type="range"
+                        min={0}
+                        max={smoothingOptions.length - 1}
+                        step={1}
+                        value={smoothingIndex}
+                        onChange={(e) => patch(chartSmoothingSettings(smoothingOptions[Number(e.target.value)]!.value))}
+                        className="rm-accent-range w-full"
+                        aria-label="Smoothing"
+                        aria-valuetext={smoothingOption.label}
+                      />
+                    </Field>
+                    <p className="mt-1.5 text-xs text-fg-tertiary">{smoothingOption.description}</p>
+                  </div>
+                ) : timeFilterSupported ? (
+                  <div>
+                    <Field label={`Time bins - ${timeFilterLabel(timeFilter)}`}>
                       <input
                         type="range"
                         min={0}
@@ -520,28 +550,14 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                         value={timeFilterIndex}
                         onChange={(e) => patch({ timeFilter: TIME_FILTER_OPTIONS[Number(e.target.value)]!.value })}
                         className="rm-accent-range w-full"
+                        aria-label="Time bins"
+                        aria-valuetext={timeFilterLabel(timeFilter)}
                       />
                     </Field>
-                    {chartType === 'bar' || chartType === 'daily_delta' ? (
-                      <p className="-mt-1 text-xs text-fg-tertiary">
-                        Non-raw windows sum bars within each time bin.
-                      </p>
-                    ) : null}
+                    <p className="mt-1.5 text-xs text-fg-tertiary">
+                      Raw keeps one bar per reading. Any other window adds the readings in each time bin into one bar.
+                    </p>
                   </div>
-                ) : null}
-                {smoothnessSupported ? (
-                  <Field label={`Curve smoothness - ${curveSmoothnessLabel(smoothness)}`}>
-                    <input
-                      type="range"
-                      min={0}
-                      max={CURVE_SMOOTHNESS_OPTIONS.length - 1}
-                      step={1}
-                      value={smoothnessIndex}
-                      onChange={(e) => patch({ smoothness: CURVE_SMOOTHNESS_OPTIONS[Number(e.target.value)]!.value })}
-                      className="rm-accent-range w-full"
-                      aria-label="Curve smoothness"
-                    />
-                  </Field>
                 ) : null}
                 <ChartColorField
                   value={curveColor}

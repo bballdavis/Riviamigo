@@ -35,16 +35,24 @@ export {
   timeFilterLabel,
   timeFilterMilliseconds,
 } from './timeFilter';
-export type { TimeBucketPoint, TimeFilterWindow } from './timeFilter';
+export type { TimeBucketPoint, TimeFilterOptions, TimeFilterWindow } from './timeFilter';
 export {
   CURVE_SMOOTHNESS_OPTIONS,
   DEFAULT_CURVE_SMOOTHNESS,
   curveSmoothnessLabel,
-  clampedControlPoints,
+  monotoneControlPoints,
+  monotoneCurveSlopes,
   normalizeCurveSmoothness,
   splitCurveSegments,
 } from './curveSmoothness';
 export type { CurvePoint, CurveSmoothness } from './curveSmoothness';
+export {
+  chartSmoothingLabel,
+  chartSmoothingOptions,
+  chartSmoothingSettings,
+  resolveChartSmoothingLevel,
+} from './chartSmoothing';
+export type { ChartSmoothingLevel, ChartSmoothingOption, ChartSmoothingSupport } from './chartSmoothing';
 export { ChargeCurveChart } from './ChargeCurveChart';
 export type { ChargeCurveChartProps, ChargeCurvePoint } from './ChargeCurveChart';
 export { ChargeSessionDistributionChart } from './ChargeSessionDistributionChart';

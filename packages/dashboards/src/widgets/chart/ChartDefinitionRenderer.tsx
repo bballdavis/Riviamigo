@@ -101,6 +101,7 @@ export function ChartDefinitionRenderer({ definition, datasets, height, loading 
     xRange={numericRange(definition.axes.x)}
     yRange={numericRange(definition.axes.y)}
     yRightRange={definition.axes.y2 ? numericRange(definition.axes.y2) : undefined}
+    timeFilter={definition.display.timeFilter}
     smoothness={definition.display.curveSmoothness}
     showLegend={definition.display.legend !== 'hide'}
     showGrid={definition.display.grid}

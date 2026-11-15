@@ -30,6 +30,7 @@ import {
   ManagedChartRuntime,
   getBatteryCapacityMileageYRange,
   getProjectedRangeMileageYRange,
+  resolveAuthoredChartDisplaySettings,
   usesBundledChartRenderer,
 } from '../../../../packages/dashboards/src/widgets/chart/DashboardChartWidget';
 
@@ -106,6 +107,29 @@ vi.mock('uplot', () => {
 });
 
 describe('DashboardChartWidget - smoothing controls', () => {
+  it('keeps a custom chart on the smoothing its author chose until the dashboard overrides it', () => {
+    const seed = chartRecord('battery-capacity-mileage');
+    const authored = {
+      ...seed,
+      slug: 'my-custom-chart',
+      config: {
+        ...seed.config,
+        display: { ...seed.config.display, timeFilter: '6h' as const, curveSmoothness: 'straight' as const },
+      },
+    };
+    expect(resolveAuthoredChartDisplaySettings({}, authored)).toEqual({
+      timeFilter: '6h',
+      smoothness: 'straight',
+      axes: {},
+    });
+    expect(
+      resolveAuthoredChartDisplaySettings(
+        { 'my-custom-chart': { timeFilter: 'raw', smoothness: 'gentle' } },
+        authored
+      )
+    ).toEqual({ timeFilter: 'raw', smoothness: 'gentle', axes: {} });
+  });
+
   it('never changes the renderer for a bundled slug, even when its saved definition is edited', () => {
     const seed = chartRecord('battery-capacity-mileage');
     expect(usesBundledChartRenderer(seed)).toBe(true);
@@ -710,9 +734,13 @@ describe('DashboardChartWidget - smoothing controls', () => {
     render(<DashboardChartWidget instance={instance} ctx={CTX} />);
     fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
 
-    const slider = screen.getByLabelText('Display filter');
+    // Raw values with the default rounded line read as the "Curve" level.
+    const slider = screen.getByLabelText('Smoothing');
     expect(slider).toBeTruthy();
-    expect(slider.getAttribute('value')).toBe('0');
+    expect(slider.getAttribute('value')).toBe('1');
+    expect(slider).toHaveAttribute('max', '7');
+    expect(screen.queryByLabelText('Display filter')).toBeNull();
+    expect(screen.queryByLabelText('Curve smoothness')).toBeNull();
     expect(screen.queryByLabelText('Time minimum')).toBeNull();
   });
 
@@ -778,48 +806,61 @@ describe('DashboardChartWidget - smoothing controls', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
-    fireEvent.change(screen.getByLabelText('Display filter'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Smoothing'), { target: { value: '3' } });
 
     expect(updateWidgetOptions).toHaveBeenLastCalledWith(
       'test-soc-history',
       expect.objectContaining({
-        chartSettings: { 'soc-history': { timeFilter: '1h' } },
+        chartSettings: { 'soc-history': { timeFilter: '1h', smoothness: 'gentle' } },
       })
     );
   });
 
-  it('persists curve smoothness independently from the display filter', () => {
+  it('stores each smoothing level as a time filter and a curve together', () => {
     const updateWidgetOptions = vi.fn();
     renderWidget(makeInstance('soc-history'), { ...CTX, updateWidgetOptions });
     fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
-    fireEvent.change(screen.getByLabelText('Curve smoothness'), { target: { value: '2' } });
-    expect(updateWidgetOptions).toHaveBeenLastCalledWith(
-      'test-soc-history',
-      expect.objectContaining({ chartSettings: { 'soc-history': { smoothness: 'smooth' } } })
-    );
 
-    fireEvent.change(screen.getByLabelText('Display filter'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Smoothing'), { target: { value: '0' } });
     expect(updateWidgetOptions).toHaveBeenLastCalledWith(
       'test-soc-history',
       expect.objectContaining({
-        chartSettings: { 'soc-history': { smoothness: 'smooth', timeFilter: '1h' } },
+        chartSettings: { 'soc-history': { timeFilter: 'raw', smoothness: 'straight' } },
+      })
+    );
+
+    fireEvent.change(screen.getByLabelText('Smoothing'), { target: { value: '1' } });
+    expect(updateWidgetOptions).toHaveBeenLastCalledWith(
+      'test-soc-history',
+      expect.objectContaining({
+        chartSettings: { 'soc-history': { timeFilter: 'raw', smoothness: 'gentle' } },
+      })
+    );
+
+    fireEvent.change(screen.getByLabelText('Smoothing'), { target: { value: '3' } });
+    expect(updateWidgetOptions).toHaveBeenLastCalledWith(
+      'test-soc-history',
+      expect.objectContaining({
+        chartSettings: { 'soc-history': { timeFilter: '1h', smoothness: 'gentle' } },
       })
     );
   });
 
-  it('applies the display filter and curve smoothness to both projected-range curves', () => {
+  it('applies one smoothing level to both projected-range curves', () => {
     renderChart('projected-range-mileage');
     fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
 
-    fireEvent.change(screen.getByLabelText('Display filter'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Smoothing'), { target: { value: '3' } });
     expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-time-filter', '1h');
     expect(screen.getByTestId('rich-chart')).toHaveAttribute(
       'data-series-filterable',
       'Projected Max Range:true|Mileage:true'
     );
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-chart-smoothness', 'gentle');
 
-    fireEvent.change(screen.getByLabelText('Curve smoothness'), { target: { value: '2' } });
-    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-chart-smoothness', 'smooth');
+    fireEvent.change(screen.getByLabelText('Smoothing'), { target: { value: '0' } });
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-time-filter', 'raw');
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-chart-smoothness', 'straight');
   });
 
   it('persists projected-range display controls through the account dashboard save seam', () => {
@@ -827,8 +868,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
     renderWidget(makeInstance('projected-range-mileage'), { ...CTX, updateWidgetOptions });
     fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
 
-    fireEvent.change(screen.getByLabelText('Display filter'), { target: { value: '2' } });
-    fireEvent.change(screen.getByLabelText('Curve smoothness'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Smoothing'), { target: { value: '3' } });
 
     expect(updateWidgetOptions).toHaveBeenLastCalledWith(
       'test-projected-range-mileage',
@@ -836,7 +876,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
         chartSettings: {
           'projected-range-mileage': {
             timeFilter: '1h',
-            smoothness: 'smooth',
+            smoothness: 'gentle',
           },
         },
       })
