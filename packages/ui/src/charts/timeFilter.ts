@@ -50,15 +50,20 @@ function toMilliseconds(value: string | number | Date): number | null {
 /**
  * Filters contiguous finite samples with a centered, timestamp-aware moving
  * average. It keeps the original timestamps and null gaps intact.
+ *
+ * The running sum always adds and removes the raw samples, never an already
+ * averaged one: subtracting averaged values let the sum drift, which made a
+ * rising series such as an odometer overshoot and then fall back.
  */
 export function filterTimeSeriesValues(
   timestamps: Array<string | number | Date>,
   values: Array<number | null | undefined>,
   window: TimeFilterWindow,
 ): Array<number | null> {
-  const result = values.map((value) => (
+  const raw = values.map((value) => (
     typeof value === 'number' && Number.isFinite(value) ? value : null
   ));
+  const result = [...raw];
   const windowMilliseconds = timeFilterMilliseconds(window);
   if (windowMilliseconds === 0 || timestamps.length !== values.length) return result;
 
@@ -67,15 +72,15 @@ export function filterTimeSeriesValues(
   let segmentStart = 0;
 
   while (segmentStart < result.length) {
-    while (segmentStart < result.length && (result[segmentStart] == null || timeValues[segmentStart] == null)) {
+    while (segmentStart < raw.length && (raw[segmentStart] == null || timeValues[segmentStart] == null)) {
       segmentStart += 1;
     }
-    if (segmentStart >= result.length) break;
+    if (segmentStart >= raw.length) break;
 
     let segmentEnd = segmentStart + 1;
     while (
-      segmentEnd < result.length &&
-      result[segmentEnd] != null &&
+      segmentEnd < raw.length &&
+      raw[segmentEnd] != null &&
       timeValues[segmentEnd] != null &&
       timeValues[segmentEnd]! >= timeValues[segmentEnd - 1]!
     ) {
@@ -89,16 +94,16 @@ export function filterTimeSeriesValues(
     for (let index = segmentStart; index < segmentEnd; index += 1) {
       const center = timeValues[index]!;
       while (right < segmentEnd && timeValues[right]! <= center + halfWindow) {
-        sum += result[right]!;
+        sum += raw[right]!;
         count += 1;
         right += 1;
       }
       while (left < right && timeValues[left]! < center - halfWindow) {
-        sum -= result[left]!;
+        sum -= raw[left]!;
         count -= 1;
         left += 1;
       }
-      result[index] = count > 0 ? sum / count : result[index] ?? null;
+      result[index] = count > 0 ? sum / count : raw[index] ?? null;
     }
     segmentStart = segmentEnd;
   }
