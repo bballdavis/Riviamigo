@@ -1348,7 +1348,13 @@ fn truncate_ws_message(value: &str) -> String {
     if value.len() <= MAX_LEN {
         return value.to_string();
     }
-    format!("{}...", &value[..MAX_LEN])
+    // Cut on a character boundary; a byte index inside a multibyte character
+    // would panic.
+    let mut end = MAX_LEN;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &value[..end])
 }
 
 fn rejected_vehicle_state_fields(value: &Value) -> Vec<String> {
@@ -1385,6 +1391,15 @@ fn rejected_vehicle_state_field(message: &str) -> Option<String> {
 mod tests {
     use super::*;
     use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
+    #[test]
+    fn truncation_never_splits_a_multibyte_character() {
+        // 499 ASCII bytes then a 3-byte character straddling the 500 byte limit.
+        let text = format!("{}€{}", "a".repeat(499), "b".repeat(50));
+        let truncated = truncate_ws_message(&text);
+        assert_eq!(truncated, format!("{}...", "a".repeat(499)));
+        assert_eq!(truncate_ws_message("short"), "short");
+    }
 
     #[test]
     fn rivian_ws_request_includes_required_handshake_headers() {

@@ -12,8 +12,11 @@ use tracing::info;
 use uuid::Uuid;
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    riviamigo_api::logging::init();
+async fn main() -> std::process::ExitCode {
+    riviamigo_api::logging::run(run()).await
+}
+
+async fn run() -> Result<()> {
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
 
     let mut vehicle_id = None;

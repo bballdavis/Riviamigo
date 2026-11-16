@@ -18,7 +18,6 @@ use uuid::Uuid;
 
 use riviamigo_api::{
     config::Config,
-    logging,
     services::{
         backups, restore_compatibility, restore_history,
         restore_jobs::{self, RestorePhase},
@@ -81,10 +80,19 @@ async fn drop_candidate(config: &Config, database: &str) {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    logging::init();
-    let config = Config::from_env()?;
-    cleanup_restore_roles(&config).await?;
+async fn main() -> std::process::ExitCode {
+    riviamigo_api::logging::run(Box::pin(run())).await
+}
+
+async fn run() -> anyhow::Result<()> {
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "restore agent starting"
+    );
+    let config = Config::from_env().context("loading configuration from the environment")?;
+    cleanup_restore_roles(&config)
+        .await
+        .context("cleaning up expired restore roles")?;
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
     if let Some(command) = arguments.first().map(String::as_str) {
         match command {
@@ -115,7 +123,9 @@ async fn main() -> anyhow::Result<()> {
             _ => {}
         }
     }
-    let agent_key = fs::read_to_string(restore_jobs::agent_key_path(&config)).await?;
+    let agent_key = fs::read_to_string(restore_jobs::agent_key_path(&config))
+        .await
+        .context("reading the restore agent key")?;
     let state = AgentState {
         config,
         agent_key: agent_key.trim().into(),
@@ -127,15 +137,24 @@ async fn main() -> anyhow::Result<()> {
         .route("/internal/jobs/{job_id}/execute", post(execute_job))
         .with_state(state);
     let port = std::env::var("RESTORE_AGENT_PORT").unwrap_or_else(|_| "3002".into());
-    let address: SocketAddr = format!("127.0.0.1:{port}").parse()?;
-    let listener = TcpListener::bind(address).await?;
+    let address: SocketAddr = format!("127.0.0.1:{port}")
+        .parse()
+        .context("parsing the restore agent listen address")?;
+    let listener = TcpListener::bind(address)
+        .await
+        .with_context(|| format!("binding {address}"))?;
     tracing::info!(listen_addr = %address, "restore agent listening");
     tokio::spawn(async move {
         if let Err(error) = retry_interrupted_restore(&recovery_state).await {
             tracing::error!(error = ?error, "interrupted restore retry failed");
         }
     });
-    axum::serve(listener, app).await?;
+    tokio::select! {
+        result = axum::serve(listener, app) => result.context("serving restore agent HTTP")?,
+        signal = riviamigo_api::logging::shutdown_signal() => {
+            tracing::info!(signal, "shutdown signal received; stopping");
+        }
+    }
     Ok(())
 }
 
@@ -1291,7 +1310,7 @@ async fn build_restore_toc(dump: &Path, toc_path: &Path) -> anyhow::Result<()> {
     if !output.status.success() {
         anyhow::bail!(
             "pg_restore could not inspect the recovery dump: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            stderr_text(&output)
         );
     }
     let list = String::from_utf8_lossy(&output.stdout)
@@ -1317,10 +1336,48 @@ async fn run_pg_restore(config: &Config, dump: &Path, toc_path: &Path) -> anyhow
     if output.status.success() {
         return Ok(());
     }
-    anyhow::bail!(
-        "pg_restore failed: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    )
+    anyhow::bail!("pg_restore failed: {}", stderr_text(&output))
+}
+
+/// Creates the unprivileged candidate role. The statement carries the role's
+/// password as a literal, so it runs on a connection with statement logging
+/// off; otherwise `sqlx=debug` would write the password to the log. Failures
+/// are reported without the statement text.
+async fn create_restore_role(
+    config: &Config,
+    role: &str,
+    password: &str,
+    valid_until: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<()> {
+    use sqlx::{postgres::PgConnectOptions, ConnectOptions, Connection};
+    let options = config
+        .database_url
+        .parse::<PgConnectOptions>()
+        .context("parsing the database URL")?
+        .disable_statement_logging();
+    let mut connection = options
+        .connect()
+        .await
+        .context("connecting to create the restore role")?;
+    let statement = format!(
+        "CREATE ROLE {} LOGIN PASSWORD {} VALID UNTIL {} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4",
+        quote_identifier(role),
+        quote_literal(password),
+        quote_literal(&valid_until.to_rfc3339())
+    );
+    let result = sqlx::query(sqlx::AssertSqlSafe(statement))
+        .execute(&mut connection)
+        .await;
+    if let Err(error) = connection.close().await {
+        tracing::debug!(error = %error, "restore role connection close failed");
+    }
+    result.map(|_| ()).context("creating the restore role")
+}
+
+/// A child process's stderr, trimmed and with credentials masked. It becomes
+/// part of an error that is logged and recorded on the restore job.
+fn stderr_text(output: &std::process::Output) -> String {
+    riviamigo_api::logging::redact(String::from_utf8_lossy(&output.stderr).trim()).into_owned()
 }
 
 struct PreparedDatabase {
@@ -1372,8 +1429,7 @@ async fn prepare_restore_database(
         let valid_until = chrono::Utc::now() + chrono::Duration::seconds(config.recovery.restore_deadline_seconds as i64);
         // No memberships, superuser privileges, cluster administration or file/
         // program roles. Only this fresh candidate receives object privileges.
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE ROLE {} LOGIN PASSWORD {} VALID UNTIL {} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4", quote_identifier(&restore_role), quote_literal(&role_password), quote_literal(&valid_until.to_rfc3339()))))
-            .execute(&pool).await?;
+        create_restore_role(&restore_config, &restore_role, &role_password, valid_until).await?;
         sqlx::raw_sql(sqlx::AssertSqlSafe(format!("REVOKE CONNECT ON DATABASE {} FROM PUBLIC; GRANT CONNECT, CREATE, TEMPORARY ON DATABASE {} TO {}; GRANT USAGE, CREATE ON SCHEMA public, riviamigo TO {}; ALTER SCHEMA riviamigo OWNER TO {};", quote_identifier(&restore_database), quote_identifier(&restore_database), quote_identifier(&restore_role), quote_identifier(&restore_role), quote_identifier(&restore_role))))
             .execute(&pool).await?;
         // Timescale's installed extension owns its catalog tables. COPY needs
@@ -1543,10 +1599,7 @@ async fn database_exists(config: &Config, database: &str) -> anyhow::Result<bool
         .output()
         .await?;
     if !output.status.success() {
-        anyhow::bail!(
-            "could not inspect database state: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        anyhow::bail!("could not inspect database state: {}", stderr_text(&output));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim() == "t")
 }
@@ -1563,10 +1616,7 @@ async fn run_psql_on_database(config: &Config, database: &str, sql: &str) -> any
     if output.status.success() {
         return Ok(());
     }
-    anyhow::bail!(
-        "psql failed: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    )
+    anyhow::bail!("psql failed: {}", stderr_text(&output))
 }
 
 async fn run_psql(config: &Config, sql: &str) -> anyhow::Result<()> {
