@@ -24,11 +24,12 @@ use tracing_subscriber::{
     EnvFilter,
 };
 
-/// Filter used when `RUST_LOG` is unset or invalid: `INFO` for first-party
-/// code, `WARN` for HTTP framework chatter. Use `RUST_LOG` to opt in to
-/// `debug` or `trace`.
-pub const DEFAULT_FILTER: &str =
-    "riviamigo_api=info,riviamigo_restore_agent=info,tower_http=warn,warn";
+/// Filter used when `RUST_LOG` is unset or invalid: `INFO` everywhere except
+/// HTTP framework chatter, which stays at `WARN`. Applying `INFO` to every
+/// target keeps the maintenance binaries (their targets are not under
+/// `riviamigo_api`) as visible as the API. Use `RUST_LOG` to opt in to `debug`
+/// or `trace`.
+pub const DEFAULT_FILTER: &str = "info,tower_http=warn";
 
 const FIRST_PARTY_PREFIX: &str = "riviamigo_api::";
 

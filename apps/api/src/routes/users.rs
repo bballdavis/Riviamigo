@@ -266,6 +266,12 @@ async fn create_account_invitation(
             .await?;
     }
     tx.commit().await?;
+    tracing::info!(
+        actor_user_id = %auth.user_id,
+        invitation_id = %id,
+        count = vehicle_ids.len(),
+        "account invitation created"
+    );
     audit_log(
         &state.pool,
         "account_invitation_created",
@@ -308,6 +314,11 @@ async fn revoke_account_invitation(
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
     sqlx::query("UPDATE riviamigo.account_invitations SET revoked_at = now(), updated_at = now() WHERE id = $1 AND accepted_at IS NULL")
         .bind(id).execute(&state.pool).await?;
+    tracing::info!(
+        actor_user_id = %auth.user_id,
+        invitation_id = %id,
+        "account invitation revoked"
+    );
     audit_log(
         &state.pool,
         "account_invitation_revoked",
@@ -335,7 +346,7 @@ fn audit_log(pool: &sqlx::PgPool, event: &'static str, user_id: Uuid, _detail: S
             .record(&pool)
             .await
         {
-            tracing::warn!(%error, event, "failed to record account invitation audit event");
+            tracing::error!(error = %error, event, "account invitation audit record failed");
         }
     });
 }
@@ -407,6 +418,14 @@ async fn update_user(
         crate::services::sessions::revoke_user_sessions(&mut tx, target_user_id).await?;
     }
     tx.commit().await?;
+    tracing::info!(
+        actor_user_id = %auth.user_id,
+        user_id = %target_user_id,
+        email_changed = body.email.is_some(),
+        role_changed = body.role.is_some(),
+        is_disabled = body.is_disabled,
+        "user updated by administrator"
+    );
     support_audit(
         state.pool.clone(),
         "admin_user_update",
@@ -478,6 +497,11 @@ async fn delete_user(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    tracing::info!(
+        actor_user_id = %auth.user_id,
+        user_id = %target_user_id,
+        "user deleted by administrator"
+    );
     support_audit(
         state.pool.clone(),
         "admin_user_delete",
@@ -572,6 +596,12 @@ async fn revoke_user_invite(
     .bind(email)
     .execute(&state.pool)
     .await?;
+    tracing::debug!(
+        actor_user_id = %auth.user_id,
+        user_id = %target_user_id,
+        invitation_id = %invite_id,
+        "vehicle invite revoked"
+    );
     support_audit(
         state.pool.clone(),
         "admin_invite_revoke",
@@ -611,6 +641,13 @@ async fn grant_user_vehicle_membership(
     .bind(target_user_id)
     .execute(&state.pool)
     .await?;
+    tracing::debug!(
+        actor_user_id = %auth.user_id,
+        user_id = %target_user_id,
+        vehicle_id = %vehicle_id,
+        role,
+        "vehicle membership granted"
+    );
     support_audit(
         state.pool.clone(),
         "admin_membership_grant",
@@ -639,6 +676,13 @@ async fn update_user_vehicle_membership(
     .bind(role)
     .execute(&state.pool)
     .await?;
+    tracing::debug!(
+        actor_user_id = %auth.user_id,
+        user_id = %target_user_id,
+        vehicle_id = %vehicle_id,
+        role,
+        "vehicle membership updated"
+    );
     support_audit(
         state.pool.clone(),
         "admin_membership_update",
@@ -684,6 +728,12 @@ async fn remove_user_vehicle_membership(
         .bind(vehicle_id)
         .execute(&state.pool)
         .await?;
+    tracing::debug!(
+        actor_user_id = %auth.user_id,
+        user_id = %target_user_id,
+        vehicle_id = %vehicle_id,
+        "vehicle membership removed"
+    );
     support_audit(
         state.pool.clone(),
         "admin_membership_remove",
@@ -764,7 +814,7 @@ fn support_audit(pool: sqlx::PgPool, event: &'static str, user_id: Option<Uuid>,
             .record(&pool)
             .await;
         if let Err(error) = result {
-            tracing::warn!(error = %error, event, "support audit insert failed");
+            tracing::error!(error = %error, event, "admin audit record failed");
         }
     });
 }

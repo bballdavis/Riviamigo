@@ -166,13 +166,9 @@ pub async fn run_claimed(
             .execute(pool)
             .await?;
         }
-        Err(error) => {
-            tracing::warn!(
-                vehicle_id = %claimed.vehicle_id,
-                error = %error,
-                "charge history backfill failed"
-            );
-            let _ = sqlx::query(
+        // The caller of `run` or `spawn` logs the failure with its context.
+        Err(_) => {
+            if let Err(write_error) = sqlx::query(
                 "UPDATE riviamigo.vehicles
                  SET history_backfill_status = 'error',
                      updated_at = now()
@@ -180,7 +176,14 @@ pub async fn run_claimed(
             )
             .bind(claimed.vehicle_id)
             .execute(pool)
-            .await;
+            .await
+            {
+                tracing::error!(
+                    vehicle_id = %claimed.vehicle_id,
+                    error = %write_error,
+                    "charge history backfill status write failed"
+                );
+            }
         }
     }
 
@@ -203,18 +206,36 @@ pub async fn spawn(
     vehicle_id: Uuid,
 ) -> Result<ChargeBackfillStart, ChargeBackfillError> {
     let claimed = claim(&pool, vehicle_id).await?;
+    tracing::info!(vehicle_id = %vehicle_id, "charge history backfill started");
     tokio::spawn(async move {
+        let started = std::time::Instant::now();
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
+            .inspect_err(|error| {
+                tracing::warn!(
+                    error = %error,
+                    "charge history backfill client build failed, using default client"
+                );
+            })
             .unwrap_or_default();
 
         match run_claimed(&pool, &client, &age_key, claimed).await {
             Ok(count) => {
-                tracing::info!(vehicle_id=%vehicle_id, count, "charge history backfill complete");
+                tracing::info!(
+                    vehicle_id = %vehicle_id,
+                    count,
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    "charge history backfill complete"
+                );
             }
             Err(error) => {
-                tracing::warn!(vehicle_id=%vehicle_id, error=%error, "charge history backfill task failed");
+                tracing::warn!(
+                    vehicle_id = %vehicle_id,
+                    error = %error,
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    "charge history backfill failed"
+                );
             }
         }
     });

@@ -16,7 +16,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    riviamigo_api::logging::init();
     let args = parse_args()?;
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let pool = create_pool(&database_url).await?;

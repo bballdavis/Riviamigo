@@ -126,11 +126,19 @@ pub async fn gql_request<T: for<'de> Deserialize<'de>>(
         request = request.bearer_auth(&tokens.access_token);
     }
 
+    let started = std::time::Instant::now();
     let response = request.send().await.map_err(|source| RequestError::Send {
         operation: operation.to_owned(),
         source,
     })?;
     let status = response.status();
+    // Outcome only: the response body and URL are never logged.
+    tracing::debug!(
+        operation = operation,
+        status = status.as_u16(),
+        duration_ms = started.elapsed().as_millis() as u64,
+        "rivian graphql response received"
+    );
     if status == reqwest::StatusCode::UNAUTHORIZED {
         return Err(anyhow!(AuthError));
     }

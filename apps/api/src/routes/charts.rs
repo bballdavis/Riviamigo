@@ -155,6 +155,7 @@ async fn create(
     validate_config(&body.slug, &body.config)?;
     let row = sqlx::query_as::<_, ChartRecord>("INSERT INTO riviamigo.charts (owner_id, slug, name, description, is_default, is_locked, is_enabled, config) VALUES ($1,$2,$3,$4,FALSE,FALSE,COALESCE($5,TRUE),$6) RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at")
         .bind(auth.user_id).bind(body.slug).bind(body.name).bind(body.description).bind(body.is_enabled).bind(body.config).fetch_one(&state.pool).await.map_err(map_conflict)?;
+    tracing::info!(chart_id = %row.id, user_id = %auth.user_id, "chart created");
     Ok((StatusCode::CREATED, Json(row)))
 }
 
@@ -171,6 +172,7 @@ async fn update(
     }
     let row = sqlx::query_as::<_, ChartRecord>("UPDATE riviamigo.charts SET name=COALESCE($1,name),description=COALESCE($2,description),is_enabled=COALESCE($3,is_enabled),config=COALESCE($4,config),updated_at=NOW() WHERE id=$5 RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at")
         .bind(body.name).bind(body.description).bind(body.is_enabled).bind(body.config).bind(id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+    tracing::debug!(chart_id = %row.id, user_id = %auth.user_id, "chart updated");
     Ok(Json(row))
 }
 
@@ -185,6 +187,7 @@ async fn remove(
         .bind(id)
         .execute(&state.pool)
         .await?;
+    tracing::info!(chart_id = %id, user_id = %auth.user_id, "chart deleted");
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -206,6 +209,7 @@ async fn clone_chart(
     validate_name(&name)?;
     let row = sqlx::query_as::<_, ChartRecord>("INSERT INTO riviamigo.charts (owner_id,slug,name,description,is_default,is_locked,is_enabled,config) VALUES ($1,$2,$3,$4,FALSE,FALSE,$5,$6) RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at")
         .bind(auth.user_id).bind(slug).bind(name).bind(source.description).bind(source.is_enabled).bind(source.config).fetch_one(&state.pool).await.map_err(map_conflict)?;
+    tracing::info!(chart_id = %row.id, source_chart_id = %id, user_id = %auth.user_id, "chart cloned");
     Ok((StatusCode::CREATED, Json(row)))
 }
 
@@ -225,6 +229,7 @@ async fn reset(
         .execute(&state.pool)
         .await?;
 
+    tracing::info!(chart_id = %id, user_id = %auth.user_id, "chart reset to system default");
     Ok(Json(system))
 }
 
@@ -264,6 +269,7 @@ async fn set_placements(
         .fetch_optional(&state.pool)
         .await?
         .ok_or(AppError::NotFound)?;
+    tracing::debug!(chart_id = %row.id, placements = body.placements.len(), user_id = %auth.user_id, "chart placements updated");
     Ok(Json(row))
 }
 
@@ -279,6 +285,7 @@ async fn admin_update(
         validate_config(&existing.slug, config)?;
     }
     let row=sqlx::query_as::<_,ChartRecord>("UPDATE riviamigo.charts SET name=COALESCE($1,name),description=COALESCE($2,description),is_enabled=COALESCE($3,is_enabled),config=COALESCE($4,config),updated_at=NOW() WHERE id=$5 RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at").bind(body.name).bind(body.description).bind(body.is_enabled).bind(body.config).bind(id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+    tracing::info!(chart_id = %row.id, user_id = %auth.user_id, "chart updated by administrator");
     Ok(Json(row))
 }
 async fn admin_lock(
@@ -290,6 +297,7 @@ async fn admin_lock(
 ) -> Result<Json<ChartRecord>, AppError> {
     require_admin(&state, auth.user_id).await?;
     let row=sqlx::query_as::<_,ChartRecord>("UPDATE riviamigo.charts SET is_locked=$1,updated_at=NOW() WHERE id=$2 RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at").bind(body.locked).bind(id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+    tracing::info!(chart_id = %row.id, locked = row.is_locked, user_id = %auth.user_id, "chart lock changed by administrator");
     Ok(Json(row))
 }
 async fn admin_restore(
@@ -306,6 +314,7 @@ async fn admin_restore(
             .bind(id)
             .execute(&state.pool)
             .await?;
+        tracing::info!(chart_id = %id, user_id = %auth.user_id, "chart restored to system default");
         return Ok(Json(system));
     }
     let bundled = bundled_default(&row.slug).ok_or(AppError::NotFound)?;
@@ -325,12 +334,20 @@ async fn admin_restore(
         .bind(BUNDLED_CHART_BASELINE_REVISION)
         .fetch_one(&state.pool)
         .await?;
+    tracing::info!(chart_id = %restored.id, user_id = %auth.user_id, "chart restored to bundled default");
     Ok(Json(restored))
 }
 
 fn bundled_default(slug: &str) -> Option<Value> {
-    serde_json::from_str::<Vec<Value>>(include_str!("../../charts/defaults.json"))
-        .ok()?
+    let charts =
+        match serde_json::from_str::<Vec<Value>>(include_str!("../../charts/defaults.json")) {
+            Ok(charts) => charts,
+            Err(error) => {
+                tracing::error!(error = %error, "bundled chart defaults are invalid");
+                return None;
+            }
+        };
+    charts
         .into_iter()
         .find(|chart| chart["slug"].as_str() == Some(slug))
 }

@@ -66,6 +66,7 @@ async fn test_authentication(
     provider_settings.oidc_enabled = true;
     crate::services::oidc::test_provider(&provider_settings).await?;
     authentication_settings::record_validation(&state.pool, &effective, &state.age_key).await?;
+    tracing::debug!(user_id = %auth.user_id, "authentication provider validated");
     Ok(Json(
         serde_json::json!({ "valid": true, "discovery": "validated", "message": "OIDC provider discovery and JWKS retrieval succeeded." }),
     ))
@@ -184,6 +185,12 @@ async fn update_update_check_settings(
         .record_tx(&mut transaction)
         .await?;
     transaction.commit().await?;
+    tracing::info!(
+        user_id = %auth.user_id,
+        enabled,
+        frequency = %frequency,
+        "update check settings changed"
+    );
     Ok(Json(UpdateCheckSettingsResponse {
         enabled,
         frequency: UpdateCheckFrequency::parse(&frequency)?,
@@ -210,6 +217,11 @@ async fn update_timezone(
         .record_tx(&mut transaction)
         .await?;
     transaction.commit().await?;
+    tracing::info!(
+        user_id = %auth.user_id,
+        timezone = timezone.name(),
+        "application timezone changed"
+    );
     Ok(Json(TimezoneResponse {
         timezone: timezone.name().to_string(),
     }))

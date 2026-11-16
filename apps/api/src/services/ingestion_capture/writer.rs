@@ -88,6 +88,9 @@ pub(super) async fn run_writer(pool: PgPool, mut rx: mpsc::Receiver<Record>) {
     let mut batch = Vec::with_capacity(BATCH_ROWS);
     let mut flush = tokio::time::interval(FLUSH_INTERVAL);
     flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // A database outage fails every batch for as long as it lasts: warn on the
+    // first failure, keep the rest at debug, and log the recovery once.
+    let mut write_failing = false;
     loop {
         tokio::select! {
             record = rx.recv() => {
@@ -107,8 +110,22 @@ pub(super) async fn run_writer(pool: PgPool, mut rx: mpsc::Receiver<Record>) {
             }
         }
         let records = std::mem::take(&mut batch);
-        if let Err(error) = write_batch(&pool, &mut ledger, records).await {
-            tracing::warn!(err = %error, "ingestion capture batch write failed");
+        let count = records.len();
+        match write_batch(&pool, &mut ledger, records).await {
+            Ok(()) => {
+                if write_failing {
+                    tracing::info!("ingestion capture batch writes recovered");
+                    write_failing = false;
+                }
+            }
+            Err(error) => {
+                if write_failing {
+                    tracing::debug!(error = ?error, records = count, suppressed = true, "ingestion capture batch write failed");
+                } else {
+                    tracing::error!(error = ?error, records = count, "ingestion capture batch write failed; records dropped");
+                    write_failing = true;
+                }
+            }
         }
     }
 }
@@ -135,14 +152,26 @@ async fn write_batch(
     let mut recorded_ats = Vec::with_capacity(records.len());
     let mut kinds = Vec::with_capacity(records.len());
     let mut fields = Vec::with_capacity(records.len());
+    let mut over_cap = 0_usize;
     for record in records {
         let (kind, value) = match ledger.admit(record.capture_id, MAX_EVENTS_PER_CAPTURE) {
             Admit::Store => (record.kind, record.fields),
-            Admit::Truncate => (
-                Kind::Truncated,
-                serde_json::json!({ "max_events": MAX_EVENTS_PER_CAPTURE }),
-            ),
-            Admit::Drop => continue,
+            Admit::Truncate => {
+                tracing::warn!(
+                    vehicle_id = %record.vehicle_id,
+                    capture_id = %record.capture_id,
+                    max_events = MAX_EVENTS_PER_CAPTURE,
+                    "ingestion capture reached its event cap; further events dropped"
+                );
+                (
+                    Kind::Truncated,
+                    serde_json::json!({ "max_events": MAX_EVENTS_PER_CAPTURE }),
+                )
+            }
+            Admit::Drop => {
+                over_cap += 1;
+                continue;
+            }
         };
         vehicle_ids.push(record.vehicle_id);
         capture_ids.push(record.capture_id);
@@ -150,12 +179,16 @@ async fn write_batch(
         kinds.push(kind.as_str().to_owned());
         fields.push(value);
     }
+    if over_cap > 0 {
+        tracing::trace!(count = over_cap, "ingestion capture events dropped at cap");
+    }
     if vehicle_ids.is_empty() {
         return Ok(());
     }
+    let expected = vehicle_ids.len() as u64;
     // Joining the current capture row drops records that were queued for a
     // capture that has since been replaced.
-    sqlx::query(
+    let inserted = sqlx::query(
         "INSERT INTO riviamigo.vehicle_ingestion_capture_events \
              (vehicle_id, capture_id, recorded_at, kind, fields) \
          SELECT r.vehicle_id, r.capture_id, r.recorded_at, r.kind, r.fields \
@@ -170,6 +203,14 @@ async fn write_batch(
     .bind(kinds)
     .bind(fields)
     .execute(pool)
-    .await?;
+    .await?
+    .rows_affected();
+    let unmatched = expected.saturating_sub(inserted);
+    if unmatched > 0 {
+        tracing::debug!(
+            count = unmatched,
+            "ingestion capture records skipped: capture replaced"
+        );
+    }
     Ok(())
 }

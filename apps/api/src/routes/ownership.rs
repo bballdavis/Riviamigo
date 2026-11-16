@@ -136,6 +136,7 @@ async fn put_ownership_settings(
     let latest_purchase_date = Utc::now().date_naive() + chrono::Days::new(1);
     let settings = ownership::validate_settings(body, latest_purchase_date)?;
     ownership::save_settings(&state.pool, vehicle_id, auth.user_id, &settings).await?;
+    tracing::debug!(user_id = %auth.user_id, vehicle_id = %vehicle_id, "ownership settings saved");
     Ok(Json(OwnershipSettingsResponse {
         vehicle_id,
         can_edit: true,

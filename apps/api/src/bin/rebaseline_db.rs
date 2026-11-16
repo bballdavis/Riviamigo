@@ -31,10 +31,14 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let result = adopt(&database_url, &pool, confirm, backup_path.as_deref()).await;
-    let _ = sqlx::query("SELECT pg_advisory_unlock(hashtext($1))")
+    if let Err(error) = sqlx::query("SELECT pg_advisory_unlock(hashtext($1))")
         .bind(ADOPTION_LOCK)
         .execute(&pool)
-        .await;
+        .await
+    {
+        // The session lock is also released when the connection closes.
+        eprintln!("warning: could not release the baseline adoption lock: {error}");
+    }
     result
 }
 

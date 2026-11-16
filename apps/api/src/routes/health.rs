@@ -34,6 +34,7 @@ async fn rollback_repair(
     crate::services::charge_session_repair::rollback_repair(&state.pool, journal_id)
         .await
         .map_err(|error| AppError::Conflict(error.to_string()))?;
+    tracing::info!(user_id = %auth.user_id, journal_id, "charge session repair rolled back");
     Ok(Json(
         serde_json::json!({ "journal_id": journal_id, "status": "reverted" }),
     ))

@@ -240,7 +240,12 @@ impl StagingFile {
 }
 impl Drop for StagingFile {
     fn drop(&mut self) {
-        let _ = self.dir.remove_file(&self.temporary);
+        // After publish the temporary name is gone; only a real failure is worth a line.
+        if let Err(error) = self.dir.remove_file(&self.temporary) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(file = %self.final_name, error = %error, "staging temporary file cleanup failed");
+            }
+        }
     }
 }
 

@@ -341,7 +341,7 @@ pub async fn reversed_course(pool: &PgPool, vehicle_id: Uuid) -> sqlx::Result<bo
     let reversed = backed_into_position(&load_facing_evidence(pool, vehicle_id).await?);
     if let Some((None, epoch)) = saved {
         if let Err(error) = save_facing(pool, vehicle_id, epoch, reversed).await {
-            tracing::warn!(vehicle_id=%vehicle_id, err=%error, "vehicle facing could not be saved");
+            tracing::warn!(vehicle_id = %vehicle_id, error = %error, "vehicle facing save failed, using computed facing");
         }
     }
     Ok(reversed)
@@ -358,7 +358,7 @@ pub async fn resolve_facing_deg(
     let reversed = reversed_course(pool, vehicle_id)
         .await
         .unwrap_or_else(|error| {
-            tracing::warn!(vehicle_id=%vehicle_id, err=%error, "vehicle facing evidence unavailable");
+            tracing::warn!(vehicle_id = %vehicle_id, error = %error, "vehicle facing evidence unavailable, using raw course");
             false
         });
     apply_facing(bearing_deg, reversed)

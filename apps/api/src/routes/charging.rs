@@ -714,6 +714,12 @@ async fn update_charge_session(
             if recomputed.is_none() {
                 return Err(AppError::NotFound);
             }
+            tracing::info!(
+                user_id = %auth.user_id,
+                vehicle_id = %vehicle_id,
+                session_id = %session_id,
+                "charge session updated"
+            );
             Ok(())
         }
         None => Err(AppError::NotFound),
@@ -794,6 +800,12 @@ async fn update_network_preference(
     for id in sessions {
         recompute_charge_session_cost(&state.pool, id).await?;
     }
+    tracing::debug!(
+        user_id = %auth.user_id,
+        vehicle_id = %vehicle_id,
+        cost_mode = payload.cost_mode.as_str(),
+        "charging network preference updated"
+    );
     Ok(Json(
         serde_json::json!({ "network_vendor": observed, "cost_mode": payload.cost_mode.as_str() }),
     ))
@@ -1409,6 +1421,9 @@ async fn get_summary_response(
     .bind(to)
     .fetch_all(&state.pool)
     .await
+    .inspect_err(|error| {
+        tracing::error!(vehicle_id = %vehicle_id, error = %error, "charging network breakdown query failed");
+    })
     .unwrap_or_default();
 
     let total_kwh = agg.total_kwh.unwrap_or(0.0);
@@ -1422,8 +1437,9 @@ async fn get_summary_response(
     });
     if let (Some(cycles), Some(cap)) = (charging_cycles, capacity_kwh) {
         if cycles >= 500.0 {
-            tracing::warn!(
-                %vehicle_id,
+            // Per summary read, so a data anomaly stays at debug rather than warn.
+            tracing::debug!(
+                vehicle_id = %vehicle_id,
                 total_kwh,
                 capacity_kwh = cap,
                 charging_cycles = cycles,

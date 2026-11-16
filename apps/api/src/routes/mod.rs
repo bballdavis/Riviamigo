@@ -437,7 +437,7 @@ async fn health(
     match crate::services::redis_health::ping(&state.redis).await {
         Ok(()) => (StatusCode::OK, "ok"),
         Err(error) => {
-            tracing::error!(operation = "health", error = %error, "secure_session_store.unavailable");
+            tracing::error!(operation = "health", error = %error, "secure session store unavailable");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "secure session storage unavailable",

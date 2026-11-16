@@ -196,6 +196,7 @@ pub async fn upload(
     run_id: Uuid,
     created_at: DateTime<Utc>,
 ) -> Result<()> {
+    let started = std::time::Instant::now();
     let size = fs::metadata(path).await?.len();
     let metadata = HashMap::from([
         (
@@ -216,9 +217,22 @@ pub async fn upload(
             .send()
             .await
             .context("S3 upload failed")?;
+        tracing::debug!(
+            bytes = size,
+            multipart = false,
+            duration_ms = started.elapsed().as_millis() as u64,
+            "s3 backup uploaded"
+        );
         return Ok(());
     }
-    multipart_upload(settings, key, path, metadata).await
+    multipart_upload(settings, key, path, metadata).await?;
+    tracing::debug!(
+        bytes = size,
+        multipart = true,
+        duration_ms = started.elapsed().as_millis() as u64,
+        "s3 backup uploaded"
+    );
+    Ok(())
 }
 
 async fn multipart_upload(
@@ -289,17 +303,21 @@ async fn multipart_upload(
             .send()
             .await
             .context("could not complete S3 multipart upload")?;
+        tracing::debug!(parts = part_number - 1, "s3 multipart upload completed");
         Ok::<(), anyhow::Error>(())
     }
     .await;
     if result.is_err() {
-        let _ = client
+        if let Err(error) = client
             .abort_multipart_upload()
             .bucket(&settings.bucket)
             .key(key)
             .upload_id(&upload_id)
             .send()
-            .await;
+            .await
+        {
+            tracing::warn!(error = %error, "s3 multipart upload abort failed; upload may need manual cleanup");
+        }
     }
     result
 }
@@ -315,7 +333,8 @@ pub async fn download(
         key_belongs_to_prefix(&settings.prefix, key),
         "S3 object is outside the configured package prefix"
     );
-    tokio::time::timeout(
+    let started = std::time::Instant::now();
+    let staged = tokio::time::timeout(
         std::time::Duration::from_secs(limits.restore_deadline_seconds),
         async {
             let output = client(settings)?
@@ -344,7 +363,12 @@ pub async fn download(
         },
     )
     .await
-    .context("S3 download deadline exceeded")?
+    .context("S3 download deadline exceeded")??;
+    tracing::debug!(
+        duration_ms = started.elapsed().as_millis() as u64,
+        "s3 package staged"
+    );
+    Ok(staged)
 }
 
 pub async fn download_stream(settings: &S3Settings, key: &str) -> Result<ByteStream> {
@@ -427,6 +451,7 @@ pub async fn list(settings: &S3Settings) -> Result<Vec<RemoteObject>> {
         continuation = response.next_continuation_token().map(str::to_string);
     }
     rows.sort_by_key(|row| std::cmp::Reverse(row.created_at));
+    tracing::debug!(count = rows.len(), "s3 backup catalog listed");
     Ok(rows)
 }
 

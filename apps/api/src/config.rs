@@ -492,6 +492,20 @@ impl Config {
         let config =
             envy::from_env::<Config>().map_err(|e| anyhow::anyhow!("Config error: {e}"))?;
         config.validate()?;
+        // Resolved values, including serde defaults. Secrets and URLs are
+        // deliberately left out.
+        tracing::debug!(
+            environment = config.riviamigo_env.as_deref().unwrap_or("unset"),
+            port = config.port,
+            bind_address = %config.origin_bind.riviamigo_bind_address,
+            allowed_origins = config.allowed_origins.len(),
+            backup_driver = %config.backup_driver,
+            backup_poll_interval_seconds = config.backup_poll_interval_seconds,
+            rivian_persist_raw_events = config.rivian_persist_raw_events,
+            rivian_suppress_duplicate_telemetry = config.rivian_suppress_duplicate_telemetry,
+            rivian_raw_event_retention_days = config.rivian_raw_event_retention_days,
+            "configuration resolved"
+        );
         Ok(config)
     }
 
@@ -715,7 +729,15 @@ impl Config {
     /// proof. This intentionally reports only availability, never the secret
     /// source or value.
     pub fn setup_proof_available(&self) -> bool {
-        load_setup_token().is_ok_and(|token| token.is_some())
+        match load_setup_token() {
+            Ok(token) => token.is_some(),
+            Err(error) => {
+                // validate() rejects an unreadable token at startup, so this
+                // only happens if the source changed while running.
+                tracing::debug!(error = ?error, "setup token unavailable");
+                false
+            }
+        }
     }
 
     /// Verify a supplied first-owner proof without persisting or logging the
@@ -913,12 +935,14 @@ fn populate_compose_connection_urls() -> anyhow::Result<()> {
         url.set_password(Some(&password))
             .map_err(|_| anyhow::anyhow!("POSTGRES_PASSWORD cannot be encoded in DATABASE_URL"))?;
         std::env::set_var("DATABASE_URL", url.as_str());
+        tracing::debug!("database url derived from compose settings");
     }
 
     if std::env::var_os("REDIS_URL").is_none() {
         let password = std::env::var("REDIS_PASSWORD")
             .map_err(|_| anyhow::anyhow!("REDIS_URL or REDIS_PASSWORD is required"))?;
         std::env::set_var("REDIS_URL", compose_redis_url(&password)?);
+        tracing::debug!("redis url derived from compose settings");
     }
 
     Ok(())

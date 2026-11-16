@@ -332,8 +332,10 @@ pub async fn require_enabled(pool: &PgPool, id: &str) -> Result<ConnectionSettin
     }
 }
 
+// Activity bookkeeping is best effort: the outbound request has already
+// happened, so a failed write is a warning rather than a request failure.
 pub async fn record_attempt(pool: &PgPool, id: &str) {
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         r#"INSERT INTO riviamigo.external_connection_activity
              (connection_id, last_attempt_at, usage_date, request_count)
            VALUES ($1, now(), CURRENT_DATE, 1)
@@ -347,11 +349,14 @@ pub async fn record_attempt(pool: &PgPool, id: &str) {
     )
     .bind(id)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!(provider = %id, error = %error, "connection attempt record failed");
+    }
 }
 
 pub async fn record_success(pool: &PgPool, id: &str) {
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         r#"INSERT INTO riviamigo.external_connection_activity
              (connection_id, last_attempt_at, last_success_at, last_error, usage_date, request_count)
            VALUES ($1, now(), now(), NULL, CURRENT_DATE, 0)
@@ -359,12 +364,15 @@ pub async fn record_success(pool: &PgPool, id: &str) {
     )
     .bind(id)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!(provider = %id, error = %error, "connection success record failed");
+    }
 }
 
 pub async fn record_failure(pool: &PgPool, id: &str, message: &str) {
     let sanitized = sanitize_error(message);
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         r#"INSERT INTO riviamigo.external_connection_activity
              (connection_id, last_attempt_at, last_error, usage_date, request_count)
            VALUES ($1, now(), $2, CURRENT_DATE, 0)
@@ -373,11 +381,14 @@ pub async fn record_failure(pool: &PgPool, id: &str, message: &str) {
     .bind(id)
     .bind(sanitized)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!(provider = %id, error = %error, "connection failure record failed");
+    }
 }
 
 pub async fn record_test(pool: &PgPool, id: &str, ok: bool, message: Option<&str>) {
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         r#"INSERT INTO riviamigo.external_connection_activity
              (connection_id, last_attempt_at, usage_date, request_count, last_test_at, last_test_ok, last_test_error)
            VALUES ($1, now(), CURRENT_DATE, 0, now(), $2, $3)
@@ -388,7 +399,10 @@ pub async fn record_test(pool: &PgPool, id: &str, ok: bool, message: Option<&str
     .bind(ok)
     .bind(message.map(sanitize_error))
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!(provider = %id, error = %error, "connection test record failed");
+    }
 }
 
 fn sanitize_error(message: &str) -> String {

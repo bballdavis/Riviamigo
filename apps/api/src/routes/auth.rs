@@ -226,7 +226,7 @@ async fn begin_oidc(
     pending_password_hash: Option<String>,
     invitation_id: Option<Uuid>,
 ) -> Result<Response, AppError> {
-    tracing::info!(
+    tracing::debug!(
         target = "auth.oidc",
         stage = "start",
         link = link_user.is_some(),
@@ -263,7 +263,7 @@ async fn begin_oidc(
     )
     .await?;
     let u = oidc::authorization_url(&metadata, &provider_settings, &tx, &callback)?;
-    tracing::info!(
+    tracing::debug!(
         target = "auth.oidc",
         stage = "authorization_prepared",
         link = tx.link,
@@ -294,7 +294,7 @@ async fn oidc_callback(
     axum::extract::Query(q): axum::extract::Query<OidcCallback>,
 ) -> Result<Response, AppError> {
     let Some(st) = q.state else {
-        tracing::warn!(
+        tracing::debug!(
             target = "auth.oidc",
             stage = "callback_input",
             reason = "state_missing",
@@ -314,29 +314,8 @@ async fn oidc_callback(
                 .find_map(|p| p.trim().strip_prefix("oidc_state="))
                 .map(str::to_owned)
         });
-    let mut c = state
-        .redis
-        .get_multiplexed_async_connection()
-        .await
-        .inspect_err(|_| {
-            tracing::warn!(
-                target = "auth.oidc",
-                stage = "transaction_load",
-                reason = "redis_connection_failed",
-                "OIDC callback failed"
-            );
-        })?;
-    let raw: Option<String> = c
-        .get_del(format!("riviamigo:oidc:tx:{st}"))
-        .await
-        .inspect_err(|_| {
-            tracing::warn!(
-                target = "auth.oidc",
-                stage = "transaction_load",
-                reason = "redis_read_failed",
-                "OIDC callback failed"
-            );
-        })?;
+    let mut c = state.redis.get_multiplexed_async_connection().await?;
+    let raw: Option<String> = c.get_del(format!("riviamigo:oidc:tx:{st}")).await?;
     let Some(raw) = raw else {
         tracing::warn!(
             target = "auth.oidc",
@@ -380,7 +359,7 @@ async fn oidc_callback(
         ));
     }
     if q.error.is_some() {
-        tracing::info!(
+        tracing::debug!(
             target = "auth.oidc",
             stage = "provider_response",
             reason = "provider_denied",
@@ -395,20 +374,13 @@ async fn oidc_callback(
     let completion: Result<Response, AppError> = async {
         let settings = authentication_settings::load_effective(&state.pool, &state.age_key)
             .await
-            .inspect_err(|_| {
-                tracing::warn!(
-                    target = "auth.oidc",
-                    stage = "settings_load",
-                    reason = "load_failed",
-                    "OIDC callback failed"
-                );
-            })?;
+            .inspect_err(|error| log_callback_failure("settings_load", "load_failed", error))?;
         let code = q.code.ok_or_else(|| {
-            tracing::warn!(
+            tracing::debug!(
                 target = "auth.oidc",
                 stage = "callback_input",
                 reason = "code_missing",
-                "OIDC callback failed"
+                "OIDC callback rejected"
             );
             AppError::Unauthorized
         })?;
@@ -418,15 +390,16 @@ async fn oidc_callback(
         }
         let identity = oidc::exchange_and_verify(&provider_settings, &tx, &code)
             .await
-            .inspect_err(|_| {
+            .inspect_err(|error| {
                 tracing::warn!(
                     target = "auth.oidc",
                     stage = "exchange_verify",
                     reason = "exchange_or_verify_failed",
+                    error = %error,
                     "OIDC callback failed"
                 );
             })?;
-        tracing::info!(
+        tracing::debug!(
             target = "auth.oidc",
             stage = "exchange_verify",
             reason = "verified",
@@ -437,7 +410,7 @@ async fn oidc_callback(
             settings.required_claim_name.as_deref(),
             settings.required_claim_value.as_deref(),
         ) {
-            tracing::warn!(
+            tracing::debug!(
                 target = "auth.oidc",
                 stage = "required_claim",
                 reason = "claim_mismatch",
@@ -455,15 +428,10 @@ async fn oidc_callback(
                 error,
                 AppError::Forbidden | AppError::Unauthorized | AppError::Conflict(_)
             ) {
-                tracing::warn!(
-                    target = "auth.oidc",
-                    stage = "identity_resolution",
-                    reason = "resolution_failed",
-                    "OIDC callback failed"
-                );
+                log_callback_failure("identity_resolution", "resolution_failed", error);
             }
         })?;
-        tracing::info!(
+        tracing::debug!(
             target = "auth.oidc",
             stage = "identity_resolution",
             reason = "resolved",
@@ -474,17 +442,18 @@ async fn oidc_callback(
                 .bind(user_id)
                 .fetch_optional(&state.pool)
                 .await
-                .inspect_err(|_| {
-                    tracing::warn!(
+                .inspect_err(|error| {
+                    tracing::error!(
                         target = "auth.oidc",
                         stage = "account_status",
                         reason = "lookup_failed",
+                        error = %error,
                         "OIDC callback failed"
                     );
                 })?
                 .unwrap_or(true);
         if disabled {
-            tracing::warn!(
+            tracing::debug!(
                 target = "auth.oidc",
                 stage = "account_status",
                 reason = "account_disabled",
@@ -495,26 +464,14 @@ async fn oidc_callback(
         if let Some(password_hash) = tx.pending_password_hash.as_deref() {
             set_initial_password_after_oidc(&state.pool, user_id, password_hash, &headers)
                 .await
-                .inspect_err(|_| {
-                    tracing::warn!(
-                        target = "auth.oidc",
-                        stage = "password_setup",
-                        reason = "setup_failed",
-                        "OIDC callback failed"
-                    );
+                .inspect_err(|error| {
+                    log_callback_failure("password_setup", "setup_failed", error)
                 })?;
         }
         let refresh = issue_refresh_token(&state.pool, user_id)
             .await
-            .inspect_err(|_| {
-                tracing::warn!(
-                    target = "auth.oidc",
-                    stage = "refresh_issue",
-                    reason = "issue_failed",
-                    "OIDC callback failed"
-                );
-            })?;
-        tracing::info!(
+            .inspect_err(|error| log_callback_failure("refresh_issue", "issue_failed", error))?;
+        tracing::debug!(
             target = "auth.oidc",
             stage = "refresh_issue",
             reason = "issued",
@@ -532,19 +489,13 @@ async fn oidc_callback(
             .target("oidc")
             .record(&state.pool)
             .await
-            .inspect_err(|_| {
-                tracing::warn!(
-                    target = "auth.oidc",
-                    stage = "success_audit",
-                    reason = "record_failed",
-                    "OIDC callback completed but success audit failed"
-                );
-            })?;
+            .inspect_err(|error| log_callback_failure("success_audit", "record_failed", error))?;
         }
         tracing::info!(
             target = "auth.oidc",
             stage = "success",
             reason = "callback_complete",
+            user_id = %user_id,
             link = tx.link,
             "OIDC callback completed"
         );
@@ -565,17 +516,17 @@ async fn oidc_callback(
     match completion {
         Ok(response) => Ok(response),
         Err(_) => {
-            if SecurityAuditEvent::failure("oidc_callback_failed", tx.user_id)
+            if let Err(error) = SecurityAuditEvent::failure("oidc_callback_failed", tx.user_id)
                 .target("oidc")
                 .record(&state.pool)
                 .await
-                .is_err()
             {
-                tracing::warn!(
+                tracing::error!(
                     target = "auth.oidc",
                     stage = "failure_audit",
                     reason = "record_failed",
-                    "failed to record OIDC callback audit event"
+                    error = %error,
+                    "OIDC callback audit record failed"
                 );
             }
             Ok(oidc_callback_error_response(
@@ -583,6 +534,32 @@ async fn oidc_callback(
                 "oidc_failed",
                 state.config.allows_insecure_refresh_cookies(),
             ))
+        }
+    }
+}
+
+/// Logs one failed OIDC callback stage. Server faults are errors because an
+/// operator has to act on them; every other stage failure is a user-caused or
+/// policy rejection and stays at debug.
+fn log_callback_failure(stage: &'static str, reason: &'static str, error: &AppError) {
+    match error {
+        AppError::Database(_) | AppError::Io(_) | AppError::Redis(_) | AppError::Internal(_) => {
+            tracing::error!(
+                target = "auth.oidc",
+                stage,
+                reason,
+                error = %error,
+                "OIDC callback failed"
+            );
+        }
+        _ => {
+            tracing::debug!(
+                target = "auth.oidc",
+                stage,
+                reason,
+                error = %error,
+                "OIDC callback rejected"
+            );
         }
     }
 }
@@ -722,6 +699,7 @@ async fn oidc_unlink(
         .record_tx(&mut tx)
         .await?;
     tx.commit().await?;
+    tracing::info!(user_id = %auth.user_id, "SSO identity unlinked");
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -756,6 +734,10 @@ async fn accept_oidc_invitation(
             .get::<String, _>("invitee_email")
             .eq_ignore_ascii_case(email)
     {
+        tracing::debug!(
+            reason = "invitation_method_or_email_mismatch",
+            "OIDC invitation rejected"
+        );
         return Err(AppError::Forbidden);
     }
     let existing: Option<Uuid> = sqlx::query_scalar(
@@ -765,6 +747,10 @@ async fn accept_oidc_invitation(
     .fetch_optional(&mut *db)
     .await?;
     if existing.is_some() {
+        tracing::debug!(
+            reason = "email_already_registered",
+            "OIDC invitation rejected"
+        );
         return Err(AppError::Conflict("email already registered".into()));
     }
     let linked_identity: Option<Uuid> = sqlx::query_scalar(
@@ -776,6 +762,10 @@ async fn accept_oidc_invitation(
     .fetch_optional(&mut *db)
     .await?;
     if linked_identity.is_some() {
+        tracing::debug!(
+            reason = "identity_linked_elsewhere",
+            "OIDC invitation rejected"
+        );
         return Err(AppError::Conflict(
             "this SSO identity is already linked to another account".into(),
         ));
@@ -816,6 +806,11 @@ async fn accept_oidc_invitation(
         .record_tx(&mut db)
         .await?;
     db.commit().await?;
+    tracing::info!(
+        user_id = %user_id,
+        source = "oidc_invitation",
+        "user created"
+    );
     Ok(user_id)
 }
 
@@ -833,9 +828,10 @@ async fn resolve_oidc_identity(
         .await?;
     let linked: Option<(Uuid, bool, String)> = sqlx::query_as("SELECT i.user_id,u.is_disabled,u.auth_methods FROM riviamigo.user_oidc_identities i JOIN riviamigo.users u ON u.id=i.user_id WHERE i.issuer=$1 AND i.subject=$2 FOR UPDATE OF i,u")
         .bind(&identity.issuer).bind(&identity.subject).fetch_optional(&mut *db).await?;
+    let mut auto_provisioned = false;
     let user_id = if let Some((user_id, is_disabled, auth_methods)) = linked {
         if is_disabled {
-            tracing::warn!(
+            tracing::debug!(
                 target = "auth.oidc",
                 stage = "identity_resolution",
                 reason = "linked_account_disabled",
@@ -847,7 +843,7 @@ async fn resolve_oidc_identity(
             return Err(AppError::Forbidden);
         }
         if transaction.link && transaction.user_id != Some(user_id) {
-            tracing::warn!(
+            tracing::debug!(
                 target = "auth.oidc",
                 stage = "identity_resolution",
                 reason = "identity_linked_to_other_account",
@@ -864,7 +860,7 @@ async fn resolve_oidc_identity(
         // operation. It must use the exact identity already attached to this
         // account; a different provider subject cannot be introduced here.
         if transaction.pending_password_hash.is_some() {
-            tracing::warn!(
+            tracing::debug!(
                 target = "auth.oidc",
                 stage = "identity_resolution",
                 reason = "reauthentication_identity_not_linked",
@@ -891,7 +887,7 @@ async fn resolve_oidc_identity(
             return Err(AppError::Forbidden);
         }
         if account.is_none() {
-            tracing::warn!(
+            tracing::debug!(
                 target = "auth.oidc",
                 stage = "identity_resolution",
                 reason = "link_account_disabled_or_missing",
@@ -908,7 +904,7 @@ async fn resolve_oidc_identity(
             .as_deref()
             .filter(|_| identity.email_verified)
             .ok_or_else(|| {
-                tracing::warn!(
+                tracing::debug!(
                     target = "auth.oidc",
                     stage = "identity_resolution",
                     reason = "email_missing_or_unverified",
@@ -917,7 +913,7 @@ async fn resolve_oidc_identity(
                 AppError::Forbidden
             })?;
         if !oidc::domain_allowed(email, &settings.allowed_email_domains) {
-            tracing::warn!(
+            tracing::debug!(
                 target = "auth.oidc",
                 stage = "identity_resolution",
                 reason = "email_domain_denied",
@@ -933,7 +929,7 @@ async fn resolve_oidc_identity(
         .await?;
         let user_id = match existing {
             Some((_, true, _)) => {
-                tracing::warn!(
+                tracing::debug!(
                     target = "auth.oidc",
                     stage = "identity_resolution",
                     reason = "existing_account_disabled",
@@ -946,7 +942,7 @@ async fn resolve_oidc_identity(
             }
             Some((user_id, false, _)) if settings.auto_link_verified_email => user_id,
             Some(_) => {
-                tracing::warn!(
+                tracing::debug!(
                     target = "auth.oidc",
                     stage = "identity_resolution",
                     reason = "existing_account_auto_link_disabled",
@@ -979,7 +975,7 @@ async fn resolve_oidc_identity(
                 .fetch_optional(&mut *db)
                 .await?;
                 if super_user.is_none() {
-                    tracing::warn!(
+                    tracing::debug!(
                         target = "auth.oidc",
                         stage = "identity_resolution",
                         reason = "no_active_owner_for_signup",
@@ -987,6 +983,7 @@ async fn resolve_oidc_identity(
                     );
                     return Err(AppError::Forbidden);
                 }
+                auto_provisioned = true;
                 let user_id: Uuid = sqlx::query_scalar("INSERT INTO riviamigo.users(email,password_hash,role) VALUES($1,NULL,'user') RETURNING id").bind(email).fetch_one(&mut *db).await?;
                 sqlx::query("INSERT INTO riviamigo.user_preferences(user_id) VALUES($1)")
                     .bind(user_id)
@@ -995,7 +992,7 @@ async fn resolve_oidc_identity(
                 user_id
             }
             None => {
-                tracing::warn!(
+                tracing::debug!(
                     target = "auth.oidc",
                     stage = "identity_resolution",
                     reason = "account_missing_auto_signup_disabled",
@@ -1009,6 +1006,13 @@ async fn resolve_oidc_identity(
         user_id
     };
     db.commit().await?;
+    if auto_provisioned {
+        tracing::info!(
+            user_id = %user_id,
+            source = "oidc_auto_signup",
+            "user created"
+        );
+    }
     Ok(user_id)
 }
 
@@ -1145,12 +1149,15 @@ async fn register(
     })?;
 
     // create default preferences row
-    let _ = sqlx::query!(
+    if let Err(error) = sqlx::query!(
         "INSERT INTO riviamigo.user_preferences (user_id) VALUES ($1) ON CONFLICT DO NOTHING",
         user_id
     )
     .execute(&mut *tx)
-    .await;
+    .await
+    {
+        tracing::error!(error = %error, user_id = %user_id, "user preferences insert failed");
+    }
 
     SecurityAuditEvent::success("setup_claimed", Some(user_id))
         .target(format!("user:{user_id}"))
@@ -1160,6 +1167,7 @@ async fn register(
         .await?;
 
     tx.commit().await?;
+    tracing::info!(user_id = %user_id, role, "user created");
 
     // auto-login: issue tokens so the client is immediately authenticated
     let (refresh, sid) = issue_new_session(&state.pool, user_id).await?;
@@ -1295,6 +1303,7 @@ async fn accept_account_invitation(
         .record_tx(&mut tx)
         .await?;
     tx.commit().await?;
+    tracing::info!(user_id = %user_id, source = "account_invitation", "user created");
     let (refresh, sid) = issue_new_session(&state.pool, user_id).await?;
     let token = issue_session_access_token(user_id, None, Some(sid), &state.jwt_keys)?;
     let cookie = refresh_cookie(
@@ -1367,7 +1376,11 @@ async fn login(
         .and_then(|r| r.get::<Option<String>, _>("password_hash"));
     let hash = password_hash.as_deref().unwrap_or(DUMMY_HASH);
     if let Err(e) = verify_password(&body.password, hash) {
-        tracing::warn!(email = %email, reason = "invalid_credentials", "auth.login_failed");
+        tracing::debug!(
+            reason = "invalid_credentials",
+            known_account = row.is_some(),
+            "login rejected"
+        );
         if row.is_some() {
             let audit_result = SecurityAuditEvent::failure("login_failure", None)
                 .metadata(serde_json::json!({ "known_account": true }))
@@ -1375,7 +1388,7 @@ async fn login(
                 .record(&state.pool)
                 .await;
             if let Err(audit_error) = audit_result {
-                tracing::error!(error = ?audit_error, "auth.login_failure_audit_failed");
+                tracing::error!(error = %audit_error, "login failure audit record failed");
             }
         }
         return Err(e);
@@ -1386,11 +1399,10 @@ async fn login(
         return Err(AppError::Unauthorized);
     }
     if row.get::<bool, _>("is_disabled") {
-        tracing::warn!(
-            email = %email,
+        tracing::debug!(
             user_id = %row.get::<Uuid, _>("id"),
             reason = "disabled_account",
-            "auth.login_failed"
+            "login rejected"
         );
         return Err(AppError::Forbidden);
     }
@@ -1408,6 +1420,7 @@ async fn login(
         .record_tx(&mut tx)
         .await?;
     tx.commit().await?;
+    tracing::info!(user_id = %user_id, "login succeeded");
 
     let cookie = refresh_cookie(
         &refresh,
@@ -1475,6 +1488,7 @@ async fn refresh_from_cookie(
     .fetch_optional(&mut *tx)
     .await?
     else {
+        tracing::debug!(reason = "token_unknown", "refresh rejected");
         return Ok(None);
     };
 
@@ -1489,20 +1503,29 @@ async fn refresh_from_cookie(
         crate::services::sessions::revoke_family(&mut tx, sid).await?;
         // Commit revocation before audit I/O: audit failure must never undo it.
         tx.commit().await?;
+        tracing::warn!(
+            session_id = %sid,
+            user_id = %user_id,
+            reason = "refresh_token_replayed",
+            "refresh token replay rejected; session revoked"
+        );
         if let Err(error) = SecurityAuditEvent::failure("refresh_token_replay", Some(user_id))
             .target(format!("session:{sid}"))
             .request_id_from_headers(headers)
             .record(&state.pool)
             .await
         {
-            tracing::error!(
-                ?error,
-                "refresh replay audit failed after session revocation"
-            );
+            tracing::error!(error = %error, "refresh replay audit record failed");
         }
         return Ok(None);
     }
     if family_revoked || revoked || expired {
+        let reason = if expired {
+            "token_expired"
+        } else {
+            "session_revoked"
+        };
+        tracing::debug!(reason, "refresh rejected");
         return Ok(None);
     }
 
@@ -1513,6 +1536,7 @@ async fn refresh_from_cookie(
     .fetch_one(&mut *tx)
     .await?;
     if !enabled {
+        tracing::debug!(reason = "account_disabled", "refresh rejected");
         return Ok(None);
     }
 
@@ -1573,18 +1597,21 @@ async fn logout(
         {
             let hash = sha2_hash(token);
             let mut tx = state.pool.begin().await?;
-            let family = sqlx::query_scalar::<_, Uuid>(
-                "SELECT f.id FROM riviamigo.session_families f
+            let family = sqlx::query_as::<_, (Uuid, Uuid)>(
+                "SELECT f.id, f.user_id FROM riviamigo.session_families f
                  JOIN riviamigo.refresh_tokens t ON t.family_id=f.id
                  WHERE t.token_hash=$1 FOR UPDATE OF f",
             )
             .bind(hash.as_slice())
             .fetch_optional(&mut *tx)
             .await?;
-            if let Some(family) = family {
+            if let Some((family, _)) = family {
                 crate::services::sessions::revoke_family(&mut tx, family).await?;
             }
             tx.commit().await?;
+            if let Some((_, user_id)) = family {
+                tracing::info!(user_id = %user_id, "logout");
+            }
         }
     }
     let clear_cookie = refresh_cookie("", 0, state.config.allows_insecure_refresh_cookies());
@@ -1633,6 +1660,7 @@ async fn change_password(
         .record_tx(&mut tx)
         .await?;
     tx.commit().await?;
+    tracing::info!(user_id = %auth.user_id, "password changed");
 
     let clear_cookie = refresh_cookie("", 0, state.config.allows_insecure_refresh_cookies());
     Ok(([(SET_COOKIE, clear_cookie)], StatusCode::NO_CONTENT).into_response())
@@ -1674,6 +1702,7 @@ async fn set_initial_password_after_oidc(
         .record_tx(&mut tx)
         .await?;
     tx.commit().await?;
+    tracing::info!(user_id = %user_id, "password set after SSO sign-in");
     Ok(())
 }
 
@@ -2184,7 +2213,10 @@ fn verify_password(password: &str, hash: &str) -> Result<(), AppError> {
         password_hash::{PasswordHash, PasswordVerifier},
         Argon2,
     };
-    let parsed = PasswordHash::new(hash).map_err(|_| AppError::Unauthorized)?;
+    let parsed = PasswordHash::new(hash).map_err(|error| {
+        tracing::error!(error = %error, "stored password hash is malformed");
+        AppError::Unauthorized
+    })?;
     Argon2::default()
         .verify_password(password.as_bytes(), &parsed)
         .map_err(|_| AppError::Unauthorized)

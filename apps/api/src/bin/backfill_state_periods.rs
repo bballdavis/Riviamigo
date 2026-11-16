@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    riviamigo_api::logging::init();
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = PgPoolOptions::new()
         .max_connections(5)
@@ -34,13 +34,16 @@ async fn backfill_state_periods(pool: &PgPool) -> Result<()> {
         .execute(pool)
         .await?;
 
-    info!("Backfilling state periods for {} vehicles", vehicles.len());
+    info!(
+        count = vehicles.len(),
+        "backfilling state periods for vehicles"
+    );
 
     for vehicle_id in vehicles {
         process_vehicle(pool, vehicle_id).await?;
     }
 
-    info!("State period backfill complete");
+    info!("state period backfill complete");
     Ok(())
 }
 
@@ -100,7 +103,7 @@ async fn process_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Result<()> {
     // Close final period
     periods.push((current_state, period_start, prev_ts));
 
-    info!(vehicle_id = %vehicle_id, periods = periods.len(), "Inserting state periods");
+    info!(vehicle_id = %vehicle_id, periods = periods.len(), "inserting state periods");
 
     for (state, started_at, ended_at) in periods {
         sqlx::query!(

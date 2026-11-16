@@ -146,6 +146,7 @@ async fn create_tag(
         Some(code) if code == "23505" => AppError::Conflict("a tag with that name already exists".into()),
         _ => AppError::Database(error),
     })?;
+    tracing::debug!(user_id = %auth.user_id, vehicle_id = %vehicle_id, tag_id = %tag.id, "trip tag created");
     Ok(Json(tag))
 }
 
@@ -189,6 +190,7 @@ async fn update_tag(
         },
     )?
     .ok_or(AppError::NotFound)?;
+    tracing::debug!(user_id = %auth.user_id, vehicle_id = %vehicle_id, tag_id = %tag_id, "trip tag updated");
     Ok(Json(tag))
 }
 
@@ -206,6 +208,7 @@ async fn delete_tag(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
+    tracing::debug!(user_id = %auth.user_id, vehicle_id = %vehicle_id, tag_id = %tag_id, "trip tag deleted");
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -259,6 +262,13 @@ async fn update_assignments(
         }
     }
     tx.commit().await?;
+    tracing::debug!(
+        user_id = %auth.user_id,
+        vehicle_id = %vehicle_id,
+        trip_count = body.trip_ids.len(),
+        tag_count = body.tag_ids.len(),
+        "trip tag assignments updated"
+    );
     Ok(Json(AssignmentResponse {
         updated_trip_count: body.trip_ids.len(),
     }))

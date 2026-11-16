@@ -137,6 +137,7 @@ pub async fn lookup_json(
         endpoint.query_pairs_mut().append_pair(key, value);
     }
     connections::record_attempt(pool, id).await;
+    let started = std::time::Instant::now();
     let response = outbound_client_for_url(&endpoint, &[])
         .await?
         .get(endpoint)
@@ -153,6 +154,13 @@ pub async fn lookup_json(
     let response = match response {
         Ok(response) if response.status().is_success() => response,
         Ok(response) => {
+            // The caller logs the returned error once; this keeps the provider detail.
+            tracing::debug!(
+                provider = id,
+                status = response.status().as_u16(),
+                duration_ms = started.elapsed().as_millis() as u64,
+                "vehicle lookup returned error status"
+            );
             connections::record_failure(pool, id, &format!("HTTP {}", response.status())).await;
             return Err(AppError::DependencyUnavailable(
                 "vehicle lookup provider returned an error".into(),
@@ -166,5 +174,16 @@ pub async fn lookup_json(
     let bytes = read_response_limited(response, 2 * 1024 * 1024, "Vehicle lookup").await?;
     connections::record_success(pool, id).await;
     // The provider answers "no matches" with the JSON literal `null`.
-    Ok(serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+    match serde_json::from_slice(&bytes) {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            tracing::warn!(
+                provider = id,
+                error = %error,
+                duration_ms = started.elapsed().as_millis() as u64,
+                "vehicle lookup response unreadable, treated as no match"
+            );
+            Ok(serde_json::Value::Null)
+        }
+    }
 }

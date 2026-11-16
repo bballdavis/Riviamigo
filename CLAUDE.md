@@ -63,6 +63,7 @@ pnpm test:coverage
 pnpm test:e2e
 pnpm test:api
 pnpm docs:check
+pnpm logging:check
 pnpm docs:build
 pnpm docs:dev
 pnpm storybook

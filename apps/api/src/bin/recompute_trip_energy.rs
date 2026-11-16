@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    riviamigo_api::logging::init();
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
 
     let mut vehicle_id = None;

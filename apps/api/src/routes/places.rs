@@ -271,8 +271,17 @@ async fn search_places(
     // The persistent key contains only a digest, never the address query.
     // Redis is backed by an AOF volume in normal deployment and is cleared
     // explicitly from External Connections.
-    if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
-        if let Ok(Some(payload)) = redis.get::<_, Option<String>>(&persistent_cache_key).await {
+    if let Ok(mut redis) = state
+        .redis
+        .get_multiplexed_async_connection()
+        .await
+        .inspect_err(|error| debug!(error = %error, "places search cache unavailable"))
+    {
+        if let Ok(Some(payload)) = redis
+            .get::<_, Option<String>>(&persistent_cache_key)
+            .await
+            .inspect_err(|error| debug!(error = %error, "places search cache read failed"))
+        {
             if let Ok(value) = serde_json::from_str::<Value>(&payload) {
                 let suggestions: Vec<AddressRecord> = value
                     .as_array()
@@ -284,7 +293,7 @@ async fn search_places(
                     cache_hit = true,
                     cache = "persistent",
                     suggestion_count = suggestions.len(),
-                    "places.address_search_completed"
+                    "places address search completed"
                 );
                 return Ok(Json(suggestions));
             }
@@ -305,7 +314,7 @@ async fn search_places(
                 debug!(
                     cache_hit = true,
                     suggestion_count = suggestions.len(),
-                    "places.address_search_completed"
+                    "places address search completed"
                 );
                 return Ok(Json(suggestions));
             }
@@ -345,8 +354,17 @@ async fn search_places(
     }
 
     if let Ok(payload) = serde_json::to_string(&rows) {
-        if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
-            let _: Result<(), _> = redis.set(&persistent_cache_key, payload).await;
+        if let Ok(mut redis) = state
+            .redis
+            .get_multiplexed_async_connection()
+            .await
+            .inspect_err(|error| debug!(error = %error, "places search cache unavailable"))
+        {
+            let written: Result<(), redis::RedisError> =
+                redis.set(&persistent_cache_key, payload).await;
+            if let Err(error) = written {
+                debug!(error = %error, "places search cache write failed");
+            }
         }
     }
 
@@ -358,7 +376,7 @@ async fn search_places(
     debug!(
         cache_hit = false,
         suggestion_count = suggestions.len(),
-        "places.address_search_completed"
+        "places address search completed"
     );
 
     Ok(Json(suggestions))
@@ -414,6 +432,7 @@ async fn create_place(
     let sessions = rematch_place_sessions(&mut tx, auth.user_id, &[place_id], &[]).await?;
 
     tx.commit().await?;
+    debug!(user_id = %auth.user_id, place_id = %place_id, session_count = sessions.len(), "place created");
 
     // A new place covers charges that happened before it existed, so its
     // price applies to that history too.
@@ -495,6 +514,7 @@ async fn update_place(
     );
 
     tx.commit().await?;
+    debug!(user_id = %auth.user_id, place_id = %id, session_count = sessions.len(), "place updated");
 
     // Place pricing is an automatic policy. Explicit Free/Manual session
     // overrides are excluded above and retain their precedence.
@@ -542,6 +562,7 @@ async fn delete_place(
     let mut sessions = rematch_place_sessions(&mut tx, auth.user_id, &[], &detached).await?;
     sessions.extend(detached);
     tx.commit().await?;
+    debug!(user_id = %auth.user_id, place_id = %id, session_count = sessions.len(), "place deleted");
 
     recompute_session_costs(&state.pool, sessions).await?;
 

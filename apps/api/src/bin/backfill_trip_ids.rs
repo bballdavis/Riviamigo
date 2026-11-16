@@ -12,7 +12,7 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    riviamigo_api::logging::init();
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = PgPoolOptions::new()
         .max_connections(5)
@@ -33,7 +33,7 @@ async fn backfill_trip_ids(pool: &PgPool) -> Result<()> {
     .fetch_all(pool)
     .await?;
 
-    info!("Found {} completed trips to backfill", trips.len());
+    info!(count = trips.len(), "found completed trips to backfill");
 
     for trip in &trips {
         let result = sqlx::query!(
@@ -55,11 +55,11 @@ async fn backfill_trip_ids(pool: &PgPool) -> Result<()> {
             info!(
                 trip_id = %trip.id,
                 rows = result.rows_affected(),
-                "Stamped telemetry rows"
+                "stamped telemetry rows"
             );
         }
     }
 
-    info!("Backfill complete");
+    info!("backfill complete");
     Ok(())
 }

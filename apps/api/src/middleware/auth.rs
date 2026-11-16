@@ -70,6 +70,13 @@ pub struct AppState {
     pub supervisor: SupervisorHandle,
 }
 
+/// One per-request authentication rejection. Expiry, missing credentials, and
+/// unknown keys are routine, so the line is debug and carries the reason.
+fn rejected(reason: &'static str) -> AppError {
+    tracing::debug!(reason, "authentication rejected");
+    AppError::Unauthorized
+}
+
 impl FromRequestParts<AppState> for AuthUser {
     type Rejection = AppError;
 
@@ -81,11 +88,11 @@ impl FromRequestParts<AppState> for AuthUser {
             .headers
             .get(AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
-            .ok_or(AppError::Unauthorized)?;
+            .ok_or_else(|| rejected("missing_authorization"))?;
 
         let token = auth_header
             .strip_prefix("Bearer ")
-            .ok_or(AppError::Unauthorized)?;
+            .ok_or_else(|| rejected("not_bearer"))?;
 
         if token.starts_with("rmigo_") {
             return authenticate_api_key(parts.method.clone(), parts.uri.path(), state, token)
@@ -93,10 +100,13 @@ impl FromRequestParts<AppState> for AuthUser {
         }
 
         // Retrieve JWT public key from extensions (set by router middleware).
-        let decoding_key = parts
-            .extensions
-            .get::<DecodingKey>()
-            .ok_or(AppError::Unauthorized)?;
+        let decoding_key = parts.extensions.get::<DecodingKey>().ok_or_else(|| {
+            tracing::error!(
+                reason = "decoding_key_missing",
+                "jwt decoding key missing from request"
+            );
+            AppError::Unauthorized
+        })?;
 
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_issuer(&["riviamigo.app"]);
@@ -105,7 +115,17 @@ impl FromRequestParts<AppState> for AuthUser {
         validation.leeway = 0;
 
         let claims = decode::<Claims>(token, decoding_key, &validation)
-            .map_err(|_| AppError::Unauthorized)?
+            .map_err(|error| {
+                match error.kind() {
+                    jsonwebtoken::errors::ErrorKind::InvalidSignature => {
+                        tracing::warn!(reason = "invalid_signature", "access token rejected");
+                    }
+                    kind => {
+                        tracing::debug!(reason = ?kind, "access token rejected");
+                    }
+                }
+                AppError::Unauthorized
+            })?
             .claims;
 
         crate::services::sessions::require_enabled_session(&state.pool, &claims).await?;
@@ -140,16 +160,15 @@ async fn authenticate_api_key(
     .bind(hash.as_slice())
     .fetch_optional(&state.pool)
     .await?
-    .ok_or(AppError::Unauthorized)?;
+    .ok_or_else(|| rejected("key_unknown_or_inactive"))?;
 
     match row.2.as_str() {
         "read" if is_integration_read_request(&method, path) => {}
         _ => {
-            tracing::warn!(
-                method = %method,
-                path,
+            tracing::debug!(
+                reason = "scope_denied",
                 access_level = %row.2,
-                "API key request denied by integration read scope"
+                "api key rejected"
             );
             return Err(AppError::Forbidden);
         }

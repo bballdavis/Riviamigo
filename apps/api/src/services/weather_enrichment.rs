@@ -107,17 +107,44 @@ pub fn start_worker(pool: PgPool, age_key: String) -> tokio::task::JoinHandle<()
         {
             Ok(client) => client,
             Err(error) => {
-                tracing::error!(error = %error, "weather_enrichment.client_build_failed");
+                tracing::error!(
+                    error = %error,
+                    "weather enrichment worker stopped, http client build failed"
+                );
                 return;
             }
         };
 
+        tracing::info!("weather enrichment worker started");
+        // Only the first failure of a streak is a warning; the rest are debug
+        // detail until the worker recovers, so an outage does not flood the log.
+        let mut consecutive_failures: u32 = 0;
         loop {
             match process_next_job(&pool, &client, &age_key).await {
-                Ok(true) => tokio::time::sleep(Duration::from_secs(1)).await,
-                Ok(false) => tokio::time::sleep(Duration::from_secs(30)).await,
+                Ok(has_work) => {
+                    if consecutive_failures > 0 {
+                        tracing::info!(
+                            attempts = consecutive_failures,
+                            "weather enrichment worker recovered"
+                        );
+                        consecutive_failures = 0;
+                    }
+                    let pause = if has_work { 1 } else { 30 };
+                    tokio::time::sleep(Duration::from_secs(pause)).await;
+                }
                 Err(error) => {
-                    tracing::warn!(error = %error, "weather_enrichment.worker_iteration_failed");
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    // Display, not Debug: the provider error chain can embed the
+                    // request URL, and the query string carries coordinates.
+                    if consecutive_failures == 1 {
+                        tracing::warn!(error = %error, "weather enrichment iteration failed");
+                    } else {
+                        tracing::debug!(
+                            error = %error,
+                            attempts = consecutive_failures,
+                            "weather enrichment iteration failed"
+                        );
+                    }
                     tokio::time::sleep(Duration::from_secs(30)).await;
                 }
             }
@@ -143,7 +170,14 @@ pub async fn enqueue(pool: &PgPool, trip_id: Uuid) -> Result<()> {
 async fn process_next_job(pool: &PgPool, client: &reqwest::Client, age_key: &str) -> Result<bool> {
     let settings = match connections::require_enabled(pool, connections::OPEN_METEO).await {
         Ok(settings) => settings,
-        Err(crate::errors::AppError::ExternalConnectionDisabled(_)) => return Ok(false),
+        Err(crate::errors::AppError::ExternalConnectionDisabled(_)) => {
+            tracing::debug!(
+                provider = connections::OPEN_METEO,
+                reason = "connection_disabled",
+                "weather enrichment skipped"
+            );
+            return Ok(false);
+        }
         Err(error) => return Err(error.into()),
     };
 
@@ -156,6 +190,10 @@ async fn process_next_job(pool: &PgPool, client: &reqwest::Client, age_key: &str
     .await?
     .unwrap_or(0);
     if request_count >= DAILY_REQUEST_BUDGET {
+        tracing::debug!(
+            reason = "daily_budget_reached",
+            "weather enrichment paused until the budget resets"
+        );
         return Ok(false);
     }
 
@@ -176,6 +214,7 @@ async fn process_next_job(pool: &PgPool, client: &reqwest::Client, age_key: &str
         return Ok(false);
     };
 
+    let started = std::time::Instant::now();
     match enrich_trip(pool, client, age_key, &settings, trip_id).await {
         Ok(EnrichTripOutcome::Complete { provider_called }) => {
             sqlx::query("UPDATE riviamigo.weather_enrichment_jobs SET status='succeeded', last_error=NULL, completed_at=now(), updated_at=now() WHERE trip_id=$1")
@@ -185,16 +224,31 @@ async fn process_next_job(pool: &PgPool, client: &reqwest::Client, age_key: &str
             }
         }
         Ok(EnrichTripOutcome::Unavailable) => {
+            tracing::debug!(
+                trip_id = %trip_id,
+                reason = "no_route_or_start",
+                "weather enrichment skipped"
+            );
             sqlx::query("UPDATE riviamigo.weather_enrichment_jobs SET status='unavailable', last_error=NULL, completed_at=now(), updated_at=now() WHERE trip_id=$1")
                 .bind(trip_id).execute(pool).await?;
         }
         Err(error) => {
             if error.downcast_ref::<WeatherPausedError>().is_some() {
+                tracing::debug!(
+                    trip_id = %trip_id,
+                    reason = "connection_disabled",
+                    "weather enrichment paused"
+                );
                 sqlx::query("UPDATE riviamigo.weather_enrichment_jobs SET status='pending', attempts=GREATEST(attempts-1, 0), next_attempt_at=now(), last_error=NULL, updated_at=now() WHERE trip_id=$1")
                     .bind(trip_id).execute(pool).await?;
                 return Ok(true);
             }
             if error.downcast_ref::<WeatherBudgetError>().is_some() {
+                tracing::warn!(
+                    trip_id = %trip_id,
+                    provider = connections::OPEN_METEO,
+                    "weather request budget reached, retrying after the daily reset"
+                );
                 sqlx::query("UPDATE riviamigo.weather_enrichment_jobs SET status='failed', attempts=GREATEST(attempts-1, 0), next_attempt_at=date_trunc('day', now()) + interval '1 day', last_error='Daily weather request budget reached', updated_at=now() WHERE trip_id=$1")
                     .bind(trip_id).execute(pool).await?;
                 return Ok(true);
@@ -216,7 +270,31 @@ async fn process_next_job(pool: &PgPool, client: &reqwest::Client, age_key: &str
             let backoff_seconds = exponential_backoff.max(retry_after).min(86_400);
             sqlx::query("UPDATE riviamigo.weather_enrichment_jobs SET status='failed', next_attempt_at=now()+make_interval(secs=>$2), last_error='Weather provider request failed', updated_at=now() WHERE trip_id=$1")
                 .bind(trip_id).bind(backoff_seconds as f64).execute(pool).await?;
-            tracing::warn!(trip_id = %trip_id, attempts, "weather_enrichment.trip_failed");
+            // The first attempt of a job warns; retries of the same job are detail.
+            let status = error
+                .downcast_ref::<WeatherFetchError>()
+                .map(|fetch| fetch.status.as_u16());
+            if attempts <= 1 {
+                tracing::warn!(
+                    trip_id = %trip_id,
+                    provider = connections::OPEN_METEO,
+                    status,
+                    attempts,
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    error = %error,
+                    "weather enrichment request failed"
+                );
+            } else {
+                tracing::debug!(
+                    trip_id = %trip_id,
+                    provider = connections::OPEN_METEO,
+                    status,
+                    attempts,
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    error = %error,
+                    "weather enrichment request failed"
+                );
+            }
         }
     }
     Ok(true)
@@ -277,6 +355,7 @@ async fn enrich_trip(
         .collect::<Vec<_>>();
     let mut cells = unique_weather_cells(&weather_targets);
     let provider_called = !cells.is_empty();
+    let provider_cells = cells.len();
     cells.shuffle(&mut rand::thread_rng());
 
     let api_key = decrypt_secret(age_key, settings.api_key_encrypted.as_deref())?;
@@ -378,6 +457,13 @@ async fn enrich_trip(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    tracing::debug!(
+        trip_id = %trip.id,
+        source,
+        samples = summary_values.len(),
+        provider_cells,
+        "weather enrichment stored"
+    );
     Ok(EnrichTripOutcome::Complete { provider_called })
 }
 

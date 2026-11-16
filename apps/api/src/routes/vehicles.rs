@@ -10,7 +10,7 @@ use chrono::Utc;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
-use tracing::{info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use std::{collections::BTreeMap, time::Duration};
@@ -179,6 +179,7 @@ async fn start_ingestion_capture(
     ingestion_capture::start(&state.pool, vehicle_id, auth.user_id)
         .await
         .map_err(AppError::Internal)?;
+    info!(user_id = %auth.user_id, vehicle_id = %vehicle_id, "ingestion capture started");
     Ok(Json(
         ingestion_capture::status(&state.pool, vehicle_id).await?,
     ))
@@ -194,6 +195,7 @@ async fn stop_ingestion_capture(
     ingestion_capture::stop(&state.pool, vehicle_id, ingestion_capture::StopReason::User)
         .await
         .map_err(AppError::Internal)?;
+    info!(user_id = %auth.user_id, vehicle_id = %vehicle_id, "ingestion capture stopped");
     Ok(Json(
         ingestion_capture::status(&state.pool, vehicle_id).await?,
     ))
@@ -248,7 +250,10 @@ async fn export_ingestion_capture(
                     }
                     Some((Ok(axum::body::Bytes::from(chunk)), Some(last_id)))
                 }
-                Err(error) => Some((Err(std::io::Error::other(error)), None)),
+                Err(error) => {
+                    error!(vehicle_id = %vehicle_id, error = %error, "ingestion capture export interrupted");
+                    Some((Err(std::io::Error::other(error)), None))
+                }
             }
         }
     });
@@ -930,7 +935,7 @@ async fn store_encrypted_redis<T: Serialize>(
     let _: () = redis::AsyncCommands::set_ex(conn, key, ciphertext, ttl_secs)
         .await
         .map_err(|error| {
-            warn!(operation = "connect_session.write", error = %error, "secure_session_store.unavailable");
+            debug!(operation = "connect_session.write", error = %error, "secure session store unavailable");
             AppError::Redis(error)
         })?;
     Ok(())
@@ -944,7 +949,7 @@ async fn load_encrypted_redis<T: DeserializeOwned>(
     let ciphertext: Option<Vec<u8>> = redis::AsyncCommands::get(conn, key)
         .await
         .map_err(|error| {
-            warn!(operation = "connect_session.read", error = %error, "secure_session_store.unavailable");
+            debug!(operation = "connect_session.read", error = %error, "secure session store unavailable");
             AppError::Redis(error)
         })?;
     let Some(ciphertext) = ciphertext else {
@@ -954,28 +959,22 @@ async fn load_encrypted_redis<T: DeserializeOwned>(
     let identity = age_identity(state)?;
     let value = crate::ingestion::session_store::decrypt_json::<T>(&ciphertext, &identity)
         .map_err(|error| {
-            warn!(key, error = %error, "vehicle.connect_session.decrypt_failed");
+            warn!(error = ?error, "vehicle connect session decrypt failed");
             AppError::RivianConnectSessionExpired
         })?;
 
     Ok(Some(value))
 }
 
+// The caller logs the upstream cause once at debug; the returned RivianApi
+// error is logged at warn by AppError, so these mappers do not log.
 fn map_rivian_login_error(error: RivianAuthError) -> AppError {
     match error {
         RivianAuthError::InvalidCredentials => AppError::RivianCredentialsRejected,
-        RivianAuthError::Network(error) => {
-            warn!(error = %error, "vehicle.connect.rivian_network_error");
+        RivianAuthError::Network(_) => {
             AppError::RivianApi("Unable to reach Rivian. Please try again shortly.".into())
         }
-        RivianAuthError::UnexpectedResponse(error) => {
-            warn!(error = %error, "vehicle.connect.rivian_unexpected_response");
-            AppError::RivianApi(
-                "Rivian returned an unexpected sign-in response. Please try again shortly.".into(),
-            )
-        }
-        RivianAuthError::InvalidOtp => {
-            warn!("vehicle.connect.login_returned_otp_error");
+        RivianAuthError::UnexpectedResponse(_) | RivianAuthError::InvalidOtp => {
             AppError::RivianApi(
                 "Rivian returned an unexpected sign-in response. Please try again shortly.".into(),
             )
@@ -987,17 +986,12 @@ fn map_rivian_otp_error(error: RivianAuthError) -> AppError {
     match error {
         RivianAuthError::InvalidOtp => AppError::RivianOtpRejected,
         RivianAuthError::InvalidCredentials => AppError::RivianConnectSessionExpired,
-        RivianAuthError::Network(error) => {
-            warn!(error = %error, "vehicle.connect_otp.rivian_network_error");
+        RivianAuthError::Network(_) => {
             AppError::RivianApi("Unable to reach Rivian. Please try again shortly.".into())
         }
-        RivianAuthError::UnexpectedResponse(error) => {
-            warn!(error = %error, "vehicle.connect_otp.rivian_unexpected_response");
-            AppError::RivianApi(
-                "Rivian returned an unexpected verification response. Please try again shortly."
-                    .into(),
-            )
-        }
+        RivianAuthError::UnexpectedResponse(_) => AppError::RivianApi(
+            "Rivian returned an unexpected verification response. Please try again shortly.".into(),
+        ),
     }
 }
 
@@ -1006,30 +1000,27 @@ async fn connect(
     auth: AuthUser,
     Json(body): Json<ConnectBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    info!(
-        user_id = %auth.user_id,
-        email_present = !body.email.trim().is_empty(),
-        "vehicle.connect.start"
-    );
+    debug!(user_id = %auth.user_id, "vehicle connect start");
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
+        .inspect_err(|error| error!(error = %error, "rivian http client build failed"))
         .unwrap_or_default();
     match crate::ingestion::rivian_auth::rivian_login(&client, &body.email, &body.password)
         .await
         .map_err(|e| {
-            warn!(user_id = %auth.user_id, error = %e, "vehicle.connect.login_failed");
+            debug!(user_id = %auth.user_id, error = %e, "vehicle connect login failed");
             map_rivian_login_error(e)
         })? {
         crate::ingestion::rivian_auth::LoginResult::Authenticated(tokens) => {
             let vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, &tokens)
                 .await
                 .map_err(|e| {
-                    warn!(
+                    debug!(
                         user_id = %auth.user_id,
                         error = %e,
-                        "vehicle.connect.fetch_user_vehicles_failed"
+                        "vehicle connect fetch user vehicles failed"
                     );
                     AppError::RivianApi("Unable to fetch vehicles from Rivian".into())
                 })?;
@@ -1039,8 +1030,7 @@ async fn connect(
             info!(
                 user_id = %auth.user_id,
                 vehicle_count = vehicles.len(),
-                connect_key = %key,
-                "vehicle.connect.authenticated"
+                "vehicle connect authenticated"
             );
             Ok(Json(
                 serde_json::to_value(ConnectResponse {
@@ -1065,12 +1055,7 @@ async fn connect(
                 user_id: auth.user_id,
             };
             store_encrypted_redis(&state, &mut conn, &key, &pending, 300).await?;
-            info!(
-                user_id = %auth.user_id,
-                challenge_id = %challenge_id,
-                challenge_key = %key,
-                "vehicle.connect.otp_required"
-            );
+            debug!(user_id = %auth.user_id, "vehicle connect otp required");
             Ok(Json(
                 serde_json::to_value(ConnectResponse {
                     status: "otp_required",
@@ -1090,30 +1075,22 @@ async fn connect_otp(
     auth: AuthUser,
     Json(body): Json<OtpBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    info!(
-        user_id = %auth.user_id,
-        challenge_id = %body.challenge_id,
-        "vehicle.connect_otp.start"
-    );
+    debug!(user_id = %auth.user_id, "vehicle connect otp start");
 
     let mut conn = state.redis.get_multiplexed_async_connection().await?;
     let key = format!("rivian:otp:{}", body.challenge_id);
     let pending = load_encrypted_redis::<PendingOtpChallenge>(&state, &mut conn, &key).await?;
     let pending = pending.ok_or_else(|| {
-        warn!(
-            user_id = %auth.user_id,
-            challenge_id = %body.challenge_id,
-            "vehicle.connect_otp.challenge_missing"
-        );
+        // An expired or already-used challenge is normal user timing.
+        debug!(user_id = %auth.user_id, "vehicle connect otp challenge missing");
         AppError::RivianConnectSessionExpired
     })?;
 
     if pending.user_id != auth.user_id {
         warn!(
             user_id = %auth.user_id,
-            challenge_id = %body.challenge_id,
             stored_user_id = %pending.user_id,
-            "vehicle.connect_otp.challenge_user_mismatch"
+            "vehicle connect otp challenge user mismatch"
         );
         return Err(AppError::RivianConnectSessionExpired);
     }
@@ -1128,27 +1105,26 @@ async fn connect_otp(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
+        .inspect_err(|error| error!(error = %error, "rivian http client build failed"))
         .unwrap_or_default();
     let tokens =
         crate::ingestion::rivian_auth::rivian_login_otp(&client, &challenge, &body.otp_code)
             .await
             .map_err(|e| {
-                warn!(
+                debug!(
                     user_id = %auth.user_id,
-                    challenge_id = %body.challenge_id,
                     error = %e,
-                    "vehicle.connect_otp.login_failed"
+                    "vehicle connect otp login failed"
                 );
                 map_rivian_otp_error(e)
             })?;
     let vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, &tokens)
         .await
         .map_err(|e| {
-            warn!(
+            debug!(
                 user_id = %auth.user_id,
-                challenge_id = %body.challenge_id,
                 error = %e,
-                "vehicle.connect_otp.fetch_user_vehicles_failed"
+                "vehicle connect otp fetch user vehicles failed"
             );
             AppError::RivianApi("Unable to fetch vehicles from Rivian".into())
         })?;
@@ -1158,10 +1134,8 @@ async fn connect_otp(
     let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
     info!(
         user_id = %auth.user_id,
-        challenge_id = %body.challenge_id,
         vehicle_count = vehicles.len(),
-        connect_key = %connect_key,
-        "vehicle.connect_otp.authenticated"
+        "vehicle connect otp authenticated"
     );
 
     Ok(Json(
@@ -1183,11 +1157,7 @@ async fn add_vehicle(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let rivian_vehicle_id = body.rivian_vehicle_id.trim().to_owned();
 
-    info!(
-        user_id = %auth.user_id,
-        rivian_vehicle_id = %body.rivian_vehicle_id,
-        "vehicle.add.start"
-    );
+    debug!(user_id = %auth.user_id, "vehicle add start");
 
     // Retrieve tokens from Redis
     let mut conn = state.redis.get_multiplexed_async_connection().await?;
@@ -1197,11 +1167,8 @@ async fn add_vehicle(
     )
     .await?;
     let tokens = tokens.ok_or_else(|| {
-        warn!(
-            user_id = %auth.user_id,
-            connect_key = %key,
-            "vehicle.add.missing_connect_session"
-        );
+        // A sign-in session that expired or was never started is normal user timing.
+        debug!(user_id = %auth.user_id, "vehicle add missing connect session");
         AppError::RivianConnectSessionExpired
     })?;
 
@@ -1389,15 +1356,15 @@ async fn add_vehicle(
         warn!(
             user_id = %auth.user_id,
             vehicle_id = %vehicle_id,
-            err = %error,
-            "vehicle.add.connect_session_cleanup_failed"
+            error = %error,
+            "vehicle add connect session cleanup failed"
         );
     }
     info!(
         user_id = %auth.user_id,
         vehicle_id = %vehicle_id,
-        rivian_vehicle_id = %rivian_vehicle_id,
-        "vehicle.add.persisted"
+        is_new,
+        "vehicle add persisted"
     );
 
     let telemetry_start_queued = is_new
@@ -1405,6 +1372,14 @@ async fn add_vehicle(
             .supervisor
             .send(SupervisorCommand::StartWorker { vehicle_id })
             .await;
+    if is_new && !telemetry_start_queued {
+        warn!(
+            user_id = %auth.user_id,
+            vehicle_id = %vehicle_id,
+            reason = "supervisor_unavailable",
+            "worker start not queued"
+        );
+    }
 
     Ok(Json(serde_json::json!({
         "vehicle_id": vehicle_id,
@@ -1430,7 +1405,10 @@ async fn verify_account_vehicle(
         .map_err(|e| AppError::Internal(e.into()))?;
     let vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, tokens)
         .await
-        .map_err(|_| AppError::RivianApi("Unable to verify Rivian vehicle access".into()))?;
+        .map_err(|error| {
+            debug!(error = %error, "rivian account vehicle verification failed");
+            AppError::RivianApi("Unable to verify Rivian vehicle access".into())
+        })?;
     vehicles
         .into_iter()
         .find(|vehicle| vehicle.id == vehicle_id)
@@ -1544,10 +1522,16 @@ async fn refresh_vehicle_credentials(
         warn!(
             user_id = %auth.user_id,
             vehicle_id = %vid,
-            err = %error,
-            "vehicle.refresh_credentials.connect_session_cleanup_failed"
+            error = %error,
+            "vehicle refresh credentials connect session cleanup failed"
         );
     }
+    info!(
+        user_id = %auth.user_id,
+        vehicle_id = %vid,
+        collection_paused,
+        "vehicle credentials refreshed"
+    );
     let telemetry = start_refreshed_vehicle_telemetry(&state, vid, collection_paused).await;
     Ok(Json(credential_refresh_response(vid, telemetry)))
 }
@@ -1603,6 +1587,11 @@ async fn start_refreshed_vehicle_telemetry(
         .send(SupervisorCommand::StartWorker { vehicle_id })
         .await
     {
+        warn!(
+            vehicle_id = %vehicle_id,
+            reason = "supervisor_unavailable",
+            "worker start not queued"
+        );
         return CredentialRefreshTelemetry::SupervisorUnavailable;
     }
     if wait_for_vehicle_data(&state.pool, vehicle_id).await {
@@ -1643,16 +1632,24 @@ fn credential_refresh_response(
 }
 
 async fn wait_for_vehicle_data(pool: &sqlx::PgPool, vehicle_id: Uuid) -> bool {
+    // A failed read counts as not ready; the last failure is logged once after
+    // the wait instead of once per poll.
+    let mut last_query_error = None;
     for _ in 0..10 {
-        let runtime = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        let runtime = match sqlx::query_as::<_, (Option<String>, Option<String>)>(
             "SELECT worker_health, auth_state
              FROM riviamigo.vehicle_runtime_state WHERE vehicle_id = $1",
         )
         .bind(vehicle_id)
         .fetch_optional(pool)
         .await
-        .ok()
-        .flatten();
+        {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                last_query_error = Some(error);
+                None
+            }
+        };
         if runtime
             .as_ref()
             .is_some_and(|(health, auth)| vehicle_data_ready(health.as_deref(), auth.as_deref()))
@@ -1660,6 +1657,9 @@ async fn wait_for_vehicle_data(pool: &sqlx::PgPool, vehicle_id: Uuid) -> bool {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    if let Some(error) = last_query_error {
+        error!(vehicle_id = %vehicle_id, error = %error, "vehicle data readiness check failed");
     }
     false
 }
@@ -1688,10 +1688,19 @@ async fn delete_vehicle(
         .execute(&state.pool)
         .await?;
 
-    state
+    let stop_queued = state
         .supervisor
         .send(SupervisorCommand::StopWorker { vehicle_id: vid })
         .await;
+    if !stop_queued {
+        warn!(
+            user_id = %auth.user_id,
+            vehicle_id = %vid,
+            reason = "supervisor_unavailable",
+            "worker stop not queued"
+        );
+    }
+    info!(user_id = %auth.user_id, vehicle_id = %vid, "vehicle removed");
 
     Ok(Json(
         serde_json::json!({ "ok": true, "default_vehicle_id": next_default }),
@@ -1757,6 +1766,7 @@ async fn update_vehicle_settings_impl(
     .bind(target_tire_pressure_psi)
     .execute(&state.pool)
     .await?;
+    debug!(user_id = %user_id, vehicle_id = %vid, "vehicle settings updated");
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -1841,13 +1851,20 @@ async fn update_vehicle_collection(
         SupervisorCommand::StartWorker { vehicle_id: vid }
     };
     let queued = state.supervisor.send(command).await;
-    info!(
-        user_id = %auth.user_id,
-        vehicle_id = %vid,
-        paused = body.paused,
-        queued,
-        "vehicle.collection.updated"
-    );
+    if !queued {
+        warn!(
+            user_id = %auth.user_id,
+            vehicle_id = %vid,
+            paused = body.paused,
+            reason = "supervisor_unavailable",
+            "worker command not queued"
+        );
+    }
+    if body.paused {
+        info!(user_id = %auth.user_id, vehicle_id = %vid, "vehicle collection paused");
+    } else {
+        info!(user_id = %auth.user_id, vehicle_id = %vid, "vehicle collection resumed");
+    }
     Ok(Json(serde_json::json!({
         "ok": true,
         "collection_paused": body.paused,
@@ -1878,6 +1895,7 @@ async fn update_vehicle_name(
     .bind(canonical_vehicle_name(trimmed))
     .execute(&state.pool)
     .await?;
+    info!(user_id = %auth.user_id, vehicle_id = %vid, "vehicle renamed");
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -1919,6 +1937,7 @@ async fn set_default_vehicle(
         .await?;
 
     tx.commit().await?;
+    debug!(user_id = %auth.user_id, vehicle_id = %vid, "default vehicle set");
     Ok(Json(
         serde_json::json!({ "ok": true, "default_vehicle_id": vid }),
     ))
@@ -1988,6 +2007,13 @@ async fn add_vehicle_member(
         if result.rows_affected() == 0 {
             return Err(AppError::Conflict("member already exists".into()));
         }
+        info!(
+            user_id = %auth.user_id,
+            vehicle_id = %vid,
+            member_user_id = %target_user_id,
+            role = %body.role,
+            "vehicle member granted"
+        );
 
         sqlx::query(
             "INSERT INTO riviamigo.vehicle_user_settings (vehicle_id, user_id)
@@ -2057,6 +2083,13 @@ async fn update_vehicle_member(
     if updated.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
+    info!(
+        user_id = %auth.user_id,
+        vehicle_id = %vid,
+        member_user_id = %member_user_id,
+        role = %body.role,
+        "vehicle member role updated"
+    );
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -2096,6 +2129,12 @@ async fn remove_vehicle_member(
         .bind(member_user_id)
         .execute(&state.pool)
         .await?;
+    info!(
+        user_id = %auth.user_id,
+        vehicle_id = %vid,
+        member_user_id = %member_user_id,
+        "vehicle member removed"
+    );
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -2133,6 +2172,7 @@ async fn create_vehicle_invite(
     .bind(expires_at)
     .execute(&state.pool)
     .await?;
+    info!(user_id = %auth.user_id, vehicle_id = %vid, "vehicle invite created");
 
     Ok(Json(serde_json::json!({
         "ok": true,
@@ -2174,6 +2214,12 @@ async fn revoke_vehicle_invite(
     .bind(vid)
     .execute(&state.pool)
     .await?;
+    info!(
+        user_id = %auth.user_id,
+        vehicle_id = %vid,
+        invite_id = %invite_id,
+        "vehicle invite revoked"
+    );
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -2282,6 +2328,12 @@ async fn accept_invite(
     .await?;
 
     tx.commit().await?;
+    info!(
+        user_id = %auth.user_id,
+        vehicle_id = %vehicle_id,
+        invite_id = %invite_id,
+        "vehicle invite accepted"
+    );
     Ok(Json(
         serde_json::json!({ "ok": true, "vehicle_id": vehicle_id }),
     ))
@@ -2338,6 +2390,9 @@ async fn list_vehicles(
         // only local cache files and falls back to the local placeholder.
         let images = fetch_vehicle_images_json(&state.pool, &state.config, r.id)
             .await
+            .inspect_err(|error| {
+                error!(vehicle_id = %r.id, error = %error, "vehicle artwork listing failed");
+            })
             .unwrap_or_else(|_| serde_json::json!({ "all": [] }));
         vehicles.push(serde_json::json!({
             "id":                       r.id,
@@ -2483,6 +2538,7 @@ async fn create_demo_vehicle(
     let summary = seed_demo_vehicle(&mut tx, vehicle_id, model, Utc::now()).await?;
 
     tx.commit().await?;
+    info!(user_id = %auth.user_id, vehicle_id = %vehicle_id, model, "demo vehicle created");
     Ok(Json(serde_json::json!({
         "ok": true,
         "vehicle_id": vehicle_id,
@@ -2519,6 +2575,7 @@ async fn refresh_demo_vehicle(
     let mut tx = state.pool.begin().await?;
     let summary = seed_demo_vehicle(&mut tx, vehicle_id, &model, Utc::now()).await?;
     tx.commit().await?;
+    info!(user_id = %auth.user_id, vehicle_id = %vehicle_id, "demo vehicle data refreshed");
 
     Ok(Json(serde_json::json!({
         "ok": true,

@@ -165,6 +165,11 @@ Use these names so a filter works across the whole codebase.
 | `attempt`, `retry_seconds` | Retry bookkeeping |
 | `provider` | Upstream name: `rivian`, `openfreemap`, `nominatim`, `s3` |
 | `reason` | Short machine-friendly cause for a skip or rejection |
+| `listen_addr` | A bound socket address. Never use a bare `address` field |
+
+Any other entity id follows the same `<entity>_id` shape (`artifact_id`,
+`api_key_id`, `invitation_id`, `actor_user_id` for the user who performed an
+admin action on someone else). Do not invent synonyms for a field above.
 
 `request_id`, `method`, and `path` come from the `http` span; do not add them.
 Use `?value` only for enums and small debug-only structures.
@@ -203,36 +208,52 @@ Fields on an enclosing span must not be repeated on events inside it.
 - One-shot maintenance binaries in `src/bin` (backfills, repair and report
   tools) own their stdout as a report for the operator, so `println!` there is
   the output, not logging. Failures go to stderr and a non-zero exit code.
-  The long-running binaries (`riviamigo-api`, `riviamigo-restore-agent`)
-  initialize `logging::init()` and use `tracing`.
+  A maintenance binary that wants progress lines uses `tracing` after
+  calling `riviamigo_api::logging::init()` so its output matches the API; it
+  never initializes its own subscriber. The long-running binaries
+  (`riviamigo-api`, `riviamigo-restore-agent`) do the same.
 - Library code under `src/` (everything but `src/bin`) never uses `println!`,
   `eprintln!`, or `dbg!`.
 - Browser code goes through `reportClientError()`; there are no stray
-  `console.*` calls. Diagnostic output that is only useful while developing is
-  removed, not left behind a flag.
+  `console.*` calls. Browser failures map to the same ladder: `severity:
+  'error'` for failures the user hits, `warn` for degraded-but-working paths.
+  The one standing exception is the opt-in live websocket inspector
+  (`localStorage['rm-ws-debug']`), which is the browser's `TRACE` and writes
+  with the console methods the lint config allows. Other developer-only output is removed, not left
+  behind a flag.
 
 ## Turning levels up
 
 `RUST_LOG` is a standard `tracing` filter. The default is:
 
 ```text
-riviamigo_api=info,riviamigo_restore_agent=info,tower_http=warn,warn
+info,tower_http=warn
 ```
 
 ```bash
-# a slimmer or louder whole app
-RUST_LOG=riviamigo_api=warn
-RUST_LOG=riviamigo_api=debug
+# a louder first-party app with quiet dependencies
+RUST_LOG=riviamigo_api=debug,info
+
+# a slimmer app: warnings and errors only
+RUST_LOG=warn
 
 # one subsystem at trace, everything else at info
-RUST_LOG=riviamigo_api=info,riviamigo_api::ingestion=trace
+RUST_LOG=info,riviamigo_api::ingestion=trace
 
 # include the SQL sqlx executes
-RUST_LOG=riviamigo_api=debug,sqlx=debug
+RUST_LOG=riviamigo_api=debug,sqlx=debug,info
 ```
 
 Targets match the module path in each line, so you can copy it from a log line
 into the filter.
+
+## Enforcement
+
+`pnpm logging:check` (part of `pnpm verify:ci` and the Quality workflow)
+mechanically enforces what a script can: message style, the `error` field
+name, a ban on sensitive field names, no `println!`/`eprintln!`/`dbg!` in
+library code, and no `console.*` outside the diagnostics seam. Choosing the
+right _level_ is a judgment call and stays in code review.
 
 ## Review checklist
 

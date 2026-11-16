@@ -91,36 +91,66 @@ pub fn spawn_in_process(
     } = channels;
     tokio::spawn(async move {
         let owner_id = Uuid::new_v4();
+        let mut lease_waits = FailureStreak::default();
         loop {
             match acquire_in_process_lease(&pool, vehicle_id, owner_id).await {
-                Ok(true) => break,
+                Ok(true) => {
+                    tracing::info!(vehicle_id = %vehicle_id, "parallax collector started");
+                    break;
+                }
                 Ok(false) => {
-                    tracing::warn!(vehicle_id=%vehicle_id, "fresh standalone Parallax owner detected; waiting for upgrade overlap to clear");
+                    let attempt = lease_waits.record();
+                    if attempt == 1 {
+                        tracing::warn!(vehicle_id = %vehicle_id, "parallax standalone owner detected; waiting for upgrade overlap to clear");
+                    } else {
+                        tracing::debug!(vehicle_id = %vehicle_id, attempt, "parallax standalone owner still present; waiting");
+                    }
                 }
                 Err(error) => {
-                    tracing::warn!(vehicle_id=%vehicle_id, err=%error, "Parallax lease acquisition failed")
+                    let attempt = lease_waits.record();
+                    if attempt == 1 {
+                        tracing::warn!(vehicle_id = %vehicle_id, error = ?error, "parallax lease acquisition failed; retrying");
+                    } else {
+                        tracing::debug!(vehicle_id = %vehicle_id, attempt, error = ?error, "parallax lease acquisition failed; retrying");
+                    }
                 }
             }
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(30)) => {}
-                _ = shutdown.recv() => { return; }
+                _ = shutdown.recv() => {
+                    tracing::info!(vehicle_id = %vehicle_id, "parallax collector stopped");
+                    return;
+                }
             }
         }
         let mut backoff = 2u64;
         // Survives reconnects: a snapshot re-sent on the next connection is
         // recognised as one already handled.
         let mut seen = CollectorMemory::default();
+        let mut credential_failures = FailureStreak::default();
+        let mut disconnects = FailureStreak::default();
         loop {
             let tokens = match crate::ingestion::rivian_poll::load_vehicle_tokens(
                 vehicle_id, &pool, &age_key,
             )
             .await
             {
-                Ok((_, tokens)) => tokens,
+                Ok((_, tokens)) => {
+                    let previous = credential_failures.recover();
+                    if previous > 0 {
+                        tracing::info!(vehicle_id = %vehicle_id, attempts = previous, "parallax credentials available again");
+                    }
+                    tokens
+                }
                 Err(error) => {
-                    let _ =
-                        set_collector_state(&pool, vehicle_id, "error", Some(&error.to_string()))
-                            .await;
+                    let attempt = credential_failures.record();
+                    if attempt == 1 {
+                        tracing::warn!(vehicle_id = %vehicle_id, error = ?error, "parallax credentials unavailable; retrying");
+                    } else {
+                        tracing::debug!(vehicle_id = %vehicle_id, attempt, error = ?error, "parallax credentials unavailable; retrying");
+                    }
+                    record_collector_state(&pool, vehicle_id, "error", Some(&error.to_string()))
+                        .await;
                     tokio::select! {
                         _ = tokio::time::sleep(Duration::from_secs(rivian_ws_backoff::jittered_secs(backoff))) => {}
                         _ = shutdown.recv() => { break; }
@@ -131,7 +161,13 @@ pub fn spawn_in_process(
             };
             let session_key = rivian_ws_backoff::session_key(&tokens.user_session_token);
             if let Some((remaining, reason)) = rivian_ws_backoff::remaining_hold(session_key) {
-                let _ = set_collector_state(
+                tracing::debug!(
+                    vehicle_id = %vehicle_id,
+                    reason = reason.as_str(),
+                    retry_seconds = remaining.as_secs(),
+                    "parallax waiting out session hold"
+                );
+                record_collector_state(
                     &pool,
                     vehicle_id,
                     "reconnecting",
@@ -159,11 +195,17 @@ pub fn spawn_in_process(
             };
             let result = tokio::select! {
                 _ = shutdown.recv() => {
-                    let _ = set_collector_state(&pool, vehicle_id, "disconnected", Some("shutdown")).await;
+                    record_collector_state(&pool, vehicle_id, "disconnected", Some("shutdown")).await;
                     break;
                 }
                 result = collect_connection_with_context(&pool, &session, &mut context) => result
             };
+            if result.is_ok() {
+                let previous = disconnects.recover();
+                if previous > 0 {
+                    tracing::info!(vehicle_id = %vehicle_id, attempts = previous, "parallax collector connection restored");
+                }
+            }
             match result {
                 Ok(ConnectionEnd::Renewed) => backoff = 2,
                 Ok(ConnectionEnd::Replaced) => {
@@ -176,20 +218,28 @@ pub fn spawn_in_process(
                         _ = shutdown.recv() => { break; }
                     }
                 }
-                Err(_) if shutdown.try_recv().is_ok() => break,
+                Err(error) if shutdown.try_recv().is_ok() => {
+                    tracing::debug!(vehicle_id = %vehicle_id, error = ?error, "parallax collector stopped during shutdown");
+                    break;
+                }
                 Err(error) => {
                     record_reconnect(&pool, vehicle_id).await;
                     let message = error.to_string();
-                    let _ = set_collector_state(&pool, vehicle_id, "error", Some(&message)).await;
+                    record_collector_state(&pool, vehicle_id, "error", Some(&message)).await;
                     if let Some(SessionHold(reason)) = error.downcast_ref::<SessionHold>().copied()
                     {
                         // Held for both sockets; waited out before reconnecting.
                         let hold = rivian_ws_backoff::start_hold(session_key, reason);
-                        tracing::warn!(vehicle_id=%vehicle_id, reason=reason.as_str(), hold_seconds=hold.as_secs(), "Parallax socket held off; both subscription sockets wait before reconnecting");
+                        tracing::warn!(vehicle_id = %vehicle_id, reason = reason.as_str(), hold_seconds = hold.as_secs(), "parallax socket held off; both subscription sockets wait before reconnecting");
                         continue;
                     }
                     let delay = rivian_ws_backoff::jittered_secs(backoff);
-                    tracing::warn!(vehicle_id=%vehicle_id, err=%message, retry_seconds=delay, "Parallax collector disconnected");
+                    let attempt = disconnects.record();
+                    if attempt == 1 {
+                        tracing::warn!(vehicle_id = %vehicle_id, error = ?error, retry_seconds = delay, "parallax collector disconnected; reconnecting");
+                    } else {
+                        tracing::debug!(vehicle_id = %vehicle_id, attempt, error = ?error, retry_seconds = delay, "parallax collector disconnected; reconnecting");
+                    }
                     tokio::select! {
                         _ = tokio::time::sleep(Duration::from_secs(delay)) => {}
                         _ = shutdown.recv() => { break; }
@@ -198,7 +248,10 @@ pub fn spawn_in_process(
                 }
             }
         }
-        let _ = release_in_process_lease(&pool, vehicle_id, owner_id).await;
+        if let Err(error) = release_in_process_lease(&pool, vehicle_id, owner_id).await {
+            tracing::warn!(vehicle_id = %vehicle_id, error = ?error, "parallax lease release failed; the next owner waits for it to expire");
+        }
+        tracing::info!(vehicle_id = %vehicle_id, "parallax collector stopped");
     })
 }
 
@@ -226,11 +279,45 @@ pub struct InProcessChannels {
     pub legacy_motion: watch::Receiver<Option<DateTime<Utc>>>,
 }
 
+/// Counts consecutive failures of one repeating operation. The first failure
+/// of a streak is logged at warn; the repeats are debug, and a recovery is
+/// logged once at info.
+#[derive(Debug, Default)]
+struct FailureStreak {
+    failures: u32,
+}
+
+impl FailureStreak {
+    /// Records a failure and returns its attempt number, starting at 1.
+    fn record(&mut self) -> u32 {
+        self.failures = self.failures.saturating_add(1);
+        self.failures
+    }
+
+    /// Ends the streak and returns how many failures it had (0 when none).
+    fn recover(&mut self) -> u32 {
+        std::mem::take(&mut self.failures)
+    }
+}
+
+/// Writes collector status from a path whose cause the caller already logs.
+/// A failed status write there is a debug trace, not a second warning.
+async fn record_collector_state(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    status: &str,
+    detail: Option<&str>,
+) {
+    if let Err(error) = set_collector_state(pool, vehicle_id, status, detail).await {
+        tracing::debug!(vehicle_id = %vehicle_id, status, error = ?error, "parallax collector state write failed");
+    }
+}
+
 async fn record_reconnect(pool: &PgPool, vehicle_id: Uuid) {
     if let Err(error) = sqlx::query("UPDATE riviamigo.parallax_collector_state SET reconnect_count=reconnect_count+1 WHERE vehicle_id=$1")
         .bind(vehicle_id).execute(pool).await
     {
-        tracing::debug!(vehicle_id=%vehicle_id, err=%error, "Parallax reconnect count update failed");
+        tracing::debug!(vehicle_id = %vehicle_id, error = %error, "parallax reconnect count update failed");
     }
 }
 
@@ -1295,7 +1382,7 @@ pub async fn run(database_url: &str) -> Result<()> {
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
-            tracing::info!("Parallax collector shutdown requested");
+            tracing::info!("parallax collector shutdown requested");
             tasks.abort_all();
         }
         result = tasks.join_next() => {
@@ -1344,6 +1431,7 @@ async fn run_vehicle(pool: PgPool, session: CollectorSession) -> Result<()> {
     let (_motion_tx, mut legacy_motion) = watch::channel(None);
     let mut seen = CollectorMemory::default();
     let session_key = rivian_ws_backoff::session_key(&session.tokens.user_session_token);
+    let mut disconnects = FailureStreak::default();
     loop {
         while let Some((remaining, _)) = rivian_ws_backoff::remaining_hold(session_key) {
             tokio::time::sleep(remaining).await;
@@ -1355,29 +1443,43 @@ async fn run_vehicle(pool: PgPool, session: CollectorSession) -> Result<()> {
             seen: &mut seen,
         };
         match collect_connection_with_context(&pool, &session, &mut context).await {
-            Ok(_) => backoff = 2,
+            Ok(_) => {
+                backoff = 2;
+                let previous = disconnects.recover();
+                if previous > 0 {
+                    tracing::info!(vehicle_id = %session.vehicle_id, attempts = previous, "parallax collector connection restored");
+                }
+            }
             Err(error) => {
-                if let Err(state_error) = set_collector_state(
+                record_collector_state(
                     &pool,
                     session.vehicle_id,
                     "error",
                     Some(&error.to_string()),
                 )
-                .await
-                {
-                    tracing::warn!(vehicle_id=%session.vehicle_id, err=%state_error, "Parallax collector state update failed");
-                }
+                .await;
                 if let Some(SessionHold(reason)) = error.downcast_ref::<SessionHold>().copied() {
                     rivian_ws_backoff::start_hold(session_key, reason);
                     continue;
                 }
                 let delay = rivian_ws_backoff::jittered_secs(backoff);
-                tracing::warn!(
-                    vehicle_id = %session.vehicle_id,
-                    error = %error,
-                    retry_seconds = delay,
-                    "Parallax collector disconnected"
-                );
+                let attempt = disconnects.record();
+                if attempt == 1 {
+                    tracing::warn!(
+                        vehicle_id = %session.vehicle_id,
+                        error = ?error,
+                        retry_seconds = delay,
+                        "parallax collector disconnected; reconnecting"
+                    );
+                } else {
+                    tracing::debug!(
+                        vehicle_id = %session.vehicle_id,
+                        attempt,
+                        error = ?error,
+                        retry_seconds = delay,
+                        "parallax collector disconnected; reconnecting"
+                    );
+                }
                 tokio::time::sleep(Duration::from_secs(delay)).await;
                 backoff = (backoff * 2).min(120);
             }
@@ -1590,7 +1692,7 @@ async fn collect_connection_with_context(
     {
         Ok(()) => true,
         Err(error) => {
-            tracing::warn!(vehicle_id=%session.vehicle_id, err=%error, "Parallax collector state update failed");
+            tracing::warn!(vehicle_id = %session.vehicle_id, error = ?error, "parallax collector state update failed");
             false
         }
     };
@@ -1599,7 +1701,12 @@ async fn collect_connection_with_context(
         CaptureKind::ParallaxConnection,
         json!({ "event": "subscribed", "topics": VEHICLE_STATE_TOPICS.len() }),
     );
+    tracing::info!(vehicle_id = %session.vehicle_id, "parallax subscription established");
 
+    // Per-connection streaks: a failing frame or heartbeat warns once on this
+    // socket and is quiet on repeats; a new socket starts a fresh streak.
+    let mut storage_failures = FailureStreak::default();
+    let mut heartbeat_failures = FailureStreak::default();
     let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
     heartbeat.tick().await;
     let mut watchdog_tick = tokio::time::interval(WATCHDOG_TICK);
@@ -1615,7 +1722,10 @@ async fn collect_connection_with_context(
                 match message? {
                     Message::Ping(payload) => websocket.send(Message::Pong(payload)).await?,
                     Message::Text(text) => {
-                        let value: Value = serde_json::from_str(&text).unwrap_or_default();
+                        let Ok(value) = serde_json::from_str::<Value>(&text) else {
+                            tracing::trace!(vehicle_id = %session.vehicle_id, bytes = text.len(), "parallax frame is not JSON; ignored");
+                            continue;
+                        };
                         // Frames for an earlier subscription on this socket
                         // (completed by a re-send) are ignored.
                         if value.get("id").and_then(Value::as_str) != Some(current_id.as_str()) {
@@ -1635,10 +1745,24 @@ async fn collect_connection_with_context(
                                 let moving = legacy_shows_motion(*context.legacy_motion.borrow(), now);
                                 watchdog.on_frame(tokio::time::Instant::now(), fresh, moving);
                                 let active = context.active_sessions.borrow_and_update().clone();
-                                if persist_envelope(pool, session.vehicle_id, envelope, &active, context.telemetry_tx, context.seen).await.is_err() {
-                                    tracing::debug!(vehicle_id=%session.vehicle_id, "Parallax frame rejected by typed decoder");
-                                    let _ = sqlx::query("UPDATE riviamigo.parallax_collector_state SET decode_error_count=decode_error_count+1,last_frame_at=now(),updated_at=now() WHERE vehicle_id=$1")
-                                        .bind(session.vehicle_id).execute(pool).await;
+                                if let Err(error) = persist_envelope(pool, session.vehicle_id, envelope, &active, context.telemetry_tx, context.seen).await {
+                                    if error.downcast_ref::<sqlx::Error>().is_some() {
+                                        // A valid frame could not be stored: warn once per socket.
+                                        let attempt = storage_failures.record();
+                                        if attempt == 1 {
+                                            tracing::warn!(vehicle_id = %session.vehicle_id, error = ?error, "parallax frame storage failed; frame skipped");
+                                        } else {
+                                            tracing::debug!(vehicle_id = %session.vehicle_id, attempt, error = ?error, "parallax frame storage failed; frame skipped");
+                                        }
+                                    } else {
+                                        // Per-frame detail; the decode error counter records the total.
+                                        tracing::trace!(vehicle_id = %session.vehicle_id, error = ?error, "parallax frame rejected");
+                                    }
+                                    if let Err(error) = sqlx::query("UPDATE riviamigo.parallax_collector_state SET decode_error_count=decode_error_count+1,last_frame_at=now(),updated_at=now() WHERE vehicle_id=$1")
+                                        .bind(session.vehicle_id).execute(pool).await
+                                    {
+                                        tracing::debug!(vehicle_id = %session.vehicle_id, error = %error, "parallax decode error count update failed");
+                                    }
                                 }
                             }
                             Some("error") => {
@@ -1680,18 +1804,18 @@ async fn collect_connection_with_context(
                                 "close_code": frame.as_ref().map(|f| u16::from(f.code)),
                             }),
                         );
-                        if let Err(error) =
-                            set_collector_state(pool, session.vehicle_id, "disconnected", None).await
-                        {
-                            tracing::warn!(vehicle_id=%session.vehicle_id, err=%error, "Parallax collector state update failed");
-                        }
+                        record_collector_state(pool, session.vehicle_id, "disconnected", None).await;
                         if renewal {
                             return Ok(ConnectionEnd::Renewed);
                         }
                         if let Some(reason) = hold {
                             return Err(SessionHold(reason).into());
                         }
-                        anyhow::bail!("Parallax socket closed: {frame:?}");
+                        // The close reason is provider text; only the code is reported.
+                        anyhow::bail!(
+                            "Parallax socket closed with code {}",
+                            frame.as_ref().map_or(0, |f| u16::from(f.code))
+                        );
                     }
                     _ => {}
                 }
@@ -1705,7 +1829,7 @@ async fn collect_connection_with_context(
                             generation += 1;
                             subscription_id(generation)
                         });
-                        tracing::info!(vehicle_id=%session.vehicle_id, generation, moving, "Parallax subscription quiet; re-sending it on the open socket");
+                        tracing::debug!(vehicle_id = %session.vehicle_id, generation, moving, "parallax subscription quiet; re-sending on the open socket");
                         ingestion_capture::record(
                             session.vehicle_id,
                             CaptureKind::ParallaxConnection,
@@ -1724,29 +1848,36 @@ async fn collect_connection_with_context(
                         if let Err(error) = sqlx::query("UPDATE riviamigo.parallax_collector_state SET resubscribe_count=resubscribe_count+1 WHERE vehicle_id=$1")
                             .bind(session.vehicle_id).execute(pool).await
                         {
-                            tracing::debug!(vehicle_id=%session.vehicle_id, err=%error, "Parallax resubscribe count update failed");
+                            tracing::debug!(vehicle_id = %session.vehicle_id, error = %error, "parallax resubscribe count update failed");
                         }
                     }
                     WatchdogAction::Reconnect => {
-                        tracing::warn!(vehicle_id=%session.vehicle_id, moving, "Parallax subscription stayed quiet after re-sending; replacing the socket");
+                        tracing::warn!(vehicle_id = %session.vehicle_id, moving, "parallax subscription stayed quiet after re-sending; replacing the socket");
                         ingestion_capture::record(
                             session.vehicle_id,
                             CaptureKind::ParallaxConnection,
                             json!({ "event": "silence_reconnect", "generation": generation, "legacy_moving": moving }),
                         );
-                        let _ = websocket.close(None).await;
+                        if let Err(error) = websocket.close(None).await {
+                            tracing::debug!(vehicle_id = %session.vehicle_id, error = %error, "parallax socket close failed");
+                        }
                         return Ok(ConnectionEnd::Replaced);
                     }
                 }
             }
             _ = heartbeat.tick() => {
                 if connected_recorded {
-                    touch_collector_heartbeat(pool, session.vehicle_id).await?;
+                    touch_collector_heartbeat(pool, session.vehicle_id, &mut heartbeat_failures).await?;
                 } else {
                     // The earlier write failed: record "connected" now
                     // instead of treating the missing state as a takeover.
-                    connected_recorded =
-                        set_collector_state(pool, session.vehicle_id, "connected", None).await.is_ok();
+                    connected_recorded = match set_collector_state(pool, session.vehicle_id, "connected", None).await {
+                        Ok(()) => true,
+                        Err(error) => {
+                            tracing::debug!(vehicle_id = %session.vehicle_id, error = ?error, "parallax connected state still not recorded");
+                            false
+                        }
+                    };
                 }
             }
         }
@@ -1756,7 +1887,11 @@ async fn collect_connection_with_context(
 /// Refresh the collector heartbeat. A database error is logged and retried on
 /// the next tick rather than closing a live socket; a row that is missing or
 /// no longer connected (another owner took over) still ends the connection.
-async fn touch_collector_heartbeat(pool: &PgPool, vehicle_id: Uuid) -> Result<()> {
+async fn touch_collector_heartbeat(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    failures: &mut FailureStreak,
+) -> Result<()> {
     let result = match sqlx::query(
         r#"UPDATE riviamigo.parallax_collector_state
            SET updated_at = now()
@@ -1766,9 +1901,20 @@ async fn touch_collector_heartbeat(pool: &PgPool, vehicle_id: Uuid) -> Result<()
     .execute(pool)
     .await
     {
-        Ok(result) => result,
+        Ok(result) => {
+            let previous = failures.recover();
+            if previous > 0 {
+                tracing::info!(vehicle_id = %vehicle_id, attempts = previous, "parallax collector heartbeat recovered");
+            }
+            result
+        }
         Err(error) => {
-            tracing::warn!(vehicle_id=%vehicle_id, err=%error, "Parallax collector heartbeat failed; keeping the socket open");
+            let attempt = failures.record();
+            if attempt == 1 {
+                tracing::warn!(vehicle_id = %vehicle_id, error = %error, "parallax collector heartbeat failed; keeping the socket open");
+            } else {
+                tracing::debug!(vehicle_id = %vehicle_id, attempt, error = %error, "parallax collector heartbeat failed; keeping the socket open");
+            }
             return Ok(());
         }
     };
@@ -1814,7 +1960,11 @@ where
                     );
                     return Err(SessionHold(reason).into());
                 }
-                anyhow::bail!("Parallax socket closed before acknowledgement: {frame:?}");
+                // The close reason is provider text; only the code is reported.
+                anyhow::bail!(
+                    "Parallax socket closed before acknowledgement with code {}",
+                    frame.as_ref().map_or(0, |f| u16::from(f.code))
+                );
             }
             _ => {}
         }
@@ -2039,7 +2189,7 @@ async fn record_vehicle_reported(
     .execute(pool)
     .await
     {
-        tracing::debug!(vehicle_id=%vehicle_id, err=%error, "Parallax vehicle-reported time update failed");
+        tracing::debug!(vehicle_id = %vehicle_id, error = %error, "parallax vehicle-reported time update failed");
     }
 }
 
@@ -2344,19 +2494,21 @@ async fn persist_allowlisted_envelope(
                             let count = TELEMETRY_FORWARD_DROP_LOG_COUNT
                                 .fetch_add(1, Ordering::Relaxed)
                                 + 1;
-                            tracing::debug!(
-                                vehicle_id=%vehicle_id,
-                                source=%topic,
+                            tracing::trace!(
+                                vehicle_id = %vehicle_id,
+                                topic,
                                 reason,
-                                "validated Parallax telemetry could not reach canonical worker"
+                                "parallax telemetry dropped before canonical worker"
                             );
+                            // Sampled: the first drop and each power of two
+                            // after it, so a stalled worker stays visible.
                             if count == 1 || count.is_power_of_two() {
                                 tracing::warn!(
-                                    vehicle_id=%vehicle_id,
-                                    source=%topic,
+                                    vehicle_id = %vehicle_id,
+                                    topic,
                                     reason,
-                                    sampled_drop_count=count,
-                                    "validated Parallax telemetry could not reach canonical worker"
+                                    count,
+                                    "parallax telemetry dropped before canonical worker"
                                 );
                             }
                         }
@@ -2373,8 +2525,8 @@ async fn persist_allowlisted_envelope(
                 });
                 report.forward_outcome = ForwardOutcome::NoCanonicalData;
             }
-            Err(_) => {
-                anyhow::bail!("typed Parallax decoder rejected topic {topic}");
+            Err(error) => {
+                anyhow::bail!("typed Parallax decoder rejected topic {topic}: {error:#}");
             }
         }
     }
@@ -2529,7 +2681,8 @@ async fn persist_allowlisted_envelope(
         "energy.high_voltage.battery_state" => {
             let value = match HvBatteryState::decode(payload) {
                 Ok(v) => v,
-                Err(_) => {
+                Err(error) => {
+                    tracing::trace!(vehicle_id = %vehicle_id, topic, error = %error, "parallax frame did not decode");
                     record_decode_error(pool, vehicle_id).await?;
                     return Ok(EnvelopeOutcome::Rejected);
                 }
@@ -2550,7 +2703,8 @@ async fn persist_allowlisted_envelope(
         "energy_edge_compute.graphs.charging_graph_global" => {
             let value = match ChargingGraphGlobal::decode(payload) {
                 Ok(v) => v,
-                Err(_) => {
+                Err(error) => {
+                    tracing::trace!(vehicle_id = %vehicle_id, topic, error = %error, "parallax frame did not decode");
                     record_decode_error(pool, vehicle_id).await?;
                     return Ok(EnvelopeOutcome::Rejected);
                 }
@@ -2604,7 +2758,8 @@ async fn persist_allowlisted_envelope(
         "charging.session.time_estimation" => {
             let value = match ChargingTimeEstimation::decode(payload) {
                 Ok(v) => v,
-                Err(_) => {
+                Err(error) => {
+                    tracing::trace!(vehicle_id = %vehicle_id, topic, error = %error, "parallax frame did not decode");
                     record_decode_error(pool, vehicle_id).await?;
                     return Ok(EnvelopeOutcome::Rejected);
                 }
@@ -2627,7 +2782,8 @@ async fn persist_allowlisted_envelope(
         "charging.session.status" => {
             let value = match ChargingStatus::decode(payload) {
                 Ok(v) => v,
-                Err(_) => {
+                Err(error) => {
+                    tracing::trace!(vehicle_id = %vehicle_id, topic, error = %error, "parallax frame did not decode");
                     record_decode_error(pool, vehicle_id).await?;
                     return Ok(EnvelopeOutcome::Rejected);
                 }

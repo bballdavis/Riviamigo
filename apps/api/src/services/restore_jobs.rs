@@ -209,6 +209,12 @@ pub async fn create(
         previous_database: None,
     };
     write(config, &job).await?;
+    tracing::info!(
+        job_id = %job.id,
+        artifact_id = %artifact_id,
+        restore_request_id = %restore_request_id,
+        "restore queued"
+    );
     Ok((job, token))
 }
 
@@ -287,6 +293,7 @@ pub async fn update(
     message: impl Into<String>,
 ) -> Result<RestoreJob, AppError> {
     let mut job = read(config, id).await?;
+    tracing::debug!(job_id = %id, phase = ?phase, progress_percent = progress_percent.min(100), "restore phase entered");
     job.phase = phase;
     job.progress_percent = progress_percent.min(100);
     job.message = message.into();
@@ -355,6 +362,23 @@ pub async fn agent_is_ready(config: &Config) -> bool {
     agent_readiness(config).await.is_ok()
 }
 
+/// Journal records that cannot be read are re-examined on every reconciler
+/// pass. Warn on the first sighting of each file and keep repeats at debug.
+static SKIPPED_JOB_RECORDS: std::sync::Mutex<std::collections::BTreeSet<PathBuf>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+fn note_skipped_job_record(path: &Path, reason: &'static str, error: &dyn std::fmt::Display) {
+    let first = SKIPPED_JOB_RECORDS
+        .lock()
+        .map(|mut seen| seen.insert(path.to_path_buf()))
+        .unwrap_or(true);
+    if first {
+        tracing::warn!(path = %path.display(), reason, error = %error, "restore job record skipped");
+    } else {
+        tracing::debug!(path = %path.display(), reason, error = %error, suppressed = true, "restore job record skipped");
+    }
+}
+
 pub async fn reconcile_completed_jobs(pool: &PgPool, config: &Config) -> Result<(), AppError> {
     let directory = jobs_dir(config);
     if !fs::try_exists(&directory).await.unwrap_or(false) {
@@ -367,11 +391,17 @@ pub async fn reconcile_completed_jobs(pool: &PgPool, config: &Config) -> Result<
         }
         let bytes = match fs::read(entry.path()).await {
             Ok(bytes) => bytes,
-            Err(_) => continue,
+            Err(error) => {
+                note_skipped_job_record(&entry.path(), "unreadable", &error);
+                continue;
+            }
         };
         let mut job: RestoreJob = match serde_json::from_slice(&bytes) {
             Ok(job) => job,
-            Err(_) => continue,
+            Err(error) => {
+                note_skipped_job_record(&entry.path(), "invalid_record", &error);
+                continue;
+            }
         };
         if !matches!(job.phase, RestorePhase::Completed | RestorePhase::Failed)
             || job.reconciled_at.is_some()
@@ -444,6 +474,7 @@ pub async fn reconcile_completed_jobs(pool: &PgPool, config: &Config) -> Result<
         .await?;
         job.reconciled_at = Some(Utc::now());
         write(config, &job).await?;
+        tracing::info!(job_id = %job.id, status = final_status, "restore job reconciled");
     }
     Ok(())
 }
@@ -500,6 +531,12 @@ pub async fn merge_catalog_snapshot(
             .bind(&request.confirmation_phrase).bind(&request.notes).bind(&request.error_message)
             .bind(request.requested_at).bind(request.updated_at).execute(pool).await?;
     }
+    tracing::trace!(
+        runs = snapshot.runs.len(),
+        artifacts = snapshot.artifacts.len(),
+        restore_requests = snapshot.restore_requests.len(),
+        "backup catalog snapshot merged"
+    );
     Ok(())
 }
 
@@ -534,10 +571,24 @@ pub fn mark_source_artifact_availability(
 pub fn start_reconciler(pool: PgPool, config: Config) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        let mut last_failure_signature: Option<String> = None;
         loop {
             interval.tick().await;
-            if let Err(error) = reconcile_completed_jobs(&pool, &config).await {
-                tracing::error!(error = ?error, "restore job journal reconciliation failed");
+            match reconcile_completed_jobs(&pool, &config).await {
+                Ok(()) => {
+                    if last_failure_signature.take().is_some() {
+                        tracing::info!("restore job journal reconciliation recovered");
+                    }
+                }
+                Err(error) => {
+                    let signature = format!("{error:?}");
+                    if last_failure_signature.as_deref() == Some(signature.as_str()) {
+                        tracing::debug!(error = ?error, suppressed = true, "restore job journal reconciliation failed");
+                    } else {
+                        tracing::error!(error = ?error, "restore job journal reconciliation failed");
+                        last_failure_signature = Some(signature);
+                    }
+                }
             }
         }
     })

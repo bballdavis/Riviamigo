@@ -104,8 +104,25 @@ pub fn parse_fuel_prices(body: &serde_json::Value) -> Vec<(NaiveDate, &'static s
 }
 
 fn decrypt_api_key(age_key: &str, encrypted: Option<&[u8]>) -> Option<String> {
-    let identity = age_key.parse::<age::x25519::Identity>().ok()?;
-    crate::ingestion::session_store::decrypt_json::<String>(encrypted?, &identity).ok()
+    let encrypted = encrypted?;
+    let decrypted = age_key
+        .parse::<age::x25519::Identity>()
+        .map_err(|_| anyhow::anyhow!("age key is not a valid identity"))
+        .and_then(|identity| {
+            crate::ingestion::session_store::decrypt_json::<String>(encrypted, &identity)
+        });
+    match decrypted {
+        Ok(key) => Some(key),
+        Err(error) => {
+            // The refresh continues with the shared demo key; say so once per fetch.
+            tracing::warn!(
+                provider = connections::FUEL_PRICES,
+                error = ?error,
+                "stored fuel price api key unreadable, using shared demo key"
+            );
+            None
+        }
+    }
 }
 
 async fn fetch_fuel_prices(
@@ -272,11 +289,16 @@ async fn refresh_fuel_prices_if_stale(
         Ok(false) => return Ok((true, previously_failed)),
         Err(error) => {
             // A refresh failure never fails the page; serve what is stored.
-            tracing::warn!(err = %error, "ownership.fuel_prices.claim_failed");
+            tracing::warn!(
+                provider = connections::FUEL_PRICES,
+                error = %error,
+                "fuel price refresh claim failed, serving stored prices"
+            );
             return Ok((true, previously_failed));
         }
     }
     let api_key = decrypt_api_key(age_key, settings.api_key_encrypted.as_deref());
+    let started = std::time::Instant::now();
     let fetched = tokio::time::timeout(
         FUEL_PRICE_FETCH_TIMEOUT,
         fetch_fuel_prices(api_key.as_deref()),
@@ -284,18 +306,35 @@ async fn refresh_fuel_prices_if_stale(
     .await
     .unwrap_or_else(|_| Err("request timed out".into()));
     let stored = match fetched {
-        Ok(rows) => store_fuel_prices(pool, &rows)
-            .await
-            .map_err(|_| "could not store the downloaded prices".to_string()),
+        Ok(rows) => {
+            let count = rows.len();
+            store_fuel_prices(pool, &rows)
+                .await
+                .map(|()| count)
+                .map_err(|_| "could not store the downloaded prices".to_string())
+        }
         Err(message) => Err(message),
     };
     match stored {
-        Ok(()) => {
+        Ok(count) => {
+            tracing::info!(
+                provider = connections::FUEL_PRICES,
+                count,
+                duration_ms = started.elapsed().as_millis() as u64,
+                "fuel prices refreshed"
+            );
             connections::record_success(pool, connections::FUEL_PRICES).await;
             Ok((true, false))
         }
         Err(message) => {
-            tracing::warn!(error = %message, "fuel price refresh failed");
+            // The message names the failure (for example `HTTP 503`) and never
+            // carries the request URL, which holds the API key.
+            tracing::warn!(
+                provider = connections::FUEL_PRICES,
+                error = %message,
+                duration_ms = started.elapsed().as_millis() as u64,
+                "fuel price refresh failed, serving stored prices"
+            );
             connections::record_failure(pool, connections::FUEL_PRICES, &message).await;
             Ok((true, true))
         }
@@ -310,7 +349,11 @@ pub async fn fuel_prices(pool: &PgPool, age_key: &str) -> Result<FuelPrices, App
     let (connection_enabled, refresh_failed) = refresh_fuel_prices_if_stale(pool, age_key)
         .await
         .unwrap_or_else(|error| {
-            tracing::warn!(err = %error, "ownership.fuel_prices.refresh_check_failed");
+            tracing::warn!(
+                provider = connections::FUEL_PRICES,
+                error = %error,
+                "fuel price refresh check failed, serving stored prices"
+            );
             (true, true)
         });
     let rows = sqlx::query_as::<_, (NaiveDate, Option<f64>, Option<f64>, Option<DateTime<Utc>>)>(

@@ -161,8 +161,12 @@ pub(crate) fn extract(
     })();
     if result.is_err() {
         for path in created.into_iter().rev() {
-            let _ = std::fs::remove_file(path);
+            if let Err(error) = std::fs::remove_file(&path) {
+                tracing::warn!(path = %path.display(), error = %error, "recovery extraction cleanup failed");
+            }
         }
+    } else {
+        tracing::debug!(files = created.len(), "recovery package extracted");
     }
     result
 }

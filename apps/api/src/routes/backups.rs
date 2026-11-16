@@ -391,7 +391,10 @@ async fn get_backup_overview(
     let recent_runs = load_recent_runs(&state, recent_runs_page, recent_runs_per_page).await?;
     let s3_catalog_error = match reconcile_s3_catalog(&state).await {
         Ok(()) => None,
-        Err(error) => Some(error.to_string()),
+        Err(error) => {
+            tracing::warn!(error = %error, "s3 catalog reconciliation failed");
+            Some(error.to_string())
+        }
     };
     let artifacts = load_artifacts(&state).await?;
     let restore_requests = load_restore_requests(&state).await?;
@@ -512,6 +515,7 @@ async fn upload_backup_artifact_admitted(
     let destination = crate::services::artifact_files::StagingFile::upload(root, run_id)?;
     let final_path = destination.path.clone();
     let final_name = destination.file_name().to_owned();
+    tracing::info!(run_id = %run_id, user_id = %auth.user_id, "backup package import started");
     let upload_result = async {
         sqlx::query(
             "INSERT INTO riviamigo.backup_runs (id, trigger, status, phase, progress_percent, requested_by, started_at, updated_at) VALUES ($1, 'upload', 'running', 'queued', 0, $2, now(), now())",
@@ -600,16 +604,34 @@ async fn upload_backup_artifact_admitted(
     .await;
 
     let response = match upload_result {
-        Ok(artifact) => Ok((StatusCode::CREATED, Json(UploadBackupResponse { artifact }))),
+        Ok(artifact) => {
+            tracing::info!(
+                run_id = %run_id,
+                artifact_id = %artifact.id,
+                size_bytes = artifact.size_bytes,
+                "backup package import completed"
+            );
+            Ok((StatusCode::CREATED, Json(UploadBackupResponse { artifact })))
+        }
         Err(error) => {
-            let _ = crate::services::artifact_files::remove(root, &final_path);
-            let _ = sqlx::query(
+            // The package was never published when the failure came before
+            // publish, so a missing final file is expected and not reported.
+            if let Err(cleanup_error) = crate::services::artifact_files::remove(root, &final_path) {
+                if !matches!(&cleanup_error, AppError::Io(io) if io.kind() == std::io::ErrorKind::NotFound)
+                {
+                    tracing::warn!(run_id = %run_id, error = %cleanup_error, "backup package import cleanup failed");
+                }
+            }
+            if let Err(update_error) = sqlx::query(
                 "UPDATE riviamigo.backup_runs SET status = 'failed', phase = 'failed', completed_at = now(), updated_at = now(), error_message = $2 WHERE id = $1 AND status = 'running'",
             )
             .bind(run_id)
             .bind(error.to_string())
             .execute(&state.pool)
-            .await;
+            .await
+            {
+                tracing::error!(run_id = %run_id, error = %update_error, "backup import failure could not be recorded");
+            }
             Err(error)
         }
     };
@@ -658,6 +680,7 @@ async fn delete_uploaded_artifact(
         .bind(artifact.run_id)
         .execute(&state.pool)
         .await?;
+    tracing::info!(artifact_id = %artifact_id, user_id = %auth.user_id, "imported backup package deleted");
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -752,17 +775,28 @@ async fn start_restore_admitted(
     let job_id = job.id;
     tokio::spawn(async move {
         if let Err(error) = prepare_and_handoff_restore(background_state.clone(), job_id).await {
-            if let Ok(job) = restore_jobs::read(&background_state.config, job_id).await {
-                cleanup_remote_staging_path(&job.artifact_path).await;
+            tracing::error!(job_id = %job_id, request_id = %request_id, error = %error, "restore handoff failed");
+            match restore_jobs::read(&background_state.config, job_id).await {
+                Ok(job) => cleanup_remote_staging_path(&job.artifact_path).await,
+                Err(read_error) => {
+                    tracing::warn!(job_id = %job_id, error = %read_error, "restore staging cleanup skipped: job unreadable");
+                }
             }
-            let _ = restore_jobs::fail(&background_state.config, job_id, &error).await;
-            let _ = sqlx::query(
+            if let Err(fail_error) =
+                restore_jobs::fail(&background_state.config, job_id, &error).await
+            {
+                tracing::error!(job_id = %job_id, error = %fail_error, "restore job failure could not be recorded");
+            }
+            if let Err(update_error) = sqlx::query(
                 "UPDATE riviamigo.backup_restore_requests SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
             )
             .bind(request_id)
             .bind(error.to_string())
             .execute(&background_state.pool)
-            .await;
+            .await
+            {
+                tracing::error!(request_id = %request_id, error = %update_error, "restore request failure could not be recorded");
+            }
         }
     });
     // The durable job and its background worker now own the published path.
@@ -829,7 +863,11 @@ async fn cleanup_remote_staging_path(path: &str) {
         .and_then(|name| name.to_str())
         == Some(".remote-staging")
     {
-        let _ = fs::remove_file(path).await;
+        if let Err(error) = fs::remove_file(path).await {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(error = %error, "remote staging package cleanup failed");
+            }
+        }
     }
 }
 
@@ -875,6 +913,7 @@ async fn prepare_and_handoff_restore(state: AppState, job_id: Uuid) -> Result<()
             response.status()
         )));
     }
+    tracing::debug!(job_id = %job_id, "restore job handed to restore agent");
     Ok(())
 }
 
@@ -1042,6 +1081,14 @@ async fn update_backup_settings(
     .await?;
 
     app_settings::set_app_timezone(&state.pool, timezone).await?;
+    tracing::info!(
+        user_id = %auth.user_id,
+        enabled = body.enabled,
+        frequency = body.frequency.as_str(),
+        local_enabled = body.local_enabled,
+        s3_enabled = body.s3_enabled,
+        "backup settings updated"
+    );
 
     Ok(Json(load_settings(&state).await?))
 }
@@ -1062,7 +1109,11 @@ impl MaterializedArtifact {
 impl Drop for MaterializedArtifact {
     fn drop(&mut self) {
         if !self.retained {
-            let _ = crate::services::artifact_files::remove_staged(&self.root, self.staging_id);
+            if let Err(error) =
+                crate::services::artifact_files::remove_staged(&self.root, self.staging_id)
+            {
+                tracing::warn!(staging_id = %self.staging_id, error = %error, "staged recovery package cleanup failed");
+            }
         }
     }
 }
@@ -1156,10 +1207,13 @@ async fn test_s3_connection(
     crate::services::s3_transport::S3Policy::from_config(&state.config)?
         .validate_endpoint(&body.endpoint)
         .await?;
-    let existing = backup_service::configured_s3_settings(&state.pool, &state.config)
-        .await
-        .ok()
-        .flatten();
+    let existing = match backup_service::configured_s3_settings(&state.pool, &state.config).await {
+        Ok(settings) => settings,
+        Err(error) => {
+            tracing::error!(error = %error, "stored s3 settings unavailable, testing with submitted values only");
+            None
+        }
+    };
     let secret_key = body
         .secret_key
         .as_deref()
@@ -1256,6 +1310,8 @@ async fn create_restore_request(
         body.notes,
     )
     .await?;
+
+    tracing::info!(request_id = %request_id, artifact_id = %body.artifact_id, user_id = %auth.user_id, "restore request created");
 
     let request = load_restore_request_by_id(&state, request_id).await?;
     Ok((StatusCode::CREATED, Json(request)))

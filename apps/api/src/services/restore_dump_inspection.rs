@@ -55,6 +55,11 @@ pub async fn inspect_recovery_dump(
                 String::from_utf8_lossy(&diagnostics).trim()
             )));
         }
+        tracing::debug!(
+            has_riviamigo_schema = schema.has_riviamigo_schema,
+            has_timeseries_schema = schema.has_timeseries_schema,
+            "recovery dump inspected"
+        );
         Ok(schema)
     };
     tokio::time::timeout(

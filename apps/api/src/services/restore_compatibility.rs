@@ -474,6 +474,16 @@ pub async fn prepare_candidate_schema(
         );
     }
 
+    let ledger_path = if exact_prefix {
+        "exact_prefix"
+    } else {
+        "legacy_baseline"
+    };
+    tracing::debug!(
+        ledger_path,
+        source_migration_version = source.migration_version,
+        "restore candidate ledger path selected"
+    );
     if exact_prefix {
         migrations::restore_ledger(pool, &source.migration_ledger).await?;
     } else {
@@ -508,6 +518,10 @@ pub async fn prepare_candidate_schema(
     MIGRATOR
         .run_direct(None, &mut *migration_connection, false)
         .await?;
+    tracing::debug!(
+        migrations_applied = migrations_applied.len(),
+        "restore candidate migrations applied"
+    );
     drop(migration_connection);
     crate::services::restore_policy::sanitize(pool).await?;
     let mut migration_connection = pool.acquire().await?;
@@ -592,6 +606,10 @@ async fn baseline_schema_fingerprint(candidate_database_url: &str) -> anyhow::Re
     .execute(&admin_pool)
     .await;
     admin_pool.close().await;
+    if let Err(error) = &cleanup {
+        // The returned error does not name the scratch database, so record it here.
+        tracing::warn!(database = %database_name, error = %error, "baseline scratch database cleanup failed");
+    }
     cleanup?;
     result
 }
@@ -803,6 +821,17 @@ pub async fn plan_restore(
         "validation_checks": validation_checks,
     }))
     .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+    let blocking_codes = blocking_errors
+        .iter()
+        .map(|error| &error.code)
+        .collect::<Vec<_>>();
+    tracing::debug!(
+        compatible = blocking_errors.is_empty(),
+        package_format = package_format.as_str(),
+        blocking_codes = ?blocking_codes,
+        pending_migrations = pending_migrations.len(),
+        "restore plan evaluated"
+    );
     Ok(RestorePlan {
         plan_id: hex::encode(Sha256::digest(plan_material)),
         engine_version: RESTORE_ENGINE_VERSION,

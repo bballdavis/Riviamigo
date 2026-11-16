@@ -44,11 +44,11 @@ async fn trigger_backfill(
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<charge_backfill::ChargeBackfillStart>, AppError> {
     require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
-    Ok(Json(
-        charge_backfill::spawn(state.pool.clone(), state.age_key.clone(), vehicle_id)
-            .await
-            .map_err(map_backfill_error)?,
-    ))
+    let start = charge_backfill::spawn(state.pool.clone(), state.age_key.clone(), vehicle_id)
+        .await
+        .map_err(map_backfill_error)?;
+    tracing::info!(vehicle_id = %vehicle_id, user_id = %auth.user_id, "charge backfill requested");
+    Ok(Json(start))
 }
 
 fn map_backfill_error(error: ChargeBackfillError) -> AppError {
