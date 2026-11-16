@@ -4,7 +4,7 @@ description: Customize dashboards and control the optional services an installat
 slug: /using-riviamigo/
 sidebar_label: Using Riviamigo
 pagination_prev: null
-pagination_next: guides/dashboard-customization
+pagination_next: guides/dashboard-editing
 ---
 
 # Using Riviamigo
@@ -15,8 +15,10 @@ Use this section after the installation is healthy and receiving vehicle data. I
 
 | Goal | Start here |
 |---|---|
-| Understand built-in dashboards and personal copies | [Dashboard customization](./guides/dashboard-customization.md) |
-| Edit layouts, widgets, and conditional previews | [Dashboard customization](./guides/dashboard-customization.md) |
+| Move, resize, add, and remove widgets, or show them only when plugged in | [Edit a dashboard](./guides/dashboard-editing.md) |
+| Choose the Vehicle Overview's stat rows and location map | [Vehicle Overview](./guides/vehicle-overview.md) |
+| Build or change a sensor chip, including formulas and graphs | [Sensor chips](./guides/sensor-chips.md) |
+| Understand built-in dashboards and personal copies, or reset one | [Manage dashboards](./guides/dashboard-customization.md) |
 | Choose Classic/RAD or build a private theme | [Appearance and custom themes](./guides/themes.md) |
 | Review weather, map, geocoding, or proxy access | [External connections](./guides/external-connections.md) |
 | Explore development-only Rivian-reported parked energy and extended readings | [Extended Vehicle Telemetry](./guides/extended-vehicle-telemetry.md) |

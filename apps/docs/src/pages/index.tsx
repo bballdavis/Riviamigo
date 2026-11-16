@@ -28,7 +28,7 @@ const entryPoints = [
 
 const quickLinks = [
   ['Features', '/docs/overview/features/'],
-  ['Dashboard customization', '/docs/using-riviamigo/dashboard-customization/'],
+  ['Customize dashboards', '/docs/using-riviamigo/edit-dashboards/'],
   ['Operations', '/docs/operations/'],
   ['Backup and restore', '/docs/operations/backup-and-restore/'],
   ['Privacy', '/docs/privacy/'],
