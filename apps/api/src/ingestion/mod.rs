@@ -8,6 +8,7 @@ pub mod rivian_poll;
 pub mod rivian_ws_backoff;
 pub mod session_store;
 pub mod supervisor;
+pub mod tire_validity;
 pub mod trip_detector;
 pub mod trip_signals;
 pub mod worker;

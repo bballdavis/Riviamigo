@@ -14,6 +14,7 @@ use crate::{
         closure_motion::{ClosureMotionMap, ClosureMotionTracker},
         parser, rivian_poll,
         session_store::{decrypt_tokens, RivianTokenBundle},
+        tire_validity::TireValidityGate,
         trip_detector::{
             compute_distance_odometer_or_gps, compute_trip_energy, TripDetectorState, TripEvent,
         },
@@ -490,6 +491,7 @@ pub async fn run_vehicle_worker(
     // connection that stays silently wedged while still holding the worker lock.
     let mut last_ws_inbound_at = tokio::time::Instant::now();
     let mut closure_motion = ClosureMotionTracker::default();
+    let mut tire_validity = TireValidityGate::default();
     let mut state_reconcile_interval = tokio::time::interval(STATE_PERIOD_RECONCILE_INTERVAL);
     state_reconcile_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Startup reconciliation above already covered the current tail.
@@ -639,7 +641,7 @@ pub async fn run_vehicle_worker(
             }
         }
 
-        let Some(event) = inbound.telemetry else {
+        let Some(mut event) = inbound.telemetry else {
             // A chargingSession frame can arrive without a telemetry sample.
             // Keep the live projection fresh when a canonical session is known.
             if let Some(charging_session) = inbound.charging_session.as_ref() {
@@ -668,6 +670,10 @@ pub async fn run_vehicle_worker(
             .await;
             continue;
         }
+
+        // Before anything reads the sample: a parked vehicle's "not valid"
+        // tire flags must not reach the live stream or the stored status.
+        tire_validity.observe(&mut event);
 
         let trip_id = trip_det.active_trip_id();
         let charge_event = if is_parallax {
