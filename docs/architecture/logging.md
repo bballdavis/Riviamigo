@@ -1,10 +1,11 @@
 # Logging Conventions
 
-This page is the contract for runtime logging in the Rust API and the
-restore agent. It defines the output shape, what each level means, the field
-names to use, and what must never be logged. Browser-side reporting follows the
-same level meanings through the seam in
-[Frontend Error Observability](./frontend-error-observability.md).
+This page is the contract for runtime logging in the Rust API, the restore
+agent, the maintenance binaries, and the browser app. It defines the output
+shape, what each level means, the field names to use, and what must never be
+logged. The browser follows the same ladder and line shape through
+`clientLog` (see [Browser logging](#browser-logging)); failure reporting there
+is described in [Frontend Error Observability](./frontend-error-observability.md).
 
 The goal is a ladder where each rung is a strict superset of the one above it
 and noticeably noisier:
@@ -28,6 +29,18 @@ Every line follows `[riviamigo][LEVEL] module::path:span{fields}: message key=va
 crate prefix removed, so `ingestion::worker` identifies the source without a
 file name. Docker adds the outer timestamp. Nginx failure lines are normalized
 by the production wrapper into the same `[riviamigo][LEVEL]` prefix.
+
+`logging.rs` also guarantees two properties for every line, whatever the call
+site logged:
+
+- One event is one line. Newlines in a value (an `anyhow` chain printed with
+  `?error`, a child process's stderr) are folded to ` | `, and other control
+  characters are dropped, so a logged value cannot forge a second log line.
+- Credentials are masked. URL userinfo (`postgres://user:secret@host`),
+  `password`/`passwd`/`secret` assignments (`password=x`, `PASSWORD 'x'`, JSON
+  `"password":"x"`), and `Bearer` tokens are replaced with `***`. This is a
+  backstop for text you do not control; it does not make it acceptable to log a
+  secret on purpose.
 
 HTTP handling runs inside an `http` span carrying `method`, `path`, and
 `request_id`. Every event emitted while a request is handled, from any layer,
@@ -158,7 +171,7 @@ Use these names so a filter works across the whole codebase.
 | `vehicle_id` | Internal vehicle UUID |
 | `user_id` | Internal user UUID |
 | `trip_id`, `session_id`, `job_id`, `run_id` | Internal ids for that entity |
-| `error` | The error. `%e` for std/`sqlx`/`AppError`; `?e` for `anyhow`, to keep the chain |
+| `error` | The error. `%e` for std/`sqlx`/`AppError`; `?e` for `anyhow`, to keep the cause chain (the formatter folds it onto one line) |
 | `status` | HTTP status as a number |
 | `latency_ms`, `duration_ms` | Elapsed milliseconds |
 | `count`, `rows`, `bytes` | Quantities |
@@ -190,6 +203,25 @@ At any level, including `TRACE`:
 If a value is needed to diagnose, log a length, a hash prefix, or a boolean
 such as `token_present`.
 
+## Startup, shutdown, and failure
+
+Every binary starts with `riviamigo_api::logging::run(...)` (or `init()` for a
+process that manages its own result). That installs the shared subscriber
+before any other work, so configuration, database, migration, and key errors
+appear in the same format and obey `RUST_LOG`, instead of being printed by the
+runtime as a bare `Error:` line.
+
+- A fatal error is logged once, at `ERROR`, as `process exiting after fatal
+  error` with the whole cause chain in `error`. Add `.context("verb-ing the
+  thing")` to each fallible startup step so the chain says which step failed,
+  and do not also log the error before returning it.
+- `api starting` and `restore agent starting` log the version. `effective
+  configuration` logs the settings an operator needs to read a log (environment,
+  port, the active log filter) and never a secret.
+- A stop signal logs `shutdown signal received; stopping` with the signal name.
+- A panic is logged as `thread panicked` with its location, through the same
+  format, by a hook installed in `init()`.
+
 ## Spans
 
 Use spans for context that applies to many lines, not for timing every
@@ -214,13 +246,45 @@ Fields on an enclosing span must not be repeated on events inside it.
   (`riviamigo-api`, `riviamigo-restore-agent`) do the same.
 - Library code under `src/` (everything but `src/bin`) never uses `println!`,
   `eprintln!`, or `dbg!`.
-- Browser code goes through `reportClientError()`; there are no stray
-  `console.*` calls. Browser failures map to the same ladder: `severity:
-  'error'` for failures the user hits, `warn` for degraded-but-working paths.
-  The one standing exception is the opt-in live websocket inspector
-  (`localStorage['rm-ws-debug']`), which is the browser's `TRACE` and writes
-  with the console methods the lint config allows. Other developer-only output is removed, not left
-  behind a flag.
+- Browser code uses `clientLog` and `reportClientError()`; there are no stray
+  `console.*` calls outside `clientDiagnostics.ts`.
+
+## Browser logging
+
+`@riviamigo/ui/lib/clientDiagnostics` owns browser output, with the same ladder
+and line shape as the server:
+
+```text
+[riviamigo][INFO] auth: signed in user_id=123e4567…
+[riviamigo][DEBUG] api: request completed method=GET path=/v1/vehicles/<id> status=200 latency_ms=41 request_id=…
+```
+
+```ts
+clientLog.info('auth', 'signed in', { user_id });
+clientLog.debug('api', 'request completed', { method, path: redactPath(path), status, latency_ms });
+clientLog.trace('live', 'frame received', { vehicle_id, count });
+```
+
+- The first argument is the subsystem (`app`, `auth`, `api`, `live`, `route`,
+  `query`, `mutation`, `map`), the second a lowercase message with no trailing
+  period, and values go in the fields object with the server's names.
+  `pnpm logging:check` enforces the message style.
+- The default threshold is `info`. Raise it with `riviamigoLog.setLevel('debug')`
+  in the console (it is saved and applies after a reload), or set
+  `localStorage['rm-log-level']`. `trace` replaces the former `rm-ws-debug`
+  websocket inspector.
+- Level meaning matches the server: `info` is lifecycle (app start, sign-in and
+  sign-out, a live connection opening), `debug` is the decision trail (each API
+  request outcome, navigation, reconnect scheduling, a mutation succeeding),
+  `trace` is per-message detail (each request start, each websocket frame's
+  shape). `reportClientError()` is the `warn`/`error` path for failures, with
+  the deduplication described in the observability doc.
+- The same never-log rules hold. Fields named like a password, token, email,
+  VIN, coordinate, or address are dropped, UUIDs are shortened to eight
+  characters except `request_id`, which stays whole so a browser line can be
+  matched to the server line that carries the same `request_id`. Log paths with
+  `redactPath()`, never a URL with a query string. Websocket frames log their
+  field names and counts, never values.
 
 ## Turning levels up
 
@@ -250,9 +314,10 @@ into the filter.
 ## Enforcement
 
 `pnpm logging:check` (part of `pnpm verify:ci` and the Quality workflow)
-mechanically enforces what a script can: message style, the `error` field
-name, a ban on sensitive field names, no `println!`/`eprintln!`/`dbg!` in
-library code, and no `console.*` outside the diagnostics seam. Choosing the
+mechanically enforces what a script can: message style for `tracing` and
+`clientLog` calls, the `error` field name, a ban on sensitive field names, no
+`println!`/`eprintln!`/`dbg!` in library code, no private tracing subscriber,
+and no `console.*` outside the diagnostics seam. Choosing the
 right _level_ is a judgment call and stays in code review.
 
 ## Review checklist

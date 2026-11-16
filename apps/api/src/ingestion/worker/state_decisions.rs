@@ -34,6 +34,18 @@ pub(super) struct RuntimeHealthUpdate {
 pub(super) fn runtime_health_update_for_ws_control(
     inbound: &WsInboundEvent,
 ) -> Option<RuntimeHealthUpdate> {
+    let update = health_update_for_ws_control(inbound)?;
+    tracing::debug!(
+        control = inbound.message_type.as_deref().unwrap_or_default(),
+        online = update.online,
+        worker_health = update.worker_health,
+        auth_state = update.auth_state,
+        "websocket control changed vehicle health"
+    );
+    Some(update)
+}
+
+fn health_update_for_ws_control(inbound: &WsInboundEvent) -> Option<RuntimeHealthUpdate> {
     match inbound.message_type.as_deref() {
         Some("connection_open") => Some(RuntimeHealthUpdate {
             online: true,
@@ -105,11 +117,24 @@ pub(super) fn runtime_health_update_for_ws_control(
 }
 
 fn read_ws_detail_message(raw: &str) -> Option<String> {
-    let value = serde_json::from_str::<serde_json::Value>(raw).ok()?;
-    value
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        tracing::debug!(
+            reason = "detail_unreadable",
+            "websocket control detail unreadable; using fallback message"
+        );
+        return None;
+    };
+    let detail = value
         .get("reason")
         .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
+        .map(str::to_string);
+    if detail.is_none() {
+        tracing::debug!(
+            reason = "detail_missing",
+            "websocket control detail has no reason; using fallback message"
+        );
+    }
+    detail
 }
 
 fn ws_handshake_auth_rejected(raw: &str) -> bool {

@@ -1088,18 +1088,6 @@ pub async fn run_vehicle_worker(
         }
         let start_decision = trip_det.start_decision(&trip_sample);
         let trip_event = trip_det.process(&trip_sample);
-        if let TripEvent::TripStarted {
-            trip_id: started_trip_id,
-            ..
-        } = &trip_event
-        {
-            tracing::debug!(
-                vehicle_id=%vehicle_id,
-                trip_id=%started_trip_id,
-                reason=start_decision,
-                "trip detector entered driving"
-            );
-        }
         if capturing {
             record_trip_diagnostics(
                 vehicle_id,

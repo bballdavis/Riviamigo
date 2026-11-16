@@ -31,6 +31,7 @@ impl TireValidityGate {
         if self.sensors_should_report(event.ts) {
             return;
         }
+        let mut dropped: u32 = 0;
         for valid in [
             &mut event.tire_fl_valid,
             &mut event.tire_fr_valid,
@@ -39,7 +40,15 @@ impl TireValidityGate {
         ] {
             if *valid == Some(false) {
                 *valid = None;
+                dropped += 1;
             }
+        }
+        if dropped > 0 {
+            tracing::trace!(
+                count = dropped,
+                reason = "sensors_expected_quiet",
+                "tire not-valid flags dropped"
+            );
         }
     }
 
@@ -48,13 +57,20 @@ impl TireValidityGate {
             let driving =
                 gear.eq_ignore_ascii_case("drive") || gear.eq_ignore_ascii_case("reverse");
             if !driving {
+                if self.driving_since.is_some() {
+                    tracing::debug!(reason = "parked", "tire sensor wake window closed");
+                }
                 self.driving_since = None;
             } else if self.driving_since.is_none() {
                 self.driving_since = Some(event.gear_status_ts.unwrap_or(event.ts));
+                tracing::debug!(reason = "driving_gear", "tire sensor wake window opened");
             }
         }
         // A sleeping vehicle is parked even if the shift to park was missed.
         if event.power_state == Some(PowerState::Sleep) {
+            if self.driving_since.is_some() {
+                tracing::debug!(reason = "asleep", "tire sensor wake window closed");
+            }
             self.driving_since = None;
         }
     }

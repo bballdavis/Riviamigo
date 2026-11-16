@@ -80,6 +80,9 @@ pub struct ChargeDetectorState {
     // Energy / rate accumulators
     energy_used_wh_acc: f64,
     peak_charge_kw: f64,
+
+    // Whether the open session is being held past an idle charger status.
+    held_open: bool,
 }
 
 #[derive(Debug)]
@@ -99,6 +102,12 @@ impl ChargeDetectorState {
     }
 
     pub fn from_snapshot(vehicle_id: Uuid, snapshot: ActiveChargeSessionSnapshot) -> Self {
+        tracing::debug!(
+            vehicle_id = %vehicle_id,
+            session_id = %snapshot.session_id,
+            reason = "persisted_open_session",
+            "charge detector resumed open session"
+        );
         Self {
             vehicle_id,
             active_session_id: Some(snapshot.session_id),
@@ -114,6 +123,7 @@ impl ChargeDetectorState {
             last_power_ts: snapshot.last_power_ts,
             energy_used_wh_acc: snapshot.energy_used_wh.max(0.0),
             peak_charge_kw: snapshot.peak_charge_kw.max(0.0),
+            held_open: false,
         }
     }
 
@@ -169,7 +179,9 @@ impl ChargeDetectorState {
                     && self.peak_charge_kw < AC_L2_MAX_KW
                     && kw_abs > self.peak_charge_kw * 5.0;
 
-                if kw_abs > 0.0 && kw_abs <= PLAUSIBLE_MAX_CHARGE_KW && !is_dc_spike_on_ac_session {
+                let accepted =
+                    kw_abs > 0.0 && kw_abs <= PLAUSIBLE_MAX_CHARGE_KW && !is_dc_spike_on_ac_session;
+                if accepted {
                     if let Some(last_t) = self.last_power_ts {
                         let dt_hours = (ts - last_t).num_milliseconds() as f64 / 3_600_000.0;
                         self.energy_used_wh_acc += kw_abs * 1_000.0 * dt_hours;
@@ -178,6 +190,16 @@ impl ChargeDetectorState {
                         self.peak_charge_kw = kw_abs;
                     }
                     self.last_power_ts = Some(ts);
+                } else if kw_abs > 0.0 {
+                    tracing::trace!(
+                        vehicle_id = %self.vehicle_id,
+                        reason = if kw_abs > PLAUSIBLE_MAX_CHARGE_KW {
+                            "above_ceiling"
+                        } else {
+                            "ac_spike"
+                        },
+                        "charge power sample rejected"
+                    );
                 }
             }
         }
@@ -194,6 +216,14 @@ impl ChargeDetectorState {
                 && matches!(status, Some("chrgr_sts_connected_no_chrg"))
                 && !has_remaining_charge_time);
 
+        tracing::trace!(
+            vehicle_id = %self.vehicle_id,
+            is_charging = self.is_charging,
+            actively_charging,
+            session_ended,
+            "charge signals evaluated"
+        );
+
         // Start
         if !self.is_charging && actively_charging {
             let session_id = Uuid::new_v4();
@@ -209,6 +239,13 @@ impl ChargeDetectorState {
             self.last_power_ts = Some(ts);
             self.energy_used_wh_acc = 0.0;
             self.peak_charge_kw = 0.0;
+            tracing::debug!(
+                vehicle_id = %self.vehicle_id,
+                session_id = %session_id,
+                reason = "actively_charging",
+                charger_state = ?state,
+                "charge detector opened session"
+            );
             return ChargeEvent::SessionStarted;
         }
 
@@ -223,7 +260,40 @@ impl ChargeDetectorState {
                 .is_some_and(|last| (ts - last).num_seconds() > CHARGE_TIMEOUT_SECS);
 
             if session_ended || timed_out {
+                if let Some(session_id) = self.active_session_id {
+                    tracing::debug!(
+                        vehicle_id = %self.vehicle_id,
+                        session_id = %session_id,
+                        reason = end_reason(state, status, session_ended),
+                        duration_ms = (ts - self.started_at.unwrap_or(ts)).num_milliseconds(),
+                        "charge detector closed session"
+                    );
+                }
                 return self.close_session(ts);
+            }
+
+            // The charger reports idle, but remaining charge time keeps the
+            // session open. Log the start and the release of that hold only.
+            let held =
+                matches!(status, Some("chrgr_sts_connected_no_chrg")) && has_remaining_charge_time;
+            if held != self.held_open {
+                self.held_open = held;
+                if let Some(session_id) = self.active_session_id {
+                    if held {
+                        tracing::debug!(
+                            vehicle_id = %self.vehicle_id,
+                            session_id = %session_id,
+                            reason = "idle_charger_with_remaining_time",
+                            "charge session held open"
+                        );
+                    } else {
+                        tracing::debug!(
+                            vehicle_id = %self.vehicle_id,
+                            session_id = %session_id,
+                            "charge session hold released"
+                        );
+                    }
+                }
             }
         }
 
@@ -303,8 +373,24 @@ impl ChargeDetectorState {
         self.last_power_ts = None;
         self.energy_used_wh_acc = 0.0;
         self.peak_charge_kw = 0.0;
+        self.held_open = false;
 
         ChargeEvent::SessionEnded(session)
+    }
+}
+
+/// Why an open session is closed, for the decision log.
+fn end_reason(
+    state: Option<&ChargerState>,
+    status: Option<&str>,
+    session_ended: bool,
+) -> &'static str {
+    match (state, status) {
+        (Some(ChargerState::Done), _) => "charger_done",
+        (Some(ChargerState::Disconnected), _) => "charger_disconnected",
+        (_, Some("chrgr_sts_not_connected")) => "charger_not_connected",
+        _ if session_ended => "connected_without_charge",
+        _ => "timeout",
     }
 }
 

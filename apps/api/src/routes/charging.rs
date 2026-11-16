@@ -714,7 +714,7 @@ async fn update_charge_session(
             if recomputed.is_none() {
                 return Err(AppError::NotFound);
             }
-            tracing::info!(
+            tracing::debug!(
                 user_id = %auth.user_id,
                 vehicle_id = %vehicle_id,
                 session_id = %session_id,

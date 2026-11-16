@@ -368,10 +368,7 @@ async fn host_restore_inner(
         report_removal("host staging", fs::remove_dir_all(&state.staging).await);
         return Err(error);
     }
-    println!(
-        "host restore candidate prepared and validated; state={}",
-        state_path.display()
-    );
+    tracing::info!(state_path = %state_path.display(), "host restore candidate prepared and validated");
     Ok(())
 }
 
@@ -423,7 +420,7 @@ async fn activate_host_restore(config: &Config) -> anyhow::Result<()> {
         rollback_artwork(&artwork_activation_from_state(&state)?).await?;
         return Err(error.into());
     }
-    println!("host restore candidate activated");
+    tracing::info!("host restore candidate activated");
     Ok(())
 }
 
@@ -738,10 +735,15 @@ async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
     let lock_pool = riviamigo_api::db::pool::create_pool(&config.database_url).await?;
     let config = config_with_active_keys(config, &lock_pool).await?;
     let lock = backups::acquire_recovery_mutation_lock(&lock_pool).await?;
+    tracing::info!(job_id = %job_id, "restore started");
+    let started = std::time::Instant::now();
     let result =
         with_restore_deadline(&config, job_id, perform_restore_inner(&config, job_id)).await;
     lock.release().await;
     lock_pool.close().await;
+    if result.is_ok() {
+        tracing::info!(job_id = %job_id, duration_ms = started.elapsed().as_millis() as u64, "restore completed");
+    }
     result
 }
 
@@ -1404,6 +1406,7 @@ async fn prepare_restore_database(
         drop_database(config, &restore_database).await?;
     }
     create_database(config, &restore_database).await?;
+    tracing::debug!(job_id = %job_id, "candidate database created");
     let restore_role = format!("riviamigo_restore_owner_{}", job_id.simple());
     let mut role_password_bytes = [0_u8; 32];
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut role_password_bytes);
@@ -1430,6 +1433,7 @@ async fn prepare_restore_database(
         // No memberships, superuser privileges, cluster administration or file/
         // program roles. Only this fresh candidate receives object privileges.
         create_restore_role(&restore_config, &restore_role, &role_password, valid_until).await?;
+        tracing::debug!(job_id = %job_id, "candidate owner role created");
         sqlx::raw_sql(sqlx::AssertSqlSafe(format!("REVOKE CONNECT ON DATABASE {} FROM PUBLIC; GRANT CONNECT, CREATE, TEMPORARY ON DATABASE {} TO {}; GRANT USAGE, CREATE ON SCHEMA public, riviamigo TO {}; ALTER SCHEMA riviamigo OWNER TO {};", quote_identifier(&restore_database), quote_identifier(&restore_database), quote_identifier(&restore_role), quote_identifier(&restore_role), quote_identifier(&restore_role))))
             .execute(&pool).await?;
         // Timescale's installed extension owns its catalog tables. COPY needs
@@ -1442,7 +1446,9 @@ async fn prepare_restore_database(
         }
         pool.close().await;
         build_restore_toc(dump, &toc_path).await?;
+        let dump_started = std::time::Instant::now();
         run_pg_restore(&archive_config, dump, &toc_path).await?;
+        tracing::debug!(job_id = %job_id, duration_ms = dump_started.elapsed().as_millis() as u64, "database dump restored into candidate");
         inject_restore_fault("dump_restored")?;
         let pool = riviamigo_api::db::pool::create_pool(&archive_config.database_url).await?;
         let validation_report = restore_compatibility::prepare_candidate_schema(
@@ -1451,6 +1457,7 @@ async fn prepare_restore_database(
             manifest,
         )
         .await?;
+        tracing::debug!(job_id = %job_id, "candidate schema prepared and validated");
         if let Some(history) = history {
             if path_exists("operational history check", history).await {
                 restore_history::merge(&pool, history, config.recovery.max_history_bytes).await?;
@@ -1465,6 +1472,7 @@ async fn prepare_restore_database(
         // Keep object ownership on this unprivileged role. Promoting archive
         // functions to the bootstrap owner would undo the execution boundary.
         run_psql(config, &format!("ALTER ROLE {} NOLOGIN PASSWORD NULL;", quote_identifier(&restore_role))).await?;
+        tracing::debug!(job_id = %job_id, "candidate owner role locked");
         Ok::<_, anyhow::Error>(validation_report)
     }
     .await;

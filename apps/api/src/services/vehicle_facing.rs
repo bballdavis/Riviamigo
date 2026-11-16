@@ -340,8 +340,16 @@ pub async fn reversed_course(pool: &PgPool, vehicle_id: Uuid) -> sqlx::Result<bo
     // started is either seen by the evidence query or has bumped the epoch.
     let reversed = backed_into_position(&load_facing_evidence(pool, vehicle_id).await?);
     if let Some((None, epoch)) = saved {
-        if let Err(error) = save_facing(pool, vehicle_id, epoch, reversed).await {
-            tracing::warn!(vehicle_id = %vehicle_id, error = %error, "vehicle facing save failed, using computed facing");
+        match save_facing(pool, vehicle_id, epoch, reversed).await {
+            Ok(true) => {}
+            Ok(false) => tracing::debug!(
+                vehicle_id = %vehicle_id,
+                reason = "telemetry_changed",
+                "vehicle facing save skipped"
+            ),
+            Err(error) => {
+                tracing::warn!(vehicle_id = %vehicle_id, error = %error, "vehicle facing save failed, using computed facing");
+            }
         }
     }
     Ok(reversed)

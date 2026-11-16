@@ -183,12 +183,30 @@ impl HttpConnector for S3Connector {
                     aws_smithy_http_client::tls::rustls_provider::CryptoMode::AwsLc,
                 ))
                 .build_with_resolver(approved);
-            client
+            let result = client
                 .http_connector(&this.settings, &this.components)
                 .call(request)
-                .await
+                .await;
+            if let Err(error) = &result {
+                // Send-stage failures are the ones the SDK may retry, so each
+                // attempt that fails here is reported with its cause chain.
+                tracing::warn!(
+                    provider = "s3",
+                    error = %error_chain(error),
+                    "s3 transport attempt failed"
+                );
+            }
+            result
         })
     }
+}
+
+/// The error and every cause beneath it, joined for one log field.
+fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    std::iter::successors(Some(error), |error| error.source())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(": ")
 }
 
 #[cfg(test)]

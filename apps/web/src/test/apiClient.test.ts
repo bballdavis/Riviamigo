@@ -480,7 +480,7 @@ describe('api client dashboard contracts', () => {
       detail: { requestId: 'request-123' },
     });
     expect(consoleWarn).toHaveBeenCalledWith(
-      expect.stringContaining('[Riviamigo client] api.request_failed:'),
+      expect.stringContaining('[riviamigo][WARN] api: api.request_failed'),
       expect.objectContaining({
         event: 'api.request_failed',
         path: '/v1/external/basemap/config',

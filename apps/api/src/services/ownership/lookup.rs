@@ -171,8 +171,16 @@ pub async fn lookup_json(
             return Err(error);
         }
     };
+    let status = response.status().as_u16();
     let bytes = read_response_limited(response, 2 * 1024 * 1024, "Vehicle lookup").await?;
     connections::record_success(pool, id).await;
+    tracing::debug!(
+        provider = id,
+        status,
+        bytes = bytes.len(),
+        duration_ms = started.elapsed().as_millis() as u64,
+        "vehicle lookup completed"
+    );
     // The provider answers "no matches" with the JSON literal `null`.
     match serde_json::from_slice(&bytes) {
         Ok(value) => Ok(value),

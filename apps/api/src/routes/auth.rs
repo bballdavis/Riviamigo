@@ -230,6 +230,8 @@ async fn begin_oidc(
         target = "auth.oidc",
         stage = "start",
         link = link_user.is_some(),
+        user_id = link_user.as_ref().map(tracing::field::display),
+        invitation_id = invitation_id.as_ref().map(tracing::field::display),
         "OIDC flow started"
     );
     let s = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
@@ -1565,6 +1567,11 @@ async fn refresh_from_cookie(
     let access_token =
         issue_session_access_token(user_id, default_vehicle_id, Some(sid), &state.jwt_keys)?;
     tx.commit().await?;
+    tracing::debug!(
+        session_id = %sid,
+        user_id = %user_id,
+        "access token refreshed"
+    );
 
     let max_age = 30 * 24 * 3600;
     let cookie = refresh_cookie(
@@ -1852,6 +1859,8 @@ async fn update_preferences(
         ));
     }
 
+    let units_updated = body.units.is_some();
+    let theme_updated = body.theme.is_some();
     let theme = body.theme.map(normalize_theme_payload).transpose()?;
 
     if let Some(units) = body.units {
@@ -1943,6 +1952,12 @@ async fn update_preferences(
         .await?;
     }
 
+    tracing::debug!(
+        user_id = %auth.user_id,
+        units_updated,
+        theme_updated,
+        "preferences updated"
+    );
     get_preferences(State(state), auth).await
 }
 
@@ -1963,6 +1978,7 @@ async fn update_map_style(
     .bind(&body.map_style)
     .execute(&state.pool)
     .await?;
+    tracing::debug!(user_id = %auth.user_id, "map style updated");
     Ok(Json(MapStyleResponse {
         map_style: body.map_style,
     }))
@@ -1982,6 +1998,11 @@ async fn update_ownership_preference(
     .bind(body.ownership_enabled)
     .execute(&state.pool)
     .await?;
+    tracing::debug!(
+        user_id = %auth.user_id,
+        ownership_enabled = body.ownership_enabled,
+        "ownership preference updated"
+    );
     Ok(Json(body))
 }
 
@@ -2002,6 +2023,7 @@ async fn update_overview_view(
     .bind(&body.overview_view)
     .execute(&state.pool)
     .await?;
+    tracing::debug!(user_id = %auth.user_id, "overview view updated");
     Ok(Json(body))
 }
 
@@ -2019,6 +2041,11 @@ async fn update_overview_map_expanded(
     .bind(body.overview_map_expanded)
     .execute(&state.pool)
     .await?;
+    tracing::debug!(
+        user_id = %auth.user_id,
+        overview_map_expanded = body.overview_map_expanded,
+        "overview map expanded updated"
+    );
     Ok(Json(body))
 }
 
@@ -2066,6 +2093,7 @@ async fn update_chart_favorite(
     .bind(&body.chart_id)
     .execute(&state.pool)
     .await?;
+    tracing::debug!(user_id = %auth.user_id, "chart favorite updated");
 
     get_chart_favorites(State(state), auth).await
 }

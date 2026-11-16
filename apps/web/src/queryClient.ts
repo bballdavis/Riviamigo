@@ -9,7 +9,7 @@ import {
   type Query,
   type QueryKey,
 } from '@tanstack/react-query';
-import { reportClientError } from '@riviamigo/ui/lib/clientDiagnostics';
+import { clientLog, reportClientError } from '@riviamigo/ui/lib/clientDiagnostics';
 
 const QUERY_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_PERSISTED_CACHE_BYTES = 1_500_000;
@@ -47,6 +47,9 @@ export const queryClient = new QueryClient({
     },
   }),
   mutationCache: new MutationCache({
+    onSuccess: (_data, _variables, _context, mutation) => {
+      clientLog.debug('mutation', 'succeeded', { operation: mutationOperation(mutation) });
+    },
     onError: (error, _variables, _context, mutation) => {
       reportClientError(error, {
         event: 'mutation.failed',
@@ -96,6 +99,10 @@ export function hydrateQueryCacheForUser(userId: string) {
       return;
     }
     hydrate(queryClient, persisted.state);
+    clientLog.debug('query', 'cache restored from storage', {
+      count: persisted.state.queries.length,
+      age_ms: Date.now() - persisted.timestamp,
+    });
   } catch {
     if (typeof window !== 'undefined') window.localStorage.removeItem(cacheKey(userId));
   }

@@ -16,12 +16,8 @@ const BANNED_FIELD_ALIASES = new Map([
   ['err', 'error'],
   ['e', 'error'],
 ]);
-// The browser diagnostics seam and the opt-in websocket debug tool are the only
-// places allowed to write to the console.
-const CONSOLE_ALLOWLIST = new Set([
-  'packages/ui/src/lib/clientDiagnostics.ts',
-  'packages/hooks/src/useVehicleStatus.ts',
-]);
+// The browser diagnostics seam is the only place allowed to write to the console.
+const CONSOLE_ALLOWLIST = new Set(['packages/ui/src/lib/clientDiagnostics.ts']);
 const WEB_ROOTS = [
   'apps/web/src',
   'packages/ui/src',
@@ -159,6 +155,20 @@ export function consoleProblems(source) {
   return problems;
 }
 
+/** Message style for `clientLog.<level>('area', 'message', ...)` calls in browser code. */
+export function clientLogProblems(source) {
+  const problems = [];
+  for (const match of source.matchAll(/\bclientLog\.(trace|debug|info|warn|error)\(\s*'([^']*)'\s*,\s*'([^']*)'/g)) {
+    const [, , area, text] = match;
+    const line = lineOf(source, match.index);
+    if (!/^[a-z][a-z0-9_]*$/.test(area)) problems.push({ line, message: `clientLog area "${area}" should be a lowercase word` });
+    if (/[.!]$/.test(text)) problems.push({ line, message: `message "${text}" ends with punctuation` });
+    if (/^[A-Z][a-z]/.test(text)) problems.push({ line, message: `message "${text}" should start lowercase` });
+    if (/\$\{/.test(text)) problems.push({ line, message: `message "${text}" interpolates values; use fields instead` });
+  }
+  return problems;
+}
+
 export function loggingFailures(root) {
   const failures = [];
   const apiSource = join(root, 'apps/api/src');
@@ -176,10 +186,10 @@ export function loggingFailures(root) {
     const files = walk(join(root, directory), (file) => /\.(ts|tsx)$/.test(file) && !/\.(test|stories)\.[jt]sx?$/.test(file));
     for (const file of files) {
       const path = rel(root, file);
-      if (CONSOLE_ALLOWLIST.has(path)) continue;
-      for (const { line, message } of consoleProblems(readFileSync(file, 'utf8'))) {
-        failures.push(`${path}:${line}: ${message}`);
-      }
+      const source = readFileSync(file, 'utf8');
+      const problems = [...clientLogProblems(source)];
+      if (!CONSOLE_ALLOWLIST.has(path)) problems.push(...consoleProblems(source));
+      for (const { line, message } of problems) failures.push(`${path}:${line}: ${message}`);
     }
   }
   return failures;
@@ -193,5 +203,5 @@ if (invokedPath === fileURLToPath(import.meta.url)) {
     console.error(`Logging conventions (docs/architecture/logging.md) violated:\n${failures.map((f) => `- ${f}`).join('\n')}`);
     process.exit(1);
   }
-  console.log('Logging conventions passed: tracing message style, field names, sensitive-field ban, and stdout/console hygiene.');
+  console.log('Logging conventions passed: tracing and clientLog message style, field names, sensitive-field ban, and stdout/console hygiene.');
 }

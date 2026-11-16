@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { consoleProblems, stdoutProblems, subscriberProblems, tracingProblems } from './check-logging.mjs';
+import { clientLogProblems, consoleProblems, stdoutProblems, subscriberProblems, tracingProblems } from './check-logging.mjs';
 
 const messages = (source) => tracingProblems(source).map((problem) => problem.message);
 
@@ -55,4 +55,11 @@ test('reports a private tracing subscriber', () => {
 test('flags dotted event codes used as messages', () => {
   assert.match(messages('debug!(error = %e, "places.cache_write_failed");')[0], /event code/);
   assert.deepEqual(tracingProblems('debug!(error = %e, "places cache write failed");'), []);
+});
+
+test('checks clientLog message style', () => {
+  assert.deepEqual(clientLogProblems("clientLog.info('auth', 'signed in', { user_id });"), []);
+  assert.equal(clientLogProblems("clientLog.warn('auth', 'Signed in.');").length, 2);
+  assert.equal(clientLogProblems("clientLog.debug('Live Socket', 'open');").length, 1);
+  assert.equal(clientLogProblems("clientLog.info('auth', 'user ${id}');").length, 1);
 });

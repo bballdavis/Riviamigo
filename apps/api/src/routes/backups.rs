@@ -607,6 +607,7 @@ async fn upload_backup_artifact_admitted(
         Ok(artifact) => {
             tracing::info!(
                 run_id = %run_id,
+                user_id = %auth.user_id,
                 artifact_id = %artifact.id,
                 size_bytes = artifact.size_bytes,
                 "backup package import completed"
@@ -817,10 +818,18 @@ async fn preflight_restore(
     Json(body): Json<PreflightRestoreBody>,
 ) -> Result<Json<RestorePreflightResponse>, AppError> {
     require_admin(&state, auth.user_id).await?;
-    backup_service::run_recovery_operation(state.pool.clone(), async move {
+    let artifact_id = body.artifact_id;
+    let response = backup_service::run_recovery_operation(state.pool.clone(), async move {
         preflight_restore_admitted(state, body).await
     })
-    .await
+    .await?;
+    tracing::debug!(
+        user_id = %auth.user_id,
+        artifact_id = %artifact_id,
+        compatible = response.0.plan.compatible,
+        "restore preflight completed"
+    );
+    Ok(response)
 }
 
 async fn preflight_restore_admitted(

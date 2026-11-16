@@ -293,7 +293,7 @@ pub async fn update(
     message: impl Into<String>,
 ) -> Result<RestoreJob, AppError> {
     let mut job = read(config, id).await?;
-    tracing::debug!(job_id = %id, phase = ?phase, progress_percent = progress_percent.min(100), "restore phase entered");
+    tracing::info!(job_id = %id, phase = ?phase, progress_percent = progress_percent.min(100), "restore phase entered");
     job.phase = phase;
     job.progress_percent = progress_percent.min(100);
     job.message = message.into();
@@ -304,7 +304,9 @@ pub async fn update(
 
 pub async fn fail(config: &Config, id: Uuid, error: impl ToString) -> Result<(), AppError> {
     let mut job = read(config, id).await?;
-    let message = error.to_string();
+    // The message is stored on the job record and shown to the operator, and
+    // it can carry a child process's stderr, so credentials are masked.
+    let message = crate::logging::redact(&error.to_string()).into_owned();
     job.phase = RestorePhase::Failed;
     job.progress_percent = job.progress_percent.min(99);
     job.message = "Restore failed".into();
