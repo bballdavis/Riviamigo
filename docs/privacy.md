@@ -14,11 +14,13 @@ Vehicle ingestion diagnostics are off by default and can be enabled by an owner 
 
 Riviamigo still needs to communicate with services that make its features work:
 
-- **Rivian:** account authentication, vehicle telemetry, and vehicle-artwork requests. Artwork is retrieved through the same encrypted account session, mirrored onto persistent local storage, and then served only from Riviamigo cache URLs or a local placeholder. The browser retrieves cache bytes through the existing authenticated Riviamigo API and never contacts Rivian artwork hosts directly.
+- **Rivian:** account authentication, vehicle telemetry, and vehicle-artwork requests. Artwork is retrieved through the same encrypted account session, mirrored onto persistent local storage, and then served only from Riviamigo cache URLs or a local placeholder. The browser retrieves cache bytes through the existing authenticated Riviamigo API and never contacts Rivian artwork hosts directly. Loaded artwork is kept in the browser's IndexedDB so reloads do not download it again; it is removed when the vehicle no longer uses it and cleared when you sign out.
 - **Open-Meteo:** completed-drive weather enrichment. Riviamigo selects exact local route samples, then rounds provider coordinates to roughly 1 km by default, deduplicates them, randomizes their batch order, and sends the drive's UTC date span. Exact weather coordinates are an administrator option.
 - **OpenStreetMap Nominatim:** explicitly submitted search text or exact reverse-geocoding coordinates. Accuracy requires exact input. Requests are sent by the Riviamigo server, cached, and throttled; public mode does not autocomplete.
 - **OpenFreeMap/CARTO basemap resources:** exact tile coordinates reveal the requested map area. Style JSON, vector tiles, sprites, glyphs, or raster tiles are fetched by an authenticated Riviamigo server proxy, so providers see the server connection rather than each viewer's browser identity.
 - **Iconify:** explicit icon searches and missing icon resources, through the Riviamigo server proxy.
+- **U.S. Energy Information Administration:** a fixed request for national average gasoline prices, sent by the server at most daily while the Ownership page is in use. It carries no vehicle or account data, and an EIA API key only if an administrator saved one.
+- **fueleconomy.gov:** the year, make, model, and trim chosen when adding a comparison vehicle on the Ownership page, sent by the server.
 - **Your configured S3-compatible backup service:** backup uploads, only when you enable it.
 - **Your configured OIDC provider:** when SSO is enabled, Riviamigo sends the
   server-side authorization-code exchange and receives the claims required for

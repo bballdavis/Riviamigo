@@ -190,12 +190,14 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
         window_rr_closed: extract_closed(state, "/windowRearRightClosed/value"),
         // Not in the legacy vehicleState subscription; Parallax reports it.
         window_rear_closed: None,
-        gear_guard_locked: extract_bool(state, "/gearGuardLocked/value"),
+        // Rivian reports lock state as a string ("locked"/"unlocked"), like
+        // the door locks, so a strict boolean read never matched.
+        gear_guard_locked: extract_locked(state, "/gearGuardLocked/value"),
         gear_guard_video_status: extract_str(state, "/gearGuardVideoStatus/value")
             .map(String::from),
         wiper_fluid_low: extract_str(state, "/wiperFluidState/value")
             .map(|s| matches!(s.to_lowercase().as_str(), "low" | "empty" | "critical")),
-        brake_fluid_low: extract_bool(state, "/brakeFluidLow/value"),
+        brake_fluid_low: extract_low_warning(state, "/brakeFluidLow/value"),
         alarm_active: extract_str(state, "/alarmSoundStatus/value")
             .map(|s| matches!(s.to_lowercase().as_str(), "active" | "on" | "sounding")),
         service_mode: extract_str(state, "/serviceMode/value")
@@ -314,6 +316,19 @@ fn extract_i32(v: &Value, ptr: &str) -> Option<i32> {
 
 fn extract_bool(v: &Value, ptr: &str) -> Option<bool> {
     v.pointer(ptr)?.as_bool()
+}
+
+/// A warning flag that may arrive as a boolean or as a state string.
+fn extract_low_warning(v: &Value, ptr: &str) -> Option<bool> {
+    match v.pointer(ptr)? {
+        Value::Bool(value) => Some(*value),
+        Value::String(value) => match value.to_lowercase().as_str() {
+            "true" | "low" | "empty" | "critical" | "warning" => Some(true),
+            "false" | "ok" | "good" | "normal" | "full" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn extract_bool_like(v: &Value, ptr: &str) -> Option<bool> {
@@ -461,6 +476,30 @@ mod tests {
     fn connection_ack_returns_none() {
         let msg = r#"{"type":"connection_ack"}"#;
         assert!(parse_ws_message(msg, vid()).unwrap().is_none());
+    }
+
+    #[test]
+    fn gear_guard_lock_and_brake_fluid_accept_string_states() {
+        let parse = |gear: serde_json::Value, brake: serde_json::Value| {
+            let msg = serde_json::json!({
+                "type": "next",
+                "payload": { "data": { "vehicleState": {
+                    "gearGuardLocked": { "timeStamp": "2024-01-15T10:30:00Z", "value": gear },
+                    "brakeFluidLow": { "timeStamp": "2024-01-15T10:30:00Z", "value": brake }
+                }}}
+            })
+            .to_string();
+            parse_ws_message(&msg, vid()).unwrap().unwrap()
+        };
+        let ev = parse("locked".into(), "LOW".into());
+        assert_eq!(ev.gear_guard_locked, Some(true));
+        assert_eq!(ev.brake_fluid_low, Some(true));
+        let ev = parse("unlocked".into(), "GOOD".into());
+        assert_eq!(ev.gear_guard_locked, Some(false));
+        assert_eq!(ev.brake_fluid_low, Some(false));
+        let ev = parse(true.into(), false.into());
+        assert_eq!(ev.gear_guard_locked, Some(true));
+        assert_eq!(ev.brake_fluid_low, Some(false));
     }
 
     #[test]

@@ -27,12 +27,25 @@ import {
   resolveVehicleArtwork,
 } from '@riviamigo/hooks';
 
-afterEach(cleanup);
+const queryClients: QueryClient[] = [];
+
+function createQueryClient() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  queryClients.push(queryClient);
+  return queryClient;
+}
+
+// The protected-artwork queries reject asynchronously, and React Query
+// delivers results on a timer. Unmount, drop the queries, and let that timer
+// run while the DOM still exists, so no update lands after teardown.
+afterEach(async () => {
+  cleanup();
+  for (const queryClient of queryClients.splice(0)) queryClient.clear();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
 
 function renderArtwork(node: React.ReactNode) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  const queryClient = createQueryClient();
   return render(
     <QueryClientProvider client={queryClient}>{node}</QueryClientProvider>,
   );
@@ -137,7 +150,7 @@ describe('vehicle artwork fallback contract', () => {
       fallbackSource: '/vehicle-images/fallbacks/r1s/overview.webp',
       alt: 'Recovering Rivian',
     };
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryClient = createQueryClient();
     const { rerender } = render(
       <QueryClientProvider client={queryClient}>
         <AuthenticatedVehicleArtwork {...props} source="/first-api-artwork.webp" />
@@ -188,17 +201,17 @@ describe('vehicle artwork fallback contract', () => {
     }
   });
 
-  it('shows packaged artwork on the first render while protected artwork is pending', () => {
+  it('waits for pending protected artwork instead of flashing packaged artwork', () => {
     renderArtwork(
       <AuthenticatedVehicleArtwork
         source="/v1/vehicle-image-cache/00000000-0000-0000-0000-000000000000/overview.webp"
         fallbackSource="/vehicle-images/fallbacks/r1t/overview.webp"
         alt="Pending protected Rivian"
+        loadingIndicator={<span>Loading picture</span>}
       />,
     );
 
-    const image = screen.getByRole('img', { name: 'Pending protected Rivian' });
-    expect(image.getAttribute('src')).toBe('/vehicle-images/fallbacks/r1t/overview.webp');
-    expect(image.getAttribute('data-artwork-fallback')).toBe('true');
+    expect(screen.getByText('Loading picture')).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'Pending protected Rivian' })).toBeNull();
   });
 });

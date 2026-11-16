@@ -1,10 +1,12 @@
-import { useUpdateMapStyle } from '@riviamigo/hooks';
 import type { MapStylePreference } from '@riviamigo/types';
 import { SelectPicker } from '@riviamigo/ui/primitives';
 
-export function AppearanceSettings({ mapStyle }: { mapStyle: MapStylePreference }) {
-  const updateMapStyle = useUpdateMapStyle();
-
+/** Map style picker. The value is staged by the parent Appearance draft; this control does not save. */
+export function AppearanceSettings({ mapStyle, onChange, disabled }: {
+  mapStyle: MapStylePreference;
+  onChange: (value: MapStylePreference) => void;
+  disabled: boolean;
+}) {
   return (
     <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
           <div>
@@ -13,8 +15,8 @@ export function AppearanceSettings({ mapStyle }: { mapStyle: MapStylePreference 
           </div>
           <SelectPicker
             value={mapStyle}
-            onChange={(value) => updateMapStyle.mutate(value as MapStylePreference)}
-            disabled={updateMapStyle.isPending}
+            onChange={(value) => onChange(value as MapStylePreference)}
+            disabled={disabled}
             aria-label="Map style"
             size="sm"
             className="w-full sm:w-52"
@@ -28,7 +30,6 @@ export function AppearanceSettings({ mapStyle }: { mapStyle: MapStylePreference 
               { value: '3d', label: '3D (Liberty)' },
             ]}
           />
-          {updateMapStyle.isError ? <p role="alert" className="text-xs text-status-danger sm:col-span-2">Unable to save map style.</p> : null}
     </div>
   );
 }

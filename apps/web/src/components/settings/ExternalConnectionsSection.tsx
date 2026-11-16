@@ -8,16 +8,24 @@ import type {
   UpdateExternalConnectionBody,
 } from '@riviamigo/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker, Switch } from '@riviamigo/ui/primitives';
-import { ExternalLink, RefreshCw, Save, ShieldOff, Trash2 } from 'lucide-react';
+import { ExternalLink, RefreshCw, ShieldOff, Trash2 } from 'lucide-react';
 import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
 import { useReleaseCheckStatus } from '../../hooks/useGithubReleaseCheck';
 import { RELEASES_URL } from '../../lib/releaseCheck';
+import { useSettingsDraft, useSettingsLeaveGuard } from '../../features/settings/drafts/SettingsDraftProvider';
+import { useStagedValue } from '../../features/settings/drafts/useStagedValue';
+import { saveFailure } from '../../features/settings/drafts/saveFailure';
+import { SettingsConfirmationDialog, type SettingsConfirmation } from '../../features/settings/SettingsConfirmationDialog';
 
-const CONNECTION_QUERY_KEY = ['external-connections'] as const;
+const CONNECTION_QUERY_KEY = queryKeys.externalConnections.all;
 const GITHUB_RELEASES_ID = 'github_releases';
+/** Ownership responses carry the fuel-price and vehicle-lookup connection state. */
+const OWNERSHIP_QUERY_KEY = ['vehicles', 'ownership'] as const;
+const OWNERSHIP_CONNECTION_IDS = new Set(['fuel_prices', 'vehicle_lookup']);
 
 export function ExternalConnectionsSection() {
   const queryClient = useQueryClient();
+  const requestLeave = useSettingsLeaveGuard();
   const connections = useQuery({
     queryKey: CONNECTION_QUERY_KEY,
     queryFn: () => api.getExternalConnections(),
@@ -29,12 +37,14 @@ export function ExternalConnectionsSection() {
     onSuccess: (data) => {
       queryClient.setQueryData(CONNECTION_QUERY_KEY, data);
       void queryClient.invalidateQueries({ queryKey: BASEMAP_CONFIG_QUERY_KEY });
+      void queryClient.invalidateQueries({ queryKey: OWNERSHIP_QUERY_KEY });
     },
   });
 
   const canManage = connections.data?.can_manage ?? false;
   const items = connections.data?.connections ?? [];
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
+  const [optionalConfirmation, setOptionalConfirmation] = React.useState<SettingsConfirmation | null>(null);
   const releaseCheckSettings = useQuery({
     queryKey: queryKeys.updateCheck.current,
     queryFn: () => api.getUpdateCheckSettings(),
@@ -66,11 +76,12 @@ export function ExternalConnectionsSection() {
                 iconLeft={<ShieldOff className="h-3.5 w-3.5" />}
                 loading={disableOptional.isPending}
                 className="shrink-0"
-                onClick={() => {
-                  if (window.confirm('Disable every optional external connection? Rivian vehicle connectivity remains configured, but weather, geocoding, basemaps, and Iconify will stop.')) {
-                    disableOptional.mutate();
-                  }
-                }}
+                onClick={() => setOptionalConfirmation({
+                  title: 'Disable every optional external connection?',
+                  description: 'Rivian vehicle connectivity remains configured, but weather, geocoding, basemaps, Iconify, fuel prices, and vehicle lookup will stop.',
+                  confirmLabel: 'Disable optional',
+                  run: () => disableOptional.mutateAsync(),
+                })}
               >
                 Disable optional
               </Button>
@@ -113,7 +124,7 @@ export function ExternalConnectionsSection() {
                 <button
                   key={connection.id}
                   type="button"
-                  onClick={() => setSelectedId(connection.id)}
+                  onClick={() => requestLeave(() => setSelectedId(connection.id))}
                   className={`min-w-44 rounded-xl border px-3 py-2.5 text-left transition lg:min-w-0 ${selectedConnection ? 'border-accent bg-accent/10' : 'border-border bg-bg-elevated/30 hover:bg-bg-elevated/60'}`}
                 >
                   <span className="flex items-center justify-between gap-2">
@@ -126,7 +137,7 @@ export function ExternalConnectionsSection() {
             })}
             <button
               type="button"
-              onClick={() => setSelectedId(GITHUB_RELEASES_ID)}
+              onClick={() => requestLeave(() => setSelectedId(GITHUB_RELEASES_ID))}
               className={`min-w-44 rounded-xl border px-3 py-2.5 text-left transition lg:min-w-0 ${showReleases ? 'border-accent bg-accent/10' : 'border-border bg-bg-elevated/30 hover:bg-bg-elevated/60'}`}
             >
               <span className="flex items-center justify-between gap-2">
@@ -137,17 +148,25 @@ export function ExternalConnectionsSection() {
             </button>
           </nav>
           {showReleases ? <GitHubReleasesCard canManage={canManage} connectionsLoaded={connections.isSuccess} /> : null}
-          {selected ? <ConnectionCard connection={selected} canManage={canManage} onUpdated={(data) => queryClient.setQueryData(CONNECTION_QUERY_KEY, data)} /> : null}
+          {selected ? <ConnectionCard key={selected.id} connection={selected} canManage={canManage} onUpdated={(data) => queryClient.setQueryData(CONNECTION_QUERY_KEY, data)} /> : null}
         </div>
+      ) : null}
+      {optionalConfirmation ? (
+        <SettingsConfirmationDialog confirmation={optionalConfirmation} onClose={() => setOptionalConfirmation(null)} />
       ) : null}
     </div>
   );
 }
 
+/** Compares the two release-check fields; a null value (not loaded yet) only equals null. */
+function sameReleaseSettings(left: UpdateCheckSettings | null, right: UpdateCheckSettings | null) {
+  if (!left || !right) return left === right;
+  return left.enabled === right.enabled && left.frequency === right.frequency;
+}
+
 function GitHubReleasesCard({ canManage, connectionsLoaded }: { canManage: boolean; connectionsLoaded: boolean }) {
   const queryClient = useQueryClient();
   const releaseStatus = useReleaseCheckStatus();
-  const [updateCheckMessage, setUpdateCheckMessage] = React.useState<string | null>(null);
   const updateCheckSettings = useQuery({
     queryKey: queryKeys.updateCheck.current,
     queryFn: () => api.getUpdateCheckSettings(),
@@ -161,25 +180,31 @@ function GitHubReleasesCard({ canManage, connectionsLoaded }: { canManage: boole
     staleTime: 5 * 60_000,
     retry: false,
   });
+  const staged = useStagedValue<UpdateCheckSettings | null>(updateCheckSettings.data ?? null, sameReleaseSettings);
+  const releaseSettings = staged.value;
+  const setReleaseSettings = staged.setValue;
   const updateCheckMutation = useMutation({
     mutationFn: (settings: UpdateCheckSettings) => api.updateUpdateCheckSettings(settings),
-    onMutate: async (settings) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.updateCheck.current });
-      const previous = queryClient.getQueryData<UpdateCheckSettings>(queryKeys.updateCheck.current);
-      queryClient.setQueryData(queryKeys.updateCheck.current, settings);
-      setUpdateCheckMessage(null);
-      return { previous };
-    },
     onSuccess: (settings) => {
       queryClient.setQueryData(queryKeys.updateCheck.current, settings);
-      setUpdateCheckMessage('GitHub release check settings saved.');
-    },
-    onError: (_error, _settings, context) => {
-      if (context?.previous) queryClient.setQueryData(queryKeys.updateCheck.current, context.previous);
-      setUpdateCheckMessage('GitHub release check settings could not be saved. The previous settings remain active.');
     },
   });
-  const releaseSettings = updateCheckSettings.data;
+  const { saving } = useSettingsDraft('github-release-checks', {
+    isDirty: staged.isDirty,
+    save: saveReleaseSettings,
+    discard: staged.reset,
+  });
+
+  async function saveReleaseSettings() {
+    if (!releaseSettings) throw new Error('Release check settings are still loading. Try again.');
+    const payload: UpdateCheckSettings = { enabled: releaseSettings.enabled, frequency: releaseSettings.frequency };
+    try {
+      await updateCheckMutation.mutateAsync(payload);
+    } catch {
+      throw new Error('GitHub release check settings could not be saved. The previous settings remain active.');
+    }
+    staged.commit(payload);
+  }
   const releaseStatusMessage = updateCheckSettings.data?.enabled && (
     appVersion.isError || !appVersion.data?.version || appVersion.data.version === 'unknown'
   )
@@ -220,12 +245,9 @@ function GitHubReleasesCard({ canManage, connectionsLoaded }: { canManage: boole
               </div>
               <Switch
                 checked={releaseSettings?.enabled ?? false}
-                onChange={(enabled) => updateCheckMutation.mutate({
-                  enabled,
-                  frequency: releaseSettings?.frequency ?? 'daily',
-                })}
+                onChange={(enabled) => setReleaseSettings((current) => (current ? { ...current, enabled } : current))}
                 aria-label="Enable GitHub release checks"
-                disabled={!canManage || updateCheckSettings.isLoading || updateCheckSettings.isError || updateCheckMutation.isPending}
+                disabled={!canManage || updateCheckSettings.isLoading || updateCheckSettings.isError || saving}
               />
             </div>
 
@@ -238,12 +260,11 @@ function GitHubReleasesCard({ canManage, connectionsLoaded }: { canManage: boole
                 <SelectPicker
                   className="w-full"
                   value={releaseSettings.frequency}
-                  onChange={(frequency) => updateCheckMutation.mutate({
-                    enabled: releaseSettings.enabled,
-                    frequency: frequency as UpdateCheckSettings['frequency'],
-                  })}
+                  onChange={(frequency) => setReleaseSettings((current) => (
+                    current ? { ...current, frequency: frequency as UpdateCheckSettings['frequency'] } : current
+                  ))}
                   aria-label="GitHub release check frequency"
-                  disabled={!canManage || updateCheckMutation.isPending}
+                  disabled={!canManage || saving}
                   options={[
                     { value: 'hourly', label: 'Hourly' },
                     { value: 'daily', label: 'Daily' },
@@ -270,7 +291,6 @@ function GitHubReleasesCard({ canManage, connectionsLoaded }: { canManage: boole
                 ) : null}
               </div>
             ) : null}
-            {updateCheckMessage ? <p role="status" className="text-xs text-fg-tertiary">{updateCheckMessage}</p> : null}
             {connectionsLoaded && !canManage ? (
               <p className="text-xs text-fg-tertiary">All signed-in users can view this status. An administrator controls the installation-wide setting.</p>
             ) : null}
@@ -297,23 +317,34 @@ function ConnectionCard({
   canManage: boolean;
   onUpdated: (data: Awaited<ReturnType<typeof api.getExternalConnections>>) => void;
 }) {
-  const [draft, setDraft] = React.useState<UpdateExternalConnectionBody>(() => toDraft(connection));
+  const queryClient = useQueryClient();
+  // Saved baseline follows the server; the staged draft keeps edits through refetches.
+  const savedDraft = React.useMemo(() => toDraft(connection), [connection]);
+  const staged = useStagedValue<UpdateExternalConnectionBody>(savedDraft);
+  const draft = staged.value;
+  const setDraft = staged.setValue;
   const [apiKey, setApiKey] = React.useState('');
   const [isReplacingApiKey, setIsReplacingApiKey] = React.useState(false);
   const [isClearingApiKey, setIsClearingApiKey] = React.useState(false);
   const [bearerToken, setBearerToken] = React.useState('');
+  // Latest typed secrets, read after an awaited save to tell whether they changed since submit.
+  const apiKeyRef = React.useRef(apiKey);
+  apiKeyRef.current = apiKey;
+  const bearerTokenRef = React.useRef(bearerToken);
+  bearerTokenRef.current = bearerToken;
   const [message, setMessage] = React.useState<string | null>(null);
   const [previewDataUrl, setPreviewDataUrl] = React.useState<string | null>(null);
-  const queryClient = useQueryClient();
-
-  React.useEffect(() => {
-    setDraft(toDraft(connection));
-    setApiKey('');
-    setIsReplacingApiKey(false);
-    setIsClearingApiKey(false);
-    setBearerToken('');
-    setPreviewDataUrl(null);
-  }, [connection]);
+  const [confirmation, setConfirmation] = React.useState<SettingsConfirmation | null>(null);
+  // A secret counts (and is sent) only while its field is on screen: switching
+  // the mode or provider away from it must not save a hidden key.
+  const draftActive = draft.enabled && draft.mode !== 'disabled';
+  const apiKeyShown = draft.mode === 'custom'
+    || (connection.id === 'basemap' && draftActive && (draft.basemap_provider ?? 'auto') !== 'openfreemap')
+    || (connection.id === 'fuel_prices' && draftActive);
+  const bearerShown = draft.mode === 'custom';
+  const pendingApiKey = apiKeyShown ? apiKey.trim() : '';
+  const pendingBearerToken = bearerShown ? bearerToken.trim() : '';
+  const hasSecretEdits = pendingApiKey !== '' || pendingBearerToken !== '';
 
   const update = useMutation({
     mutationFn: (body: UpdateExternalConnectionBody) => api.updateExternalConnection(connection.id, body),
@@ -322,12 +353,15 @@ function ConnectionCard({
       if (connection.id === 'basemap') {
         await queryClient.invalidateQueries({ queryKey: BASEMAP_CONFIG_QUERY_KEY });
       }
-      setApiKey('');
-      setIsReplacingApiKey(false);
-      setIsClearingApiKey(false);
-      setMessage('Saved.');
+      if (OWNERSHIP_CONNECTION_IDS.has(connection.id)) {
+        void queryClient.invalidateQueries({ queryKey: OWNERSHIP_QUERY_KEY });
+      }
     },
-    onError: (error) => setMessage(error instanceof Error ? error.message : 'Could not save connection.'),
+  });
+  const { saving } = useSettingsDraft(`external-connection:${connection.id}`, {
+    isDirty: staged.isDirty || hasSecretEdits,
+    save: saveDraft,
+    discard: discardDraft,
   });
   const test = useMutation({
     mutationFn: (body: UpdateExternalConnectionBody) => api.testExternalConnection(connection.id, body),
@@ -354,25 +388,72 @@ function ConnectionCard({
   const basemapProviderChanged = connection.id === 'basemap'
     && (draft.basemap_provider ?? 'auto') !== (connection.basemap_provider ?? 'auto');
 
-  function save() {
-    if (!active && connection.enabled && !window.confirm(`Disable ${connection.name}? ${connection.disabled_effect}`)) return;
-    update.mutate({
-      ...draft,
-      ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
-      ...(bearerToken.trim() ? { bearer_token: bearerToken.trim() } : {}),
+  /**
+   * Stages a mode. Turning off a live connection is confirmed here, before it is staged, so the page
+   * save never opens a dialog on top of another one (such as the unsaved-changes prompt).
+   */
+  function chooseMode(value: ExternalConnectionMode) {
+    const stage = () => setDraft((current) => ({ ...current, mode: value, enabled: value !== 'disabled' }));
+    if (value === 'disabled' && connection.enabled) {
+      setConfirmation({
+        title: `Disable ${connection.name}?`,
+        description: connection.disabled_effect,
+        confirmLabel: 'Disable',
+        run: async () => stage(),
+      });
+      return;
+    }
+    stage();
+  }
+
+  /** Save for the page bar. Rejects with a short message when the server refuses the change. */
+  async function saveDraft() {
+    const submitted = draft;
+    const submittedApiKey = apiKey;
+    const submittedBearerToken = bearerToken;
+    const response = await update.mutateAsync({
+      ...submitted,
+      ...(pendingApiKey ? { api_key: pendingApiKey } : {}),
+      ...(pendingBearerToken ? { bearer_token: pendingBearerToken } : {}),
+      ...(isReplacingApiKey ? { clear_api_key: false } : {}),
+    }).catch((error: unknown) => {
+      throw saveFailure(error, 'Could not save connection.');
     });
+    const saved = response.connections.find((item) => item.id === connection.id);
+    // Edits made while the request was in flight stay staged; only the submitted part is adopted.
+    staged.commit(saved ? toDraft(saved) : submitted, submitted);
+    // A secret is cleared only if the user has not typed a new one since submitting.
+    if (apiKeyRef.current === submittedApiKey) {
+      setApiKey('');
+      setIsReplacingApiKey(false);
+      setIsClearingApiKey(false);
+    }
+    if (bearerTokenRef.current === submittedBearerToken) setBearerToken('');
+  }
+
+  function discardDraft() {
+    staged.reset();
+    setApiKey('');
+    setBearerToken('');
+    setIsReplacingApiKey(false);
+    setIsClearingApiKey(false);
+    setPreviewDataUrl(null);
   }
 
   function testDraft() {
     test.mutate({
       ...draft,
-      ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
-      ...(bearerToken.trim() ? { bearer_token: bearerToken.trim() } : {}),
+      ...(pendingApiKey ? { api_key: pendingApiKey } : {}),
+      ...(pendingBearerToken ? { bearer_token: pendingBearerToken } : {}),
     });
   }
 
+  /** One-shot action: clears the stored key from the saved settings, leaving other staged edits alone. */
   function clearStoredBasemapKey() {
-    update.mutate({ ...draft, basemap_provider: 'auto', clear_api_key: true });
+    update.mutate({ ...savedDraft, basemap_provider: 'auto', clear_api_key: true }, {
+      onSuccess: () => setIsClearingApiKey(false),
+      onError: (error) => setMessage(error instanceof Error ? error.message : 'Could not clear the stored key.'),
+    });
   }
 
   return (
@@ -422,7 +503,12 @@ function ConnectionCard({
                   size="sm"
                   loading={purgeCache.isPending}
                   onClick={() => {
-                    if (window.confirm(`Purge the ${connection.name} cache? The next matching request may contact the provider again.`)) purgeCache.mutate();
+                    setConfirmation({
+                      title: `Purge the ${connection.name} cache?`,
+                      description: 'The next matching request may contact the provider again.',
+                      confirmLabel: 'Purge cache',
+                      run: () => purgeCache.mutateAsync(),
+                    });
                   }}
                 >
                   Purge cache
@@ -434,13 +520,14 @@ function ConnectionCard({
         ) : null}
 
         {connection.editable ? (
+          <fieldset disabled={saving} className="contents">
           <div className="grid gap-3 rounded-xl border border-border p-3">
             <div className="grid items-start gap-3 sm:grid-cols-2">
               <Field label="Mode">
                 <SelectPicker
                   className="w-full"
                   value={draft.mode}
-                  onChange={(value) => setDraft((current) => ({ ...current, mode: value as ExternalConnectionMode, enabled: value !== 'disabled' }))}
+                  onChange={(value) => chooseMode(value as ExternalConnectionMode)}
                   aria-label={`${connection.name} mode`}
                   options={modeOptions(connection.id)}
                 />
@@ -505,10 +592,7 @@ function ConnectionCard({
                       className="h-7 w-7 px-0"
                       aria-label="Replace stored CARTO Basemap key"
                       iconLeft={<RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />}
-                      onClick={() => {
-                        setDraft((current) => ({ ...current, clear_api_key: false }));
-                        setIsReplacingApiKey(true);
-                      }}
+                      onClick={() => setIsReplacingApiKey(true)}
                     />
                     <Button
                       type="button"
@@ -548,9 +632,20 @@ function ConnectionCard({
                 </Field>
               )
             ) : null}
+            {connection.id === 'fuel_prices' && active && !custom ? (
+              <Field label={`EIA API key${connection.has_api_key ? ' (stored)' : ''}`}>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  placeholder={connection.has_api_key ? 'Leave blank to keep stored key' : 'Optional. The shared demo key is used when blank'}
+                  className="h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                />
+              </Field>
+            ) : null}
 
             <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" iconLeft={<Save className="h-3.5 w-3.5" />} loading={update.isPending} onClick={save}>Save</Button>
               {active && !(
                 connection.id === 'basemap'
                 && connection.has_api_key
@@ -565,6 +660,7 @@ function ConnectionCard({
               </div>
             ) : null}
           </div>
+          </fieldset>
         ) : null}
 
         {!connection.editable && canManage && active ? (
@@ -583,6 +679,7 @@ function ConnectionCard({
           {connection.attribution_url ? <ExternalAnchor href={connection.attribution_url}>{connection.attribution ?? 'Attribution'}</ExternalAnchor> : null}
         </div>
       </CardContent>
+      {confirmation ? <SettingsConfirmationDialog confirmation={confirmation} onClose={() => setConfirmation(null)} /> : null}
     </Card>
   );
 }

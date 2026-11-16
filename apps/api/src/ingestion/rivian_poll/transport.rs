@@ -3,7 +3,7 @@
 //! This module owns request construction and response-envelope handling only.
 //! Token refresh and vehicle-specific retry policy remain in the parent module.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -30,10 +30,21 @@ struct GqlErrorExtensions {
     code: Option<String>,
 }
 
+/// Messages in source order, each followed by its `extensions.code` when
+/// Rivian sends one, so a log line shows whether an error was classified.
 fn fmt_errors(errors: &[GqlError]) -> String {
     errors
         .iter()
-        .map(|error| error.message.as_str())
+        .map(|error| {
+            match error
+                .extensions
+                .as_ref()
+                .and_then(|value| value.code.as_deref())
+            {
+                Some(code) => format!("{} [{code}]", error.message),
+                None => error.message.clone(),
+            }
+        })
         .collect::<Vec<_>>()
         .join("; ")
 }
@@ -42,6 +53,35 @@ fn fmt_errors(errors: &[GqlError]) -> String {
 #[derive(Debug, thiserror::Error)]
 #[error("Rivian API: authentication required")]
 pub struct AuthError;
+
+/// Typed failures of one Rivian GraphQL request, so callers can tell a
+/// network failure, an HTTP status, and a GraphQL error apart without parsing
+/// messages. The messages are for logs only: GraphQL error text is provider
+/// output and may name the vehicle.
+#[derive(Debug, thiserror::Error)]
+pub enum RequestError {
+    #[error("Rivian {operation} request could not be sent")]
+    Send {
+        operation: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("Rivian {operation} request failed: HTTP {status}")]
+    HttpStatus {
+        operation: String,
+        status: reqwest::StatusCode,
+    },
+    #[error("Rivian {operation} response could not be read")]
+    Read {
+        operation: String,
+        #[source]
+        source: crate::errors::AppError,
+    },
+    #[error("Rivian {operation} request returned errors: {details}")]
+    Graphql { operation: String, details: String },
+    #[error("Rivian {operation} request returned no data")]
+    NoData { operation: String },
+}
 
 fn errors_indicate_auth(errors: &[GqlError]) -> bool {
     errors.iter().any(|error| {
@@ -86,13 +126,20 @@ pub async fn gql_request<T: for<'de> Deserialize<'de>>(
         request = request.bearer_auth(&tokens.access_token);
     }
 
-    let response = request.send().await.context("HTTP request failed")?;
+    let response = request.send().await.map_err(|source| RequestError::Send {
+        operation: operation.to_owned(),
+        source,
+    })?;
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
         return Err(anyhow!(AuthError));
     }
     if !status.is_success() {
-        return Err(anyhow!("Rivian API: HTTP {status}"));
+        return Err(RequestError::HttpStatus {
+            operation: operation.to_owned(),
+            status,
+        }
+        .into());
     }
 
     let envelope: GqlEnvelope<T> = crate::services::outbound::read_json(
@@ -100,20 +147,31 @@ pub async fn gql_request<T: for<'de> Deserialize<'de>>(
         crate::services::outbound::operator_security()?.rivian_max_response_bytes,
         "Rivian provider",
     )
-    .await?;
+    .await
+    .map_err(|source| RequestError::Read {
+        operation: operation.to_owned(),
+        source,
+    })?;
 
     if let Some(errors) = &envelope.errors {
         if !errors.is_empty() {
             if errors_indicate_auth(errors) {
                 return Err(anyhow!(AuthError));
             }
-            return Err(anyhow!("Rivian GQL errors: {}", fmt_errors(errors)));
+            return Err(RequestError::Graphql {
+                operation: operation.to_owned(),
+                details: fmt_errors(errors),
+            }
+            .into());
         }
     }
 
-    envelope
-        .data
-        .ok_or_else(|| anyhow!("Rivian API: empty data for {operation}"))
+    envelope.data.ok_or_else(|| {
+        RequestError::NoData {
+            operation: operation.to_owned(),
+        }
+        .into()
+    })
 }
 
 #[cfg(test)]
@@ -153,5 +211,17 @@ mod tests {
         ];
 
         assert_eq!(fmt_errors(&errors), "first; second");
+    }
+
+    #[test]
+    fn formats_graphql_error_codes_when_present() {
+        let errors = vec![GqlError {
+            message: "User is unauthenticated".into(),
+            extensions: Some(GqlErrorExtensions {
+                code: Some("FORBIDDEN".into()),
+            }),
+        }];
+
+        assert_eq!(fmt_errors(&errors), "User is unauthenticated [FORBIDDEN]");
     }
 }

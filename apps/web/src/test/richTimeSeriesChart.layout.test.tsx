@@ -2,7 +2,7 @@ import React from 'react';
 import { render, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { carryForwardTooltipValues, formatAxisDateForSpan, formatAxisDateValuesForScale, formatChartNumber, getAdaptiveDecimalPrecision, getCalendarDateSplits, getResponsiveCalendarTickMaximum, isZoomedXRange, RichTimeSeriesChart } from '@riviamigo/ui/charts';
-import { buildRichTimeSeriesAlignedData } from '../../../../packages/ui/src/charts/RichTimeSeriesChart';
+import { buildRichTimeSeriesAlignedData, getPlottedXExtent } from '../../../../packages/ui/src/charts/RichTimeSeriesChart';
 
 describe('RichTimeSeriesChart aligned data', () => {
   it('drops invalid x values and reorders every series with the same stable permutation', () => {
@@ -14,6 +14,82 @@ describe('RichTimeSeriesChart aligned data', () => {
         false,
       ),
     ).toEqual([[1, 2, 3], [10, 20, 30]]);
+  });
+
+  const hour = 3600;
+  const zigzagPoints = Array.from({ length: 9 }, (_, index) => ({ ts: 1_800_000_000 + index * hour }));
+  const zigzag = [0, 100, 0, 100, 0, 100, 0, 100, 0];
+  const built = (
+    series: Parameters<typeof buildRichTimeSeriesAlignedData>[1],
+    options?: Parameters<typeof buildRichTimeSeriesAlignedData>[4],
+    points = zigzagPoints,
+  ) => buildRichTimeSeriesAlignedData(points, series, '6h', true, options);
+
+  it('smooths lines and areas but leaves bars, points and steps on their recorded values', () => {
+    const [, line, area, bar, scatter, step, optedOut] = built([
+      { key: 'line', label: 'Line', values: zigzag },
+      { key: 'area', label: 'Area', values: zigzag, mode: 'area' },
+      { key: 'bar', label: 'Bar', values: zigzag, mode: 'bar' },
+      { key: 'scatter', label: 'Scatter', values: zigzag, mode: 'scatter' },
+      { key: 'step', label: 'Step', values: zigzag, interpolation: 'step' },
+      { key: 'raw', label: 'Raw', values: zigzag, filterable: false },
+    ]);
+    expect(line![4]).toBeGreaterThan(20);
+    expect(line![4]).toBeLessThan(80);
+    expect(area).toEqual(line);
+    expect(bar).toEqual(zigzag);
+    expect(scatter).toEqual(zigzag);
+    expect(step).toEqual(zigzag);
+    expect(optedOut).toEqual(zigzag);
+  });
+
+  it('follows the chart-level mode and step setting for series that set neither', () => {
+    const series = [{ key: 'a', label: 'A', values: zigzag }];
+    expect(built(series, { mode: 'bar' })[1]).toEqual(zigzag);
+    expect(built(series, { stepInterpolation: true })[1]).toEqual(zigzag);
+    expect(built(series, { mode: 'area' })[1]).not.toEqual(zigzag);
+  });
+
+  it('smooths in time order even when the points arrive unsorted', () => {
+    const order = [3, 0, 7, 1, 8, 2, 5, 4, 6];
+    const shuffled = built(
+      [{ key: 'a', label: 'A', values: order.map((index) => zigzag[index]!) }],
+      undefined,
+      order.map((index) => zigzagPoints[index]!),
+    );
+    expect(shuffled).toEqual(built([{ key: 'a', label: 'A', values: zigzag }]));
+  });
+
+  it('smooths across empty slots only when the chart connects gaps', () => {
+    const sparse = [0, null, 100, null, 0, null, 100, null, 0];
+    const series = [{ key: 'a', label: 'A', values: sparse }];
+    expect(built(series)[1]).toEqual(sparse);
+    const joined = built(series, { connectGaps: true })[1] as Array<number | null>;
+    expect(joined[1]).toBeNull();
+    expect(joined[4]!).toBeGreaterThan(0);
+  });
+});
+
+describe('getPlottedXExtent', () => {
+  const series = [
+    { key: 'power', label: 'Power' },
+    { key: 'speed', label: 'Speed' },
+    { key: 'tip', label: 'Tip', tooltipOnly: true },
+  ];
+  const aligned = [
+    [0, 10, 20, 30, 40],
+    [null, 5, 6, null, null],
+    [null, null, 30, 31, null],
+    [1, 1, 1, 1, 1],
+  ] as never;
+
+  it('runs from the first to the last point a drawn series has a value', () => {
+    expect(getPlottedXExtent(aligned, series)).toEqual([10, 30]);
+  });
+
+  it('ignores hidden series and falls back to the whole range when nothing is drawn', () => {
+    expect(getPlottedXExtent(aligned, series, new Set(['speed']))).toEqual([10, 20]);
+    expect(getPlottedXExtent(aligned, series, new Set(['power', 'speed']))).toEqual([0, 40]);
   });
 });
 

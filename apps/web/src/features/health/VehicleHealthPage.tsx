@@ -59,6 +59,7 @@ import {
   type BadgeProps,
   FrunkIcon,
   LiftgateIcon,
+  AssistantWave,
 } from '@riviamigo/ui/primitives';
 import {
   DEFAULT_TARGET_TIRE_PRESSURE_PSI,
@@ -73,6 +74,7 @@ import {
   formatMassKg,
   getUnitPreferences,
 } from '@riviamigo/ui/lib/utils';
+import { useUnitPreferencesVersion } from '@riviamigo/ui/lib/useUnitPreferencesVersion';
 import {
   buildAvailabilityTooltip,
   formatAvailabilityLastUpdated,
@@ -116,8 +118,13 @@ export function VehicleHealthContent() {
   const diagnostics = summarizeDiagnostics(status);
   const extended = data?.extended_telemetry;
   const [unitMode, setUnitMode] = useState(() => getUnitPreferences().mode);
+  // Unit formatters read preferences at render time, so any preference change
+  // (not just the mode) has to re-render this page.
+  useUnitPreferencesVersion();
   useEffect(() => {
-    const handleUnits = () => setUnitMode(getUnitPreferences().mode);
+    const handleUnits = () => {
+      setUnitMode(getUnitPreferences().mode);
+    };
     window.addEventListener('rm-units-change', handleUnits as EventListener);
     window.addEventListener('storage', handleUnits);
     return () => {
@@ -126,7 +133,14 @@ export function VehicleHealthContent() {
     };
   }, []);
   const vehicleName = data?.vehicle?.name || data?.vehicle?.model || 'Rivian';
-  const displayModel = [data?.vehicle?.model, data?.vehicle?.trim].filter(Boolean).join(' ');
+  // Rivian often reports a trim that already starts with the model ("R1S Dual"),
+  // so only prefix the model when the trim does not repeat it.
+  const displayModel = (() => {
+    const model = data?.vehicle?.model?.trim();
+    const trim = data?.vehicle?.trim?.trim();
+    if (model && trim && trim.toLowerCase().startsWith(model.toLowerCase())) return trim;
+    return [model, trim].filter(Boolean).join(' ');
+  })();
   const freshness = getFreshness(data?.runtime?.last_event_at ?? data?.latest?.ts ?? null);
   const collector = getCollectorState(data?.runtime?.worker_health ?? null);
   const twelveVolt = getHealthState(data?.latest?.twelve_volt_health ?? null);
@@ -242,12 +256,22 @@ export function VehicleHealthContent() {
                         <h2 className="font-display text-4xl font-semibold tracking-tight text-fg">
                           {vehicleName}
                         </h2>
-                        <p className="mt-1 text-lg text-fg-secondary">
-                          {displayModel || 'Vehicle identity pending telemetry'}
-                        </p>
+                        <div className="mt-1 flex flex-wrap items-baseline gap-x-3">
+                          <p className="text-lg text-fg-secondary">
+                            {displayModel || 'Vehicle identity pending telemetry'}
+                          </p>
+                          {status?.odometer_miles != null ? (
+                            <p
+                              className="font-mono text-sm tabular-nums text-fg-tertiary"
+                              data-testid="health-hero-odometer"
+                            >
+                              {Math.round(status.odometer_miles).toLocaleString()} mi
+                            </p>
+                          ) : null}
+                        </div>
                         {data?.vehicle?.vin ? (
-                          <p className="mt-1 font-mono text-sm text-fg-tertiary">
-                            VIN {data.vehicle?.vin}
+                          <p className="mt-1 break-all font-mono text-sm text-fg-tertiary">
+                            VIN {data.vehicle.vin}
                           </p>
                         ) : null}
                       </div>
@@ -257,6 +281,11 @@ export function VehicleHealthContent() {
                         <AuthenticatedVehicleArtwork
                           source={heroImageUrl}
                           fallbackSource={fallbackHeroImageUrl}
+                          loadingIndicator={
+                            <div className="absolute inset-0 flex items-center justify-center min-[1200px]:justify-end">
+                              <AssistantWave label="Loading vehicle picture" className="w-2/3 max-w-sm" />
+                            </div>
+                          }
                           fallbackProps={{
                             className:
                               'absolute inset-0 h-full w-full object-contain object-center min-[1200px]:object-right-bottom',

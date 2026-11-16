@@ -39,7 +39,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@riviamigo/dashboards', () => ({
   ChargeSessionCurveDetail: () => <div data-testid="charge-curve-chart" />,
-  SensorChipSummary: ({ title, value, secondary }: { title: string; value: string; secondary?: string }) => (
+  SensorChipSummary: ({ title, value, secondary }: { title: string; value: React.ReactNode; secondary?: string }) => (
     <div data-testid={`sensor-chip-${title.toLowerCase().replace(/\s+/g, '-')}`}>
       <span>{title}</span>
       <span>{value}</span>
@@ -100,6 +100,7 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
 }));
 vi.mock('lucide-react', () => ({
   ArrowLeft: () => <svg data-testid="icon-arrow-left" />,
+  ArrowRight: () => <svg data-testid="icon-arrow-right" />,
   Info: () => <svg data-testid="icon-info" />,
   MapPin: () => <svg data-testid="icon-map-pin" />,
   Edit2: () => <svg data-testid="icon-edit" />,
@@ -140,7 +141,8 @@ describe('ChargeSessionContent', () => {
     expect(screen.getByText('Energy Added')).toBeInTheDocument();
     expect(screen.getByText('28.5 kWh')).toBeInTheDocument();
     expect(screen.getByText('SoC')).toBeInTheDocument();
-    expect(screen.getByText('20% -> 80%')).toBeInTheDocument();
+    expect(screen.getByTestId('sensor-chip-soc')).toHaveTextContent('20% to 80%');
+    expect(screen.getByTestId('sensor-chip-soc').querySelector('svg')).not.toBeNull();
     expect(screen.getByText('Duration')).toBeInTheDocument();
     expect(screen.getByText('75 min')).toBeInTheDocument();
     expect(screen.getByTestId('sensor-chip-cost')).toBeInTheDocument();
@@ -181,7 +183,8 @@ describe('ChargeSessionContent', () => {
     render(<ChargeSessionContent />);
 
     expect(screen.getByText('12.4 kWh')).toBeInTheDocument();
-    expect(screen.getByText('20% -> 57% · Live')).toBeInTheDocument();
+    expect(screen.getByTestId('sensor-chip-soc')).toHaveTextContent('20% to 57%');
+    expect(screen.getByTestId('sensor-chip-soc')).toHaveTextContent('Live');
     expect(screen.getByText('30 min')).toBeInTheDocument();
     expect(screen.getByText('Pending')).toBeInTheDocument();
     expect(screen.getByText('11.2 kW')).toBeInTheDocument();

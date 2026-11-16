@@ -5,10 +5,12 @@ import {
   ChartColorField,
   CHART_COLOR_TOKENS,
   CHART_SERIES_TOKENS,
-  CURVE_SMOOTHNESS_OPTIONS,
+  chartSmoothingOptions,
+  chartSmoothingSettings,
+  DEFAULT_CURVE_SMOOTHNESS,
   DEFAULT_SPRITE_TIME_FILTER,
-  curveSmoothnessLabel,
   normalizeCurveSmoothness,
+  resolveChartSmoothingLevel,
   normalizeTimeFilter,
   TIME_FILTER_OPTIONS,
   timeFilterLabel,
@@ -34,6 +36,17 @@ import {
   type SensorDataSource,
   type SensorValueColor,
 } from '../widgets/sensor/sensorDefinitions';
+import {
+  getOverviewStatOptions,
+  resolveOverviewStatIds,
+} from '../widgets/custom/overviewStats';
+import {
+  OVERVIEW_MAP_MODE_OPTIONS,
+  OVERVIEW_MAP_STYLE_OPTIONS,
+  resolveOverviewMapOptions,
+  type OverviewMapMode,
+  type OverviewMapStyle,
+} from '../widgets/custom/overviewMap';
 import { IconPicker } from './IconPicker';
 import { resolveIconId } from './iconMigration';
 
@@ -61,6 +74,10 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
   const sensorDefinition = sensorMode ? getSensorDefinition(widget.definitionId) : undefined;
 
   const options = (widget.options ?? {}) as Record<string, unknown>;
+  const overviewVehicleMode = customMode && widget.definitionId === 'overview.vehicle';
+  const overviewStatIds = resolveOverviewStatIds(options.stats);
+  const overviewStatOptions = useMemo(() => getOverviewStatOptions(), []);
+  const overviewMap = resolveOverviewMapOptions(options);
   const title = widget.title ?? '';
   const connectionVisibility = getWidgetVisibilityRules(widget)
     .find((rule) => rule.type === 'vehicle-connection')?.value ?? 'always';
@@ -80,7 +97,16 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
   const timeFilterIndex = Math.max(0, TIME_FILTER_OPTIONS.findIndex((option) => option.value === timeFilter));
   const smoothnessSupported = chartType === 'line' || chartType === 'area';
   const smoothness = normalizeCurveSmoothness(options.smoothness, legacyCurveSmoothingToSmoothness(options.curveSmoothing, chartType));
-  const smoothnessIndex = Math.max(0, CURVE_SMOOTHNESS_OPTIONS.findIndex((option) => option.value === smoothness));
+  // Lines and areas get one smoothing scale. Bars keep the separate time-bin
+  // control below, because a window there adds values up rather than evening
+  // them out.
+  const smoothingSupport = { timeWindows: smoothnessSupported && timeFilterSupported, curve: smoothnessSupported };
+  const smoothingOptions = chartSmoothingOptions(smoothingSupport);
+  const smoothingIndex = Math.max(
+    0,
+    smoothingOptions.findIndex((option) => option.value === resolveChartSmoothingLevel(timeFilter, smoothness, smoothingSupport)),
+  );
+  const smoothingOption = smoothingOptions[smoothingIndex];
   const valueSize = typeof options.valueSize === 'string' ? options.valueSize : 'md';
   const valueMode = typeof options.valueMode === 'string' ? options.valueMode : sensorDefinition?.valueMode ?? 'latest';
   const iconId = resolveIconId(typeof options.icon === 'string' ? options.icon : sensorDefinition?.icon);
@@ -175,7 +201,9 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
           ? timeFilter
           : DEFAULT_SPRITE_TIME_FILTER
         : 'raw',
-      smoothness: nextType === 'line' || nextType === 'area' ? smoothness : 'straight',
+      smoothness: nextType === 'line' || nextType === 'area'
+        ? smoothnessSupported ? smoothness : DEFAULT_CURVE_SMOOTHNESS
+        : 'straight',
     });
   }
 
@@ -494,9 +522,26 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                     />
                   </Field>
                 ) : null}
-                {timeFilterSupported ? (
+                {smoothingOption ? (
                   <div>
-                    <Field label={`Display filter - ${timeFilterLabel(timeFilter)}`}>
+                    <Field label={`Smoothing - ${smoothingOption.label}`}>
+                      <input
+                        type="range"
+                        min={0}
+                        max={smoothingOptions.length - 1}
+                        step={1}
+                        value={smoothingIndex}
+                        onChange={(e) => patch(chartSmoothingSettings(smoothingOptions[Number(e.target.value)]!.value))}
+                        className="rm-accent-range w-full"
+                        aria-label="Smoothing"
+                        aria-valuetext={smoothingOption.label}
+                      />
+                    </Field>
+                    <p className="mt-1.5 text-xs text-fg-tertiary">{smoothingOption.description}</p>
+                  </div>
+                ) : timeFilterSupported ? (
+                  <div>
+                    <Field label={`Time bins - ${timeFilterLabel(timeFilter)}`}>
                       <input
                         type="range"
                         min={0}
@@ -505,28 +550,14 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                         value={timeFilterIndex}
                         onChange={(e) => patch({ timeFilter: TIME_FILTER_OPTIONS[Number(e.target.value)]!.value })}
                         className="rm-accent-range w-full"
+                        aria-label="Time bins"
+                        aria-valuetext={timeFilterLabel(timeFilter)}
                       />
                     </Field>
-                    {chartType === 'bar' || chartType === 'daily_delta' ? (
-                      <p className="-mt-1 text-xs text-fg-tertiary">
-                        Non-raw windows sum bars within each time bin.
-                      </p>
-                    ) : null}
+                    <p className="mt-1.5 text-xs text-fg-tertiary">
+                      Raw keeps one bar per reading. Any other window adds the readings in each time bin into one bar.
+                    </p>
                   </div>
-                ) : null}
-                {smoothnessSupported ? (
-                  <Field label={`Curve smoothness - ${curveSmoothnessLabel(smoothness)}`}>
-                    <input
-                      type="range"
-                      min={0}
-                      max={CURVE_SMOOTHNESS_OPTIONS.length - 1}
-                      step={1}
-                      value={smoothnessIndex}
-                      onChange={(e) => patch({ smoothness: CURVE_SMOOTHNESS_OPTIONS[Number(e.target.value)]!.value })}
-                      className="rm-accent-range w-full"
-                      aria-label="Curve smoothness"
-                    />
-                  </Field>
                 ) : null}
                 <ChartColorField
                   value={curveColor}
@@ -619,6 +650,79 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                 ))}
               </div>
             </div>
+          </Section>
+        ) : null}
+
+        {overviewVehicleMode ? (
+          <Section title="Stat rows">
+            <p className="text-[11px] text-fg-tertiary">
+              Choose the five current readings shown beside the vehicle. Search by name. A reading can only appear once. Distances, speeds, temperatures and pressures follow your unit settings.
+            </p>
+            {overviewStatIds.map((statId, slot) => (
+              <Field key={slot} label={`Row ${slot + 1}`}>
+                <SelectPicker
+                  className="w-full"
+                  value={statId}
+                  onChange={(next) => {
+                    const nextIds = [...overviewStatIds];
+                    nextIds[slot] = next;
+                    patch({ stats: nextIds });
+                  }}
+                  aria-label={`Stat row ${slot + 1}`}
+                  searchable
+                  searchPlaceholder="Search readings"
+                  menuClassName="min-w-64"
+                  options={overviewStatOptions
+                    .filter((option) => option.id === statId || !overviewStatIds.includes(option.id))
+                    .map((option) => ({ value: option.id, label: option.label, group: option.group, keywords: option.keywords }))}
+                />
+              </Field>
+            ))}
+            <button
+              type="button"
+              onClick={() => clearOption('stats')}
+              className="self-start text-[11px] font-medium text-fg-tertiary underline-offset-2 hover:text-fg hover:underline"
+            >
+              Reset to defaults
+            </button>
+          </Section>
+        ) : null}
+
+        {overviewVehicleMode ? (
+          <Section title="Location map">
+            <p className="text-[11px] text-fg-tertiary">
+              Adds a cluster and map toggle to the overview header. The cluster view stays the default; the map view shows the current location in place of the stat rows.
+            </p>
+            <ToggleSwitch
+              label="Offer location map"
+              checked={overviewMap.enabled}
+              onChange={(checked) => (checked ? clearOption('locationMap') : patch({ locationMap: false }))}
+            />
+            {overviewMap.enabled ? (
+              <>
+                <Field label="Light or dark">
+                  <SelectPicker
+                    className="w-full"
+                    value={overviewMap.mode}
+                    onChange={(next) => patch({ mapMode: next as OverviewMapMode })}
+                    aria-label="Map light or dark mode"
+                    options={OVERVIEW_MAP_MODE_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                  />
+                </Field>
+                <Field label="Map type">
+                  <SelectPicker
+                    className="w-full"
+                    value={overviewMap.style}
+                    onChange={(next) => patch({ mapStyle: next as OverviewMapStyle })}
+                    aria-label="Map type"
+                    options={OVERVIEW_MAP_STYLE_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                  />
+                </Field>
+                <p className="text-[11px] text-fg-tertiary">
+                  App setting uses the map style chosen in Settings &gt; Appearance.
+                </p>
+              </>
+            ) : null}
           </Section>
         ) : null}
 

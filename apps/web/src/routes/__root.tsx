@@ -50,7 +50,13 @@ function Root() {
   }, [queryClient, userId]);
 
   const themeBelongsToCurrentAccount = Boolean(authReady && accessToken && userId);
-  const { preferences: runtimePreferences, resolvedTheme } = resolveThemeRuntimeResponse(themeRuntime.data);
+  // Memoized so a root re-render keeps the same resolved theme identity; a new
+  // object would make the runtime re-apply the saved theme over a live preview
+  // staged in Settings > Appearance.
+  const { preferences: runtimePreferences, resolvedTheme } = React.useMemo(
+    () => resolveThemeRuntimeResponse(themeRuntime.data),
+    [themeRuntime.data],
+  );
 
   return (
     <ThemeRuntimeProvider preferences={themeBelongsToCurrentAccount ? runtimePreferences ?? null : null} resolvedTheme={resolvedTheme}>

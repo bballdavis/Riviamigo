@@ -1,7 +1,8 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { dashboardSearchSchema } from '../dashboardSearch';
 
 vi.mock('@riviamigo/ui/primitives', async () => {
   const m = await import('../../test/mockPrimitives');
@@ -29,11 +30,11 @@ const settingsMocks = vi.hoisted(() => ({
       id: 'v1',
       display_name: 'Adventure Truck',
       model: 'R1T',
-      year: null,
+      year: null as number | null,
       trim: null,
       vin: null,
       rivian_vehicle_id: 'rivian-1',
-      battery_capacity_kwh: 135,
+      battery_capacity_kwh: 135 as number | null,
       target_tire_pressure_psi: 48,
       membership_role: 'owner',
       is_demo: false,
@@ -69,9 +70,9 @@ const dashboardMocks = vi.hoisted(() => ({
   downloadDashboardYaml: vi.fn(),
   cloneMutateAsync: vi.fn(),
   createMutateAsync: vi.fn(),
-  deleteMutate: vi.fn(),
+  deleteMutateAsync: vi.fn(),
   lockMutate: vi.fn(),
-  restoreMutate: vi.fn(),
+  restoreMutateAsync: vi.fn(),
 }));
 
 const hooksMocks = vi.hoisted(() => ({
@@ -82,10 +83,35 @@ const hooksMocks = vi.hoisted(() => ({
 const mockNavigate = vi.fn();
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>();
-  return { ...actual, useNavigate: () => mockNavigate };
+  return { ...actual, useNavigate: () => mockNavigate, useBlocker: () => ({ status: 'idle' }) };
 });
 
+// One stable object, as React Query returns: the editor reseeds its form whenever `data` changes.
+const ownershipMocks = vi.hoisted(() => ({
+  update: vi.fn(),
+  data: {
+    vehicle_id: 'v1',
+    can_edit: true,
+    settings: {
+      purchase_price_usd: 82000,
+      purchase_date: '2024-03-15',
+      resale_value_usd: null,
+      insurance_monthly_usd: null,
+      tire_set_cost_usd: null,
+      gas_price_usd_per_gallon: null,
+      enabled_reference_ids: null,
+      custom_vehicles: [],
+    },
+  },
+}));
+
 vi.mock('@riviamigo/hooks', () => ({
+  useOwnershipSettings: () => ({
+    data: ownershipMocks.data,
+    isLoading: false,
+    isError: false,
+  }),
+  useUpdateOwnershipSettings: () => ({ mutate: ownershipMocks.update, isPending: false, isError: false }),
   queryKeys: {
     auth: {
       identities: ['auth-identities'],
@@ -124,6 +150,8 @@ vi.mock('@riviamigo/hooks', () => ({
       all: ['vehicles'],
       status: (vehicleId: string) => ['vehicles', 'status', vehicleId],
     },
+    places: { all: ['places'] },
+    externalConnections: { all: ['external-connections'] },
   },
   themeClient: {
     getCatalog: vi.fn().mockResolvedValue({ builtInThemes: ['classic', 'rad'], customThemes: [] }),
@@ -417,6 +445,14 @@ vi.mock('@riviamigo/hooks', () => ({
     createDemoVehicle: vi
       .fn()
       .mockResolvedValue({ ok: true, vehicle_id: 'demo-v1', created: true }),
+    deleteVehicle: vi.fn().mockResolvedValue({ ok: true, default_vehicle_id: 'v1' }),
+    setDefaultVehicle: vi.fn().mockResolvedValue({ default_vehicle_id: 'v2' }),
+    listVehicleMembers: vi.fn().mockResolvedValue([]),
+    listVehicleInvites: vi.fn().mockResolvedValue([]),
+    addVehicleMember: vi.fn().mockResolvedValue({ invite_created: false, invite_token: null }),
+    updateVehicleMember: vi.fn().mockResolvedValue(undefined),
+    removeVehicleMember: vi.fn().mockResolvedValue(undefined),
+    revokeVehicleInvite: vi.fn().mockResolvedValue(undefined),
     refreshDemoVehicle: vi.fn().mockResolvedValue({
       ok: true,
       vehicle_id: 'demo-v1',
@@ -433,16 +469,23 @@ vi.mock('@riviamigo/hooks', () => ({
     }),
     updateVehicleSettings: vi.fn().mockResolvedValue({}),
     updateVehicleName: vi.fn().mockResolvedValue({}),
+    updateUnitPreferences: vi.fn().mockImplementation(async (units: unknown) => ({ units })),
+    getAppTimezone: vi.fn().mockResolvedValue({ timezone: 'America/Chicago' }),
+    updateAppTimezone: vi.fn().mockImplementation(async (timezone: string) => ({ timezone })),
+    updateVehicleCollection: vi.fn().mockResolvedValue({ ok: true, collection_paused: true, worker_command_queued: true }),
     refreshVehicleArtwork: vi.fn().mockResolvedValue({ ok: true, vehicle_id: 'v1' }),
   },
   useAuth: (selector?: (state: typeof settingsMocks.auth) => unknown) => selector ? selector(settingsMocks.auth) : settingsMocks.auth,
   useAuthReady: () => true,
+  useOwnershipEnabled: () => true,
+  useUpdateOwnershipPreference: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
   useMe: () => ({ data: settingsMocks.me }),
   useVehicles: () => ({ data: settingsMocks.vehicles }),
   useChargingNetworkPreferences: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
   useBasemapConfig: () => ({ data: settingsMocks.basemapConfig, isLoading: false, isError: false }),
   useUpdateMapStyle: () => ({
     mutate: hooksMocks.updateMapStylePreference,
+    mutateAsync: hooksMocks.updateMapStylePreference,
     isPending: false,
     isError: false,
   }),
@@ -453,6 +496,7 @@ vi.mock('@riviamigo/hooks', () => ({
     error: null,
     variables: undefined,
   }),
+  invalidateVehicleCapacityData: vi.fn(),
   resolveVehicleArtwork: (_images: unknown, model: string) => ({
     light: null,
     dark: null,
@@ -491,7 +535,7 @@ vi.mock('@riviamigo/dashboards', () => ({
     variables: undefined,
   }),
   useDeleteDashboard: () => ({
-    mutate: dashboardMocks.deleteMutate,
+    mutateAsync: dashboardMocks.deleteMutateAsync,
     isPending: false,
     variables: undefined,
   }),
@@ -501,7 +545,7 @@ vi.mock('@riviamigo/dashboards', () => ({
     variables: undefined,
   }),
   useRestoreAdminDashboardDefault: () => ({
-    mutate: dashboardMocks.restoreMutate,
+    mutateAsync: dashboardMocks.restoreMutateAsync,
     isPending: false,
     variables: undefined,
   }),
@@ -550,6 +594,23 @@ vi.mock('lucide-react', () => ({
   LogOut: () => <svg data-testid="icon-logout" />,
   MapPin: () => <svg data-testid="icon-map-pin" />,
   Plus: () => <svg data-testid="icon-plus" />,
+  Disc: () => <svg data-testid="icon-disc" />,
+  Droplet: () => <svg data-testid="icon-droplet" />,
+  LifeBuoy: () => <svg data-testid="icon-lifebuoy" />,
+  Wrench: () => <svg data-testid="icon-wrench" />,
+  CircleDollarSign: () => <svg data-testid="icon-circle-dollar" />,
+  AirVent: () => <svg data-testid="icon-airvent" />,
+  ClipboardCheck: () => <svg data-testid="icon-clipboardcheck" />,
+  Cog: () => <svg data-testid="icon-cog" />,
+  Droplets: () => <svg data-testid="icon-droplets" />,
+  RotateCw: () => <svg data-testid="icon-rotatecw" />,
+  ShieldPlus: () => <svg data-testid="icon-shieldplus" />,
+  ThermometerSnowflake: () => <svg data-testid="icon-thermometersnowflake" />,
+  Wind: () => <svg data-testid="icon-wind" />,
+  Wallet: () => <svg data-testid="icon-wallet" />,
+  Receipt: () => <svg data-testid="icon-receipt" />,
+  CalendarClock: () => <svg data-testid="icon-calendarclock" />,
+  Pause: () => <svg data-testid="icon-pause" />,
   Pencil: () => <svg data-testid="icon-pencil" />,
   Play: () => <svg data-testid="icon-play" />,
   RefreshCw: () => <svg data-testid="icon-refresh" />,
@@ -570,7 +631,32 @@ vi.mock('lucide-react', () => ({
 
 import { SettingsContent } from '../settings';
 
-function renderSettings() {
+type SettingsSearch = { section?: string };
+type InitialSection = NonNullable<NonNullable<Parameters<typeof SettingsContent>[0]>['initialSection']>;
+
+/** Sets the Settings route search from outside the page, as a sidebar link or back/forward would. */
+let applyRouteSearch: ((search: SettingsSearch) => void) | null = null;
+
+/**
+ * Stands in for the Settings route: the open section is whatever the search names. Navigations the page
+ * makes through `navigate` update that search, so a section switch re-renders the new section as it does
+ * in the app.
+ */
+function SettingsRouteHarness({ initialSearch }: { initialSearch: SettingsSearch }) {
+  const [search, setSearch] = React.useState<SettingsSearch>(initialSearch);
+  React.useEffect(() => {
+    applyRouteSearch = setSearch;
+    mockNavigate.mockImplementation((options: { to: string; search?: SettingsSearch }) => {
+      if (options.to === '/settings') setSearch(options.search ?? {});
+    });
+    return () => {
+      applyRouteSearch = null;
+    };
+  }, []);
+  return <SettingsContent {...(search.section ? { initialSection: search.section as InitialSection } : {})} />;
+}
+
+function renderSettings(initialSearch: SettingsSearch = {}) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -579,13 +665,30 @@ function renderSettings() {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <SettingsContent />
+      <SettingsRouteHarness initialSearch={initialSearch} />
     </QueryClientProvider>
   );
 }
 
+function navigateSettingsRoute(search: SettingsSearch) {
+  act(() => applyRouteSearch?.(search));
+}
+
 function clickSettingsSection(label: string) {
   fireEvent.click(screen.getByRole('button', { name: label }));
+}
+
+/** The page-level unsaved-changes bar that Settings renders while any draft is dirty. */
+function unsavedChangesBar() {
+  return screen.getByRole('region', { name: 'Unsaved changes' });
+}
+
+function saveUnsavedChanges() {
+  fireEvent.click(within(unsavedChangesBar()).getByRole('button', { name: 'Save' }));
+}
+
+function discardUnsavedChanges() {
+  fireEvent.click(within(unsavedChangesBar()).getByRole('button', { name: 'Discard' }));
 }
 
 describe('Settings page', () => {
@@ -627,9 +730,9 @@ describe('Settings page', () => {
     dashboardMocks.downloadDashboardYaml.mockReset();
     dashboardMocks.cloneMutateAsync.mockReset();
     dashboardMocks.createMutateAsync.mockReset();
-    dashboardMocks.deleteMutate.mockReset();
+    dashboardMocks.deleteMutateAsync.mockReset();
     dashboardMocks.lockMutate.mockReset();
-    dashboardMocks.restoreMutate.mockReset();
+    dashboardMocks.restoreMutateAsync.mockReset();
     localStorage.clear();
     settingsMocks.me = {
       user_id: 'u1',
@@ -718,6 +821,7 @@ describe('Settings page', () => {
       'dashboards',
       'external',
       'jobs',
+      'ownership',
       'places',
       'raw',
       'units',
@@ -744,6 +848,51 @@ describe('Settings page', () => {
     renderSettings();
 
     expect(screen.getByRole('option', { name: 'Backups' })).toBeInTheDocument();
+  });
+
+  it('shows Vehicles for a plain /settings navigation after another section was open', () => {
+    renderSettings({ section: 'account' });
+    expect(screen.getByText('Sign Out')).toBeInTheDocument();
+
+    navigateSettingsRoute({});
+
+    expect(screen.getByLabelText('Settings section')).toHaveValue('vehicles');
+    expect(screen.queryByText('Sign Out')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Vehicle' })).toBeInTheDocument();
+  });
+
+  it('follows the section named by the URL on back and forward navigation', () => {
+    renderSettings({ section: 'places' });
+    expect(screen.getByLabelText('Settings section')).toHaveValue('places');
+
+    navigateSettingsRoute({ section: 'account' });
+    expect(screen.getByLabelText('Settings section')).toHaveValue('account');
+    expect(screen.getByText('Sign Out')).toBeInTheDocument();
+
+    navigateSettingsRoute({ section: 'places' });
+    expect(screen.getByLabelText('Settings section')).toHaveValue('places');
+    expect(screen.queryByText('Sign Out')).not.toBeInTheDocument();
+  });
+
+  it('keeps the chosen section open after a sidebar switch with no unsaved edits', () => {
+    renderSettings();
+
+    clickSettingsSection('Account');
+    expect(screen.getByText('Sign Out')).toBeInTheDocument();
+
+    clickSettingsSection('Places');
+    expect(screen.getByLabelText('Settings section')).toHaveValue('places');
+    expect(screen.queryByText('Sign Out')).not.toBeInTheDocument();
+    expect(mockNavigate).toHaveBeenLastCalledWith({ to: '/settings', search: { section: 'places' } });
+  });
+
+  it('selecting the section that is already open does not navigate', () => {
+    renderSettings({ section: 'account' });
+
+    clickSettingsSection('Account');
+
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(screen.getByText('Sign Out')).toBeInTheDocument();
   });
 
   it('renders the connected vehicle display name', () => {
@@ -833,6 +982,71 @@ describe('Settings page', () => {
     ).toBeInTheDocument();
   });
 
+  it('pauses and resumes Rivian collection from a connected vehicle card', async () => {
+    settingsMocks.me = { user_id: 'u1', email: 'owner@example.com', role: 'user', default_vehicle_id: 'v1' };
+    const vehicle = {
+      id: 'v1',
+      display_name: 'Adventure Truck',
+      model: 'R1T',
+      year: null,
+      trim: null,
+      vin: null,
+      rivian_vehicle_id: 'rivian-1',
+      battery_capacity_kwh: 135,
+      target_tire_pressure_psi: 48,
+      membership_role: 'owner',
+      is_demo: false,
+    };
+    settingsMocks.vehicles = [
+      vehicle,
+      { ...vehicle, id: 'demo-v1', display_name: 'Demo R2S', rivian_vehicle_id: 'demo-r2s-local', is_demo: true },
+    ];
+    const hooks = await import('@riviamigo/hooks');
+    const { unmount } = renderSettings();
+
+    expect(screen.queryByRole('button', { name: /data collection for Demo R2S/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Pause data collection for Adventure Truck' }));
+    await waitFor(() => expect(hooks.api.updateVehicleCollection).toHaveBeenCalledWith('v1', true));
+    unmount();
+
+    settingsMocks.vehicles = [Object.assign({}, vehicle, { collection_paused: true })];
+    renderSettings();
+    expect(screen.getByText('Collection paused')).toBeInTheDocument();
+    expect(screen.getByText('Paused')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Resume data collection for Adventure Truck' }));
+    await waitFor(() => expect(hooks.api.updateVehicleCollection).toHaveBeenCalledWith('v1', false));
+  });
+
+  it('blocks artwork refresh for a paused vehicle and reports refused row actions', async () => {
+    settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' };
+    const vehicle = {
+      id: 'v1',
+      display_name: 'Adventure Truck',
+      model: 'R1T',
+      year: null,
+      trim: null,
+      vin: null,
+      rivian_vehicle_id: 'rivian-1',
+      battery_capacity_kwh: 135,
+      target_tire_pressure_psi: 48,
+      membership_role: 'owner',
+      is_demo: false,
+    };
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.vehicles = [Object.assign({}, vehicle, { collection_paused: true })];
+    const { unmount } = renderSettings();
+    expect(screen.getByRole('button', { name: 'Refresh vehicle artwork for Adventure Truck' })).toBeDisabled();
+    unmount();
+
+    settingsMocks.vehicles = [vehicle];
+    vi.mocked(hooks.api.refreshVehicleArtwork).mockRejectedValueOnce(
+      Object.assign(new Error('400 VALIDATION: refused'), { detail: { message: 'The Rivian connection is off for this server.' } }),
+    );
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh vehicle artwork for Adventure Truck' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The Rivian connection is off for this server.');
+  });
+
   it('renders dashboard persistence controls and triggers dashboard actions for admins', async () => {
     settingsMocks.me = {
       user_id: 'u1',
@@ -882,8 +1096,6 @@ describe('Settings page', () => {
       ownerId: 'u1',
       widgets: [],
     });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
     renderSettings();
     clickSettingsSection('Dashboards');
 
@@ -943,10 +1155,19 @@ describe('Settings page', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Restore bundled' }));
-    expect(dashboardMocks.restoreMutate).toHaveBeenCalledWith('00000000-0000-0000-0000-000000000001');
+    const restoreDialog = screen.getByRole('dialog');
+    expect(within(restoreDialog).getByRole('heading', { name: 'Restore "Overview" to the bundled default layout?' })).toBeInTheDocument();
+    expect(dashboardMocks.restoreMutateAsync).not.toHaveBeenCalled();
+    fireEvent.click(within(restoreDialog).getByRole('button', { name: 'Restore bundled' }));
+    expect(dashboardMocks.restoreMutateAsync).toHaveBeenCalledWith('00000000-0000-0000-0000-000000000001');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('22222222-2222-2222-2222-222222222222');
+    const deleteDialog = screen.getByRole('dialog');
+    expect(within(deleteDialog).getByRole('heading', { name: 'Delete "My Charging"? This removes your saved dashboard.' })).toBeInTheDocument();
+    fireEvent.click(within(deleteDialog).getByRole('button', { name: 'Delete' }));
+    expect(dashboardMocks.deleteMutateAsync).toHaveBeenCalledWith('22222222-2222-2222-2222-222222222222');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
     const showEditButton = screen.getByRole('switch', {
       name: 'Show edit button on dashboard pages',
@@ -954,8 +1175,12 @@ describe('Settings page', () => {
     expect(showEditButton).toHaveAttribute('aria-checked', 'false');
     fireEvent.click(showEditButton);
     expect(showEditButton).toHaveAttribute('aria-checked', 'true');
-    expect(localStorage.getItem('rm-show-dashboard-edit-button:u1')).toBe('true');
-    confirmSpy.mockRestore();
+    // Staged: nothing is written until the page bar saves it.
+    expect(localStorage.getItem('rm-show-dashboard-edit-button:u1')).toBeNull();
+    saveUnsavedChanges();
+    await waitFor(() => {
+      expect(localStorage.getItem('rm-show-dashboard-edit-button:u1')).toBe('true');
+    });
   });
 
   it('marks a same-slug personal copy active and resets it back to the system default', () => {
@@ -981,8 +1206,6 @@ describe('Settings page', () => {
         widgets: [{ id: 'w2' }],
       },
     ];
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
     renderSettings();
     clickSettingsSection('Dashboards');
 
@@ -997,8 +1220,37 @@ describe('Settings page', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
-    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('55555555-5555-5555-5555-555555555555');
-    confirmSpy.mockRestore();
+    const resetDialog = screen.getByRole('dialog');
+    expect(within(resetDialog).getByRole('heading', { name: 'Reset "Overview" to the system default? This removes your personal dashboard copy.' })).toBeInTheDocument();
+    fireEvent.click(within(resetDialog).getByRole('button', { name: 'Reset to default' }));
+    expect(dashboardMocks.deleteMutateAsync).toHaveBeenCalledWith('55555555-5555-5555-5555-555555555555');
+  });
+
+  it('leaves a system dashboard unchanged when its restore is cancelled', () => {
+    settingsMocks.me = { ...settingsMocks.me, role: 'admin' };
+    dashboardMocks.dashboards = [
+      {
+        id: 'default-overview',
+        slug: 'dashboard',
+        name: 'Overview',
+        description: null,
+        isDefault: true,
+        isLocked: false,
+        ownerId: null,
+        widgets: [{ id: 'w1' }],
+      },
+    ];
+
+    renderSettings();
+    clickSettingsSection('Dashboards');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore bundled' }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(dashboardMocks.restoreMutateAsync).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Restore bundled' })).toBeInTheDocument();
   });
 
   it('navigates to /connect when Vehicle is clicked', () => {
@@ -1033,7 +1285,7 @@ describe('Settings page', () => {
     await waitFor(() => {
       expect(settingsMocks.auth.setActiveVehicleId).toHaveBeenCalledWith('demo-v1');
     });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles'], exact: true });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'status', 'demo-v1'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'health', 'demo-v1'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'images', 'demo-v1'] });
@@ -1098,7 +1350,9 @@ describe('Settings page', () => {
     renderSettings();
     fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
     fireEvent.change(screen.getByDisplayValue('48'), { target: { value: '46' } });
-    fireEvent.click(screen.getByLabelText('Save vehicle'));
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(hooks.api.updateVehicleSettings).not.toHaveBeenCalled();
+    saveUnsavedChanges();
 
     await waitFor(() => {
       expect(hooks.api.updateVehicleSettings).toHaveBeenCalledWith('v1', {
@@ -1106,6 +1360,524 @@ describe('Settings page', () => {
         battery_config: 'R1T / R1S Large (Gen 1)',
         target_tire_pressure_psi: 46,
       });
+    });
+  });
+
+  it('refreshes only the vehicle list after the default vehicle changes', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.vehicles = [
+      ...settingsMocks.vehicles,
+      { ...settingsMocks.vehicles[0]!, id: 'v2', display_name: 'Weekend Car', rivian_vehicle_id: 'rivian-2' },
+    ];
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
+    renderSettings();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set Weekend Car as default vehicle' }));
+
+    await waitFor(() => expect(hooks.api.setDefaultVehicle).toHaveBeenCalledWith('v2'));
+    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles'], exact: true }));
+    // A prefix match on ['vehicles'] would also refetch every vehicle's status, health, images, and ownership.
+    const prefixMatches = invalidateSpy.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["vehicles"]' && !filters?.exact);
+    expect(prefixMatches).toHaveLength(0);
+    invalidateSpy.mockRestore();
+  });
+
+  it('adds a member from the sharing panel and keeps the invite token on the page', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.auth.accessToken = 'session-token';
+    vi.mocked(hooks.api.addVehicleMember).mockResolvedValueOnce({ invite_created: true, invite_token: 'invite-token-123' } as never);
+    renderSettings();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage sharing for Adventure Truck' }));
+    fireEvent.change(screen.getByPlaceholderText('user@example.com'), { target: { value: 'friend@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Member' }));
+
+    await waitFor(() => expect(hooks.api.addVehicleMember).toHaveBeenCalledWith('v1', { email: 'friend@example.com', role: 'viewer' }));
+    expect(await screen.findByText('invite-token-123')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('user@example.com')).toHaveValue('');
+  });
+
+  it('lists the members of an expanded vehicle and removes one from the sharing panel', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.auth.accessToken = 'session-token';
+    vi.mocked(hooks.api.listVehicleMembers).mockResolvedValueOnce([
+      { user_id: 'u2', email: 'friend@example.com', role: 'viewer', is_default: false, created_at: '2026-05-04T12:00:00Z' },
+    ] as never);
+    renderSettings();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage sharing for Adventure Truck' }));
+    expect(await screen.findByText('friend@example.com')).toBeInTheDocument();
+    expect(hooks.api.listVehicleMembers).toHaveBeenCalledWith('v1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(hooks.api.removeVehicleMember).toHaveBeenCalledWith('v1', 'u2'));
+  });
+
+  it('deletes a vehicle only after DELETE is typed in a labelled dialog', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    renderSettings();
+
+    fireEvent.click(screen.getByLabelText('Delete Adventure Truck'));
+    const dialog = screen.getByRole('dialog', { name: 'Delete Adventure Truck?' });
+    const deleteButton = within(dialog).getByRole('button', { name: 'Delete Vehicle' });
+    expect(deleteButton).toBeDisabled();
+
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Type DELETE to confirm' }), { target: { value: 'DELETE' } });
+    expect(deleteButton).toBeEnabled();
+    fireEvent.click(deleteButton);
+
+    await waitFor(() => expect(hooks.api.deleteVehicle).toHaveBeenCalledWith('v1'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('cancels the vehicle delete dialog without deleting, even after DELETE is typed', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    renderSettings();
+
+    fireEvent.click(screen.getByLabelText('Delete Adventure Truck'));
+    const dialog = screen.getByRole('dialog', { name: 'Delete Adventure Truck?' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Type DELETE to confirm' }), { target: { value: 'DELETE' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(hooks.api.deleteVehicle).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Delete Adventure Truck')).toBeInTheDocument();
+  });
+
+  it('opens and edits every dashboard via links the /d/$slug route accepts', () => {
+    // Real default dashboards (real ids), not hand-written fixtures: the route's own
+    // search validation must accept whatever the Open/Edit buttons navigate with.
+    // Read the bundled JSON directly: importing the dashboards package here would pull in
+    // every widget and trip over this file's lucide-react mock.
+    const bundled = import.meta.glob<{ default: { id: string; slug: string; name: string; widgets: unknown[] } }>(
+      '../../../../../packages/dashboards/src/defaults/*.json',
+      { eager: true },
+    );
+    const DEFAULT_DASHBOARDS = Object.values(bundled).map(({ default: json }) => ({
+      ...json,
+      description: null,
+      isDefault: true,
+      isLocked: false,
+      ownerId: null,
+    }));
+    expect(DEFAULT_DASHBOARDS.length).toBeGreaterThanOrEqual(5);
+    const owned = {
+      id: crypto.randomUUID(),
+      slug: 'my-charging',
+      name: 'My Charging',
+      description: null,
+      isDefault: false,
+      isLocked: false,
+      ownerId: 'u1',
+      widgets: [],
+    };
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'admin@example.com',
+      role: 'admin',
+      default_vehicle_id: 'v1',
+    };
+    dashboardMocks.dashboards = [...DEFAULT_DASHBOARDS, owned] as never;
+
+    renderSettings();
+    clickSettingsSection('Dashboards');
+    mockNavigate.mockReset(); // drop the section-switch navigation
+
+    const expectNavigatesToValidDashboardRoute = (slug: string, dashboardId: string, edit: boolean) => {
+      expect(mockNavigate).toHaveBeenCalledTimes(1);
+      const call = mockNavigate.mock.calls[0]![0] as {
+        to: string;
+        params: { slug: string };
+        search: unknown;
+      };
+      expect(call.to).toBe('/d/$slug');
+      expect(call.params).toEqual({ slug });
+      const parsed = dashboardSearchSchema.safeParse(call.search);
+      expect(parsed.success).toBe(true);
+      expect(parsed.data).toEqual({ dashboardId, ...(edit ? { edit: 1 } : {}) });
+      mockNavigate.mockReset();
+    };
+
+    const openDefaults = screen.getAllByRole('button', { name: 'Open default' });
+    const editDefaults = screen.getAllByRole('button', { name: 'Edit default' });
+    expect(openDefaults).toHaveLength(DEFAULT_DASHBOARDS.length);
+    expect(editDefaults).toHaveLength(DEFAULT_DASHBOARDS.length);
+
+    DEFAULT_DASHBOARDS.forEach((dashboard, index) => {
+      fireEvent.click(openDefaults[index]!);
+      expectNavigatesToValidDashboardRoute(dashboard.slug, dashboard.id, false);
+      fireEvent.click(editDefaults[index]!);
+      expectNavigatesToValidDashboardRoute(dashboard.slug, dashboard.id, true);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    expectNavigatesToValidDashboardRoute(owned.slug, owned.id, false);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expectNavigatesToValidDashboardRoute(owned.slug, owned.id, true);
+  });
+
+  const gen1CapacityHint = "Your saved capacity (135 kWh) matches a Gen 1 pack; your vehicle's VIN indicates Gen 2.";
+  const gen2CapacityHint = "Your saved capacity (109 kWh) matches a Gen 2 pack; your vehicle's VIN indicates Gen 1.";
+
+  it.each([
+    { year: 2025, capacity: null, generation: 'gen2', pack: 'r1_large_g2', hint: null },
+    { year: 2026, capacity: 109, generation: 'gen2', pack: 'r1_large_g2', hint: null },
+    { year: 2025, capacity: 135, generation: 'gen2', pack: 'custom', hint: gen1CapacityHint },
+    { year: 2026, capacity: 123, generation: 'gen2', pack: 'custom', hint: null },
+    { year: 2024, capacity: null, generation: 'gen1', pack: 'r1_large_g1', hint: null },
+    { year: 2024, capacity: 109, generation: 'gen1', pack: 'custom', hint: gen2CapacityHint },
+    { year: null, capacity: 109, generation: 'gen2', pack: 'r1_large_g2', hint: null },
+    { year: null, capacity: 135, generation: 'gen1', pack: 'r1_large_g1', hint: null },
+    { year: null, capacity: null, generation: 'gen1', pack: 'r1_large_g1', hint: null },
+  ])('uses R1 model year before saved capacity: $year / $capacity', ({ year, capacity, generation, pack, hint }) => {
+    settingsMocks.vehicles[0]!.year = year;
+    settingsMocks.vehicles[0]!.battery_capacity_kwh = capacity;
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+
+    expect(screen.getByLabelText('Battery generation')).toHaveValue(generation);
+    expect(screen.getByLabelText('Battery pack')).toHaveValue(pack);
+    if (pack === 'custom') expect(screen.getByDisplayValue(String(capacity))).toBeInTheDocument();
+    if (hint) {
+      expect(screen.getByRole('note')).toHaveTextContent(hint);
+    } else {
+      expect(screen.queryByText(/matches a Gen \d pack/)).not.toBeInTheDocument();
+    }
+  });
+
+  it('defaults an R2 to the R2 pack even when its model year is 2025 or later', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.vehicles[0]!.model = 'R2';
+    settingsMocks.vehicles[0]!.year = 2026;
+    settingsMocks.vehicles[0]!.battery_capacity_kwh = null;
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+
+    expect(screen.queryByLabelText('Battery generation')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Battery pack')).toHaveValue('r2');
+    expect(screen.queryByText(/matches a Gen \d pack/)).not.toBeInTheDocument();
+    // The displayed default is not persisted until the editor has an edit to save.
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Target Tire Pressure'), { target: { value: '47' } });
+    saveUnsavedChanges();
+
+    await waitFor(() => {
+      expect(hooks.api.updateVehicleSettings).toHaveBeenCalledWith('v1', {
+        battery_capacity_kwh: 82,
+        battery_config: 'R2',
+        target_tire_pressure_psi: 47,
+      });
+    });
+  });
+
+  it('shows an R2 capacity outside the R2 pack as custom without an R1 generation hint', () => {
+    settingsMocks.vehicles[0]!.model = 'R2';
+    settingsMocks.vehicles[0]!.year = 2026;
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+
+    expect(screen.getByLabelText('Battery pack')).toHaveValue('custom');
+    expect(screen.getByDisplayValue('135')).toBeInTheDocument();
+    expect(screen.queryByText(/matches a Gen \d pack/)).not.toBeInTheDocument();
+  });
+
+  it('preserves a saved capacity when the refreshed model year corrects the generation', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.vehicles[0]!.year = 2025;
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    expect(screen.getByLabelText('Battery generation')).toHaveValue('gen2');
+    expect(screen.getByLabelText('Battery pack')).toHaveValue('custom');
+    fireEvent.change(screen.getByLabelText('Target Tire Pressure'), { target: { value: '47' } });
+    saveUnsavedChanges();
+
+    await waitFor(() => {
+      expect(hooks.api.updateVehicleSettings).toHaveBeenCalledWith('v1', {
+        battery_capacity_kwh: 135,
+        battery_config: 'Custom (135 kWh)',
+        target_tire_pressure_psi: 47,
+      });
+    });
+  });
+
+  it('still allows selecting the correct Gen 2 pack after automatic generation correction', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.vehicles[0]!.year = 2025;
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    fireEvent.change(screen.getByLabelText('Battery pack'), { target: { value: 'r1_large_g2' } });
+    saveUnsavedChanges();
+
+    await waitFor(() => {
+      expect(hooks.api.updateVehicleSettings).toHaveBeenCalledWith('v1', {
+        battery_capacity_kwh: 109,
+        battery_config: 'R1T / R1S Large (Gen 2)',
+        target_tire_pressure_psi: 48,
+      });
+    });
+  });
+
+  it('does not carry generation state from a different vehicle into a custom pack', () => {
+    settingsMocks.vehicles = [
+      { ...settingsMocks.vehicles[0]!, id: 'v2', display_name: 'Gen 2 SUV', year: 2025, battery_capacity_kwh: 109 },
+      { ...settingsMocks.vehicles[0]!, battery_capacity_kwh: 123 },
+    ];
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Gen 2 SUV'));
+    expect(screen.getByLabelText('Battery generation')).toHaveValue('gen2');
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    expect(screen.getByLabelText('Battery generation')).toHaveValue('gen1');
+    expect(screen.getByLabelText('Battery pack')).toHaveValue('custom');
+  });
+
+  it('uses a Gen 2 model hint when Rivian omits the model year', () => {
+    settingsMocks.vehicles[0]!.model = 'R1S Gen 2';
+    settingsMocks.vehicles[0]!.battery_capacity_kwh = null;
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    expect(screen.getByLabelText('Battery generation')).toHaveValue('gen2');
+    expect(screen.getByLabelText('Battery pack')).toHaveValue('r1_large_g2');
+  });
+
+  it('stages vehicle edits behind the page bar and reverts them on Discard', async () => {
+    const hooks = await import('@riviamigo/hooks');
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    fireEvent.change(screen.getByLabelText('Vehicle Name'), { target: { value: 'Renamed Truck' } });
+
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(hooks.api.updateVehicleName).not.toHaveBeenCalled();
+
+    discardUnsavedChanges();
+
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Vehicle Name')).toHaveValue('Adventure Truck');
+    expect(hooks.api.updateVehicleName).not.toHaveBeenCalled();
+    expect(hooks.api.updateVehicleSettings).not.toHaveBeenCalled();
+  });
+
+  it('saves a renamed vehicle through the name endpoint after the battery settings', async () => {
+    const hooks = await import('@riviamigo/hooks');
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    fireEvent.change(screen.getByLabelText('Vehicle Name'), { target: { value: '  Renamed Truck ' } });
+    saveUnsavedChanges();
+
+    await waitFor(() => {
+      expect(hooks.api.updateVehicleName).toHaveBeenCalledWith('v1', 'Renamed Truck');
+    });
+    expect(hooks.api.updateVehicleSettings).toHaveBeenCalledWith('v1', {
+      battery_capacity_kwh: 135,
+      battery_config: 'R1T / R1S Large (Gen 1)',
+      target_tire_pressure_psi: 48,
+    });
+    expect(vi.mocked(hooks.api.updateVehicleSettings).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(hooks.api.updateVehicleName).mock.invocationCallOrder[0]!,
+    );
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Vehicle Name')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+  });
+
+  it('shows an inline error and keeps the bar open when the vehicle name is blank', async () => {
+    const hooks = await import('@riviamigo/hooks');
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    fireEvent.change(screen.getByLabelText('Vehicle Name'), { target: { value: '   ' } });
+    saveUnsavedChanges();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Enter a vehicle name.');
+    expect(screen.getByPlaceholderText('Vehicle name').closest('label')).toHaveTextContent('Enter a vehicle name.');
+    expect(hooks.api.updateVehicleSettings).not.toHaveBeenCalled();
+    expect(hooks.api.updateVehicleName).not.toHaveBeenCalled();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+  });
+
+  it('keeps the editor open with the API message when the battery save is rejected', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    vi.mocked(hooks.api.updateVehicleSettings).mockRejectedValueOnce(
+      Object.assign(new Error('400 bad_request: capacity rejected'), {
+        detail: { message: 'Battery capacity is outside the supported range.' },
+      }),
+    );
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    fireEvent.change(screen.getByLabelText('Target Tire Pressure'), { target: { value: '46' } });
+    saveUnsavedChanges();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Battery capacity is outside the supported range.');
+    expect(screen.getByLabelText('Target Tire Pressure')).toHaveValue(46);
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(hooks.api.updateVehicleName).not.toHaveBeenCalled();
+  });
+
+  it('asks before closing a vehicle editor with unsaved edits', async () => {
+    const hooks = await import('@riviamigo/hooks');
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    fireEvent.change(screen.getByLabelText('Target Tire Pressure'), { target: { value: '46' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close vehicle editor' }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Save your changes?')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stay' }));
+    expect(screen.getByLabelText('Target Tire Pressure')).toHaveValue(46);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close vehicle editor' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Discard' }));
+
+    expect(screen.queryByLabelText('Target Tire Pressure')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+    expect(hooks.api.updateVehicleSettings).not.toHaveBeenCalled();
+  });
+
+  it('asks before opening another vehicle while this editor has unsaved edits', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.vehicles = [
+      settingsMocks.vehicles[0]!,
+      { ...settingsMocks.vehicles[0]!, id: 'v2', display_name: 'Gen 2 SUV', year: 2025, battery_capacity_kwh: 109 },
+    ];
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    fireEvent.change(screen.getByLabelText('Target Tire Pressure'), { target: { value: '46' } });
+    fireEvent.click(screen.getByLabelText('Edit Gen 2 SUV'));
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Save your changes?')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stay' }));
+    expect(screen.getByLabelText('Target Tire Pressure')).toHaveValue(46);
+
+    fireEvent.click(screen.getByLabelText('Edit Gen 2 SUV'));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(hooks.api.updateVehicleSettings).toHaveBeenCalledWith('v1', {
+        battery_capacity_kwh: 135,
+        battery_config: 'R1T / R1S Large (Gen 1)',
+        target_tire_pressure_psi: 46,
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText('Battery generation')).toHaveValue('gen2');
+    });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('stages a unit change behind the page bar and saves it on Save', async () => {
+    const hooks = await import('@riviamigo/hooks');
+
+    renderSettings();
+    clickSettingsSection('Units');
+    fireEvent.click(screen.getByRole('button', { name: /^Metric/ }));
+
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Metric/ })).toHaveTextContent('Selected');
+    expect(hooks.api.updateUnitPreferences).not.toHaveBeenCalled();
+
+    saveUnsavedChanges();
+
+    await waitFor(() => {
+      expect(hooks.api.updateUnitPreferences).toHaveBeenCalledWith({
+        mode: 'metric',
+        distance_unit: 'kilometers',
+        speed_unit: 'kmh',
+        temperature_unit: 'celsius',
+        pressure_unit: 'kpa',
+        altitude_unit: 'meters',
+        place_radius_unit: 'meters',
+        efficiency_display: 'distance_per_energy',
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+    });
+  });
+
+  it('reverts staged unit changes on Discard without calling the API', async () => {
+    const hooks = await import('@riviamigo/hooks');
+
+    renderSettings();
+    clickSettingsSection('Units');
+    fireEvent.click(screen.getByRole('button', { name: /^Metric/ }));
+    discardUnsavedChanges();
+
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Imperial/ })).toHaveTextContent('Selected');
+    expect(hooks.api.updateUnitPreferences).not.toHaveBeenCalled();
+  });
+
+  it('stages custom unit selects and keeps them with an error when the save fails', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    vi.mocked(hooks.api.updateUnitPreferences).mockRejectedValueOnce(new Error('network down'));
+
+    renderSettings();
+    clickSettingsSection('Units');
+    fireEvent.click(screen.getByRole('button', { name: /^Custom/ }));
+    fireEvent.change(screen.getByLabelText('Speed unit'), { target: { value: 'kmh' } });
+    saveUnsavedChanges();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Units could not be saved. Try again.');
+    expect(hooks.api.updateUnitPreferences).toHaveBeenCalledWith(expect.objectContaining({ mode: 'custom', speed_unit: 'kmh' }));
+    expect(screen.getByLabelText('Speed unit')).toHaveValue('kmh');
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+  });
+
+  it('asks before leaving the Units section with unsaved changes', async () => {
+    const hooks = await import('@riviamigo/hooks');
+
+    renderSettings();
+    clickSettingsSection('Units');
+    fireEvent.click(screen.getByRole('button', { name: /^Metric/ }));
+    clickSettingsSection('Account');
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Save your changes?')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stay' }));
+    expect(screen.getByText('Pick a preset system or switch to Custom for per-unit control.')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    clickSettingsSection('Account');
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Discard' }));
+
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/settings', search: { section: 'account' } });
+    expect(screen.queryByText('Pick a preset system or switch to Custom for per-unit control.')).not.toBeInTheDocument();
+    expect(screen.getByText('Sign Out')).toBeInTheDocument();
+    expect(hooks.api.updateUnitPreferences).not.toHaveBeenCalled();
+  });
+
+  it('stages the application time zone for administrators until Save', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.me = { ...settingsMocks.me, role: 'admin' };
+    settingsMocks.auth.accessToken = 'test-access-token';
+
+    renderSettings();
+    clickSettingsSection('Units');
+    await waitFor(() => {
+      expect(screen.getByLabelText('Application time zone')).toHaveValue('America/Chicago');
+    });
+    fireEvent.change(screen.getByLabelText('Application time zone'), { target: { value: 'America/Denver' } });
+
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(hooks.api.updateAppTimezone).not.toHaveBeenCalled();
+
+    saveUnsavedChanges();
+
+    await waitFor(() => {
+      expect(hooks.api.updateAppTimezone).toHaveBeenCalledWith('America/Denver');
     });
   });
 
@@ -1127,6 +1899,8 @@ describe('Settings page', () => {
     }
 
     fireEvent.change(style, { target: { value: 'liberty' } });
+    expect(hooksMocks.updateMapStylePreference).not.toHaveBeenCalled();
+    saveUnsavedChanges();
     await waitFor(() => expect(hooksMocks.updateMapStylePreference).toHaveBeenCalledWith('liberty'));
   });
 
@@ -1295,7 +2069,11 @@ describe('Settings page', () => {
     clickSettingsSection('Appearance');
 
     await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
-    fireEvent.click(await screen.findByRole('radio', { name: /^RAD/ }));
+    // Wait for the saved theme to load so the click stages a change against it.
+    await waitFor(() => expect(screen.getByRole('radio', { name: /^Classic/ })).toHaveAttribute('aria-checked', 'true'));
+    fireEvent.click(screen.getByRole('radio', { name: /^RAD/ }));
+    expect(hooks.themeClient.updatePreferences).not.toHaveBeenCalled();
+    saveUnsavedChanges();
 
     await waitFor(() => {
       expect(hooks.themeClient.updatePreferences).toHaveBeenCalledWith(
@@ -1315,9 +2093,13 @@ describe('Settings page', () => {
 
     await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
     fireEvent.change(screen.getByLabelText('Appearance mode'), { target: { value: 'light' } });
+    saveUnsavedChanges();
 
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/previous selection has been restored/i));
-    expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark');
+    // The failed save keeps the staged edit and the bar open; Discard restores the saved appearance.
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to save appearance mode.');
+    expect(screen.getByLabelText('Appearance mode')).toHaveValue('light');
+    discardUnsavedChanges();
+    await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
     expect(document.documentElement.classList.contains('dark')).toBe(true);
   });
 
@@ -1383,7 +2165,7 @@ describe('Settings page', () => {
     await waitFor(() => expect(hooks.api.downloadVehicleIngestionCapture).toHaveBeenCalledWith('v1'));
   });
 
-  it('confirms before a new capture replaces the previous one', async () => {
+  it('asks before a new capture replaces the previous one and keeps it when cancelled', async () => {
     const hooks = await import('@riviamigo/hooks');
     vi.mocked(hooks.api.getVehicleIngestionCapture).mockResolvedValueOnce({
       state: 'stopped',
@@ -1395,7 +2177,6 @@ describe('Settings page', () => {
       last_event_at: null,
       truncated: false,
     });
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderSettings();
     clickSettingsSection('Raw Data');
     const newCapture = await screen.findByRole('button', { name: 'Start capture for Adventure Truck' });
@@ -1403,9 +2184,36 @@ describe('Settings page', () => {
     expect(screen.getByRole('button', { name: 'Download capture for Adventure Truck' })).toBeDisabled();
     await waitFor(() => expect(newCapture).not.toBeDisabled());
     fireEvent.click(newCapture);
-    expect(confirm).toHaveBeenCalled();
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Start a new capture?' })).toBeInTheDocument();
+    expect(within(dialog).getByText('This replaces the previous capture and its file.')).toBeInTheDocument();
     expect(hooks.api.startVehicleIngestionCapture).not.toHaveBeenCalled();
-    confirm.mockRestore();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(hooks.api.startVehicleIngestionCapture).not.toHaveBeenCalled();
+  });
+
+  it('starts a new capture once the replacement is confirmed in the dialog', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    vi.mocked(hooks.api.getVehicleIngestionCapture).mockResolvedValueOnce({
+      state: 'stopped',
+      started_at: '2026-09-24T17:00:00Z',
+      ends_at: '2026-09-24T18:00:00Z',
+      stopped_at: '2026-09-24T18:00:00Z',
+      stop_reason: 'expired',
+      event_count: 0,
+      last_event_at: null,
+      truncated: false,
+    });
+    renderSettings();
+    clickSettingsSection('Raw Data');
+    const newCapture = await screen.findByRole('button', { name: 'Start capture for Adventure Truck' });
+    await waitFor(() => expect(newCapture).not.toBeDisabled());
+    fireEvent.click(newCapture);
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'New capture' }));
+    await waitFor(() => expect(hooks.api.startVehicleIngestionCapture).toHaveBeenCalledWith('v1'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
   it('renders and operates the admin Backups section', async () => {
@@ -1430,7 +2238,10 @@ describe('Settings page', () => {
       expect(screen.getByText('Rows')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText('Save settings'));
+    // Backup settings are staged; a real edit makes the page bar appear, and its Save persists them.
+    fireEvent.change(screen.getByLabelText('Prefix'), { target: { value: 'prod/riviamigo-staged' } });
+    expect(hooks.api.updateBackupSettings).not.toHaveBeenCalled();
+    saveUnsavedChanges();
 
     await waitFor(() => {
       expect(hooks.api.updateBackupSettings).toHaveBeenCalledWith(
@@ -1440,6 +2251,7 @@ describe('Settings page', () => {
           retention_count: 8,
           local_enabled: true,
           s3_enabled: true,
+          prefix: 'prod/riviamigo-staged',
         })
       );
     }, { timeout: 5_000 });
@@ -1476,7 +2288,13 @@ describe('Settings page', () => {
     fireEvent.change(restorePicker, { target: { value: 'artifact-1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Restore selected backup' }));
     await waitFor(() => {
-      expect(screen.getByText('Restore this backup?')).toBeInTheDocument();
+      expect(screen.getByRole('dialog', { name: 'Restore this backup?' })).toBeInTheDocument();
+    });
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Restore this backup?' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore selected backup' }));
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: 'Restore this backup?' })).toBeInTheDocument();
     });
     fireEvent.change(screen.getByLabelText('Type RESTORE to continue'), {
       target: { value: 'RESTORE' },

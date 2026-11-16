@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveBuildVersionFromGit } from './resolve-build-version.mjs';
 
@@ -13,6 +13,8 @@ const composeFile = resolve(rootDir, 'compose/docker-compose.dev.yml');
 const devRestoreAgentKeyFile = resolve(rootDir, 'data/dev-restore-agent-key');
 const devRestoreMarkerFile = resolve(rootDir, 'data/dev-restore-in-progress');
 const devApiPidFile = resolve(rootDir, 'data/dev-api.pid');
+// The launcher's own PID, so `pnpm stop` can find it on Windows, where pnpm starts it with a relative path.
+const devLauncherPidFile = resolve(rootDir, 'data/dev-launcher.pid');
 const isWindows = process.platform === 'win32';
 
 function parsePort(value, fallback) {
@@ -64,6 +66,8 @@ const urls = {
 };
 
 const runOnce = process.argv.includes('--once');
+const stopOnly = process.argv.includes('--stop');
+const launcherScript = fileURLToPath(import.meta.url);
 const children = new Set();
 let shuttingDown = false;
 
@@ -179,30 +183,214 @@ function powerShellLiteral(value) {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-async function listRepoOwnedProcesses() {
+/**
+ * Matches this checkout's host-run dev processes in `ps -axo pid=,command=`
+ * output. Other repositories' Vite servers never match: a Vite process counts
+ * only when its command line contains this checkout's web directory.
+ */
+export function matchRepoOwnedProcesses(
+  psOutput,
+  { apiBin, restoreAgentBin, webDir: web, launcher = null, selfPid = process.pid },
+) {
+  return psOutput.split(/\r?\n/).flatMap((line) => {
+    const match = line.trim().match(/^(\d+)\s+(.+)$/);
+    if (!match) return [];
+    const [, rawPid, command] = match;
+    const pid = Number.parseInt(rawPid, 10);
+    if (pid === selfPid) return [];
+    if (command.includes(apiBin)) return [{ pid, name: 'riviamigo-api', kind: 'api' }];
+    if (command.includes(restoreAgentBin)) return [{ pid, name: 'riviamigo-restore-agent', kind: 'restore-agent' }];
+    if (command.includes(web) && /\bvite(?:\.js)?\b/i.test(command)) {
+      return [{ pid, name: 'vite', kind: 'vite' }];
+    }
+    // pnpm starts the launcher as `node ./scripts/dev.mjs`, so the path may be
+    // relative; the caller confirms the working directory before stopping it.
+    if (launcher && /(?:^|[\s/\\])scripts[/\\]dev\.mjs(?:\s|$)/.test(command) && !/\s--stop(?:\s|$)/.test(command)) {
+      return [{ pid, name: 'dev-stack launcher', kind: 'launcher', command }];
+    }
+    return [];
+  });
+}
+
+const LAUNCHER_SCRIPT_COMMAND = /(?:^|[\s"'\\/])scripts[\\/]dev\.mjs(?=$|[\s"'])/i;
+const ABSOLUTE_LAUNCHER_COMMAND = /(?:^|[\s"'])(?:[a-z]:[\\/]|\\\\|\/)[^\s"']*scripts[\\/]dev\.mjs(?=$|[\s"'])/i;
+const STOP_FLAG_COMMAND = /(?:^|\s)--stop(?:\s|$)/;
+
+/** Windows paths compare case-insensitively with either separator. */
+function normalizeWindowsPath(value) {
+  return String(value ?? '').replace(/\//g, '\\').toLowerCase();
+}
+
+/** True when `path` appears in `command` as a whole argument (bare, or quoted). */
+function commandNamesPath(command, path) {
+  const haystack = normalizeWindowsPath(command);
+  const needle = normalizeWindowsPath(path);
+  for (let index = haystack.indexOf(needle); index !== -1; index = haystack.indexOf(needle, index + 1)) {
+    const before = haystack[index - 1];
+    const after = haystack[index + needle.length];
+    if ((before === undefined || /[\s"']/.test(before)) && (after === undefined || /[\s"']/.test(after))) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a Windows process is this checkout's dev-stack launcher. The launcher
+ * is named either by its absolute path (this checkout's `scripts\dev.mjs`) or,
+ * when pnpm starts it, by the relative `./scripts/dev.mjs`. A relative command
+ * names no checkout, so only the PID this checkout's launcher recorded is trusted
+ * for it. An absolute path to another checkout never matches.
+ */
+/** How far a process's creation time may differ from the recorded start and still be that launcher. */
+const LAUNCHER_START_TOLERANCE_MS = 10_000;
+
+/**
+ * A CIM `CreationDate` as epoch milliseconds. Windows PowerShell serializes it
+ * as `/Date(ms)/`, PowerShell 7 as an ISO string.
+ */
+export function parseCimDate(value) {
+  if (value === null || value === undefined) return null;
+  const legacy = /\/Date\((-?\d+)/.exec(String(value));
+  if (legacy) return Number(legacy[1]);
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isWindowsLauncherOfCheckout(command, { pid, created, launcherScript, launcherPid, launcherStartedAt }) {
+  if (!LAUNCHER_SCRIPT_COMMAND.test(command) || STOP_FLAG_COMMAND.test(command)) return false;
+  if (commandNamesPath(command, launcherScript)) return true;
+  if (launcherPid === null || pid !== launcherPid || ABSOLUTE_LAUNCHER_COMMAND.test(command)) return false;
+  // A PID file left by a launcher that died without cleanup can name a PID
+  // Windows has since reused, so the process must also have started when the
+  // recorded launcher did.
+  if (launcherStartedAt === null) return true;
+  return created !== null && Math.abs(created - launcherStartedAt) <= LAUNCHER_START_TOLERANCE_MS;
+}
+
+/**
+ * The PowerShell query behind the Windows process lookup. It only narrows the
+ * list; matchWindowsRepoOwnedProcesses decides what belongs to this checkout.
+ * The query never names the launcher script, and it skips its own process, so
+ * the PowerShell process running it cannot match itself.
+ */
+export function buildWindowsProcessQuery({ apiBin, restoreAgentBin, webDir: web, includeLaunchers = false }) {
+  return [
+    `$apiBin = ${powerShellLiteral(apiBin)}`,
+    `$restoreAgentBin = ${powerShellLiteral(restoreAgentBin)}`,
+    `$webDir = ${powerShellLiteral(web)}`,
+    `$includeLaunchers = ${includeLaunchers ? '$true' : '$false'}`,
+    'Get-CimInstance Win32_Process -ErrorAction Stop |',
+    'Where-Object {',
+    '  if ($_.ProcessId -eq $PID) { return $false }',
+    "  $isApi = $_.ExecutablePath -and $_.ExecutablePath -ieq $apiBin",
+    "  $isRestoreAgent = $_.ExecutablePath -and $_.ExecutablePath -ieq $restoreAgentBin",
+    "  $isVite = $_.CommandLine -and $_.CommandLine.IndexOf($webDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.CommandLine -match '(?i)\\bvite(?:\\.cmd|\\.js)?\\b'",
+    "  $isLauncher = $includeLaunchers -and $_.CommandLine -and $_.CommandLine -match 'dev\\.mjs'",
+    '  $isApi -or $isRestoreAgent -or $isVite -or $isLauncher',
+    '} |',
+    'Select-Object ProcessId, Name, ExecutablePath, CommandLine, CreationDate |',
+    'ConvertTo-Json -Compress',
+  ].join('\n');
+}
+
+/**
+ * Classifies the rows from buildWindowsProcessQuery into this checkout's dev
+ * processes, in the same shape matchRepoOwnedProcesses returns.
+ */
+export function matchWindowsRepoOwnedProcesses(
+  rows,
+  {
+    apiBin,
+    restoreAgentBin,
+    webDir: web,
+    includeLaunchers = false,
+    launcherScript = null,
+    launcherPid = null,
+    launcherStartedAt = null,
+    selfPid = process.pid,
+  },
+) {
+  return rows.flatMap((row) => {
+    const pid = row.ProcessId;
+    if (pid === selfPid) return [];
+    const name = row.Name ?? '';
+    const executable = normalizeWindowsPath(row.ExecutablePath);
+    const command = String(row.CommandLine ?? '');
+    if (executable && executable === normalizeWindowsPath(apiBin)) return [{ pid, name, kind: 'api' }];
+    if (executable && executable === normalizeWindowsPath(restoreAgentBin)) return [{ pid, name, kind: 'restore-agent' }];
+    if (normalizeWindowsPath(command).includes(normalizeWindowsPath(web)) && /\bvite(?:\.cmd|\.js)?\b/i.test(command)) {
+      return [{ pid, name, kind: 'vite' }];
+    }
+    if (includeLaunchers && launcherScript && isWindowsLauncherOfCheckout(command, {
+      pid,
+      created: parseCimDate(row.CreationDate),
+      launcherScript,
+      launcherPid,
+      launcherStartedAt,
+    })) {
+      return [{ pid, name, kind: 'launcher' }];
+    }
+    return [];
+  });
+}
+
+/** Resolves the script path a launcher candidate runs, from its working directory. */
+async function launcherScriptPath(candidate) {
+  const script = candidate.command.match(/(\S*scripts[/\\]dev\.mjs)/)?.[1];
+  if (!script) return null;
+  if (isAbsolute(script)) return resolve(script);
+  const { code, stdout } = await capture('lsof', ['-a', '-p', String(candidate.pid), '-d', 'cwd', '-Fn'], { shell: false });
+  if (code !== 0) return null;
+  const cwd = stdout.split(/\r?\n/).find((line) => line.startsWith('n'))?.slice(1);
+  return cwd ? resolve(cwd, script) : null;
+}
+
+/**
+ * The recorded launcher as `{ pid, startedAt }`, or null. `startedAt` is null
+ * for a file written by an older launcher that recorded only its PID.
+ */
+export function parseLauncherPidFile(text) {
+  const [pidText, startedText] = String(text).trim().split(/\s+/);
+  const pid = Number.parseInt(pidText ?? '', 10);
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  const startedAt = Number.parseInt(startedText ?? '', 10);
+  return { pid, startedAt: Number.isInteger(startedAt) && startedAt > 0 ? startedAt : null };
+}
+
+async function readLauncherPid() {
+  try {
+    return parseLauncherPidFile(await readFile(devLauncherPidFile, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function recordLauncherPid() {
+  await mkdir(dirname(devLauncherPidFile), { recursive: true });
+  const startedAt = Math.round(Date.now() - process.uptime() * 1000);
+  await writeFile(devLauncherPidFile, `${process.pid} ${startedAt}\n`, 'utf8');
+}
+
+/** Removes the PID file only while it still names this launcher; a newer launcher may have replaced it. */
+async function removeOwnLauncherPid() {
+  if ((await readLauncherPid())?.pid === process.pid) {
+    await rm(devLauncherPidFile, { force: true });
+  }
+}
+
+async function listRepoOwnedProcesses({ includeLaunchers = false } = {}) {
   const apiBin = resolve(apiDir, 'target/debug', isWindows ? 'riviamigo-api.exe' : 'riviamigo-api');
   const restoreAgentBin = resolve(apiDir, 'target/debug', isWindows ? 'riviamigo-restore-agent.exe' : 'riviamigo-restore-agent');
 
   if (isWindows) {
-    const command = [
-      `$apiBin = ${powerShellLiteral(apiBin)}`,
-      `$restoreAgentBin = ${powerShellLiteral(restoreAgentBin)}`,
-      `$webDir = ${powerShellLiteral(webDir)}`,
-      'Get-CimInstance Win32_Process -ErrorAction Stop |',
-      'Where-Object {',
-      "  $isApi = $_.ExecutablePath -and $_.ExecutablePath -ieq $apiBin",
-      "  $isRestoreAgent = $_.ExecutablePath -and $_.ExecutablePath -ieq $restoreAgentBin",
-      "  $isVite = $_.CommandLine -and $_.CommandLine.IndexOf($webDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.CommandLine -match '(?i)\\bvite(?:\\.cmd|\\.js)?\\b'",
-      '  $isApi -or $isRestoreAgent -or $isVite',
-      '} |',
-      'Select-Object ProcessId, Name, ExecutablePath, CommandLine |',
-      'ConvertTo-Json -Compress',
-    ].join('\n');
+    // Windows has no `lsof` to read a process's working directory, so the
+    // launcher is identified from its command line and, for pnpm's relative
+    // path, from the PID it recorded at startup.
+    const launcher = includeLaunchers ? await readLauncherPid() : null;
     const { code, stdout, stderr } = await capture('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      command,
+      buildWindowsProcessQuery({ apiBin, restoreAgentBin, webDir, includeLaunchers }),
     ]);
     if (code !== 0) {
       log(`[dev] Could not inspect existing Windows processes; leaving occupied ports alone. ${stripAnsi(stderr).trim()}`);
@@ -210,15 +398,15 @@ async function listRepoOwnedProcesses() {
     }
 
     try {
-      return parseProcessList(stdout).map((process) => ({
-        pid: process.ProcessId,
-        name: process.Name,
-        kind: String(process.ExecutablePath ?? '').toLowerCase() === apiBin.toLowerCase()
-          ? 'api'
-          : String(process.ExecutablePath ?? '').toLowerCase() === restoreAgentBin.toLowerCase()
-            ? 'restore-agent'
-            : 'vite',
-      }));
+      return matchWindowsRepoOwnedProcesses(parseProcessList(stdout), {
+        apiBin,
+        restoreAgentBin,
+        webDir,
+        includeLaunchers,
+        launcherScript,
+        launcherPid: launcher?.pid ?? null,
+        launcherStartedAt: launcher?.startedAt ?? null,
+      });
     } catch (error) {
       log(`[dev] Could not parse existing Windows process details; leaving occupied ports alone. ${error.message}`);
       return [];
@@ -231,38 +419,69 @@ async function listRepoOwnedProcesses() {
     return [];
   }
 
-  return stdout.split(/\r?\n/).flatMap((line) => {
-    const match = line.trim().match(/^(\d+)\s+(.+)$/);
-    if (!match) return [];
-    const [, rawPid, command] = match;
-    if (command.includes(apiBin)) return [{ pid: Number.parseInt(rawPid, 10), name: 'riviamigo-api', kind: 'api' }];
-    if (command.includes(restoreAgentBin)) return [{ pid: Number.parseInt(rawPid, 10), name: 'riviamigo-restore-agent', kind: 'restore-agent' }];
-    if (command.includes(webDir) && /\bvite(?:\.js)?\b/i.test(command)) {
-      return [{ pid: Number.parseInt(rawPid, 10), name: 'vite', kind: 'vite' }];
-    }
-    return [];
+  const matched = matchRepoOwnedProcesses(stdout, {
+    apiBin,
+    restoreAgentBin,
+    webDir,
+    launcher: includeLaunchers ? launcherScript : null,
   });
+  const owned = [];
+  for (const candidate of matched) {
+    if (candidate.kind !== 'launcher') {
+      owned.push(candidate);
+    } else if ((await launcherScriptPath(candidate)) === launcherScript) {
+      owned.push({ pid: candidate.pid, name: candidate.name, kind: candidate.kind });
+    }
+  }
+  return owned;
 }
 
-async function clearRepoOwnedDevProcesses() {
-  const processes = await listRepoOwnedProcesses();
-  if (processes.length === 0) return;
+// Launchers first so none can restart the API, then Vite (a launcher exits
+// when its web child exits), then the API and restore agent.
+const STOP_ORDER = { launcher: 0, vite: 1, api: 2, 'restore-agent': 3 };
 
-  // Stop Vite before the API: a dev-stack launcher exits when its web child
-  // exits, preventing it from restarting the API while cleanup is in flight.
-  processes.sort((left, right) => (left.kind === 'vite' ? -1 : 1) - (right.kind === 'vite' ? -1 : 1));
+async function clearRepoOwnedDevProcesses({ includeLaunchers = false } = {}) {
+  const processes = await listRepoOwnedProcesses({ includeLaunchers });
+  if (processes.length === 0) return 0;
+
+  processes.sort((left, right) => STOP_ORDER[left.kind] - STOP_ORDER[right.kind]);
   log(`[dev] Clearing ${processes.length} stale Riviamigo dev process(es): ${processes.map((process) => `${process.name} (${process.pid})`).join(', ')}`);
 
   for (const process of processes) {
     const result = isWindows
       ? await capture('taskkill', ['/PID', String(process.pid), '/T', '/F'])
       : await capture('kill', ['-TERM', String(process.pid)]);
-    if (result.code !== 0) {
+    // Stopping a launcher also ends its children, so they may already be gone.
+    if (result.code !== 0 && !/no such process|not found/i.test(result.stderr)) {
       log(`[dev] Could not stop stale ${process.name} (${process.pid}): ${stripAnsi(result.stderr).trim()}`);
     }
   }
 
   await sleep(500);
+  return processes.length;
+}
+
+/** `pnpm stop`: end this checkout's host-run dev servers. Docker services keep running. */
+async function stopRepoOwnedDevProcesses() {
+  const stopped = await clearRepoOwnedDevProcesses({ includeLaunchers: true });
+  if (stopped === 0) {
+    await rm(devLauncherPidFile, { force: true });
+    log('[dev] No Riviamigo dev servers from this checkout are running.');
+    return;
+  }
+  await sleep(1500);
+  const survivors = await listRepoOwnedProcesses({ includeLaunchers: true });
+  for (const survivor of survivors) {
+    log(`[dev] ${survivor.name} (${survivor.pid}) did not exit; forcing it to stop.`);
+    if (isWindows) {
+      await capture('taskkill', ['/PID', String(survivor.pid), '/T', '/F']);
+    } else {
+      await capture('kill', ['-KILL', String(survivor.pid)]);
+    }
+  }
+  // A launcher ended by taskkill /F never removes its own PID file, so clear it here.
+  await rm(devLauncherPidFile, { force: true });
+  log('[dev] Stopped. Docker services (database, Redis, Garage) are still running.');
 }
 
 async function findAvailablePort(start, label, maxTries = 50, reservedPorts = new Set()) {
@@ -626,8 +845,43 @@ async function ensureDevRestoreAgentKey() {
   });
 }
 
+// SSO cannot work against a development stack (it needs a public HTTPS callback
+// URL and a reachable provider), and a restored backup or inherited shell
+// variable can leave SSO enabled with password login hidden, locking the
+// developer out. Environment values win over the database per field, so pin
+// password login on and SSO off for the host-run API. Every other OIDC variable
+// is blanked (the API treats empty as unset) so a stale client secret or secret
+// file in the parent shell cannot fail startup. The saved database settings are
+// left untouched; this only overrides them while the dev stack runs.
+const DEV_OIDC_ENV_KEYS = [
+  'RIVIAMIGO_OIDC_ALLOWED_EMAIL_DOMAINS',
+  'RIVIAMIGO_OIDC_AUTO_LINK_VERIFIED_EMAIL',
+  'RIVIAMIGO_OIDC_AUTO_SIGNUP',
+  'RIVIAMIGO_OIDC_BUTTON_LABEL',
+  'RIVIAMIGO_OIDC_CLIENT_ID',
+  'RIVIAMIGO_OIDC_CLIENT_SECRET',
+  'RIVIAMIGO_OIDC_CLIENT_SECRET_FILE',
+  'RIVIAMIGO_OIDC_CLIENT_SECRET_SOURCE',
+  'RIVIAMIGO_OIDC_ISSUER_URL',
+  'RIVIAMIGO_OIDC_PUBLIC_BASE_URL',
+  'RIVIAMIGO_OIDC_REQUIRED_CLAIM_NAME',
+  'RIVIAMIGO_OIDC_REQUIRED_CLAIM_VALUE',
+  'RIVIAMIGO_OIDC_SCOPES',
+  'RIVIAMIGO_OIDC_TOKEN_AUTH_METHOD',
+];
+
+export function developmentAuthEnv() {
+  return {
+    ...Object.fromEntries(DEV_OIDC_ENV_KEYS.map((key) => [key, ''])),
+    RIVIAMIGO_OIDC_ENABLED: 'false',
+    RIVIAMIGO_OIDC_AUTO_LOGIN: 'false',
+    RIVIAMIGO_PASSWORD_LOGIN_ENABLED: 'true',
+  };
+}
+
 function apiEnv() {
   return {
+    ...developmentAuthEnv(),
     // The checked-in SQLx metadata lets a brand-new development database build
     // before the API process applies its embedded migrations on first start.
     SQLX_OFFLINE: 'true',
@@ -833,12 +1087,14 @@ async function shutdown(code = 0) {
     }
   }
 
+  await removeOwnLauncherPid().catch(() => {});
   process.exit(code);
 }
 
 async function main() {
   log('Starting Riviamigo development stack...');
   log('');
+  await recordLauncherPid();
 
   await requireTools();
   await clearRepoOwnedDevProcesses();
@@ -879,7 +1135,12 @@ function onceExit(child, label) {
 
 const isDirectExecution = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
-if (isDirectExecution) {
+if (isDirectExecution && stopOnly) {
+  stopRepoOwnedDevProcesses().catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
+} else if (isDirectExecution) {
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => {
       shutdown(signal === 'SIGINT' ? 130 : 143);

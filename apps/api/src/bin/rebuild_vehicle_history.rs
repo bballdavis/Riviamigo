@@ -145,6 +145,7 @@ async fn rebuild_vehicle_history(pool: &PgPool, client: &Client, args: Args) -> 
             charge_clusters_merged = charge_canonicalization.clusters_merged,
             charge_duplicates_deleted = charge_canonicalization.duplicate_rows_deleted,
             charge_payload_reconciliations = charge_canonicalization.payload_reconciliations,
+            charge_sessions_reassigned = charge_canonicalization.misattributed_sessions_reassigned,
             charge_locations,
             charge_costs,
             trips,

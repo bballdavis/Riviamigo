@@ -52,7 +52,7 @@ for the exact variable contract.
 
 ## Optional settings
 
-Weather, geocoding, basemap, and Iconify policies are configured in **Settings > External Connections** and stored in the database. Do not add provider URLs or API keys to `.env`; custom connection secrets are encrypted with the installation age key and remain write-only. See [external connections](./external-connections.md).
+Weather, geocoding, basemap, Iconify, fuel price, and vehicle lookup policies are configured in **Settings > External Connections** and stored in the database. Do not add provider URLs or API keys to `.env`; custom connection secrets are encrypted with the installation age key and remain write-only. See [external connections](./external-connections.md).
 
 - `RIVIAMIGO_ORIGIN_PORT` changes the published app port from `8080`.
 - `RIVIAMIGO_HOST_BIND_ADDRESS` controls Docker's host-side published address;

@@ -35,7 +35,14 @@ import type {
   ChartSourceManifest,
   MetricCatalogEntry,
 } from '@riviamigo/types';
-import { ChartColorField, CHART_SERIES_TOKENS } from '@riviamigo/ui/charts';
+import {
+  ChartColorField,
+  CHART_SERIES_TOKENS,
+  chartSmoothingOptions,
+  chartSmoothingSettings,
+  resolveChartSmoothingLevel,
+  type ChartSmoothingLevel,
+} from '@riviamigo/ui/charts';
 import {
   Badge,
   Button,
@@ -391,7 +398,7 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
           {saveError ? (
             <div
               role="alert"
-              className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
+              className="mb-4 rounded-lg border border-status-danger/40 bg-status-danger/10 px-3 py-2 text-sm text-status-danger"
             >
               {saveError}
             </div>
@@ -615,7 +622,7 @@ function CurvesSection({
             </p>
           )}
           {mixed ? (
-            <p className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+            <p className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-3 text-xs text-status-warning">
               This chart uses mixed domains. Use Advanced to edit its exact field bindings.
             </p>
           ) : null}
@@ -663,7 +670,7 @@ function CurvesSection({
                         {option.category} · {option.description}
                       </span>
                       {!option.enabled || mixed ? (
-                        <span className="block text-xs text-warning">
+                        <span className="block text-xs text-status-warning">
                           {mixed
                             ? 'Mixed-domain chart; edit in Advanced.'
                             : (option.disabledReason ?? 'Unavailable for this chart.')}
@@ -782,7 +789,7 @@ function CurvesListSection({
                   aria-label="Remove curve"
                   disabled={definition.series.length === 1}
                   onClick={() => onChange((current) => removeCurveAndUnusedSources(current, index))}
-                  className="icon-button text-danger"
+                  className="icon-button text-status-danger"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -905,7 +912,7 @@ function CurvesListSection({
                     ) : null}
                   </>
                 ) : (
-                  <p className="text-xs text-warning">
+                  <p className="text-xs text-status-warning">
                     This curve's data settings are unavailable. Choose another value or repair it in
                     Advanced.
                   </p>
@@ -1027,26 +1034,7 @@ function DisplaySection({
                 <option value="hide">Hide</option>
               </select>
             </EditorField>
-            <EditorField label="Curve smoothness">
-              <select
-                value={definition.display.curveSmoothness}
-                onChange={(event) =>
-                  onChange((current) => ({
-                    ...current,
-                    display: {
-                      ...current.display,
-                      curveSmoothness: event.target
-                        .value as ChartDefinitionV1['display']['curveSmoothness'],
-                    },
-                  }))
-                }
-                className="editor-input"
-              >
-                <option value="straight">Straight</option>
-                <option value="gentle">Gentle</option>
-                <option value="smooth">Smooth</option>
-              </select>
-            </EditorField>
+            <SmoothingField definition={definition} onChange={onChange} />
           </div>
           <ToggleRow
             label="Show grid"
@@ -1139,18 +1127,18 @@ function PreviewPanel({
           {errors.map((error) => (
             <div
               key={`${error.path}-${error.message}`}
-              className="rounded-lg border border-danger/30 bg-danger/10 p-2"
+              className="rounded-lg border border-status-danger/30 bg-status-danger/10 p-2"
             >
-              <strong className="text-danger">{error.path}</strong>
+              <strong className="text-status-danger">{error.path}</strong>
               <p className="mt-1 text-fg-secondary">{error.message}</p>
             </div>
           ))}
           {totalIssues === 0 ? (
             <>
-              <div className="flex items-center gap-2 text-success">
+              <div className="flex items-center gap-2 text-status-positive">
                 <Check className="h-4 w-4" /> Production chart renderer
               </div>
-              <div className="flex items-center gap-2 text-success">
+              <div className="flex items-center gap-2 text-status-positive">
                 <Check className="h-4 w-4" /> {draft.config.series.length} curves
               </div>
             </>
@@ -1301,7 +1289,7 @@ function SearchPicker({
                   <span className="block text-xs text-fg-tertiary">{option.description}</span>
                 ) : null}
                 {option.disabledReason ? (
-                  <span className="block text-xs text-warning">{option.disabledReason}</span>
+                  <span className="block text-xs text-status-warning">{option.disabledReason}</span>
                 ) : null}
               </button>
             ))}
@@ -1469,6 +1457,60 @@ function patchAxis(
     if (!existing) return current;
     return { ...current, axes: { ...current.axes, [axis]: { ...existing, ...patch } } };
   });
+}
+/**
+ * One smoothing choice for the chart: off, a rounded line through the recorded
+ * values, or values averaged over a time window. It applies to line and area
+ * series; bars, points and steps are always drawn from the recorded values.
+ */
+function SmoothingField({
+  definition,
+  onChange,
+}: {
+  definition: ChartDefinitionV1;
+  onChange: (mutator: (definition: ChartDefinitionV1) => ChartDefinitionV1) => void;
+}) {
+  const drawsLines = definition.series.some(
+    (series) => series.mark === 'line' || series.mark === 'area'
+  );
+  const support = { timeWindows: drawsLines && definition.x.kind === 'time', curve: drawsLines };
+  const options = chartSmoothingOptions(support);
+  const level = resolveChartSmoothingLevel(
+    definition.display.timeFilter,
+    definition.display.curveSmoothness,
+    support
+  );
+  const selected = options.find((option) => option.value === level);
+  return (
+    <EditorField
+      label="Smoothing"
+      hint={selected?.description ?? 'Available when the chart has a line or area series.'}
+    >
+      <select
+        value={selected ? level : ''}
+        disabled={options.length === 0}
+        onChange={(event) => {
+          const next = chartSmoothingSettings(event.target.value as ChartSmoothingLevel);
+          onChange((current) => ({
+            ...current,
+            display: {
+              ...current.display,
+              timeFilter: next.timeFilter,
+              curveSmoothness: next.smoothness,
+            },
+          }));
+        }}
+        className="editor-input"
+      >
+        {options.length === 0 ? <option value="">Not available</option> : null}
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </EditorField>
+  );
 }
 function AxisRangeEditor({
   axis,

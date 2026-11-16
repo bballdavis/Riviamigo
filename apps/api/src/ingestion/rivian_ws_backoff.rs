@@ -27,6 +27,9 @@ const HOLD_MAX_SECONDS: u64 = 900;
 /// Rejected credentials only recover after a token refresh or reauthorization,
 /// so retrying sooner just repeats the rejection.
 const UNAUTHENTICATED_MIN_SECONDS: u64 = 300;
+/// A session whose hold ended this long ago is forgotten, so rotated session
+/// tokens do not accumulate. Its next hold starts from the shortest delay.
+const HOLD_STATE_TTL: Duration = Duration::from_secs(60 * 60);
 
 /// Why reconnecting is being held off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +86,15 @@ fn with_holds<T>(f: impl FnOnce(&mut HashMap<[u8; 16], HoldState>) -> T) -> T {
     f(&mut holds)
 }
 
+/// Drop sessions whose last hold ended at least [`HOLD_STATE_TTL`] before `now`.
+fn prune_stale_holds(holds: &mut HashMap<[u8; 16], HoldState>, now: Instant) {
+    holds.retain(|_, state| {
+        state
+            .retry_at
+            .is_some_and(|retry_at| now.saturating_duration_since(retry_at) < HOLD_STATE_TTL)
+    });
+}
+
 /// The delay for the `attempt`-th consecutive hold, before the shared state
 /// decides whether an existing longer hold wins.
 fn hold_delay(reason: HoldReason, attempt: u32) -> Duration {
@@ -100,6 +112,7 @@ fn hold_delay(reason: HoldReason, attempt: u32) -> Duration {
 pub(crate) fn start_hold(key: [u8; 16], reason: HoldReason) -> Duration {
     let now = Instant::now();
     with_holds(|holds| {
+        prune_stale_holds(holds, now);
         let state = holds.entry(key).or_default();
         // Both sockets see the same incident (Rivian closes each of them):
         // while a hold is already running, a second report neither grows the
@@ -252,6 +265,29 @@ mod tests {
         assert!(remaining_hold(key).is_none());
         let reset = start_hold(key, HoldReason::NotAcknowledged);
         assert!((30..=60).contains(&reset.as_secs()));
+    }
+
+    #[test]
+    fn stale_session_holds_are_forgotten() {
+        let now = Instant::now();
+        let hold = |retry_at| HoldState {
+            attempt: 3,
+            retry_at: Some(retry_at),
+            reason: Some(HoldReason::RateLimited),
+        };
+        let mut holds = HashMap::from([
+            ([1u8; 16], hold(now + Duration::from_secs(30))),
+            ([2u8; 16], hold(now - Duration::from_secs(60))),
+            (
+                [3u8; 16],
+                hold(now - HOLD_STATE_TTL - Duration::from_secs(1)),
+            ),
+            ([4u8; 16], HoldState::default()),
+        ]);
+        prune_stale_holds(&mut holds, now);
+        let mut kept: Vec<u8> = holds.keys().map(|key| key[0]).collect();
+        kept.sort_unstable();
+        assert_eq!(kept, vec![1, 2]);
     }
 
     #[test]

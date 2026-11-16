@@ -23,7 +23,9 @@ export function ResponsiveDialog({ titleId, onClose, children, className }: Resp
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const focusable = () => [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? [])];
-    focusable()[0]?.focus();
+    // A field the dialog asks for (React `autoFocus`) has focus already;
+    // otherwise start on the first control.
+    if (!dialogRef.current?.contains(document.activeElement)) focusable()[0]?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onCloseRef.current();
       if (event.key !== 'Tab') return;

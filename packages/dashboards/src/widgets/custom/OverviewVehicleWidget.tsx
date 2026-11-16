@@ -1,17 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Battery, Car, CheckCircle2, CircleAlert, Cpu, Gauge, Lock, MapPin, Package, PackageOpen, Thermometer, TriangleAlert, Unlock } from 'lucide-react';
+import { Battery, Car, CheckCircle2, CircleAlert, Gauge, LocateFixed, Lock, Maximize2, Minimize2, Package, PackageOpen, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
-import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
-import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
-import { formatAltitude, formatMiles, formatMph, formatTemp } from '@riviamigo/ui/lib/utils';
+import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useUpdateOverviewMapExpanded, useUpdateOverviewView, useUserPreferences, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
+import { formatMiles } from '@riviamigo/ui/lib/utils';
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI, formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
-import { FrunkIcon, LiftgateIcon, Tooltip } from '@riviamigo/ui/primitives';
+import { AssistantWave, FrunkIcon, LiftgateIcon, Tooltip } from '@riviamigo/ui/primitives';
 import { isVehicleCharging } from '@riviamigo/types';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { isVehiclePluggedIn } from '../../dashboardVisibility';
 import { getDoorOverlayUrls, getOpenDoorStates } from './imageUtils';
+import { resolveOverviewStatIds } from './overviewStats';
+import { getOverviewStatRequirements, presentOverviewStat, type OverviewStatData } from './overviewStatDisplay';
+import { useOverviewStatData, useUnitPreferencesVersion } from './useOverviewStatData';
+import { resolveOverviewMapOptions, resolveVehicleFacingDeg, type OverviewMapOptions, type OverviewView } from './overviewMap';
+import { OverviewLocationMap } from './OverviewLocationMap';
+import { createMapFrameSource, OverviewDriveWave } from './OverviewDriveWave';
 
 type AnchorSet = {
   tire: { rl: string; fl: string; rr: string; fr: string };
@@ -54,12 +59,50 @@ const OVERVIEW_ANCHORS: Record<string, AnchorSet> = {
   R2S: SHARED_OVERVIEW_ANCHORS,
 };
 
-function OverviewVehicleWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
+// Grid columns for the three-column tiers. Each set is chosen whole, since
+// conflicting utilities at the same breakpoint resolve by stylesheet order.
+const DEFAULT_LAYOUT_COLUMNS = '@min-[34rem]/overview:grid-cols-[11.25rem_minmax(0,1fr)_8.75rem] @min-[58rem]/overview:grid-cols-[16rem_minmax(22rem,1fr)_18rem]';
+// The SoC column shrinks to its battery rail (rail width plus panel padding)
+// and the map column takes the freed width; the vehicle column keeps `1fr`.
+const EXPANDED_LAYOUT_COLUMNS = '@min-[34rem]/overview:grid-cols-[3.75rem_minmax(0,1fr)_16.25rem] @min-[58rem]/overview:grid-cols-[5.75rem_minmax(22rem,1fr)_28.25rem]';
+// The map canvas always keeps the expanded map column's width (the last
+// track above) and sits centered in its panel, which clips the overflow.
+// Expanding then only reveals more of a map that is already drawn, instead of
+// resizing and redrawing the WebGL canvas on every frame of the transition.
+const MAP_CANVAS_WIDTH = 'w-full @min-[34rem]/overview:w-[16.25rem] @min-[58rem]/overview:w-[28.25rem]';
+// Edge overlays drawn by the map (its credits) shift in by the clipped
+// overflow so they stay inside the panel. `100cqw` is the panel's width.
+const MAP_CANVAS_STYLE = { '--rm-map-overlay-inset-x': 'calc((100% - 100cqw) / 2)' } as React.CSSProperties;
+const SOC_DEFAULT_COLUMNS = '@min-[34rem]/overview:grid-cols-[2.25rem_minmax(0,1fr)] @min-[58rem]/overview:grid-cols-[3.75rem_minmax(0,1fr)]';
+const SOC_RAIL_ONLY_COLUMNS = '@min-[34rem]/overview:grid-cols-[minmax(0,1fr)]';
+
+function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { defaultVehicleId } = useAuth();
   const vehicleId = ctx.vehicleId ?? defaultVehicleId;
   const { data: status } = useCurrentVehicleStatus(vehicleId);
   const { data: vehicles } = useVehicles();
   const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
+  const statIds = resolveOverviewStatIds(instance.options?.stats);
+  const statData = useOverviewStatData(statIds, vehicleId ?? null);
+  useUnitPreferencesVersion();
+  // The cluster/map choice and the map's expansion are saved to the account so
+  // they follow the user across sessions and devices. Local copies keep the
+  // controls instant while a save is in flight or if it fails.
+  const preferences = useUserPreferences().data;
+  const savedView = preferences?.overview_view === 'map' ? 'map' : 'cluster';
+  const savedMapExpanded = preferences?.overview_map_expanded === true;
+  const updateOverviewView = useUpdateOverviewView();
+  const updateOverviewMapExpanded = useUpdateOverviewMapExpanded();
+  const [chosenView, setChosenView] = useState<OverviewView | null>(null);
+  const [chosenMapExpanded, setChosenMapExpanded] = useState<boolean | null>(null);
+  const changeView = (next: OverviewView) => {
+    setChosenView(next);
+    updateOverviewView.mutate(next);
+  };
+  const changeMapExpanded = (next: boolean) => {
+    setChosenMapExpanded(next);
+    updateOverviewMapExpanded.mutate(next);
+  };
 
   return (
     <CurrentVehicleStatePanel
@@ -69,6 +112,13 @@ function OverviewVehicleWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
       vehicleModel={activeVehicle?.model}
       isDemoVehicle={activeVehicle?.is_demo ?? activeVehicle?.rivian_vehicle_id?.startsWith('demo-') ?? false}
       targetTirePressurePsi={activeVehicle?.target_tire_pressure_psi}
+      statIds={statIds}
+      statData={statData}
+      mapOptions={resolveOverviewMapOptions(instance.options)}
+      view={chosenView ?? savedView}
+      onViewChange={changeView}
+      mapExpanded={chosenMapExpanded ?? savedMapExpanded}
+      onMapExpandedChange={changeMapExpanded}
     />
   );
 }
@@ -80,6 +130,13 @@ export function CurrentVehicleStatePanel({
   vehicleModel,
   isDemoVehicle = false,
   targetTirePressurePsi,
+  statIds,
+  statData,
+  mapOptions,
+  view: controlledView,
+  onViewChange,
+  mapExpanded: controlledMapExpanded,
+  onMapExpandedChange,
 }: {
   status: VehicleStatus | null | undefined;
   images?: VehicleImages | null | undefined;
@@ -87,7 +144,36 @@ export function CurrentVehicleStatePanel({
   vehicleModel?: string | undefined;
   isDemoVehicle?: boolean;
   targetTirePressurePsi?: number | null | undefined;
+  /** Saved `stats` option: which sensors fill the five stat rows. Defaults apply when absent. */
+  statIds?: unknown;
+  /** Metric and summary values for rows that read more than live vehicle status. */
+  statData?: OverviewStatData;
+  /** Location map settings. Omitted or disabled, the panel offers no cluster/map toggle. */
+  mapOptions?: OverviewMapOptions | undefined;
+  /** Controlled cluster/map view (the widget saves it per user); uncontrolled starts on the cluster. */
+  view?: OverviewView | undefined;
+  onViewChange?: ((view: OverviewView) => void) | undefined;
+  /** Controlled map expansion (the widget saves it per user); uncontrolled starts collapsed. */
+  mapExpanded?: boolean | undefined;
+  onMapExpandedChange?: ((expanded: boolean) => void) | undefined;
 }) {
+  const [uncontrolledView, setUncontrolledView] = useState<OverviewView>('cluster');
+  const view = controlledView ?? uncontrolledView;
+  const setView = (next: OverviewView) => {
+    if (onViewChange) onViewChange(next);
+    else setUncontrolledView(next);
+  };
+  const mapAvailable = mapOptions?.enabled === true;
+  const showMap = mapAvailable && view === 'map';
+  const [uncontrolledMapExpanded, setUncontrolledMapExpanded] = useState(false);
+  const mapExpandedPreference = controlledMapExpanded ?? uncontrolledMapExpanded;
+  const setMapExpanded = (next: boolean) => {
+    if (onMapExpandedChange) onMapExpandedChange(next);
+    else setUncontrolledMapExpanded(next);
+  };
+  // Expansion only applies while the map is showing; the cluster always uses
+  // the normal three-column layout, and the map reopens at the saved size.
+  const mapExpanded = showMap && mapExpandedPreference;
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const resolvedOverhead = resolveVehicleArtwork(images, vehicleModel, 'overview');
   const baseOverheadLight = resolvedOverhead.light;
@@ -103,6 +189,8 @@ export function CurrentVehicleStatePanel({
   const overlaysLight = getDoorOverlayUrls(images?.all, openDoorStates, 'light');
   const overlaysDark = getDoorOverlayUrls(images?.all, openDoorStates, 'dark');
   const imageStageRef = useRef<HTMLDivElement | null>(null);
+  const [locationPanelRef, locationPanelHeight] = useObservedHeight();
+  const [mapFrames] = useState(createMapFrameSource);
   const [imageStageHeight, setImageStageHeight] = useState(0);
   const [imageStageWidth, setImageStageWidth] = useState(0);
   const locksKnown = [
@@ -117,18 +205,7 @@ export function CurrentVehicleStatePanel({
     rl: makeTireDisplay(status?.tire_rl_psi, status?.tire_rl_status, targetTirePressurePsi),
     rr: makeTireDisplay(status?.tire_rr_psi, status?.tire_rr_status, targetTirePressurePsi),
   };
-  const stats = [
-    { label: 'Driver mode', value: renderDriverMode(status?.drive_mode, status?.gear_status), icon: <Car className="h-3.5 w-3.5" style={{ color: 'var(--rm-dm-everyday)' }} /> },
-    { label: 'Altitude', value: formatAltitude(status?.altitude_m), icon: <MapPin className="h-3.5 w-3.5" style={{ color: 'var(--rm-chart-teal)' }} /> },
-    { label: 'Cabin', value: formatTemp(status?.cabin_temp_c), icon: <Thermometer className="h-3.5 w-3.5" style={{ color: 'var(--rm-chart-sky)' }} /> },
-    { label: 'Speed', value: formatMph(status?.speed_mph), icon: <Gauge className="h-3.5 w-3.5" style={{ color: 'var(--rm-chart-sky)' }} /> },
-    { label: 'Software', value: formatSoftware(status), icon: <Cpu className="h-3.5 w-3.5" style={{ color: 'var(--rm-status-positive)' }} /> },
-  ];
-  const freshnessLabel = status?.telemetry_stale
-    ? 'Telemetry stale'
-    : status?.last_updated
-      ? `Updated ${new Date(status.last_updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
-      : 'Awaiting telemetry';
+  const stats = resolveOverviewStatIds(statIds).map((id) => ({ id, ...presentOverviewStat(id, status, statData) }));
   const rearGateLock = vehicleModel === 'R1T'
     ? status?.closure_tailgate_locked
     : status?.closure_liftgate_locked ?? status?.closure_tailgate_locked;
@@ -154,9 +231,9 @@ export function CurrentVehicleStatePanel({
     >
       <div className="mb-4 flex shrink-0 items-center justify-between gap-3">
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-fg-tertiary">Vehicle overview</p>
-        <span className="rounded-lg border border-border bg-bg-elevated px-2 py-1 text-[11px] text-fg-tertiary">
-          {freshnessLabel}
-        </span>
+        <div className="flex items-center gap-2">
+          {mapAvailable ? <OverviewViewToggle view={view} onChange={setView} /> : null}
+        </div>
       </div>
       {/* Tiers follow the widget's own width, not the viewport: the dashboard
           gives this widget a fixed-height cell from 640px up, so every tier
@@ -166,10 +243,13 @@ export function CurrentVehicleStatePanel({
           rather than silently clipped. */}
       <div
         data-testid="overview-layout"
-        className="grid flex-1 min-h-0 content-stretch gap-4 overflow-y-auto @min-[34rem]/overview:grid-cols-[11.25rem_minmax(0,1fr)_8.75rem] @min-[34rem]/overview:gap-3 @min-[58rem]/overview:grid-cols-[16rem_minmax(22rem,1fr)_18rem] @min-[58rem]/overview:gap-4"
+        data-map-expanded={mapExpanded || undefined}
+        className={`grid flex-1 min-h-0 content-stretch gap-4 overflow-y-auto transition-[grid-template-columns] duration-300 ease-out motion-reduce:transition-none @min-[34rem]/overview:-mx-4 @min-[34rem]/overview:gap-3 @min-[58rem]/overview:gap-4 ${mapExpanded ? EXPANDED_LAYOUT_COLUMNS : DEFAULT_LAYOUT_COLUMNS}`}
       >
         <div
-          className="grid min-h-60 grid-cols-[3.75rem_minmax(0,1fr)] gap-4 rounded-2xl border p-4 @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:grid-cols-[2.25rem_minmax(0,1fr)] @min-[34rem]/overview:gap-3 @min-[34rem]/overview:p-3 @min-[58rem]/overview:min-h-60 @min-[58rem]/overview:grid-cols-[3.75rem_minmax(0,1fr)] @min-[58rem]/overview:gap-4 @min-[58rem]/overview:p-4"
+          data-testid="overview-soc-panel"
+          data-collapsed={mapExpanded || undefined}
+          className={`grid min-h-60 grid-cols-[3.75rem_minmax(0,1fr)] gap-4 rounded-2xl border p-4 @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-l-none @min-[34rem]/overview:border-l-0 @min-[34rem]/overview:gap-3 @min-[34rem]/overview:p-3 @min-[58rem]/overview:min-h-60 @min-[58rem]/overview:gap-4 @min-[58rem]/overview:p-4 ${mapExpanded ? SOC_RAIL_ONLY_COLUMNS : SOC_DEFAULT_COLUMNS}`}
           style={{
             backgroundColor: 'color-mix(in srgb, var(--rm-accent) 8%, var(--rm-bg-surface))',
             borderColor: 'color-mix(in srgb, var(--rm-accent) 28%, var(--rm-border-default))',
@@ -179,7 +259,13 @@ export function CurrentVehicleStatePanel({
             className="relative h-full min-h-48 overflow-hidden rounded-2xl border bg-bg-surface @min-[34rem]/overview:min-h-0"
             style={{ borderColor: 'color-mix(in srgb, var(--rm-accent) 32%, var(--rm-border-default))' }}
           >
-            <div data-testid="overview-soc-rail" className="absolute inset-1 flex items-end overflow-hidden rounded-xl p-1">
+            <div
+              data-testid="overview-soc-rail"
+              role="img"
+              aria-label={`State of charge ${formatPercent(status?.battery_level)}`}
+              title={mapExpanded ? `SoC ${formatPercent(status?.battery_level)}` : undefined}
+              className="absolute inset-1 flex items-end overflow-hidden rounded-xl p-1"
+            >
               <div
                 data-testid="overview-soc-fill"
                 className="h-full w-full rounded-lg transition-[clip-path]"
@@ -191,7 +277,10 @@ export function CurrentVehicleStatePanel({
             </div>
             <Battery className="absolute left-1/2 top-3 h-4 w-4 -translate-x-1/2 text-fg/80" />
           </div>
-          <div className="flex min-w-0 flex-col justify-between gap-4 @min-[34rem]/overview:gap-3 @min-[58rem]/overview:gap-4">
+          <div
+            data-testid="overview-soc-details"
+            className={`min-w-0 flex-col justify-between gap-4 @min-[34rem]/overview:gap-3 @min-[58rem]/overview:gap-4 ${mapExpanded ? 'flex @min-[34rem]/overview:hidden' : 'flex'}`}
+          >
             <div>
               <span className="text-xs uppercase tracking-[0.16em] text-fg-tertiary">SoC</span>
               <p className="mt-1 font-mono text-4xl font-semibold tabular-nums text-fg @min-[34rem]/overview:text-3xl @min-[58rem]/overview:text-4xl">{formatPercent(status?.battery_level)}</p>
@@ -244,11 +333,42 @@ export function CurrentVehicleStatePanel({
             )}
           </div>
         </div>
+        {showMap && mapOptions ? (
+          <div
+            ref={locationPanelRef}
+            data-testid="overview-location-panel"
+            className={`@container relative overflow-hidden rounded-xl border border-border bg-bg-surface @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-r-none @min-[34rem]/overview:border-r-0 ${mapExpanded ? 'min-h-96' : 'min-h-60'}`}
+          >
+            <button
+              type="button"
+              data-testid="overview-map-expand"
+              aria-label={mapExpanded ? 'Collapse map' : 'Expand map'}
+              aria-pressed={mapExpanded}
+              title={mapExpanded ? 'Collapse map' : 'Expand map'}
+              onClick={() => setMapExpanded(!mapExpanded)}
+              className="absolute right-0 top-0 z-20 inline-flex h-11 w-11 items-center justify-center rounded-bl-xl border-b border-l border-border/60 bg-bg-elevated/50 text-accent backdrop-blur-sm transition-colors hover:bg-bg-elevated/85 focus-visible:bg-bg-elevated/85 focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent @min-[34rem]/overview:h-8 @min-[34rem]/overview:w-8 @min-[34rem]/overview:rounded-bl-lg"
+            >
+              {mapExpanded ? <Minimize2 className="h-4 w-4" aria-hidden="true" /> : <Maximize2 className="h-4 w-4" aria-hidden="true" />}
+            </button>
+            <div data-testid="overview-map-canvas" className={`absolute inset-y-0 left-1/2 min-w-full -translate-x-1/2 ${MAP_CANVAS_WIDTH}`} style={MAP_CANVAS_STYLE}>
+              <OverviewLocationMap
+                latitude={status?.latitude}
+                longitude={status?.longitude}
+                headingDeg={resolveVehicleFacingDeg(status)}
+                artwork={resolvedOverhead}
+                options={mapOptions}
+                heightPx={locationPanelHeight - 2}
+                onRenderFrame={mapFrames.publish}
+              />
+            </div>
+            <OverviewDriveWave status={status} mapFrames={mapFrames} />
+          </div>
+        ) : (
         <div data-testid="overview-stats" className="grid auto-rows-fr gap-2 @min-[34rem]/overview:gap-1.5 @min-[58rem]/overview:gap-2">
           {stats.map((stat) => (
             <div
-              key={stat.label}
-              className="flex min-h-10 min-w-0 items-center justify-between gap-3 rounded-xl border border-border bg-bg-surface px-3 py-2 text-sm @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:flex-col @min-[34rem]/overview:items-start @min-[34rem]/overview:justify-center @min-[34rem]/overview:gap-0.5 @min-[34rem]/overview:px-2.5 @min-[34rem]/overview:py-1.5 @min-[58rem]/overview:min-h-10 @min-[58rem]/overview:flex-row @min-[58rem]/overview:items-center @min-[58rem]/overview:justify-between @min-[58rem]/overview:gap-3 @min-[58rem]/overview:px-3 @min-[58rem]/overview:py-2"
+              key={stat.id}
+              className="flex min-h-10 min-w-0 items-center justify-between gap-3 rounded-xl border border-border bg-bg-surface px-3 py-2 text-sm @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-r-none @min-[34rem]/overview:border-r-0 @min-[34rem]/overview:flex-col @min-[34rem]/overview:items-start @min-[34rem]/overview:justify-center @min-[34rem]/overview:gap-0.5 @min-[34rem]/overview:px-2.5 @min-[34rem]/overview:py-1.5 @min-[58rem]/overview:min-h-10 @min-[58rem]/overview:flex-row @min-[58rem]/overview:items-center @min-[58rem]/overview:justify-between @min-[58rem]/overview:gap-3 @min-[58rem]/overview:px-3 @min-[58rem]/overview:py-2"
             >
               <span className="inline-flex min-w-0 max-w-full items-center gap-2 truncate text-fg-tertiary @min-[34rem]/overview:gap-1.5 @min-[34rem]/overview:text-[11px] @min-[58rem]/overview:gap-2 @min-[58rem]/overview:text-sm">
                 {stat.icon}
@@ -263,8 +383,54 @@ export function CurrentVehicleStatePanel({
             </div>
           ))}
         </div>
+        )}
       </div>
     </section>
+  );
+}
+
+/** Tracks an element's border-box height through a callback ref, so it also works for elements that mount later. */
+function useObservedHeight(): [(element: HTMLDivElement | null) => void, number] {
+  const [element, setElement] = useState<HTMLDivElement | null>(null);
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const update = () => setHeight(element.getBoundingClientRect().height);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return [setElement, height];
+}
+
+const OVERVIEW_VIEW_CHOICES: ReadonlyArray<{ value: OverviewView; label: string; icon: React.ComponentType<{ className?: string }> }> = [
+  { value: 'cluster', label: 'Vehicle cluster', icon: Gauge },
+  { value: 'map', label: 'Current location map', icon: LocateFixed },
+];
+
+function OverviewViewToggle({ view, onChange }: { view: OverviewView; onChange: (view: OverviewView) => void }) {
+  return (
+    <div role="group" aria-label="Overview view" className="inline-flex h-11 items-center gap-0.5 rounded-lg border border-border bg-bg-elevated p-0.5 @min-[34rem]/overview:h-8">
+      {OVERVIEW_VIEW_CHOICES.map(({ value, label, icon: Icon }) => {
+        const selected = view === value;
+        return (
+          <button
+            key={value}
+            type="button"
+            aria-label={label}
+            aria-pressed={selected}
+            title={label}
+            onClick={() => onChange(value)}
+            className={`inline-flex h-full w-10 items-center @min-[34rem]/overview:w-7 justify-center rounded-md border transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
+              selected ? 'border-accent/60 bg-accent/10 text-accent' : 'border-transparent text-fg-tertiary hover:text-fg'
+            }`}
+          >
+            <Icon className="h-4 w-4" />
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -427,7 +593,10 @@ function VehicleArtFrame({
 }) {
   const artwork = useVehicleArtwork(source);
   const fallbackArtwork = useVehicleArtwork(fallbackSource);
-  const frameArtworkSrc = artwork.src ?? fallbackArtwork.src;
+  // Wait for the real artwork rather than flashing the packaged fallback; the
+  // fallback is only for vehicles whose own artwork is missing or broken.
+  const loading = artwork.isLoading;
+  const frameArtworkSrc = loading ? null : artwork.src ?? fallbackArtwork.src;
   const [rotatedAspectRatio, setRotatedAspectRatio] = useState(2.25);
   useEffect(() => {
     const image = new Image();
@@ -457,7 +626,11 @@ function VehicleArtFrame({
         '--vehicle-frame-width': `${frameWidth}px`,
       } as React.CSSProperties}
     >
-      {frameArtworkSrc ? children : null}
+      {loading ? (
+        <div className="absolute inset-0 flex items-center">
+          <AssistantWave label="Loading vehicle picture" />
+        </div>
+      ) : frameArtworkSrc ? children : null}
     </div>
   );
 }
@@ -540,30 +713,8 @@ function isCharging(status: VehicleStatus | null | undefined) {
   return isVehicleCharging(status);
 }
 
-function renderDriverMode(driveMode: string | null | undefined, gearStatus: string | null | undefined) {
-  const rawValue = driveMode ?? gearStatus;
-  if (!rawValue) return '-';
-
-  return formatDriveMode(rawValue);
-}
-
-function formatSoftware(status: VehicleStatus | null | undefined) {
-  const otaStatus = status?.ota_status ?? status?.software_update_status ?? status?.ota_current_status;
-  const available = status?.ota_available_version;
-  const current = status?.ota_current_version;
-  if (!otaStatus && !available && !current) return '-';
-  if (!available || available === '0.0.0' || available === current) return 'Up to date';
-  if (otaStatus && !['idle', 'unknown'].includes(otaStatus.toLowerCase())) return prettify(otaStatus);
-  return `Available ${available}`;
-}
-
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
-}
-
-function prettify(value: string | null | undefined) {
-  if (!value) return '-';
-  return value.replace(/^chrgr_sts_/, '').replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function makeTireDisplay(psi: number | null | undefined, status: string | null | undefined, targetTirePressurePsi?: number | null) {
@@ -612,6 +763,6 @@ registerWidget({
   defaultSize: { w: 12, h: 7 },
   minSize: { w: 8, h: 6 },
   defaultOptions: {},
-  dataRequirements: () => ({ status: true }),
+  dataRequirements: (instance) => getOverviewStatRequirements(resolveOverviewStatIds(instance.options?.stats)),
   component: OverviewVehicleWidget,
 });

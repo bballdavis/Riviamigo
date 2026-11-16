@@ -3,15 +3,25 @@ export const queryKeys = {
   me: { all: ['me'] as const },
   auth: { config: ['auth-config'] as const, identities: ['auth-identities'] as const, authenticationSettings: ['authentication-settings'] as const },
   vehicles: {
+    /**
+     * The vehicle list. Every other vehicle key starts with this prefix, so invalidating it without
+     * `exact: true` also refetches each vehicle's status, health, images, and ownership.
+     */
     all: ['vehicles'] as const,
     status: (vehicleId: string | null) => ['vehicles', 'status', vehicleId] as const,
   },
   vehicle: {
     health: (vehicleId: string | null) => ['vehicles', 'health', vehicleId] as const,
     images: (vehicleId: string | null) => ['vehicles', 'images', vehicleId] as const,
+    ownership: (vehicleId: string | null) => ['vehicles', 'ownership', vehicleId] as const,
+    ownershipSettings: (vehicleId: string | null) =>
+      ['vehicles', 'ownership', vehicleId, 'settings'] as const,
   },
   apiKeys: { all: ['api-keys'] as const },
   apiCatalog: { all: ['api-catalog'] as const },
+  /** Saved places. Charging and trip consumers read the same key. */
+  places: { all: ['places'] as const },
+  externalConnections: { all: ['external-connections'] as const },
   vehicleMembers: {
     byVehicle: (vehicleId: string | null) => ['vehicle-members', vehicleId] as const,
   },
@@ -43,5 +53,12 @@ export const queryKeys = {
   },
   charging: {
     detail: (sessionId: string | null, vehicleId: string | null) => ['charging', 'detail', sessionId, vehicleId] as const,
+  },
+  ownership: {
+    /** One step of the vehicle lookup cascade; the year, make, and model narrow it. */
+    vehicleLookup: (
+      menu: 'years' | 'makes' | 'models' | 'options',
+      params: { year?: string; make?: string; model?: string },
+    ) => ['ownership', 'vehicle-lookup', menu, params.year ?? '', params.make ?? '', params.model ?? ''] as const,
   },
 } as const;

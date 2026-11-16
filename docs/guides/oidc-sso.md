@@ -333,6 +333,7 @@ isolated installation before relying on it for production recovery.
 | SSO button is absent | OIDC is disabled, not ready, or an environment override hides it. Inspect **Settings > Authentication** as a super-user. |
 | Password form is absent | Password login is disabled. Use the break-glass procedure if SSO is unavailable. |
 | Provider rejects the callback | Check the exact issuer, public base URL, and registered callback URI. |
+| Configuration test reports an issuer mismatch | The provider's discovery document names a different issuer from the one saved. A trailing slash alone is not a mismatch: Riviamigo stores the issuer without one and also accepts providers, such as Authentik, that publish it with one. The server log names both issuers; copy the provider's exact issuer into the setting. |
 | Configuration test says a value is missing | OIDC requires an issuer, public base URL, client ID, and client secret. Save all four values, confirm the displayed callback URL, and test again. |
 | Existing account is not linked | Verified-email auto-linking is off by default; use explicit signed-in linking. |
 | Automatic linking is refused | The provider must return a verified email matching an enabled local account. Check any configured domain or required-claim restrictions. |

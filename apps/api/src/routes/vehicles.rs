@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::{Path, Query, State},
-    http::{header, HeaderName, HeaderValue},
+    http::{header, HeaderValue},
     response::Response,
     routing::{delete, get, post, put},
     Json, Router,
@@ -13,17 +13,13 @@ use sqlx::Row;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use std::{
-    collections::BTreeMap,
-    path::{Path as StdPath, PathBuf},
-    time::Duration,
-};
+use std::{collections::BTreeMap, time::Duration};
 
 use crate::{
     db::users::require_admin_or_super_user,
     db::vehicles::{
-        get_default_vehicle_id, require_vehicle_read_access, require_vehicle_role,
-        require_vehicle_session_access,
+        get_default_vehicle_id, is_demo_vehicle_key, require_vehicle_read_access,
+        require_vehicle_role, require_vehicle_session_access,
     },
     errors::AppError,
     ingestion::{
@@ -39,6 +35,20 @@ use crate::{
         },
         ingestion_capture,
     },
+};
+
+mod artwork;
+mod status;
+
+pub use artwork::start_vehicle_artwork_repair_worker;
+use artwork::{
+    admin_purge_vehicle_artwork_cache, admin_remirror_vehicle_images, fetch_vehicle_images_json,
+    queue_vehicle_artwork_repair, vehicle_image_cache_asset, vehicle_images,
+};
+
+use status::{
+    derive_vehicle_status_freshness, insert_field_availability, max_seen_at,
+    StatusFieldAvailability, StatusFieldAvailabilityReasonCode,
 };
 
 pub fn router() -> Router<AppState> {
@@ -112,6 +122,7 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/{id}/settings", put(update_vehicle_settings))
         .route("/vehicles/{id}/battery-config", put(update_battery_config))
         .route("/vehicles/{id}/name", put(update_vehicle_name))
+        .route("/vehicles/{id}/collection", put(update_vehicle_collection))
 }
 
 #[derive(Deserialize)]
@@ -285,10 +296,6 @@ struct AddVehicleBody {
 #[derive(Deserialize)]
 struct CreateDemoVehicleBody {
     model: String,
-}
-
-fn is_demo_vehicle_key(value: &str) -> bool {
-    value.starts_with("demo-")
 }
 
 fn canonical_vehicle_model(model: &str) -> &str {
@@ -471,6 +478,7 @@ struct VehicleListRow {
     history_backfill_status: Option<String>,
     history_backfilled_at: Option<chrono::DateTime<chrono::Utc>>,
     history_session_count: Option<i32>,
+    collection_paused: bool,
     worker_health: Option<String>,
     worker_health_msg: Option<String>,
     auth_state: Option<String>,
@@ -561,31 +569,6 @@ struct VehicleStatusFieldSeenRow {
     door_rear_right_closed_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum StatusFieldAvailabilityState {
-    Current,
-    Historical,
-    NeverSeen,
-}
-
-#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum StatusFieldAvailabilityReasonCode {
-    MissingRecentPayload,
-    NeverSeen,
-    InvalidSensor,
-}
-
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
-struct StatusFieldAvailability {
-    ever_seen: bool,
-    last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
-    latest_event_at: Option<chrono::DateTime<chrono::Utc>>,
-    availability: StatusFieldAvailabilityState,
-    reason_code: Option<StatusFieldAvailabilityReasonCode>,
-}
-
 /// Serializable response shape for `GET /v1/vehicles/:id/status`.
 /// Using a typed struct instead of `serde_json::json!` avoids the recursive
 /// macro expansion that exhausts the compiler's recursion limit as fields grow.
@@ -636,6 +619,8 @@ struct VehicleStatusResponse {
     driver_temp_c: Option<f64>,
     outside_temp_c: Option<f64>,
     heading_deg: Option<f64>,
+    /// Nose direction; `heading_deg` corrected after reversing (see `vehicle_facing`).
+    facing_deg: Option<f64>,
     odometer_miles: Option<f64>,
     odometer_miles_ts: Option<chrono::DateTime<chrono::Utc>>,
     tire_fl_psi: Option<f64>,
@@ -710,191 +695,6 @@ struct VehicleStatusResponse {
     telemetry_stale: bool,
     telemetry_stale_reason: Option<String>,
     field_availability: BTreeMap<String, StatusFieldAvailability>,
-}
-
-const WS_RECEIVE_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(10);
-const BATTERY_STATUS_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(90);
-const RANGE_STATUS_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(90);
-const CHARGING_STATUS_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(45);
-
-fn timestamp_is_older_than(
-    now: chrono::DateTime<chrono::Utc>,
-    ts: Option<chrono::DateTime<chrono::Utc>>,
-    threshold: chrono::Duration,
-) -> bool {
-    ts.is_some_and(|value| now - value >= threshold)
-}
-
-fn classify_status_field_availability(
-    latest_event_at: Option<chrono::DateTime<chrono::Utc>>,
-    last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
-    reason_override: Option<StatusFieldAvailabilityReasonCode>,
-) -> StatusFieldAvailability {
-    let availability = match (latest_event_at, last_seen_at) {
-        (_, None) => StatusFieldAvailabilityState::NeverSeen,
-        (Some(latest_event_at), Some(last_seen_at)) if last_seen_at < latest_event_at => {
-            StatusFieldAvailabilityState::Historical
-        }
-        _ => StatusFieldAvailabilityState::Current,
-    };
-
-    let reason_code = match availability {
-        StatusFieldAvailabilityState::NeverSeen => {
-            Some(StatusFieldAvailabilityReasonCode::NeverSeen)
-        }
-        StatusFieldAvailabilityState::Historical => {
-            Some(reason_override.unwrap_or(StatusFieldAvailabilityReasonCode::MissingRecentPayload))
-        }
-        StatusFieldAvailabilityState::Current => reason_override,
-    };
-
-    StatusFieldAvailability {
-        ever_seen: last_seen_at.is_some(),
-        last_seen_at,
-        latest_event_at,
-        availability,
-        reason_code,
-    }
-}
-
-fn max_seen_at(
-    values: impl IntoIterator<Item = Option<chrono::DateTime<chrono::Utc>>>,
-) -> Option<chrono::DateTime<chrono::Utc>> {
-    values.into_iter().flatten().max()
-}
-
-fn insert_field_availability(
-    availability: &mut BTreeMap<String, StatusFieldAvailability>,
-    field: &str,
-    latest_event_at: Option<chrono::DateTime<chrono::Utc>>,
-    last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
-    reason_override: Option<StatusFieldAvailabilityReasonCode>,
-) {
-    availability.insert(
-        field.to_string(),
-        classify_status_field_availability(latest_event_at, last_seen_at, reason_override),
-    );
-}
-
-fn derive_vehicle_status_freshness(
-    now: chrono::DateTime<chrono::Utc>,
-    runtime: Option<&VehicleRuntimeStateRow>,
-    latest: &LatestVehicleTelemetry,
-) -> (Option<String>, bool, Option<String>) {
-    let ws_received_at = runtime.and_then(|row| row.last_ws_received_at);
-    let base_health = runtime.and_then(|row| row.worker_health.clone());
-
-    if timestamp_is_older_than(now, ws_received_at, WS_RECEIVE_STALE_AFTER) {
-        return (
-            Some("stale".to_string()),
-            true,
-            Some("ws_silent".to_string()),
-        );
-    }
-
-    let mut telemetry_stale_reason = None;
-
-    if latest.battery_level.is_some()
-        && timestamp_is_older_than(
-            now,
-            latest.battery_level_ts.or(latest.ts),
-            BATTERY_STATUS_STALE_AFTER,
-        )
-    {
-        telemetry_stale_reason = Some("battery_stale".to_string());
-    }
-
-    if latest.distance_to_empty_mi.is_some()
-        && timestamp_is_older_than(
-            now,
-            latest.distance_to_empty_mi_ts.or(latest.ts),
-            RANGE_STATUS_STALE_AFTER,
-        )
-    {
-        telemetry_stale_reason.get_or_insert_with(|| "range_stale".to_string());
-    }
-
-    let charging_active = latest
-        .charger_state
-        .as_deref()
-        .map(|state| matches!(state, "charging"))
-        .unwrap_or(false)
-        || latest
-            .charger_status
-            .as_deref()
-            .map(|status| status.eq_ignore_ascii_case("chrgr_sts_connected_charging"))
-            .unwrap_or(false)
-        || latest.time_to_end_of_charge_min.is_some();
-
-    if charging_active
-        && timestamp_is_older_than(
-            now,
-            latest
-                .charger_status_ts
-                .or(latest.charger_state_ts)
-                .or(latest.time_to_end_of_charge_min_ts)
-                .or(latest.ts),
-            CHARGING_STATUS_STALE_AFTER,
-        )
-    {
-        telemetry_stale_reason.get_or_insert_with(|| "charging_stale".to_string());
-    }
-
-    (
-        base_health,
-        telemetry_stale_reason.is_some(),
-        telemetry_stale_reason,
-    )
-}
-
-#[derive(Debug, sqlx::FromRow)]
-struct VehicleImageRow {
-    placement: String,
-    design: Option<String>,
-    size: Option<String>,
-    resolution: Option<String>,
-    url: String,
-    overlays: serde_json::Value,
-    metadata: serde_json::Value,
-}
-
-#[derive(Debug, sqlx::FromRow)]
-struct VehicleArtworkCacheStateRow {
-    status: String,
-    asset_count: i32,
-    ready_asset_count: i32,
-    attempts: i32,
-    last_repair_attempt_at: Option<chrono::DateTime<chrono::Utc>>,
-    last_repair_success_at: Option<chrono::DateTime<chrono::Utc>>,
-    last_error: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct VehicleImageOverlay {
-    url: String,
-    overlay: Option<String>,
-    #[serde(rename = "zIndex")]
-    z_index: Option<i32>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct MirroredOverlayAsset {
-    source_url: String,
-    mirror_key: String,
-    mirror_relpath: String,
-    mime_type: String,
-    sha256: String,
-    overlay: Option<String>,
-    #[serde(rename = "zIndex")]
-    z_index: Option<i32>,
-}
-
-#[derive(Debug, Clone)]
-struct MirroredFileAsset {
-    mirror_key: String,
-    mirror_relpath: String,
-    mime_type: String,
-    sha256: String,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -1429,6 +1229,8 @@ async fn add_vehicle(
     let is_new = existing_vehicle_id.is_none();
 
     let vehicle_id = if let Some(existing_vehicle_id) = existing_vehicle_id {
+        refresh_vehicle_vin(&mut tx, existing_vehicle_id, verified.vin.as_deref()).await?;
+
         let already_member = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(
                 SELECT 1
@@ -1479,7 +1281,9 @@ async fn add_vehicle(
             verified.model.as_deref().unwrap_or("R1T"),
         ))
         .bind(body.trim.as_deref())
-        .bind(verified.vin.as_deref())
+        .bind(crate::models::vehicle::normalized_vin(
+            verified.vin.as_deref(),
+        ))
         .bind(body.name.as_deref().map(canonical_vehicle_name))
         .bind(body.home_lat)
         .bind(body.home_lng)
@@ -1633,6 +1437,29 @@ async fn verify_account_vehicle(
         .ok_or_else(|| AppError::Validation("Rivian account does not include this vehicle".into()))
 }
 
+/// Stores the VIN Rivian reported for a verified account vehicle. A missing or
+/// blank VIN leaves the saved value untouched; model year is derived from the
+/// VIN at read time, so nothing else needs refreshing.
+async fn refresh_vehicle_vin(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    vehicle_id: Uuid,
+    reported_vin: Option<&str>,
+) -> Result<(), AppError> {
+    let Some(vin) = crate::models::vehicle::normalized_vin(reported_vin) else {
+        return Ok(());
+    };
+    sqlx::query(
+        "UPDATE riviamigo.vehicles
+         SET vin = $2, updated_at = now()
+         WHERE id = $1 AND vin IS DISTINCT FROM $2",
+    )
+    .bind(vehicle_id)
+    .bind(vin)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 async fn refresh_vehicle_credentials(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -1659,13 +1486,25 @@ async fn refresh_vehicle_credentials(
     .await?
     .ok_or(AppError::RivianConnectSessionExpired)?;
 
-    verify_account_vehicle(&tokens, &rivian_vehicle_id).await?;
+    let verified = verify_account_vehicle(&tokens, &rivian_vehicle_id).await?;
 
     let identity = age_identity(&state)?;
     let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
         .map_err(AppError::Internal)?;
 
     let mut tx = state.pool.begin().await?;
+
+    // Lock the vehicle row so a concurrent pause or resume cannot interleave
+    // with the start decision made from this value after commit.
+    let collection_paused: bool = sqlx::query_scalar(
+        "SELECT collection_paused FROM riviamigo.vehicles WHERE id = $1 FOR NO KEY UPDATE",
+    )
+    .bind(vid)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    refresh_vehicle_vin(&mut tx, vid, verified.vin.as_deref()).await?;
 
     sqlx::query(
         "INSERT INTO riviamigo.vehicle_credentials (vehicle_id, encrypted_tokens, token_created_at, last_refreshed_at)
@@ -1680,6 +1519,43 @@ async fn refresh_vehicle_credentials(
     .execute(&mut *tx)
     .await?;
 
+    if collection_paused {
+        // No collector will run, so record the renewed authorization without
+        // claiming that a worker is starting.
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_runtime_state
+             (vehicle_id, is_online, auth_state, auth_reason_code, updated_at)
+             VALUES ($1, FALSE, 'authorized', NULL, now())
+             ON CONFLICT (vehicle_id) DO UPDATE
+             SET auth_state = 'authorized',
+                 auth_reason_code = NULL,
+                 updated_at = now()",
+        )
+        .bind(vid)
+        .execute(&mut *tx)
+        .await?;
+    } else {
+        mark_vehicle_collector_starting(&mut tx, vid).await?;
+    }
+
+    tx.commit().await?;
+
+    if let Err(error) = redis::AsyncCommands::del::<_, ()>(&mut conn, &key).await {
+        warn!(
+            user_id = %auth.user_id,
+            vehicle_id = %vid,
+            err = %error,
+            "vehicle.refresh_credentials.connect_session_cleanup_failed"
+        );
+    }
+    let telemetry = start_refreshed_vehicle_telemetry(&state, vid, collection_paused).await;
+    Ok(Json(credential_refresh_response(vid, telemetry)))
+}
+
+async fn mark_vehicle_collector_starting(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    vid: Uuid,
+) -> Result<(), AppError> {
     sqlx::query(
         "INSERT INTO riviamigo.vehicle_runtime_state
          (vehicle_id, is_online, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at)
@@ -1693,39 +1569,77 @@ async fn refresh_vehicle_credentials(
              updated_at = now()",
     )
     .bind(vid)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
+    Ok(())
+}
 
-    tx.commit().await?;
+/// What happened to live data collection after a credential refresh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CredentialRefreshTelemetry {
+    /// A manager paused collection for this vehicle; no collector was started.
+    Paused,
+    Connected,
+    WaitingForVehicleData,
+    SupervisorUnavailable,
+}
 
-    if let Err(error) = redis::AsyncCommands::del::<_, ()>(&mut conn, &key).await {
-        warn!(
-            user_id = %auth.user_id,
-            vehicle_id = %vid,
-            err = %error,
-            "vehicle.refresh_credentials.connect_session_cleanup_failed"
-        );
+const CREDENTIAL_REFRESH_PAUSED_MESSAGE: &str = "Rivian credentials saved. Data collection is paused for this vehicle; resume it in Settings > Vehicles to reconnect.";
+
+/// Credential refresh is also the recovery path after a sanitized restore, so
+/// an active vehicle's collector starts immediately rather than staying
+/// authorized in the database but disconnected from Rivian. A paused vehicle
+/// stays paused: no collector is started and no readiness wait is spent.
+async fn start_refreshed_vehicle_telemetry(
+    state: &AppState,
+    vehicle_id: Uuid,
+    collection_paused: bool,
+) -> CredentialRefreshTelemetry {
+    if collection_paused {
+        return CredentialRefreshTelemetry::Paused;
     }
-    // Credential refresh is also the recovery path after a sanitized restore.
-    // Start the worker immediately so an existing vehicle does not remain
-    // authorized in the database but disconnected from Rivian.
-    let telemetry_start_queued = state
+    if !state
         .supervisor
-        .send(SupervisorCommand::StartWorker { vehicle_id: vid })
-        .await;
-    let telemetry_ready = telemetry_start_queued && wait_for_vehicle_data(&state.pool, vid).await;
-    Ok(Json(serde_json::json!({
+        .send(SupervisorCommand::StartWorker { vehicle_id })
+        .await
+    {
+        return CredentialRefreshTelemetry::SupervisorUnavailable;
+    }
+    if wait_for_vehicle_data(&state.pool, vehicle_id).await {
+        CredentialRefreshTelemetry::Connected
+    } else {
+        CredentialRefreshTelemetry::WaitingForVehicleData
+    }
+}
+
+fn credential_refresh_response(
+    vehicle_id: Uuid,
+    telemetry: CredentialRefreshTelemetry,
+) -> serde_json::Value {
+    let (connection_status, telemetry_status, telemetry_error) = match telemetry {
+        CredentialRefreshTelemetry::Paused => {
+            ("paused", "paused", Some(CREDENTIAL_REFRESH_PAUSED_MESSAGE))
+        }
+        CredentialRefreshTelemetry::Connected => ("connected", "connected", None),
+        CredentialRefreshTelemetry::WaitingForVehicleData => (
+            "connected_waiting_for_vehicle_data",
+            "waiting_for_vehicle_data",
+            Some("Rivian credentials saved; vehicle data is still loading"),
+        ),
+        CredentialRefreshTelemetry::SupervisorUnavailable => (
+            "connected_waiting_for_vehicle_data",
+            "delayed",
+            Some("worker supervisor unavailable; retry telemetry start"),
+        ),
+    };
+    serde_json::json!({
         "ok": true,
-        "vehicle_id": vid,
+        "vehicle_id": vehicle_id,
         "vehicle_saved": true,
-        "connection_status": if telemetry_ready { "connected" } else { "connected_waiting_for_vehicle_data" },
-        "telemetry_status": if telemetry_ready { "connected" } else if telemetry_start_queued { "waiting_for_vehicle_data" } else { "delayed" },
-        "telemetry_error": if telemetry_start_queued {
-            if telemetry_ready { serde_json::Value::Null } else { serde_json::Value::String("Rivian credentials saved; vehicle data is still loading".into()) }
-        } else {
-            serde_json::Value::String("worker supervisor unavailable; retry telemetry start".into())
-        },
-    })))
+        "connection_status": connection_status,
+        "telemetry_status": telemetry_status,
+        "telemetry_error": telemetry_error,
+    })
 }
 
 async fn wait_for_vehicle_data(pool: &sqlx::PgPool, vehicle_id: Uuid) -> bool {
@@ -1889,6 +1803,56 @@ struct VehicleInviteRow {
 #[derive(Deserialize)]
 struct UpdateVehicleMemberBody {
     role: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateVehicleCollectionBody {
+    paused: bool,
+}
+
+/// Pause or resume the background Rivian connection for one vehicle. The
+/// choice is stored, so a paused vehicle stays paused across restarts.
+async fn update_vehicle_collection(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
+    Json(body): Json<UpdateVehicleCollectionBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_role(&state.pool, auth.user_id, vid, &["owner", "manager"]).await?;
+    let rivian_vehicle_id: String =
+        sqlx::query_scalar("SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id = $1")
+            .bind(vid)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    if is_demo_vehicle_key(&rivian_vehicle_id) {
+        return Err(AppError::Validation(
+            "demo vehicles have no Rivian connection to pause".into(),
+        ));
+    }
+    sqlx::query("UPDATE riviamigo.vehicles SET collection_paused = $2 WHERE id = $1")
+        .bind(vid)
+        .bind(body.paused)
+        .execute(&state.pool)
+        .await?;
+    let command = if body.paused {
+        SupervisorCommand::StopWorker { vehicle_id: vid }
+    } else {
+        SupervisorCommand::StartWorker { vehicle_id: vid }
+    };
+    let queued = state.supervisor.send(command).await;
+    info!(
+        user_id = %auth.user_id,
+        vehicle_id = %vid,
+        paused = body.paused,
+        queued,
+        "vehicle.collection.updated"
+    );
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "collection_paused": body.paused,
+        "worker_command_queued": queued,
+    })))
 }
 
 async fn update_vehicle_name(
@@ -2339,6 +2303,7 @@ async fn list_vehicles(
                 v.battery_config, v.created_at, v.interior_color, v.wheel_option, v.max_vehicle_power_kw, \
                 v.charge_port_type, v.battery_cell_type, v.supported_features, \
                 v.history_backfill_status, v.history_backfilled_at, v.history_session_count, \
+                v.collection_paused, \
                 vrs.worker_health, vrs.worker_health_msg, vrs.auth_state, vrs.auth_reason_code, \
                 vc.token_created_at, \
                 vm.role AS membership_role \
@@ -2365,16 +2330,15 @@ async fn list_vehicles(
         let renewal_state = credential_issued_at.map(|issued| {
             rivian_renewal_state_for_auth(issued, Utc::now(), r.auth_state.as_deref())
         });
-        if !is_demo {
-            queue_vehicle_artwork_repair(&state, r.id).await;
-        }
+        // Listing vehicles must stay a local read: it never queues an artwork
+        // repair or contacts Rivian. Artwork is mirrored at vehicle add time,
+        // by the startup repair worker, by a vehicle status read, or by the
+        // explicit administrator action, each subject to the vehicle's pause
+        // and the server's Rivian connection switch. A browser render reads
+        // only local cache files and falls back to the local placeholder.
         let images = fetch_vehicle_images_json(&state.pool, &state.config, r.id)
             .await
             .unwrap_or_else(|_| serde_json::json!({ "all": [] }));
-        // Listing vehicles must never become a hidden Rivian-image fetch.
-        // Artwork is downloaded and mirrored at vehicle add time (or by the
-        // explicit administrator repair action), so a browser render reads
-        // only local cache files and falls back to the local placeholder.
         vehicles.push(serde_json::json!({
             "id":                       r.id,
             "user_id":                  auth.user_id,
@@ -2382,7 +2346,7 @@ async fn list_vehicles(
             "is_demo":                  is_demo,
             "vin":                      r.vin,
             "model":                    canonical_vehicle_model(&r.model),
-            "year":                     serde_json::Value::Null,
+            "year":                     r.vin.as_deref().and_then(crate::models::vehicle::model_year_from_vin),
             "trim":                     r.trim,
             "color":                    r.color,
             "interior_color":           r.interior_color,
@@ -2403,6 +2367,7 @@ async fn list_vehicles(
             "history_backfill_status":  r.history_backfill_status,
             "history_backfilled_at":    r.history_backfilled_at,
             "history_session_count":    r.history_session_count,
+            "collection_paused":        r.collection_paused,
             "worker_health":            r.worker_health,
             "worker_health_msg":        r.worker_health_msg,
             "auth_state":               r.auth_state,
@@ -3336,6 +3301,9 @@ async fn vehicle_status(
             .then_some(StatusFieldAvailabilityReasonCode::InvalidSensor),
     );
 
+    let facing_deg =
+        crate::services::vehicle_facing::resolve_facing_deg(&state.pool, vid, latest.heading_deg)
+            .await;
     Ok(Json(VehicleStatusResponse {
         vehicle_id: vid,
         is_online: row.as_ref().and_then(|r| r.is_online).unwrap_or(false),
@@ -3390,6 +3358,7 @@ async fn vehicle_status(
         driver_temp_c: latest.driver_temp_c,
         outside_temp_c: latest.outside_temp_c,
         heading_deg: latest.heading_deg,
+        facing_deg,
         odometer_miles: latest.odometer_miles,
         odometer_miles_ts: latest.odometer_miles_ts,
         tire_fl_psi: latest.tire_fl_psi,
@@ -3465,1237 +3434,6 @@ async fn vehicle_status(
         telemetry_stale_reason,
         field_availability,
     }))
-}
-
-#[cfg(test)]
-mod range_tests {
-    use crate::routes::range_normalization::normalize_remaining_range_miles;
-
-    #[test]
-    fn leaves_plausible_miles_untouched() {
-        let value = normalize_remaining_range_miles(Some(227.0), Some(71.0), Some(135_000.0), None);
-        assert_eq!(value, Some(227.0));
-    }
-
-    #[test]
-    fn converts_implausible_km_value_to_miles() {
-        let value = normalize_remaining_range_miles(Some(380.0), Some(71.0), Some(135_000.0), None);
-        assert_eq!(
-            value.map(|miles| (miles * 10.0).round() / 10.0),
-            Some(236.1)
-        );
-    }
-
-    #[test]
-    fn leaves_high_but_plausible_miles_untouched() {
-        let value = normalize_remaining_range_miles(Some(227.0), Some(71.0), Some(105_000.0), None);
-        assert_eq!(value, Some(227.0));
-    }
-}
-
-#[cfg(test)]
-mod freshness_tests {
-    use super::{derive_vehicle_status_freshness, LatestVehicleTelemetry, VehicleRuntimeStateRow};
-    use chrono::{TimeZone, Utc};
-
-    #[test]
-    fn flags_ws_silence_as_stale() {
-        let now = Utc.with_ymd_and_hms(2026, 6, 19, 12, 0, 0).unwrap();
-        let runtime = VehicleRuntimeStateRow {
-            last_ws_received_at: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 40, 0).unwrap()),
-            worker_health: Some("connected".to_string()),
-            ..Default::default()
-        };
-
-        let (worker_health, telemetry_stale, reason) = derive_vehicle_status_freshness(
-            now,
-            Some(&runtime),
-            &LatestVehicleTelemetry::default(),
-        );
-
-        assert_eq!(worker_health.as_deref(), Some("stale"));
-        assert!(telemetry_stale);
-        assert_eq!(reason.as_deref(), Some("ws_silent"));
-    }
-
-    #[test]
-    fn flags_old_battery_timestamp_even_when_worker_is_connected() {
-        let now = Utc.with_ymd_and_hms(2026, 6, 19, 12, 0, 0).unwrap();
-        let runtime = VehicleRuntimeStateRow {
-            last_ws_received_at: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 59, 0).unwrap()),
-            worker_health: Some("connected".to_string()),
-            ..Default::default()
-        };
-        let latest = LatestVehicleTelemetry {
-            ts: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 59, 0).unwrap()),
-            battery_level: Some(71.0),
-            battery_level_ts: Some(Utc.with_ymd_and_hms(2026, 6, 19, 10, 20, 0).unwrap()),
-            ..Default::default()
-        };
-
-        let (worker_health, telemetry_stale, reason) =
-            derive_vehicle_status_freshness(now, Some(&runtime), &latest);
-
-        assert_eq!(worker_health.as_deref(), Some("connected"));
-        assert!(telemetry_stale);
-        assert_eq!(reason.as_deref(), Some("battery_stale"));
-    }
-
-    #[test]
-    fn keeps_connected_feed_healthy_when_range_is_old() {
-        let now = Utc.with_ymd_and_hms(2026, 6, 19, 12, 0, 0).unwrap();
-        let runtime = VehicleRuntimeStateRow {
-            last_ws_received_at: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 59, 0).unwrap()),
-            worker_health: Some("connected".to_string()),
-            ..Default::default()
-        };
-        let latest = LatestVehicleTelemetry {
-            ts: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 59, 0).unwrap()),
-            distance_to_empty_mi: Some(210.0),
-            distance_to_empty_mi_ts: Some(Utc.with_ymd_and_hms(2026, 6, 19, 10, 20, 0).unwrap()),
-            ..Default::default()
-        };
-
-        let (worker_health, telemetry_stale, reason) =
-            derive_vehicle_status_freshness(now, Some(&runtime), &latest);
-
-        assert_eq!(worker_health.as_deref(), Some("connected"));
-        assert!(telemetry_stale);
-        assert_eq!(reason.as_deref(), Some("range_stale"));
-    }
-
-    #[test]
-    fn keeps_connected_feed_healthy_when_active_charging_data_is_old() {
-        let now = Utc.with_ymd_and_hms(2026, 6, 19, 12, 0, 0).unwrap();
-        let runtime = VehicleRuntimeStateRow {
-            last_ws_received_at: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 59, 0).unwrap()),
-            worker_health: Some("connected".to_string()),
-            ..Default::default()
-        };
-        let latest = LatestVehicleTelemetry {
-            ts: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 59, 0).unwrap()),
-            charger_state: Some("charging".to_string()),
-            charger_state_ts: Some(Utc.with_ymd_and_hms(2026, 6, 19, 10, 20, 0).unwrap()),
-            ..Default::default()
-        };
-
-        let (worker_health, telemetry_stale, reason) =
-            derive_vehicle_status_freshness(now, Some(&runtime), &latest);
-
-        assert_eq!(worker_health.as_deref(), Some("connected"));
-        assert!(telemetry_stale);
-        assert_eq!(reason.as_deref(), Some("charging_stale"));
-    }
-
-    #[test]
-    fn keeps_recent_runtime_as_healthy() {
-        let now = Utc.with_ymd_and_hms(2026, 6, 19, 12, 0, 0).unwrap();
-        let runtime = VehicleRuntimeStateRow {
-            last_ws_received_at: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 59, 0).unwrap()),
-            worker_health: Some("connected".to_string()),
-            ..Default::default()
-        };
-        let latest = LatestVehicleTelemetry {
-            ts: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 59, 0).unwrap()),
-            battery_level: Some(71.0),
-            battery_level_ts: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 58, 30).unwrap()),
-            ..Default::default()
-        };
-
-        let (worker_health, telemetry_stale, reason) =
-            derive_vehicle_status_freshness(now, Some(&runtime), &latest);
-
-        assert_eq!(worker_health.as_deref(), Some("connected"));
-        assert!(!telemetry_stale);
-        assert_eq!(reason, None);
-    }
-}
-
-#[cfg(test)]
-mod availability_tests {
-    use super::{
-        classify_status_field_availability, max_seen_at, StatusFieldAvailabilityReasonCode,
-        StatusFieldAvailabilityState,
-    };
-    use chrono::{TimeZone, Utc};
-
-    #[test]
-    fn marks_missing_field_as_never_seen() {
-        let latest_event_at = Some(Utc.with_ymd_and_hms(2026, 7, 7, 12, 0, 0).unwrap());
-        let availability = classify_status_field_availability(latest_event_at, None, None);
-
-        assert!(!availability.ever_seen);
-        assert_eq!(
-            availability.availability,
-            StatusFieldAvailabilityState::NeverSeen
-        );
-        assert_eq!(
-            availability.reason_code,
-            Some(StatusFieldAvailabilityReasonCode::NeverSeen)
-        );
-    }
-
-    #[test]
-    fn marks_field_as_historical_when_latest_event_is_newer() {
-        let latest_event_at = Some(Utc.with_ymd_and_hms(2026, 7, 7, 12, 0, 0).unwrap());
-        let last_seen_at = Some(Utc.with_ymd_and_hms(2026, 7, 7, 10, 30, 0).unwrap());
-        let availability = classify_status_field_availability(latest_event_at, last_seen_at, None);
-
-        assert!(availability.ever_seen);
-        assert_eq!(availability.last_seen_at, last_seen_at);
-        assert_eq!(
-            availability.availability,
-            StatusFieldAvailabilityState::Historical
-        );
-        assert_eq!(
-            availability.reason_code,
-            Some(StatusFieldAvailabilityReasonCode::MissingRecentPayload)
-        );
-    }
-
-    #[test]
-    fn keeps_latest_field_as_current() {
-        let latest_event_at = Some(Utc.with_ymd_and_hms(2026, 7, 7, 12, 0, 0).unwrap());
-        let availability =
-            classify_status_field_availability(latest_event_at, latest_event_at, None);
-
-        assert_eq!(
-            availability.availability,
-            StatusFieldAvailabilityState::Current
-        );
-        assert_eq!(availability.reason_code, None);
-    }
-
-    #[test]
-    fn preserves_invalid_sensor_reason_for_current_and_historical_fields() {
-        let latest_event_at = Some(Utc.with_ymd_and_hms(2026, 7, 7, 12, 0, 0).unwrap());
-        let current = classify_status_field_availability(
-            latest_event_at,
-            latest_event_at,
-            Some(StatusFieldAvailabilityReasonCode::InvalidSensor),
-        );
-        let historical = classify_status_field_availability(
-            latest_event_at,
-            Some(Utc.with_ymd_and_hms(2026, 7, 7, 11, 0, 0).unwrap()),
-            Some(StatusFieldAvailabilityReasonCode::InvalidSensor),
-        );
-
-        assert_eq!(
-            current.reason_code,
-            Some(StatusFieldAvailabilityReasonCode::InvalidSensor)
-        );
-        assert_eq!(
-            historical.reason_code,
-            Some(StatusFieldAvailabilityReasonCode::InvalidSensor)
-        );
-    }
-
-    #[test]
-    fn returns_latest_seen_timestamp() {
-        let a = Utc.with_ymd_and_hms(2026, 7, 7, 8, 0, 0).unwrap();
-        let b = Utc.with_ymd_and_hms(2026, 7, 7, 10, 0, 0).unwrap();
-        let c = Utc.with_ymd_and_hms(2026, 7, 7, 9, 0, 0).unwrap();
-
-        assert_eq!(max_seen_at([Some(a), Some(b), Some(c)]), Some(b));
-    }
-}
-
-async fn vehicle_images(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    axum::extract::Path(vid): axum::extract::Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_access(&auth, vid)?;
-    require_vehicle_read_access(&state.pool, &auth, vid).await?;
-    Ok(Json(
-        fetch_vehicle_images_json(&state.pool, &state.config, vid).await?,
-    ))
-}
-
-async fn cache_vehicle_images(
-    pool: &sqlx::PgPool,
-    config: &crate::config::Config,
-    vehicle_id: Uuid,
-    tokens: &crate::ingestion::session_store::RivianTokenBundle,
-    force_remirror: bool,
-) {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .unwrap_or_default();
-    mark_vehicle_artwork_repair_attempt(pool, vehicle_id).await;
-    crate::services::external_connections::record_attempt(
-        pool,
-        crate::services::external_connections::RIVIAN_ACCOUNT,
-    )
-    .await;
-    match crate::ingestion::rivian_auth::rivian_vehicle_images(&client, tokens).await {
-        Ok(images) => {
-            let image_count = images.len();
-            for image in images {
-                let _ = sqlx::query(
-                    r#"
-                    INSERT INTO riviamigo.vehicle_images
-                      (vehicle_id, placement, design, size, resolution, url, overlays, metadata)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-                    ON CONFLICT (vehicle_id, url) DO UPDATE
-                    SET placement = EXCLUDED.placement,
-                        design = EXCLUDED.design,
-                        size = EXCLUDED.size,
-                        resolution = EXCLUDED.resolution,
-                        overlays = EXCLUDED.overlays,
-                        -- A manifest refresh must never discard a working local
-                        -- mirror. Keep the ready mirror identity and only take
-                        -- the descriptive manifest fields; the mirror pass below
-                        -- replaces the asset only after a successful download.
-                        metadata = CASE
-                          WHEN riviamigo.vehicle_images.metadata->>'mirror_status' = 'ready'
-                            THEN riviamigo.vehicle_images.metadata
-                              || (EXCLUDED.metadata - 'mirror_key' - 'mirror_status')
-                          ELSE EXCLUDED.metadata
-                        END,
-                        updated_at = now()
-                    "#,
-                )
-                .bind(vehicle_id)
-                .bind(image.placement.as_deref().unwrap_or("unknown"))
-                .bind(image.design)
-                .bind(image.size)
-                .bind(image.resolution)
-                .bind(&image.url)
-                .bind(image.overlays)
-                .bind(build_cached_vehicle_image_metadata(
-                    &image.url,
-                    serde_json::json!({
-                    "source": image.source,
-                    "vehicle_version": image.vehicle_version,
-                    "rivian_vehicle_id": image.vehicle_id,
-                    "rivian_order_id": image.order_id,
-                    "extension": image.extension
-                    }),
-                ))
-                .execute(pool)
-                .await;
-            }
-            mirror_vehicle_images(pool, config, vehicle_id, force_remirror).await;
-            refresh_vehicle_artwork_cache_state(pool, config, vehicle_id, None).await;
-            crate::services::external_connections::record_success(
-                pool,
-                crate::services::external_connections::RIVIAN_ACCOUNT,
-            )
-            .await;
-            info!(vehicle_id = %vehicle_id, image_count, "vehicle.images.cached");
-        }
-        Err(error) => {
-            refresh_vehicle_artwork_cache_state(pool, config, vehicle_id, Some(&error.to_string()))
-                .await;
-            crate::services::external_connections::record_failure(
-                pool,
-                crate::services::external_connections::RIVIAN_ACCOUNT,
-                &error.to_string(),
-            )
-            .await;
-            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.add.image_cache_failed");
-        }
-    }
-}
-
-async fn ensure_vehicle_images_cached(
-    pool: &sqlx::PgPool,
-    config: &crate::config::Config,
-    vehicle_id: Uuid,
-    age_key: &str,
-    force_manifest_refresh: bool,
-) {
-    let rows = sqlx::query_as::<_, VehicleImageRow>(
-        "SELECT placement, design, size, resolution, url, overlays, metadata
-         FROM riviamigo.vehicle_images
-         WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-
-    if !rows.is_empty() && !force_manifest_refresh {
-        if rows
-            .iter()
-            .any(|row| vehicle_image_needs_local_mirror(config, row))
-        {
-            mark_vehicle_artwork_repair_attempt(pool, vehicle_id).await;
-            mirror_vehicle_images(pool, config, vehicle_id, false).await;
-            refresh_vehicle_artwork_cache_state(pool, config, vehicle_id, None).await;
-        }
-        return;
-    }
-
-    let identity = match age_key.parse::<age::x25519::Identity>() {
-        Ok(identity) => identity,
-        Err(error) => {
-            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_bad_age_key");
-            return;
-        }
-    };
-
-    let encrypted_tokens = match sqlx::query_scalar::<_, Vec<u8>>(
-        "SELECT encrypted_tokens FROM riviamigo.vehicle_credentials WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_optional(pool)
-    .await
-    {
-        Ok(Some(tokens)) => tokens,
-        Ok(None) => return,
-        Err(error) => {
-            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_credentials_failed");
-            return;
-        }
-    };
-
-    match crate::ingestion::session_store::decrypt_tokens(&encrypted_tokens, &identity) {
-        Ok(tokens) => {
-            cache_vehicle_images(pool, config, vehicle_id, &tokens, force_manifest_refresh).await
-        }
-        Err(error) => {
-            refresh_vehicle_artwork_cache_state(
-                pool,
-                config,
-                vehicle_id,
-                Some("Stored Rivian session could not be used for artwork repair."),
-            )
-            .await;
-            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_decrypt_failed");
-        }
-    }
-}
-
-fn build_cached_vehicle_image_metadata(
-    source_url: &str,
-    base: serde_json::Value,
-) -> serde_json::Value {
-    // A stable first-party key lets the UI render a local restoring placeholder
-    // even before an initial mirror has completed. Successful mirrors replace
-    // it with a checksum-revisioned immutable key.
-    let pending_key = format!(
-        "{}.webp",
-        hex::encode(Sha256::digest(source_url.as_bytes()))
-    );
-    merge_metadata(
-        base,
-        serde_json::json!({
-            "source_url": source_url,
-            "mirror_key": pending_key,
-            "mirror_status": "pending"
-        }),
-    )
-}
-
-fn merge_metadata(mut left: serde_json::Value, right: serde_json::Value) -> serde_json::Value {
-    if let (Some(left_obj), Some(right_obj)) = (left.as_object_mut(), right.as_object()) {
-        for (key, value) in right_obj {
-            left_obj.insert(key.clone(), value.clone());
-        }
-        left
-    } else {
-        right
-    }
-}
-
-fn overlay_entries_from_value(value: &serde_json::Value) -> Vec<VehicleImageOverlay> {
-    serde_json::from_value::<Vec<VehicleImageOverlay>>(value.clone()).unwrap_or_default()
-}
-
-fn image_cache_root(config: &crate::config::Config) -> PathBuf {
-    PathBuf::from(&config.vehicle_image_cache_dir)
-}
-
-fn mirror_file_path(config: &crate::config::Config, relpath: &str) -> PathBuf {
-    image_cache_root(config).join(relpath.replace('/', std::path::MAIN_SEPARATOR_STR))
-}
-
-fn sanitize_image_key(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-')
-}
-
-fn infer_extension(source_url: &str, content_type: Option<&str>) -> &'static str {
-    let lowered = source_url.to_ascii_lowercase();
-    for ext in ["webp", "png", "jpg", "jpeg", "gif"] {
-        if lowered.contains(&format!(".{ext}")) {
-            return ext;
-        }
-    }
-    match content_type.unwrap_or_default() {
-        "image/png" => "png",
-        "image/jpeg" => "jpg",
-        "image/gif" => "gif",
-        _ => "webp",
-    }
-}
-
-fn guess_mime_type(path: &StdPath) -> &'static str {
-    match path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or_default()
-    {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        _ => "image/webp",
-    }
-}
-
-async fn download_and_store_asset(
-    client: &reqwest::Client,
-    config: &crate::config::Config,
-    vehicle_id: Uuid,
-    source_url: &str,
-) -> Result<MirroredFileAsset, anyhow::Error> {
-    let response = client.get(source_url).send().await?.error_for_status()?;
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
-    let bytes = response.bytes().await?;
-    let sha256 = hex::encode(Sha256::digest(&bytes));
-    let extension = infer_extension(source_url, content_type.as_deref());
-    let key_hash = hex::encode(Sha256::digest(source_url.as_bytes()));
-    // Include the content revision so a deliberate administrator refresh gets a
-    // new immutable first-party URL rather than serving an old browser cache.
-    let mirror_key = format!("{key_hash}-{}.{extension}", &sha256[..16]);
-    let mirror_relpath = format!("{vehicle_id}/{mirror_key}");
-    let path = mirror_file_path(config, &mirror_relpath);
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::write(&path, &bytes).await?;
-    Ok(MirroredFileAsset {
-        mirror_key,
-        mirror_relpath,
-        mime_type: content_type.unwrap_or_else(|| guess_mime_type(&path).to_string()),
-        sha256,
-    })
-}
-
-async fn mirror_vehicle_image_assets(
-    client: &reqwest::Client,
-    config: &crate::config::Config,
-    vehicle_id: Uuid,
-    source_url: &str,
-    overlays: &[VehicleImageOverlay],
-) -> Result<serde_json::Value, anyhow::Error> {
-    let mirrored = download_and_store_asset(client, config, vehicle_id, source_url).await?;
-    let mut overlay_assets = Vec::with_capacity(overlays.len());
-    for overlay in overlays {
-        let mirrored_overlay =
-            download_and_store_asset(client, config, vehicle_id, &overlay.url).await?;
-        overlay_assets.push(MirroredOverlayAsset {
-            source_url: overlay.url.clone(),
-            mirror_key: mirrored_overlay.mirror_key,
-            mirror_relpath: mirrored_overlay.mirror_relpath,
-            mime_type: mirrored_overlay.mime_type,
-            sha256: mirrored_overlay.sha256,
-            overlay: overlay.overlay.clone(),
-            z_index: overlay.z_index,
-        });
-    }
-
-    Ok(serde_json::json!({
-        "source_url": source_url,
-        "mirror_status": "ready",
-        "mirror_key": mirrored.mirror_key,
-        "mirror_relpath": mirrored.mirror_relpath,
-        "mime_type": mirrored.mime_type,
-        "sha256": mirrored.sha256,
-        "overlay_mirrors": overlay_assets
-    }))
-}
-
-fn mirrored_asset_is_valid(config: &crate::config::Config, metadata: &serde_json::Value) -> bool {
-    let Some(relpath) = metadata
-        .get("mirror_relpath")
-        .and_then(|value| value.as_str())
-    else {
-        return false;
-    };
-    let Some(expected_sha256) = metadata.get("sha256").and_then(|value| value.as_str()) else {
-        return false;
-    };
-    let Ok(bytes) = std::fs::read(mirror_file_path(config, relpath)) else {
-        return false;
-    };
-    hex::encode(Sha256::digest(&bytes)) == expected_sha256
-}
-
-fn vehicle_image_needs_local_mirror(config: &crate::config::Config, row: &VehicleImageRow) -> bool {
-    if !row.url.starts_with("http://") && !row.url.starts_with("https://") {
-        return false;
-    }
-    if row
-        .metadata
-        .get("mirror_status")
-        .and_then(|value| value.as_str())
-        != Some("ready")
-    {
-        return true;
-    }
-    if !mirrored_asset_is_valid(config, &row.metadata) {
-        return true;
-    }
-    row.metadata
-        .get("overlay_mirrors")
-        .and_then(|value| value.as_array())
-        .map(|overlays| {
-            overlays
-                .iter()
-                .any(|overlay| !mirrored_asset_is_valid(config, overlay))
-        })
-        .unwrap_or_else(|| !overlay_entries_from_value(&row.overlays).is_empty())
-}
-
-async fn mirror_vehicle_images(
-    pool: &sqlx::PgPool,
-    config: &crate::config::Config,
-    vehicle_id: Uuid,
-    force_remirror: bool,
-) {
-    let rows = match sqlx::query_as::<_, VehicleImageRow>(
-        "SELECT placement, design, size, resolution, url, overlays, metadata
-         FROM riviamigo.vehicle_images
-         WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await
-    {
-        Ok(rows) => rows,
-        Err(error) => {
-            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.mirror_rows_failed");
-            return;
-        }
-    };
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .unwrap_or_default();
-
-    for row in rows {
-        let needs_mirror = vehicle_image_needs_local_mirror(config, &row);
-        let is_remote = row.url.starts_with("http://") || row.url.starts_with("https://");
-        if !needs_mirror && !(force_remirror && is_remote) {
-            continue;
-        }
-        let overlays = overlay_entries_from_value(&row.overlays);
-        match mirror_vehicle_image_assets(&client, config, vehicle_id, &row.url, &overlays).await {
-            Ok(mirror_metadata) => {
-                let merged = merge_metadata(row.metadata.clone(), mirror_metadata);
-                let _ = sqlx::query(
-                    "UPDATE riviamigo.vehicle_images
-                     SET metadata = $3,
-                         updated_at = now()
-                     WHERE vehicle_id = $1 AND url = $2",
-                )
-                .bind(vehicle_id)
-                .bind(&row.url)
-                .bind(merged)
-                .execute(pool)
-                .await;
-            }
-            Err(error) if !needs_mirror => {
-                // An explicit refresh could not download a replacement. The
-                // existing mirror is still complete and valid, so keep serving
-                // it rather than downgrading the vehicle to packaged fallbacks.
-                warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.remirror_failed_kept_existing");
-            }
-            Err(error) => {
-                warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.mirror_failed");
-                let merged = merge_metadata(
-                    row.metadata.clone(),
-                    serde_json::json!({
-                        "source_url": row.url,
-                        "mirror_status": "failed",
-                        "mirror_error": error.to_string()
-                    }),
-                );
-                let _ = sqlx::query(
-                    "UPDATE riviamigo.vehicle_images
-                     SET metadata = $3,
-                         updated_at = now()
-                     WHERE vehicle_id = $1 AND url = $2",
-                )
-                .bind(vehicle_id)
-                .bind(&row.url)
-                .bind(merged)
-                .execute(pool)
-                .await;
-            }
-        }
-    }
-}
-
-fn metadata_has_local_mirror(config: &crate::config::Config, metadata: &serde_json::Value) -> bool {
-    metadata
-        .get("mirror_status")
-        .and_then(|value| value.as_str())
-        == Some("ready")
-        && mirrored_asset_is_valid(config, metadata)
-}
-
-fn artwork_asset_counts(config: &crate::config::Config, rows: &[VehicleImageRow]) -> (i32, i32) {
-    let mut total = 0;
-    let mut ready = 0;
-    for row in rows {
-        if !row.url.starts_with("http://") && !row.url.starts_with("https://") {
-            continue;
-        }
-        total += 1;
-        if metadata_has_local_mirror(config, &row.metadata) {
-            ready += 1;
-        }
-        for overlay in row
-            .metadata
-            .get("overlay_mirrors")
-            .and_then(|value| value.as_array())
-            .into_iter()
-            .flatten()
-        {
-            total += 1;
-            if mirrored_asset_is_valid(config, overlay) {
-                ready += 1;
-            }
-        }
-    }
-    (total, ready)
-}
-
-async fn mark_vehicle_artwork_repair_attempt(pool: &sqlx::PgPool, vehicle_id: Uuid) {
-    let _ = sqlx::query(
-        r#"INSERT INTO riviamigo.vehicle_artwork_cache_state
-              (vehicle_id, status, attempts, last_repair_attempt_at, updated_at)
-           VALUES ($1, 'repairing', 1, now(), now())
-           ON CONFLICT (vehicle_id) DO UPDATE SET
-             status = 'repairing', attempts = riviamigo.vehicle_artwork_cache_state.attempts + 1,
-             last_repair_attempt_at = now(), last_error = NULL, updated_at = now()"#,
-    )
-    .bind(vehicle_id)
-    .execute(pool)
-    .await;
-}
-
-async fn refresh_vehicle_artwork_cache_state(
-    pool: &sqlx::PgPool,
-    config: &crate::config::Config,
-    vehicle_id: Uuid,
-    error: Option<&str>,
-) {
-    let rows = sqlx::query_as::<_, VehicleImageRow>(
-        "SELECT placement, design, size, resolution, url, overlays, metadata
-         FROM riviamigo.vehicle_images WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-    let (asset_count, ready_asset_count) = artwork_asset_counts(config, &rows);
-    let ready = asset_count > 0 && asset_count == ready_asset_count;
-    let status = if ready {
-        "ready"
-    } else if error.is_some() {
-        "failed"
-    } else {
-        "pending"
-    };
-    let sanitized_error = error.map(|_| "Rivian artwork repair failed; retry is scheduled.");
-    let _ = sqlx::query(
-        r#"INSERT INTO riviamigo.vehicle_artwork_cache_state
-              (vehicle_id, status, asset_count, ready_asset_count, last_repair_success_at, last_error, updated_at)
-           VALUES ($1, $2, $3, $4, CASE WHEN $2 = 'ready' THEN now() ELSE NULL END, $5, now())
-           ON CONFLICT (vehicle_id) DO UPDATE SET
-             status = EXCLUDED.status, asset_count = EXCLUDED.asset_count,
-             ready_asset_count = EXCLUDED.ready_asset_count,
-             last_repair_success_at = CASE WHEN EXCLUDED.status = 'ready' THEN now() ELSE riviamigo.vehicle_artwork_cache_state.last_repair_success_at END,
-             last_error = EXCLUDED.last_error, updated_at = now()"#,
-    )
-    .bind(vehicle_id)
-    .bind(status)
-    .bind(asset_count)
-    .bind(ready_asset_count)
-    .bind(sanitized_error)
-    .execute(pool)
-    .await;
-}
-
-async fn vehicle_artwork_cache_state_json(
-    pool: &sqlx::PgPool,
-    vehicle_id: Uuid,
-) -> serde_json::Value {
-    let state = sqlx::query_as::<_, VehicleArtworkCacheStateRow>(
-        "SELECT status, asset_count, ready_asset_count, attempts, last_repair_attempt_at,
-                last_repair_success_at, last_error
-         FROM riviamigo.vehicle_artwork_cache_state WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    match state {
-        Some(state) => serde_json::json!({
-            "status": state.status,
-            "asset_count": state.asset_count,
-            "ready_asset_count": state.ready_asset_count,
-            "attempts": state.attempts,
-            "last_repair_attempt_at": state.last_repair_attempt_at,
-            "last_repair_success_at": state.last_repair_success_at,
-            "last_error": state.last_error,
-        }),
-        None => {
-            serde_json::json!({ "status": "pending", "asset_count": 0, "ready_asset_count": 0 })
-        }
-    }
-}
-
-fn resolved_image_url(
-    _config: &crate::config::Config,
-    vehicle_id: Uuid,
-    _original_url: &str,
-    metadata: &serde_json::Value,
-) -> Option<String> {
-    if let Some(key) = metadata.get("mirror_key").and_then(|value| value.as_str()) {
-        return Some(format!("/v1/vehicle-image-cache/{vehicle_id}/{key}"));
-    }
-    None
-}
-
-fn resolved_overlays(
-    config: &crate::config::Config,
-    vehicle_id: Uuid,
-    row_overlays: &serde_json::Value,
-    metadata: &serde_json::Value,
-) -> serde_json::Value {
-    let overlays = overlay_entries_from_value(row_overlays);
-    let Some(mirrors) = metadata
-        .get("overlay_mirrors")
-        .and_then(|value| value.as_array())
-    else {
-        return serde_json::json!([]);
-    };
-
-    let overlays: Vec<_> = overlays
-        .into_iter()
-        .filter_map(|mut overlay| {
-            let mirror = mirrors.iter().find(|entry| {
-                entry.get("source_url").and_then(|value| value.as_str())
-                    == Some(overlay.url.as_str())
-            })?;
-            if let Some(key) = mirror.get("mirror_key").and_then(|value| value.as_str()) {
-                if metadata_has_local_mirror(config, mirror) {
-                    overlay.url = format!("/v1/vehicle-image-cache/{vehicle_id}/{key}");
-                    return Some(overlay);
-                }
-            }
-            None
-        })
-        .collect();
-
-    serde_json::to_value(overlays).unwrap_or_else(|_| serde_json::json!([]))
-}
-
-async fn find_mirrored_asset(
-    pool: &sqlx::PgPool,
-    vehicle_id: Uuid,
-    image_key: &str,
-) -> Result<Option<serde_json::Value>, AppError> {
-    let metadatas = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT metadata FROM riviamigo.vehicle_images WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await?;
-
-    for metadata in metadatas {
-        if metadata.get("mirror_key").and_then(|value| value.as_str()) == Some(image_key) {
-            return Ok(Some(metadata));
-        }
-
-        if let Some(mirrors) = metadata
-            .get("overlay_mirrors")
-            .and_then(|value| value.as_array())
-        {
-            if let Some(found) = mirrors.iter().find(|mirror| {
-                mirror.get("mirror_key").and_then(|value| value.as_str()) == Some(image_key)
-            }) {
-                return Ok(Some(found.clone()));
-            }
-        }
-    }
-
-    Ok(None)
-}
-
-async fn fetch_vehicle_images_json(
-    pool: &sqlx::PgPool,
-    config: &crate::config::Config,
-    vehicle_id: Uuid,
-) -> Result<serde_json::Value, AppError> {
-    let rows = sqlx::query_as::<_, VehicleImageRow>(
-        r#"
-        SELECT placement, design, size, resolution, url, overlays, metadata
-        FROM riviamigo.vehicle_images
-        WHERE vehicle_id = $1
-        ORDER BY
-          CASE WHEN size = 'large' THEN 0 ELSE 1 END,
-          placement,
-          design NULLS LAST,
-                    created_at
-                "#,
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await?;
-
-    let all: Vec<_> = rows
-        .iter()
-        .filter_map(|row| {
-            let resolved_url = resolved_image_url(config, vehicle_id, &row.url, &row.metadata)?;
-            let resolved_overlays =
-                resolved_overlays(config, vehicle_id, &row.overlays, &row.metadata);
-            Some(serde_json::json!({
-                "placement": row.placement,
-                "design": row.design,
-                "size": row.size,
-                "resolution": row.resolution,
-                "url": resolved_url,
-                "overlays": resolved_overlays,
-                "metadata": row.metadata,
-            }))
-        })
-        .collect();
-
-    let best = |placement: &str, design: &str| {
-        rows.iter()
-            .find(|row| {
-                normalize_image_placement(&row.placement) == placement
-                    && normalize_image_design(row.design.as_deref()) == design
-            })
-            .or_else(|| {
-                rows.iter()
-                    .find(|row| normalize_image_placement(&row.placement) == placement)
-            })
-            .and_then(|row| resolved_image_url(config, vehicle_id, &row.url, &row.metadata))
-    };
-
-    Ok(serde_json::json!({
-        "all": all,
-        "cache": vehicle_artwork_cache_state_json(pool, vehicle_id).await,
-        "side": {
-            "dark": best("side", "dark"),
-            "light": best("side", "light")
-        },
-        "overhead": {
-            "dark": best("overhead", "dark"),
-            "light": best("overhead", "light")
-        },
-        "front": {
-            "dark": best("front", "dark"),
-            "light": best("front", "light")
-        },
-        "rear": {
-            "dark": best("rear", "dark"),
-            "light": best("rear", "light")
-        }
-    }))
-}
-
-async fn vehicle_image_cache_asset(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Path((vehicle_id, image_key)): Path<(Uuid, String)>,
-) -> Result<Response, AppError> {
-    if !sanitize_image_key(&image_key) {
-        return Err(AppError::NotFound);
-    }
-    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
-    let Some(metadata) = find_mirrored_asset(&state.pool, vehicle_id, &image_key).await? else {
-        return Ok(vehicle_artwork_placeholder_response());
-    };
-
-    let Some(relpath) = metadata
-        .get("mirror_relpath")
-        .and_then(|value| value.as_str())
-    else {
-        queue_vehicle_artwork_repair(&state, vehicle_id).await;
-        return Ok(vehicle_artwork_restoring_response());
-    };
-    let mime_type = metadata
-        .get("mime_type")
-        .and_then(|value| value.as_str())
-        .unwrap_or("application/octet-stream");
-    let path = mirror_file_path(&state.config, relpath);
-    let Ok(bytes) = tokio::fs::read(path).await else {
-        queue_vehicle_artwork_repair(&state, vehicle_id).await;
-        return Ok(vehicle_artwork_restoring_response());
-    };
-    let Some(expected_sha256) = metadata.get("sha256").and_then(|value| value.as_str()) else {
-        return Ok(vehicle_artwork_placeholder_response());
-    };
-    if hex::encode(Sha256::digest(&bytes)) != expected_sha256 {
-        queue_vehicle_artwork_repair(&state, vehicle_id).await;
-        return Ok(vehicle_artwork_restoring_response());
-    }
-
-    let mut response = Response::new(Body::from(bytes));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(mime_type)
-            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
-    );
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("private, max-age=31536000, immutable"),
-    );
-    Ok(response)
-}
-
-fn vehicle_artwork_placeholder_response() -> Response {
-    // A compact, first-party neutral fallback for stale browser URLs while the
-    // background worker repairs the persistent artwork cache.
-    const PLACEHOLDER: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" role="img" aria-label="Vehicle artwork unavailable"><rect width="320" height="180" fill="#1d2430"/><path d="M54 121h212l-16-39c-4-10-13-16-24-16H94c-11 0-20 6-24 16l-16 39Z" fill="#64748b"/><circle cx="94" cy="122" r="18" fill="#0f172a"/><circle cx="226" cy="122" r="18" fill="#0f172a"/></svg>"##;
-    let mut response = Response::new(Body::from(PLACEHOLDER));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("image/svg+xml; charset=utf-8"),
-    );
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("private, no-store"),
-    );
-    response
-}
-
-fn vehicle_artwork_restoring_response() -> Response {
-    let mut response = vehicle_artwork_placeholder_response();
-    *response.status_mut() = axum::http::StatusCode::ACCEPTED;
-    response.headers_mut().insert(
-        HeaderName::from_static("x-riviamigo-artwork-state"),
-        HeaderValue::from_static("restoring"),
-    );
-    response
-}
-
-async fn admin_remirror_vehicle_images(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Path(vehicle_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    require_admin_or_super_user(&state.pool, auth.user_id).await?;
-    require_remote_backed_vehicle(&state.pool, vehicle_id).await?;
-    queue_vehicle_artwork_repair_with_mode(&state, vehicle_id, true).await;
-    Ok(Json(
-        serde_json::json!({ "ok": true, "queued": true, "vehicle_id": vehicle_id }),
-    ))
-}
-
-async fn admin_purge_vehicle_artwork_cache(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Path(vehicle_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    require_admin_or_super_user(&state.pool, auth.user_id).await?;
-    require_remote_backed_vehicle(&state.pool, vehicle_id).await?;
-    let _ = tokio::fs::remove_dir_all(image_cache_root(&state.config).join(vehicle_id.to_string()))
-        .await;
-    sqlx::query(
-        "UPDATE riviamigo.vehicle_images
-         SET metadata = jsonb_set(metadata, '{mirror_status}', '\"pending\"'::jsonb, true), updated_at = now()
-         WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .execute(&state.pool)
-    .await?;
-    refresh_vehicle_artwork_cache_state(&state.pool, &state.config, vehicle_id, None).await;
-    Ok(Json(
-        serde_json::json!({ "ok": true, "vehicle_id": vehicle_id }),
-    ))
-}
-
-async fn vehicle_artwork_cache_complete(
-    pool: &sqlx::PgPool,
-    config: &crate::config::Config,
-    vehicle_id: Uuid,
-) -> bool {
-    let rows = sqlx::query_as::<_, VehicleImageRow>(
-        "SELECT placement, design, size, resolution, url, overlays, metadata
-         FROM riviamigo.vehicle_images WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-    let (total, ready) = artwork_asset_counts(config, &rows);
-    total > 0 && total == ready
-}
-
-async fn claim_vehicle_artwork_repair(pool: &sqlx::PgPool, vehicle_id: Uuid) -> bool {
-    sqlx::query_scalar::<_, Uuid>(
-        r#"INSERT INTO riviamigo.vehicle_artwork_cache_state
-              (vehicle_id, status, next_attempt_at, updated_at)
-           VALUES ($1, 'pending', now(), now())
-           ON CONFLICT (vehicle_id) DO UPDATE SET
-             status = 'pending', next_attempt_at = now(), updated_at = now()
-           WHERE riviamigo.vehicle_artwork_cache_state.status <> 'repairing'
-              OR riviamigo.vehicle_artwork_cache_state.last_repair_attempt_at < now() - interval '5 minutes'
-           RETURNING vehicle_id"#,
-    )
-    .bind(vehicle_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .is_some()
-}
-
-async fn queue_vehicle_artwork_repair(state: &AppState, vehicle_id: Uuid) {
-    queue_vehicle_artwork_repair_with_mode(state, vehicle_id, false).await;
-}
-
-async fn queue_vehicle_artwork_repair_with_mode(
-    state: &AppState,
-    vehicle_id: Uuid,
-    force_manifest_refresh: bool,
-) {
-    let is_demo = sqlx::query_scalar::<_, String>(
-        "SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id=$1",
-    )
-    .bind(vehicle_id)
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten()
-    .is_some_and(|key| is_demo_vehicle_key(&key));
-    if is_demo {
-        return;
-    }
-    if !force_manifest_refresh
-        && vehicle_artwork_cache_complete(&state.pool, &state.config, vehicle_id).await
-    {
-        return;
-    }
-    if !claim_vehicle_artwork_repair(&state.pool, vehicle_id).await {
-        return;
-    }
-    let pool = state.pool.clone();
-    let config = state.config.clone();
-    let age_key = state.age_key.clone();
-    tokio::spawn(async move {
-        repair_vehicle_artwork(pool, config, age_key, vehicle_id, force_manifest_refresh).await;
-    });
-}
-
-async fn repair_vehicle_artwork(
-    pool: sqlx::PgPool,
-    config: crate::config::Config,
-    age_key: String,
-    vehicle_id: Uuid,
-    force_manifest_refresh: bool,
-) {
-    for attempt in 0..3 {
-        ensure_vehicle_images_cached(&pool, &config, vehicle_id, &age_key, force_manifest_refresh)
-            .await;
-        if vehicle_artwork_cache_complete(&pool, &config, vehicle_id).await {
-            refresh_vehicle_artwork_cache_state(&pool, &config, vehicle_id, None).await;
-            return;
-        }
-        if attempt < 2 {
-            tokio::time::sleep(Duration::from_secs(5 * (attempt + 1))).await;
-        }
-    }
-    refresh_vehicle_artwork_cache_state(
-        &pool,
-        &config,
-        vehicle_id,
-        Some("Artwork cache is incomplete."),
-    )
-    .await;
-}
-
-/// Starts a bounded repair pass after the API has loaded its encrypted vehicle
-/// credentials. Browser requests only read local files; they never trigger this.
-pub fn start_vehicle_artwork_repair_worker(
-    pool: sqlx::PgPool,
-    config: crate::config::Config,
-    age_key: String,
-) {
-    tokio::spawn(async move {
-        let vehicle_ids = sqlx::query_scalar::<_, Uuid>(
-            "SELECT v.id FROM riviamigo.vehicles v
-             JOIN riviamigo.vehicle_credentials c ON c.vehicle_id = v.id
-             WHERE v.rivian_vehicle_id NOT LIKE 'demo-%'",
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_default();
-
-        for vehicle_id in vehicle_ids {
-            if vehicle_artwork_cache_complete(&pool, &config, vehicle_id).await
-                || !claim_vehicle_artwork_repair(&pool, vehicle_id).await
-            {
-                continue;
-            }
-
-            repair_vehicle_artwork(
-                pool.clone(),
-                config.clone(),
-                age_key.clone(),
-                vehicle_id,
-                false,
-            )
-            .await;
-        }
-    });
-}
-
-fn normalize_image_placement(value: &str) -> &'static str {
-    let normalized = value.to_lowercase();
-    if normalized.contains("side") && !is_charging_side_value(value) {
-        "side"
-    } else if normalized.contains("overhead")
-        || normalized.contains("top")
-        || normalized.contains("bird")
-    {
-        "overhead"
-    } else if normalized.contains("front") {
-        "front"
-    } else if normalized.contains("rear") || normalized.contains("back") {
-        "rear"
-    } else {
-        "unknown"
-    }
-}
-
-fn is_charging_side_value(value: &str) -> bool {
-    let normalized = value.to_lowercase();
-    normalized.contains("side")
-        && (normalized.contains("charging") || normalized.contains("charge"))
-}
-
-fn normalize_image_design(value: Option<&str>) -> &'static str {
-    let Some(value) = value else {
-        return "unknown";
-    };
-    let normalized = value.to_lowercase();
-    if normalized.contains("dark") {
-        "dark"
-    } else if normalized.contains("light") {
-        "light"
-    } else {
-        "unknown"
-    }
 }
 
 fn open_closures_json(closures: &[(&str, Option<bool>)]) -> serde_json::Value {
@@ -5339,633 +4077,4 @@ fn raw_event_summary_json(row: RawEventSummaryRow) -> serde_json::Value {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        connect_otp, load_encrypted_redis, map_rivian_login_error, map_rivian_otp_error,
-        parse_raw_fields, parse_telemetry_lanes, raw_field_coverage_query,
-        raw_telemetry_where_clause, resolve_telemetry_resolution, store_encrypted_redis,
-        validate_raw_time_bounds, vehicle_data_ready, OtpBody, PendingOtpChallenge,
-        RAW_TELEMETRY_FIELDS, TELEMETRY_LANES_QUERY,
-    };
-    use axum::body::Body;
-    use axum::extract::State;
-    use axum::Json;
-    use futures::StreamExt;
-    use http::{Request, StatusCode};
-    use tower::ServiceExt;
-    use uuid::Uuid;
-
-    /// HTTP consumers may poll a body again after EOF. `unfold` itself is
-    /// not safe to poll after completion, including on a header-only export.
-    #[tokio::test]
-    async fn capture_export_body_remains_complete_after_eof() {
-        for page_count in [0, 1, 3] {
-            let rows = futures::stream::unfold(0, move |page| async move {
-                (page < page_count).then(|| {
-                    (
-                        Ok::<_, std::io::Error>(axum::body::Bytes::from(format!(
-                            "{{\"page\":{page}}}\n"
-                        ))),
-                        page + 1,
-                    )
-                })
-            });
-            let mut body = super::capture_export_body("{\"kind\":\"header\"}\n".into(), rows)
-                .into_data_stream();
-            let mut downloaded = Vec::new();
-            while let Some(chunk) = body.next().await {
-                downloaded.extend_from_slice(&chunk.expect("download chunk"));
-            }
-            let mut expected = "{\"kind\":\"header\"}\n".to_owned();
-            for page in 0..page_count {
-                expected.push_str(&format!("{{\"page\":{page}}}\n"));
-            }
-            assert_eq!(downloaded, expected.as_bytes());
-            for _ in 0..3 {
-                assert!(body.next().await.is_none());
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn capture_export_body_propagates_page_errors() {
-        let rows = futures::stream::unfold(Some(()), |state| async move {
-            state.map(|()| (Err(std::io::Error::other("page query failed")), None))
-        });
-        let mut body = super::capture_export_body("header\n".into(), rows).into_data_stream();
-        assert_eq!(body.next().await.unwrap().unwrap(), "header\n");
-        assert!(body.next().await.unwrap().is_err());
-        for _ in 0..3 {
-            assert!(body.next().await.is_none());
-        }
-    }
-
-    #[test]
-    fn maps_rejected_rivian_credentials_to_an_actionable_error() {
-        assert!(matches!(
-            map_rivian_login_error(
-                crate::ingestion::rivian_auth::RivianAuthError::InvalidCredentials
-            ),
-            crate::errors::AppError::RivianCredentialsRejected
-        ));
-    }
-
-    #[test]
-    fn maps_rejected_rivian_otp_to_an_actionable_error() {
-        assert!(matches!(
-            map_rivian_otp_error(crate::ingestion::rivian_auth::RivianAuthError::InvalidOtp),
-            crate::errors::AppError::RivianOtpRejected
-        ));
-    }
-
-    #[test]
-    fn requires_authorized_connected_runtime_before_reporting_refresh_ready() {
-        assert!(vehicle_data_ready(Some("connected"), Some("authorized")));
-        assert!(!vehicle_data_ready(Some("starting"), Some("authorized")));
-        assert!(!vehicle_data_ready(Some("connected"), Some("needs_reauth")));
-        assert!(!vehicle_data_ready(None, None));
-    }
-
-    // Run with: cargo test -- --ignored
-
-    fn make_helper_state(redis_url: String) -> crate::middleware::auth::AppState {
-        use std::sync::Arc;
-
-        use crate::middleware::auth::{AppState, JwtKeys};
-
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect_lazy("postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo")
-            .expect("lazy pool");
-        let redis = redis::Client::open(redis_url.clone()).expect("redis client");
-
-        let generated = crate::keys::generate_keys().expect("keys");
-        let jwt_keys = Arc::new(
-            JwtKeys::new(&generated.jwt_private_pem, &generated.jwt_public_pem).expect("jwt keys"),
-        );
-
-        let config = crate::config::Config {
-            database_url: "postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo".into(),
-            redis_url,
-            jwt_secret: None,
-            jwt_public_key: None,
-            age_encryption_key: None,
-            port: 3001,
-            allowed_origins: vec!["http://localhost:3000".into()],
-            s3_endpoint: None,
-            s3_access_key: None,
-            s3_secret_key: None,
-            backup_artifact_dir: std::env::temp_dir()
-                .join("riviamigo-route-test-backups")
-                .to_string_lossy()
-                .into_owned(),
-            vehicle_image_cache_dir: std::env::temp_dir()
-                .join("riviamigo-route-test-vehicle-images")
-                .to_string_lossy()
-                .into_owned(),
-            backup_driver: "pg_dump".into(),
-            backup_poll_interval_seconds: 60,
-            restore_agent_url: "http://127.0.0.1:3002".into(),
-            restore_agent_key_file: "/backups/.restore-agent-key".into(),
-            recovery: crate::config::RecoveryConfig::default(),
-            origin_bind: crate::config::OriginBindConfig::default(),
-            security: Default::default(),
-            rivian_ws_reconnect_initial_seconds: 10,
-            rivian_ws_reconnect_max_seconds: 900,
-            rivian_raw_event_retention_days: 7,
-            rivian_persist_raw_events: true,
-            rivian_suppress_duplicate_telemetry: true,
-            riviamigo_env: None,
-            cookie_insecure: None,
-            allow_insecure_lan_http_auth: false,
-            rate_limit: crate::config::RateLimitConfig::default(),
-        };
-
-        AppState {
-            pool,
-            redis,
-            jwt_keys,
-            age_key: generated.age_key,
-            config,
-            nominatim_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
-                std::collections::HashMap::new(),
-            )),
-            supervisor: crate::ingestion::supervisor::SupervisorHandle::noop(),
-            resources: Default::default(),
-        }
-    }
-
-    async fn make_app() -> axum::Router {
-        use crate::middleware::auth::{AppState, JwtKeys};
-        use std::sync::Arc;
-
-        let database_url =
-            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
-        let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
-
-        let pool = crate::db::pool::create_pool(&database_url)
-            .await
-            .expect("create_pool");
-        let redis = redis::Client::open(redis_url).expect("redis client");
-
-        let keys = crate::keys::generate_keys().expect("generate test keys");
-        let jwt_keys =
-            Arc::new(JwtKeys::new(&keys.jwt_private_pem, &keys.jwt_public_pem).expect("jwt keys"));
-
-        let config = crate::config::Config {
-            database_url: database_url.clone(),
-            redis_url: "redis://127.0.0.1/".into(),
-            jwt_secret: None,
-            jwt_public_key: None,
-            age_encryption_key: None,
-            port: 3001,
-            allowed_origins: vec!["http://localhost:3000".into()],
-            s3_endpoint: None,
-            s3_access_key: None,
-            s3_secret_key: None,
-            backup_artifact_dir: std::env::temp_dir()
-                .join("riviamigo-route-test-backups")
-                .to_string_lossy()
-                .into_owned(),
-            vehicle_image_cache_dir: std::env::temp_dir()
-                .join("riviamigo-route-test-vehicle-images")
-                .to_string_lossy()
-                .into_owned(),
-            backup_driver: "pg_dump".into(),
-            backup_poll_interval_seconds: 60,
-            restore_agent_url: "http://127.0.0.1:3002".into(),
-            restore_agent_key_file: "/backups/.restore-agent-key".into(),
-            recovery: crate::config::RecoveryConfig::default(),
-            origin_bind: crate::config::OriginBindConfig::default(),
-            security: Default::default(),
-            rivian_ws_reconnect_initial_seconds: 10,
-            rivian_ws_reconnect_max_seconds: 900,
-            rivian_raw_event_retention_days: 7,
-            rivian_persist_raw_events: true,
-            rivian_suppress_duplicate_telemetry: true,
-            riviamigo_env: None,
-            cookie_insecure: None,
-            allow_insecure_lan_http_auth: false,
-            rate_limit: crate::config::RateLimitConfig::default(),
-        };
-
-        let state = AppState {
-            pool,
-            redis,
-            jwt_keys,
-            age_key: "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
-                .to_string(),
-            config,
-            nominatim_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
-                std::collections::HashMap::new(),
-            )),
-            supervisor: crate::ingestion::supervisor::SupervisorHandle::noop(),
-            resources: Default::default(),
-        };
-
-        crate::routes::build_router(state)
-    }
-
-    async fn get_status(app: axum::Router, uri: &str) -> http::StatusCode {
-        let req = Request::builder()
-            .method("GET")
-            .uri(uri)
-            .body(Body::empty())
-            .unwrap();
-        app.oneshot(req).await.unwrap().status()
-    }
-
-    async fn post_status(
-        app: axum::Router,
-        uri: &str,
-        body: serde_json::Value,
-    ) -> http::StatusCode {
-        let req = Request::builder()
-            .method("POST")
-            .uri(uri)
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_vec(&body).unwrap()))
-            .unwrap();
-        app.oneshot(req).await.unwrap().status()
-    }
-
-    #[tokio::test]
-    #[ignore = "requires DATABASE_URL"]
-    async fn list_vehicles_requires_auth() {
-        let app = make_app().await;
-        assert_eq!(
-            get_status(app, "/v1/vehicles").await,
-            StatusCode::UNAUTHORIZED
-        );
-    }
-
-    #[tokio::test]
-    #[ignore = "requires DATABASE_URL"]
-    async fn add_vehicle_requires_auth() {
-        let app = make_app().await;
-        let status = post_status(
-            app,
-            "/v1/vehicles",
-            serde_json::json!({"rivian_vehicle_id": "test"}),
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    #[ignore = "requires DATABASE_URL"]
-    async fn demo_vehicle_requires_auth() {
-        let app = make_app().await;
-        let status = post_status(app, "/v1/vehicles/demo", serde_json::json!({})).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    #[ignore = "requires DATABASE_URL"]
-    async fn refresh_demo_vehicle_requires_auth() {
-        let app = make_app().await;
-        let status = post_status(
-            app,
-            &format!("/v1/vehicles/{}/demo/refresh", Uuid::new_v4()),
-            serde_json::json!({}),
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-    }
-
-    #[test]
-    fn demo_vehicle_keys_are_detected_explicitly() {
-        assert!(super::is_demo_vehicle_key("demo-r1t-local"));
-        assert!(super::is_demo_vehicle_key("demo-r2-local"));
-        assert!(super::is_demo_vehicle_key("demo-r2s-local"));
-        assert!(!super::is_demo_vehicle_key("rivian-1234"));
-    }
-
-    #[test]
-    fn r2_model_aliases_canonicalize_before_storage_and_response() {
-        assert_eq!(super::canonical_vehicle_model("R2"), "R2");
-        assert_eq!(super::canonical_vehicle_model(" r2s "), "R2");
-        assert_eq!(super::canonical_vehicle_model("R2-S"), "R2");
-        assert_eq!(super::canonical_vehicle_model("R1S"), "R1S");
-        assert_eq!(super::canonical_battery_config("R2S"), "r2");
-        assert_eq!(super::canonical_vehicle_name("R2S"), "R2");
-    }
-
-    #[test]
-    fn raw_telemetry_rejects_unknown_field_filters() {
-        assert!(parse_raw_fields(Some("battery_level,not_a_telemetry_field")).is_err());
-    }
-
-    #[test]
-    fn raw_selectors_reject_control_and_oversized_input() {
-        assert!(parse_raw_fields(Some("battery_level\n".repeat(300).as_str())).is_err());
-        assert!(parse_telemetry_lanes(Some("battery\u{0000},drive")).is_err());
-    }
-
-    #[test]
-    fn raw_telemetry_selected_fields_are_bounded_to_known_columns() {
-        let fields = parse_raw_fields(Some("battery_level,tire_fl_psi,battery_level"))
-            .expect("known fields should parse");
-        assert_eq!(fields, vec!["battery_level", "tire_fl_psi"]);
-
-        let clause = raw_telemetry_where_clause(&fields, false);
-        assert!(clause.contains("t.battery_level IS NOT NULL OR t.tire_fl_psi IS NOT NULL"));
-        assert!(clause.contains("to_jsonb(t)::text ILIKE"));
-    }
-
-    #[test]
-    fn raw_telemetry_field_coverage_uses_typed_rows_not_wide_json() {
-        let query = raw_field_coverage_query("t.vehicle_id = $1");
-
-        assert_eq!(RAW_TELEMETRY_FIELDS.len(), 52);
-        assert!(query.contains("unnest(ARRAY["));
-        assert!(query.contains("AS field"));
-        assert!(query.contains("AS sample_count"));
-        assert!(!query.contains("jsonb_build_object"));
-    }
-
-    #[test]
-    fn telemetry_lane_queries_are_bounded_and_allowlisted() {
-        let lanes = parse_telemetry_lanes(Some("battery,drive,battery")).expect("known lanes");
-        assert_eq!(lanes, vec!["battery", "drive"]);
-        assert!(parse_telemetry_lanes(Some("raw_payload")).is_err());
-
-        let from = "2026-07-14T00:00:00Z".parse().expect("valid timestamp");
-        let to = "2026-07-14T01:00:00Z".parse().expect("valid timestamp");
-        assert_eq!(
-            resolve_telemetry_resolution(Some("5m"), from, to, 256).unwrap(),
-            300
-        );
-    }
-
-    #[test]
-    fn telemetry_lane_runtime_query_aliases_every_row_field() {
-        for field in [
-            "latitude",
-            "longitude",
-            "altitude_m",
-            "speed_mph",
-            "battery_level",
-            "battery_capacity_wh",
-            "distance_to_empty_mi",
-            "battery_limit",
-            "time_to_end_of_charge_min",
-            "cabin_temp_c",
-            "driver_temp_c",
-            "outside_temp_c",
-            "power_kw",
-            "regen_power_kw",
-            "heading_deg",
-            "odometer_miles",
-            "tire_fl_psi",
-            "tire_fr_psi",
-            "tire_rl_psi",
-            "tire_rr_psi",
-        ] {
-            assert!(
-                TELEMETRY_LANES_QUERY.contains(&format!("AS {field}")),
-                "telemetry lane query must alias {field}"
-            );
-        }
-    }
-
-    #[test]
-    fn raw_telemetry_rejects_inverted_time_bounds() {
-        let from = "2026-07-14T00:00:00Z".parse().expect("valid timestamp");
-        let to = "2026-07-13T00:00:00Z".parse().expect("valid timestamp");
-        assert!(validate_raw_time_bounds(Some(from), Some(to)).is_err());
-    }
-
-    #[test]
-    fn resolved_image_url_keeps_a_first_party_path_when_local_file_is_missing() {
-        let config = crate::config::Config {
-            database_url: "postgres://localhost/test".into(),
-            redis_url: "redis://localhost".into(),
-            jwt_secret: None,
-            jwt_public_key: None,
-            age_encryption_key: None,
-            port: 3001,
-            allowed_origins: vec![],
-            s3_endpoint: None,
-            s3_access_key: None,
-            s3_secret_key: None,
-            backup_artifact_dir: std::env::temp_dir()
-                .join("riviamigo-test-backups")
-                .to_string_lossy()
-                .into_owned(),
-            vehicle_image_cache_dir: std::env::temp_dir()
-                .join("riviamigo-test-missing-mirror")
-                .to_string_lossy()
-                .into_owned(),
-            backup_driver: "pg_dump".into(),
-            backup_poll_interval_seconds: 60,
-            restore_agent_url: "http://127.0.0.1:3002".into(),
-            restore_agent_key_file: "/backups/.restore-agent-key".into(),
-            recovery: crate::config::RecoveryConfig::default(),
-            origin_bind: crate::config::OriginBindConfig::default(),
-            security: Default::default(),
-            rivian_ws_reconnect_initial_seconds: 10,
-            rivian_ws_reconnect_max_seconds: 900,
-            rivian_raw_event_retention_days: 7,
-            rivian_persist_raw_events: true,
-            rivian_suppress_duplicate_telemetry: true,
-            riviamigo_env: None,
-            cookie_insecure: None,
-            allow_insecure_lan_http_auth: false,
-            rate_limit: crate::config::RateLimitConfig::default(),
-        };
-        let metadata = serde_json::json!({
-            "mirror_status": "ready",
-            "mirror_key": "abc.webp",
-            "mirror_relpath": "vehicle/abc.webp"
-        });
-
-        let url = super::resolved_image_url(
-            &config,
-            uuid::Uuid::nil(),
-            "https://rivian.com/mobile/static/img/example.webp",
-            &metadata,
-        );
-
-        assert_eq!(
-            url,
-            Some("/v1/vehicle-image-cache/00000000-0000-0000-0000-000000000000/abc.webp".into())
-        );
-    }
-
-    #[tokio::test]
-    async fn resolved_image_url_keeps_a_first_party_path_for_a_corrupt_local_file() {
-        use sha2::{Digest, Sha256};
-
-        let vehicle_id = Uuid::new_v4();
-        let mut config = make_helper_state("redis://127.0.0.1/".into()).config;
-        config.vehicle_image_cache_dir = std::env::temp_dir()
-            .join(format!("riviamigo-artwork-checksum-{vehicle_id}"))
-            .to_string_lossy()
-            .into_owned();
-        let relpath = format!("{vehicle_id}/artwork.webp");
-        let path = super::mirror_file_path(&config, &relpath);
-        std::fs::create_dir_all(path.parent().expect("cache parent")).expect("cache directory");
-        std::fs::write(&path, b"valid-artwork").expect("cache asset");
-        let metadata = serde_json::json!({
-            "mirror_status": "ready",
-            "mirror_key": "artwork.webp",
-            "mirror_relpath": relpath,
-            "sha256": hex::encode(Sha256::digest(b"valid-artwork"))
-        });
-
-        assert_eq!(
-            super::resolved_image_url(
-                &config,
-                vehicle_id,
-                "https://rivian.com/artwork.webp",
-                &metadata
-            ),
-            Some(format!("/v1/vehicle-image-cache/{vehicle_id}/artwork.webp"))
-        );
-
-        std::fs::write(&path, b"corrupt-artwork").expect("corrupt cache asset");
-        assert_eq!(
-            super::resolved_image_url(
-                &config,
-                vehicle_id,
-                "https://rivian.com/artwork.webp",
-                &metadata
-            ),
-            Some(format!("/v1/vehicle-image-cache/{vehicle_id}/artwork.webp"))
-        );
-        let _ = std::fs::remove_dir_all(&config.vehicle_image_cache_dir);
-    }
-
-    #[tokio::test]
-    #[ignore = "requires DATABASE_URL"]
-    async fn vehicle_status_requires_auth() {
-        let app = make_app().await;
-        let status = get_status(
-            app,
-            &format!("/v1/vehicles/{}/status", uuid::Uuid::new_v4()),
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    #[ignore = "requires DATABASE_URL"]
-    async fn connect_requires_auth() {
-        let app = make_app().await;
-        let status = post_status(
-            app,
-            "/v1/vehicles/connect",
-            serde_json::json!({"email": "a@b.com", "password": "x"}),
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    #[ignore = "requires REDIS_URL"]
-    async fn encrypted_redis_round_trips_connect_tokens_without_plaintext_storage() {
-        let redis_url =
-            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".into());
-        let state = make_helper_state(redis_url);
-        let mut conn = state
-            .redis
-            .get_multiplexed_async_connection()
-            .await
-            .expect("redis connection");
-        let key = format!("test:rivian:connect:{}", Uuid::new_v4());
-        let tokens = crate::ingestion::session_store::RivianTokenBundle {
-            access_token: "access-token".into(),
-            refresh_token: "refresh-token".into(),
-            app_session_token: "app-session-token".into(),
-            user_session_token: "user-session-token".into(),
-            csrf_token: "csrf-token".into(),
-            created_at: chrono::Utc::now(),
-        };
-
-        store_encrypted_redis(&state, &mut conn, &key, &tokens, 60)
-            .await
-            .expect("store encrypted connect session");
-
-        let raw: Vec<u8> = redis::AsyncCommands::get(&mut conn, &key)
-            .await
-            .expect("redis get ciphertext");
-        assert_ne!(raw, serde_json::to_vec(&tokens).expect("plain json"));
-
-        let round_trip =
-            load_encrypted_redis::<crate::ingestion::session_store::RivianTokenBundle>(
-                &state, &mut conn, &key,
-            )
-            .await
-            .expect("load encrypted connect session")
-            .expect("stored connect session");
-
-        assert_eq!(round_trip.access_token, tokens.access_token);
-        assert_eq!(round_trip.refresh_token, tokens.refresh_token);
-        assert_eq!(round_trip.app_session_token, tokens.app_session_token);
-        assert_eq!(round_trip.user_session_token, tokens.user_session_token);
-        assert_eq!(round_trip.csrf_token, tokens.csrf_token);
-
-        let _: () = redis::AsyncCommands::del(&mut conn, &key)
-            .await
-            .expect("cleanup redis key");
-    }
-
-    #[tokio::test]
-    #[ignore = "requires REDIS_URL"]
-    async fn connect_otp_rejects_challenges_staged_for_other_users() {
-        let redis_url =
-            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".into());
-        let state = make_helper_state(redis_url);
-        let owner_id = Uuid::new_v4();
-        let other_user_id = Uuid::new_v4();
-        let challenge_id = Uuid::new_v4().to_string();
-        let key = format!("rivian:otp:{challenge_id}");
-        let pending = PendingOtpChallenge {
-            email: "driver@example.com".into(),
-            otp_token: "otp-token".into(),
-            csrf_token: "csrf-token".into(),
-            app_session_token: "app-session-token".into(),
-            user_id: owner_id,
-        };
-
-        let mut conn = state
-            .redis
-            .get_multiplexed_async_connection()
-            .await
-            .expect("redis connection");
-        store_encrypted_redis(&state, &mut conn, &key, &pending, 60)
-            .await
-            .expect("store encrypted otp challenge");
-        drop(conn);
-
-        let result = connect_otp(
-            State(state.clone()),
-            crate::middleware::auth::AuthUser {
-                user_id: other_user_id,
-                default_vehicle_id: None,
-                api_access_level: None,
-                api_vehicle_id: None,
-            },
-            Json(OtpBody {
-                challenge_id: challenge_id.clone(),
-                otp_code: "123456".into(),
-            }),
-        )
-        .await;
-
-        assert!(matches!(
-            result,
-            Err(crate::errors::AppError::RivianConnectSessionExpired)
-        ));
-
-        let mut conn = state
-            .redis
-            .get_multiplexed_async_connection()
-            .await
-            .expect("redis connection");
-        let _: () = redis::AsyncCommands::del(&mut conn, &key)
-            .await
-            .expect("cleanup redis key");
-    }
-}
+mod tests;

@@ -24,34 +24,39 @@ use uuid::Uuid;
 use crate::ingestion::rivian_auth::rivian_refresh_csrf;
 use crate::ingestion::session_store::{decrypt_tokens, encrypt_tokens, RivianTokenBundle};
 use crate::services::charge_backfill::{self, ChargeBackfillError};
-use crate::services::ingestion_capture::{self, Kind as CaptureKind};
-
-/// Record one GraphQL acquisition in a running ingestion capture.
-fn capture_poll<T>(
-    vehicle_id: Uuid,
-    operation: &str,
-    result: &Result<T>,
-    detail: serde_json::Value,
-) {
-    let fields = match result {
-        Ok(_) => serde_json::json!({ "operation": operation, "outcome": "ok", "detail": detail }),
-        Err(error) => serde_json::json!({
-            "operation": operation,
-            "outcome": if is_auth_error(error) { "auth_required" } else { "error" },
-            "error": error.to_string(),
-        }),
-    };
-    ingestion_capture::record(vehicle_id, CaptureKind::Poll, fields);
-}
 use crate::services::charge_sessions::{
     self, ChargeSessionPayloadRef, ChargeSessionSummaryPayload, UnmatchedInsertPolicy,
 };
 
+mod capture;
+mod live_session;
 mod transport;
+
+use capture::capture_poll;
+pub(crate) use live_session::{live_session_redis_key, LIVE_SESSION_TTL_SECONDS};
+pub use live_session::{
+    normalize_charging_session, persist_charging_session_chart, persist_live_session_data,
+    LiveSessionData,
+};
 
 static BASELINE_FORWARD_DROP_LOG_COUNT: AtomicU64 = AtomicU64::new(0);
 
 pub use transport::{gql_request, AuthError};
+
+/// The vehicle has no stored Rivian credentials (never connected, or a
+/// sanitized restore removed them).
+#[derive(Debug, thiserror::Error)]
+#[error("vehicle {vehicle_id} has no Rivian credentials")]
+pub struct CredentialsMissing {
+    vehicle_id: Uuid,
+}
+
+/// The Rivian account no longer lists this vehicle.
+#[derive(Debug, thiserror::Error)]
+#[error("vehicle {rivian_vehicle_id} not found in getUserInfo")]
+pub struct VehicleNotListed {
+    rivian_vehicle_id: String,
+}
 
 // ── URL constants ────────────────────────────────────────────────────────────
 
@@ -159,7 +164,7 @@ pub(crate) async fn load_vehicle_tokens(
     .bind(vehicle_id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| anyhow!("vehicle {vehicle_id} has no Rivian credentials"))?;
+    .ok_or(CredentialsMissing { vehicle_id })?;
 
     let (rivian_vehicle_id, encrypted_tokens) = row;
     let tokens = decrypt_tokens(&encrypted_tokens, &identity)
@@ -351,6 +356,7 @@ struct CurrentUserEnrichment {
 #[serde(rename_all = "camelCase")]
 struct VehicleEnrichmentItem {
     id: String,
+    vin: Option<String>,
     vehicle: Option<VehicleEnrichmentDetails>,
 }
 
@@ -394,7 +400,7 @@ struct SupportedFeature {
     status: Option<String>,
 }
 
-/// Fetch trim/interior/wheel/charger-port static fields and upsert into `vehicles`.
+/// Fetch the VIN and static configuration fields and upsert into `vehicles`.
 pub async fn fetch_vehicle_enrichment(
     rivian_vehicle_id: &str,
     vehicle_id: Uuid,
@@ -402,11 +408,26 @@ pub async fn fetch_vehicle_enrichment(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<()> {
+    let item = request_vehicle_enrichment(rivian_vehicle_id, client, tokens, GATEWAY_URL).await?;
+    save_vehicle_enrichment(pool, vehicle_id, item.vehicle, item.vin.as_deref()).await?;
+
+    increment_poll_counter(pool, vehicle_id).await;
+    tracing::debug!(vehicle_id=%vehicle_id, "vehicle enrichment upserted");
+    Ok(())
+}
+
+async fn request_vehicle_enrichment(
+    rivian_vehicle_id: &str,
+    client: &reqwest::Client,
+    tokens: &RivianTokenBundle,
+    gateway_url: &str,
+) -> Result<VehicleEnrichmentItem> {
     const Q: &str = r#"
         query getUserInfo {
           currentUser {
             vehicles {
               id
+              vin
               vehicle {
                 mobileConfiguration {
                   trimOption          { optionId optionName }
@@ -427,7 +448,7 @@ pub async fn fetch_vehicle_enrichment(
 
     let data: UserInfoEnrichmentData = gql_request(
         client,
-        GATEWAY_URL,
+        gateway_url,
         tokens,
         "getUserInfo",
         Q,
@@ -435,20 +456,26 @@ pub async fn fetch_vehicle_enrichment(
     )
     .await?;
 
-    let item = data
-        .current_user
+    data.current_user
         .and_then(|u| u.vehicles)
         .unwrap_or_default()
         .into_iter()
-        .find(|v| v.id == rivian_vehicle_id);
+        .find(|v| v.id == rivian_vehicle_id)
+        .ok_or_else(|| {
+            VehicleNotListed {
+                rivian_vehicle_id: rivian_vehicle_id.to_owned(),
+            }
+            .into()
+        })
+}
 
-    let Some(item) = item else {
-        return Err(anyhow!(
-            "vehicle {rivian_vehicle_id} not found in getUserInfo"
-        ));
-    };
-
-    let details = item.vehicle;
+async fn save_vehicle_enrichment(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    details: Option<VehicleEnrichmentDetails>,
+    vin: Option<&str>,
+) -> Result<()> {
+    let vin = crate::models::vehicle::normalized_vin(vin);
     let mobile_config = details
         .as_ref()
         .and_then(|d| d.mobile_configuration.as_ref());
@@ -472,23 +499,36 @@ pub async fn fetch_vehicle_enrichment(
             )
         });
 
-    sqlx::query(
+    // `None` means the vehicle row was removed while enrichment was in flight.
+    let saved_vin: Option<Option<String>> = sqlx::query_scalar(
         "UPDATE riviamigo.vehicles
          SET interior_color     = COALESCE($2, interior_color),
              trim               = COALESCE($3, trim),
              supported_features = COALESCE($4, supported_features),
+             vin                = COALESCE($5, vin),
              updated_at         = now()
-         WHERE id = $1",
+         WHERE id = $1
+         RETURNING vin",
     )
     .bind(vehicle_id)
     .bind(interior_color)
     .bind(trim)
     .bind(features_json)
-    .execute(pool)
+    .bind(vin)
+    .fetch_optional(pool)
     .await?;
 
-    increment_poll_counter(pool, vehicle_id).await;
-    tracing::debug!(vehicle_id=%vehicle_id, "vehicle enrichment upserted");
+    // Model year is derived from the stored VIN at read time; report only
+    // whether one is decodable, never the VIN itself.
+    if let Some(saved_vin) = saved_vin {
+        if saved_vin
+            .as_deref()
+            .and_then(crate::models::vehicle::model_year_from_vin)
+            .is_none()
+        {
+            tracing::warn!(vehicle_id=%vehicle_id, "vehicle model year unavailable: no usable VIN on record");
+        }
+    }
     Ok(())
 }
 
@@ -781,7 +821,7 @@ pub async fn fetch_charge_history_full(
 }
 
 async fn fetch_charge_history_inner_v2(
-    _rivian_vehicle_id: &str,
+    rivian_vehicle_id: &str,
     vehicle_id: Uuid,
     full_backfill: bool,
     pool: &PgPool,
@@ -797,7 +837,15 @@ async fn fetch_charge_history_inner_v2(
         .execute(&mut *lock_transaction)
         .await?;
 
-    let result = fetch_charge_history_locked(vehicle_id, full_backfill, pool, client, tokens).await;
+    let result = fetch_charge_history_locked(
+        rivian_vehicle_id,
+        vehicle_id,
+        full_backfill,
+        pool,
+        client,
+        tokens,
+    )
+    .await;
     if let Err(error) = lock_transaction.rollback().await {
         tracing::error!(vehicle_id=%vehicle_id, error=%error, "charge history lock release failed");
         if result.is_ok() {
@@ -811,6 +859,7 @@ async fn fetch_charge_history_inner_v2(
 }
 
 async fn fetch_charge_history_locked(
+    rivian_vehicle_id: &str,
     vehicle_id: Uuid,
     full_backfill: bool,
     pool: &PgPool,
@@ -872,7 +921,23 @@ async fn fetch_charge_history_locked(
     let mut payloads_evidence_expired = 0usize;
     let mut payload_audit_failures = 0usize;
     let mut payload_audit_error_sample: Option<String> = None;
-    for summary in &data.get_completed_session_summaries.unwrap_or_default() {
+    let summaries = data.get_completed_session_summaries.unwrap_or_default();
+    // A foreign summary in this response proves the Rivian account has other
+    // vehicles, so an unidentified summary cannot be attributed safely.
+    let response_has_foreign = summaries.iter().any(|summary| {
+        summary.vehicle_match(rivian_vehicle_id) == charge_sessions::SummaryVehicleMatch::Foreign
+    });
+    let allow_unidentified = !summaries.is_empty()
+        && !response_has_foreign
+        && charge_sessions::vehicles_accepting_unidentified_summaries(pool, Some(vehicle_id))
+            .await?
+            .contains(&vehicle_id);
+    let mut attribution = charge_sessions::SummaryAttributionCounts::default();
+    for summary in &summaries {
+        if !attribution.admit(summary.vehicle_match(rivian_vehicle_id), allow_unidentified) {
+            continue;
+        }
+
         let payload = serde_json::to_value(summary).unwrap_or_else(|_| serde_json::json!({}));
         let payload_ref = match record_charge_payload_with_ref(
             pool,
@@ -949,6 +1014,7 @@ async fn fetch_charge_history_locked(
         total_processed += 1;
     }
 
+    attribution.log(Some(vehicle_id), "charge history sync");
     if payloads_repaired > 0 || payload_audit_failures > 0 {
         tracing::warn!(
             vehicle_id=%vehicle_id,
@@ -1542,213 +1608,6 @@ pub async fn fetch_live_session_history_for_vehicle(
         },
     )
     .await
-}
-
-// ── Live session data (WebSocket chargingSession subscription) ──────────────
-
-/// Serialized to Redis and served by GET /v1/vehicles/:id/live-session.
-/// Field names must match the frontend LiveSession TypeScript interface.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LiveSessionData {
-    pub soc_pct: Option<f64>,
-    pub power_kw: Option<f64>,
-    pub energy_kwh: Option<f64>,
-    pub range_added_km: Option<f64>,
-    pub time_remaining_min: Option<f64>,
-    pub charger_type: Option<String>,
-    pub ts: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub charge_rate_kph: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub time_elapsed_seconds: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub price: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub currency: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_free_session: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub vehicle_charger_state: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub started_at: Option<DateTime<Utc>>,
-}
-
-pub(crate) const LIVE_SESSION_TTL_SECONDS: u64 = 120;
-
-pub(crate) fn live_session_redis_key(vehicle_id: Uuid) -> String {
-    format!("vehicle:{vehicle_id}:live_session")
-}
-
-/// Convert the documented `chargingSession` payload into the existing live
-/// Redis contract. `timeRemaining` and `timeElapsed` are seconds in Rivian's
-/// charging payload; the public live-session field remains minutes.
-pub fn normalize_charging_session(
-    event: &crate::ingestion::parser::ChargingSessionEvent,
-    received_at: DateTime<Utc>,
-) -> Option<LiveSessionData> {
-    let live = event.live_data.as_ref()?;
-    let has_live_value = live.power_kw.is_some()
-        || live.kilometers_charged_per_hour.is_some()
-        || live.range_added_this_session.is_some()
-        || live.total_charged_energy.is_some()
-        || live.time_elapsed_seconds.is_some()
-        || live.time_remaining_seconds.is_some()
-        || live.price.is_some()
-        || live.currency.is_some()
-        || live.is_free_session.is_some()
-        || live.vehicle_charger_state.is_some()
-        || live.start_time.is_some();
-    let has_chart_value = event.chart_data.iter().any(|point| {
-        point.soc.is_some()
-            || point.power_kw.is_some()
-            || point.start_time.is_some()
-            || point.end_time.is_some()
-            || point.time_estimation_validity_status.is_some()
-            || point.vehicle_charger_state.is_some()
-    });
-    if !has_live_value && !has_chart_value {
-        return None;
-    }
-    Some(LiveSessionData {
-        soc_pct: event.chart_data.iter().rev().find_map(|point| point.soc),
-        power_kw: live.power_kw,
-        energy_kwh: live.total_charged_energy,
-        range_added_km: live.range_added_this_session,
-        time_remaining_min: live.time_remaining_seconds.map(|seconds| seconds / 60.0),
-        charger_type: live.vehicle_charger_state.clone(),
-        ts: received_at,
-        charge_rate_kph: live.kilometers_charged_per_hour,
-        time_elapsed_seconds: live.time_elapsed_seconds,
-        price: live.price,
-        currency: live.currency.clone(),
-        is_free_session: live.is_free_session,
-        vehicle_charger_state: live.vehicle_charger_state.clone(),
-        started_at: live.start_time,
-    })
-}
-
-/// Persist the fields that belong to the active canonical charge session.
-/// The WebSocket worker owns when this is called; this helper owns the SQL
-/// shape so HTTP history and live-stream enrichment share one seam.
-pub async fn persist_live_session_data(
-    pool: &PgPool,
-    active_session_id: Option<Uuid>,
-    live: &LiveSessionData,
-) -> Result<()> {
-    let Some(session_id) = active_session_id else {
-        return Ok(());
-    };
-
-    sqlx::query(
-        "UPDATE riviamigo.charge_sessions SET
-             live_current_price       = COALESCE($2, live_current_price),
-             live_current_currency    = COALESCE($3, live_current_currency),
-             live_total_charged_kwh   = COALESCE($4, live_total_charged_kwh),
-             live_range_added_km      = COALESCE($5, live_range_added_km),
-             live_power_kw            = COALESCE($6, live_power_kw),
-             live_charge_rate_kph     = COALESCE($7, live_charge_rate_kph),
-             live_time_elapsed_seconds = COALESCE($8, live_time_elapsed_seconds),
-             live_session_started_at  = COALESCE($9, live_session_started_at),
-             live_time_remaining_minutes = COALESCE($11, live_time_remaining_minutes),
-             is_free_session          = COALESCE($10, is_free_session),
-             kwh_added                = COALESCE($4, kwh_added),
-             range_added_km           = COALESCE($5, range_added_km),
-             max_charge_rate_kw      = CASE WHEN $6 IS NOT NULL
-                                            THEN GREATEST(COALESCE(max_charge_rate_kw, 0), $6)
-                                            ELSE max_charge_rate_kw END,
-             duration_minutes        = COALESCE($12, duration_minutes),
-             source = CASE WHEN source = 'rivian_api'
-                           THEN 'telemetry+rivian_api'
-                           ELSE COALESCE(source, 'telemetry') END,
-             data_confidence = CASE WHEN source = 'rivian_api'
-                                    THEN 'telemetry_enriched'
-                                    ELSE COALESCE(data_confidence, 'telemetry') END
-         WHERE id = $1 AND ended_at IS NULL",
-    )
-    .bind(session_id)
-    .bind(live.price)
-    .bind(&live.currency)
-    .bind(live.energy_kwh)
-    .bind(live.range_added_km)
-    .bind(live.power_kw)
-    .bind(live.charge_rate_kph)
-    .bind(
-        live.time_elapsed_seconds
-            .map(|seconds| seconds.round() as i32),
-    )
-    .bind(live.started_at)
-    .bind(live.is_free_session)
-    .bind(
-        live.time_remaining_min
-            .map(|minutes| minutes.round() as i32),
-    )
-    .bind(
-        live.time_elapsed_seconds
-            .map(|seconds| (seconds / 60.0).round() as i32),
-    )
-    .execute(pool)
-    .await?;
-
-    // Do not compute a final billing amount while the session is open.  The
-    // live price is retained above for an estimate; final cost is recomputed
-    // by the canonical session-finalization path once ended_at is known.
-    Ok(())
-}
-
-/// Persist chart power points emitted by `chargingSession`. The existing
-/// curve table deliberately stores only observed power; absent or malformed
-/// timestamps are ignored instead of inventing samples.
-pub async fn persist_charging_session_chart(
-    pool: &PgPool,
-    vehicle_id: Uuid,
-    active_session_id: Option<Uuid>,
-    points: &[crate::ingestion::parser::ChargingSessionChartPoint],
-) -> Result<usize> {
-    let selected = points
-        .iter()
-        .filter_map(|point| point.start_time.map(|ts| (ts, point.power_kw)))
-        .collect::<Vec<_>>();
-    if selected.is_empty() {
-        return Ok(0);
-    }
-
-    let timestamps = selected.iter().map(|(ts, _)| *ts).collect::<Vec<_>>();
-    let power = selected.iter().map(|(_, power)| *power).collect::<Vec<_>>();
-    let actions = sqlx::query_scalar::<_, bool>(
-        r#"INSERT INTO riviamigo.rivian_charge_curve_points
-               (vehicle_id, charge_session_id, ts, power_kw)
-           SELECT $1, $2, incoming.ts, incoming.power_kw
-           FROM unnest($3::timestamptz[], $4::double precision[])
-               AS incoming(ts, power_kw)
-           ON CONFLICT (vehicle_id, ts)
-           DO UPDATE SET
-               charge_session_id = COALESCE(
-                   rivian_charge_curve_points.charge_session_id,
-                   EXCLUDED.charge_session_id
-               ),
-               power_kw = COALESCE(
-                   EXCLUDED.power_kw,
-                   rivian_charge_curve_points.power_kw
-               )
-           WHERE rivian_charge_curve_points.charge_session_id IS DISTINCT FROM
-                     COALESCE(
-                         rivian_charge_curve_points.charge_session_id,
-                         EXCLUDED.charge_session_id
-                     )
-              OR rivian_charge_curve_points.power_kw IS DISTINCT FROM
-                     COALESCE(
-                         EXCLUDED.power_kw,
-                         rivian_charge_curve_points.power_kw
-                     )
-           RETURNING xmax = 0"#,
-    )
-    .bind(vehicle_id)
-    .bind(active_session_id)
-    .bind(&timestamps)
-    .bind(&power)
-    .fetch_all(pool)
-    .await?;
-    Ok(actions.len())
 }
 
 // ── Charging schedule ─────────────────────────────────────────────────────────
@@ -2743,7 +2602,8 @@ mod tests {
     use crate::ingestion::session_store::{decrypt_tokens, encrypt_tokens, RivianTokenBundle};
     use crate::services::charge_payload_identity::reconcile_retained_payload_references;
     use crate::services::charge_sessions::{
-        infer_is_rivian_network, normalize_api_charger_type, ChargeSessionPayloadRef,
+        self, infer_is_rivian_network, normalize_api_charger_type, ChargeSessionExternalAlias,
+        ChargeSessionPayloadRef, ExternalAliasKind, UnmatchedInsertPolicy,
     };
     use age::secrecy::ExposeSecret;
     use axum::{extract::State, routing::post, Json, Router};
@@ -2837,6 +2697,134 @@ mod tests {
         .expect("seed test vehicle")
     }
 
+    #[test]
+    fn vehicle_model_year_is_read_from_enrichment_vin() {
+        for (vin, year) in [
+            (Some("7FCTGAAL0RN000001"), Some(2024)),
+            (Some("7FCTGAAL0SN000001"), Some(2025)),
+            (Some("7FCTGAAL0TN000001"), Some(2026)),
+            (None, None),
+        ] {
+            let data: super::UserInfoEnrichmentData = serde_json::from_value(json!({
+                "currentUser": { "vehicles": [{
+                    "id": "test-vehicle",
+                    "vin": vin,
+                    "vehicle": {}
+                }] }
+            }))
+            .unwrap();
+            let item = data.current_user.unwrap().vehicles.unwrap().remove(0);
+            assert_eq!(
+                item.vin
+                    .as_deref()
+                    .and_then(crate::models::vehicle::model_year_from_vin),
+                year
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn vehicle_enrichment_requests_account_vin() {
+        let app = Router::new().route(
+            "/graphql",
+            post(|Json(body): Json<serde_json::Value>| async move {
+                let query = body["query"].as_str().unwrap();
+                assert!(query.contains("vin"));
+                Json(json!({ "data": { "currentUser": { "vehicles": [
+                    { "id": "other", "vin": "7FCTGAAL0RN000001", "vehicle": {} },
+                    { "id": "target", "vin": "7FCTGAAL0SN000001", "vehicle": {} }
+                ] } } }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let tokens = RivianTokenBundle {
+            access_token: "test-access".into(),
+            refresh_token: "test-refresh".into(),
+            app_session_token: "test-app".into(),
+            user_session_token: "test-user".into(),
+            csrf_token: "test-csrf".into(),
+            created_at: Utc::now(),
+        };
+        let item = super::request_vehicle_enrichment(
+            "target",
+            &reqwest::Client::new(),
+            &tokens,
+            &format!("http://{address}/graphql"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(item.id, "target");
+        assert_eq!(
+            item.vin
+                .as_deref()
+                .and_then(crate::models::vehicle::model_year_from_vin),
+            Some(2025)
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn vehicle_enrichment_backfills_vin_without_overwriting_capacity() {
+        let db = DisposableDatabase::new().await;
+        let vehicle_id = seed_vehicle(&db.pool).await;
+        sqlx::query(
+            "UPDATE riviamigo.vehicles
+             SET battery_capacity_wh = 135000, battery_config = 'R1T / R1S Large (Gen 1)'
+             WHERE id = $1",
+        )
+        .bind(vehicle_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        for (details, vin) in [
+            (Some(json!({})), Some(" 7FCTGAAL0SN000001 ")),
+            (Some(json!({})), None),
+            (Some(json!({})), Some("   ")),
+            (None, None),
+        ] {
+            super::save_vehicle_enrichment(
+                &db.pool,
+                vehicle_id,
+                details.map(|value| serde_json::from_value(value).unwrap()),
+                vin,
+            )
+            .await
+            .unwrap();
+
+            let saved: (Option<f64>, Option<String>, Option<String>) = sqlx::query_as(
+                "SELECT battery_capacity_wh, battery_config, vin
+                 FROM riviamigo.vehicles WHERE id = $1",
+            )
+            .bind(vehicle_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                saved,
+                (
+                    Some(135000.0),
+                    Some("R1T / R1S Large (Gen 1)".into()),
+                    Some("7FCTGAAL0SN000001".into())
+                )
+            );
+        }
+
+        // A vehicle deleted while enrichment was in flight is not an error.
+        super::save_vehicle_enrichment(
+            &db.pool,
+            uuid::Uuid::new_v4(),
+            None,
+            Some("7FCTGAAL0SN000001"),
+        )
+        .await
+        .expect("enrichment for a removed vehicle is a no-op");
+        db.cleanup().await;
+    }
+
     async fn payload_count(pool: &PgPool, vehicle_id: uuid::Uuid) -> i64 {
         sqlx::query_scalar(
             "SELECT count(*) FROM riviamigo.rivian_charge_payloads WHERE vehicle_id = $1",
@@ -2856,6 +2844,534 @@ mod tests {
         .fetch_one(pool)
         .await
         .expect("seed charge session")
+    }
+
+    async fn seed_sibling_vehicle(
+        pool: &PgPool,
+        vehicle_id: uuid::Uuid,
+        rivian_vehicle_id: &str,
+    ) -> uuid::Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO riviamigo.vehicles (user_id, rivian_vehicle_id, model, name)
+             SELECT user_id, $2, 'test', 'Charge test sibling'
+             FROM riviamigo.vehicles WHERE id = $1
+             RETURNING id",
+        )
+        .bind(vehicle_id)
+        .bind(rivian_vehicle_id)
+        .fetch_one(pool)
+        .await
+        .expect("seed sibling vehicle")
+    }
+
+    async fn vehicle_rivian_id(pool: &PgPool, vehicle_id: uuid::Uuid) -> String {
+        sqlx::query_scalar("SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id = $1")
+            .bind(vehicle_id)
+            .fetch_one(pool)
+            .await
+            .expect("load rivian vehicle id")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn seed_api_attributed_session(
+        pool: &PgPool,
+        vehicle_id: uuid::Uuid,
+        source: &str,
+        rivian_session_id: Option<&str>,
+        rivian_vehicle_id: Option<&str>,
+        started_at: &str,
+        ended_at: &str,
+    ) -> uuid::Uuid {
+        let session_id: uuid::Uuid = sqlx::query_scalar(
+            "INSERT INTO riviamigo.charge_sessions
+                 (vehicle_id, started_at, ended_at, api_started_at, api_ended_at,
+                  source, data_confidence, rivian_session_id, rivian_vehicle_id)
+             VALUES ($1, $2::timestamptz, $3::timestamptz,
+                     CASE WHEN $4 = 'telemetry' THEN NULL ELSE $2::timestamptz END,
+                     CASE WHEN $4 = 'telemetry' THEN NULL ELSE $3::timestamptz END,
+                     $4, $5, $6, $7)
+             RETURNING id",
+        )
+        .bind(vehicle_id)
+        .bind(started_at)
+        .bind(ended_at)
+        .bind(source)
+        .bind(charge_sessions::confidence_for_source(source))
+        .bind(rivian_session_id)
+        .bind(rivian_vehicle_id)
+        .fetch_one(pool)
+        .await
+        .expect("seed attributed charge session");
+        if let Some(external_id) = rivian_session_id {
+            charge_sessions::upsert_external_aliases(
+                pool,
+                session_id,
+                &[ChargeSessionExternalAlias {
+                    external_id: external_id.to_string(),
+                    alias_kind: ExternalAliasKind::Legacy,
+                    transaction_id_grouping_key: None,
+                }],
+                None,
+            )
+            .await
+            .expect("seed charge session alias");
+        }
+        session_id
+    }
+
+    async fn session_vehicle(pool: &PgPool, session_id: uuid::Uuid) -> uuid::Uuid {
+        sqlx::query_scalar("SELECT vehicle_id FROM riviamigo.charge_sessions WHERE id = $1")
+            .bind(session_id)
+            .fetch_one(pool)
+            .await
+            .expect("load session vehicle")
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn charge_history_replay_filters_account_wide_payloads_by_vehicle() {
+        let db = DisposableDatabase::new().await;
+        let mut accepted_vehicles = Vec::new();
+        let mut refused_vehicles = Vec::new();
+        // (has_sibling, stores_foreign_summary): a foreign summary proves the
+        // Rivian account has other vehicles even when the owner has one.
+        for (has_sibling, stores_foreign) in [(false, false), (false, true), (true, true)] {
+            let accepts_unidentified = !has_sibling && !stores_foreign;
+            let vehicle_id = seed_vehicle(&db.pool).await;
+            // Demo vehicles never count toward the single-vehicle rule.
+            seed_sibling_vehicle(
+                &db.pool,
+                vehicle_id,
+                &format!("demo-r1t-{}", uuid::Uuid::new_v4()),
+            )
+            .await;
+            if has_sibling {
+                seed_sibling_vehicle(
+                    &db.pool,
+                    vehicle_id,
+                    &format!("charge-test-sibling-{}", uuid::Uuid::new_v4()),
+                )
+                .await;
+            }
+            if accepts_unidentified {
+                accepted_vehicles.push(vehicle_id);
+            } else {
+                refused_vehicles.push(vehicle_id);
+            }
+            let rivian_vehicle_id = vehicle_rivian_id(&db.pool, vehicle_id).await;
+
+            let mut transaction_ids = Vec::new();
+            for (label, upstream_vehicle, started_at) in [
+                (
+                    "matching",
+                    Some(rivian_vehicle_id.as_str()),
+                    "2026-06-20T10:00:00Z",
+                ),
+                ("foreign", Some("another-vehicle"), "2026-06-21T10:00:00Z"),
+                ("unidentified", None, "2026-06-22T10:00:00Z"),
+            ]
+            .into_iter()
+            .filter(|(label, _, _)| stores_foreign || *label != "foreign")
+            {
+                let transaction_id = format!("{label}-{vehicle_id}");
+                let payload = json!({
+                    "transactionId": transaction_id,
+                    "vehicleId": upstream_vehicle,
+                    "startInstant": started_at,
+                    "endInstant": started_at.replace("T10", "T11"),
+                    "totalEnergyKwh": 12.5
+                });
+                record_charge_payload_with_ref(
+                    &db.pool,
+                    vehicle_id,
+                    "getCompletedSessionSummaries",
+                    Some(&transaction_id),
+                    upstream_vehicle,
+                    payload,
+                )
+                .await
+                .unwrap();
+                transaction_ids.push(transaction_id);
+            }
+
+            let linked = charge_sessions::replay_charge_payload_summaries(
+                &db.pool,
+                Some(vehicle_id),
+                UnmatchedInsertPolicy::Always,
+            )
+            .await
+            .unwrap();
+            let case = format!("has_sibling={has_sibling} stores_foreign={stores_foreign}");
+            let unidentified = transaction_ids.last().unwrap().clone();
+            let expected = if accepts_unidentified {
+                vec![transaction_ids[0].clone(), unidentified]
+            } else {
+                vec![transaction_ids[0].clone()]
+            };
+            assert_eq!(linked, expected.len() as u64, "{case}");
+            let sessions: Vec<String> = sqlx::query_scalar(
+                "SELECT rivian_session_id FROM riviamigo.charge_sessions
+                 WHERE vehicle_id = $1 ORDER BY started_at",
+            )
+            .bind(vehicle_id)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+            assert_eq!(sessions, expected, "{case}");
+            let linked_transactions: Vec<String> = sqlx::query_scalar(
+                "SELECT rivian_transaction_id FROM riviamigo.rivian_charge_payloads
+                 WHERE vehicle_id = $1 AND charge_session_id IS NOT NULL
+                 ORDER BY rivian_transaction_id",
+            )
+            .bind(vehicle_id)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+            let mut expected_links = expected.clone();
+            expected_links.sort();
+            assert_eq!(linked_transactions, expected_links);
+            assert_eq!(
+                payload_count(&db.pool, vehicle_id).await,
+                transaction_ids.len() as i64
+            );
+            // Sessions built from unidentified summaries carry no upstream
+            // vehicle ID, so they are never reported as misattributed.
+            let diagnostics = charge_sessions::diagnose_charge_sessions(&db.pool, Some(vehicle_id))
+                .await
+                .unwrap();
+            assert_eq!(diagnostics.misattributed_sessions, 0);
+        }
+
+        let accepting = charge_sessions::vehicles_accepting_unidentified_summaries(&db.pool, None)
+            .await
+            .unwrap();
+        for vehicle_id in accepted_vehicles {
+            assert!(accepting.contains(&vehicle_id));
+        }
+        for vehicle_id in refused_vehicles {
+            assert!(!accepting.contains(&vehicle_id));
+        }
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn charge_history_reassigns_misattributed_api_sessions_to_same_user_owner() {
+        let db = DisposableDatabase::new().await;
+        let vehicle_a = seed_vehicle(&db.pool).await;
+        let rivian_a = vehicle_rivian_id(&db.pool, vehicle_a).await;
+        let rivian_b = format!("charge-test-owner-{}", uuid::Uuid::new_v4());
+        let vehicle_b = seed_sibling_vehicle(&db.pool, vehicle_a, &rivian_b).await;
+        let other_user_vehicle = seed_vehicle(&db.pool).await;
+        let rivian_other_user = vehicle_rivian_id(&db.pool, other_user_vehicle).await;
+
+        // B's real charge, misattributed to A while A was polling.
+        let foreign_api = seed_api_attributed_session(
+            &db.pool,
+            vehicle_a,
+            "rivian_api",
+            Some("txn-b"),
+            Some(&rivian_b),
+            "2026-07-01T10:00:00Z",
+            "2026-07-01T11:00:00Z",
+        )
+        .await;
+        // A's real charge, misattributed to B while B was polling.
+        let reverse_api = seed_api_attributed_session(
+            &db.pool,
+            vehicle_b,
+            "rivian_api",
+            Some("txn-a"),
+            Some(&rivian_a),
+            "2026-07-05T10:00:00Z",
+            "2026-07-05T11:00:00Z",
+        )
+        .await;
+        // Mixed-source rows carry telemetry evidence from their current vehicle.
+        let mixed = seed_api_attributed_session(
+            &db.pool,
+            vehicle_a,
+            "telemetry+rivian_api",
+            Some("txn-mixed"),
+            Some(&rivian_b),
+            "2026-07-02T10:00:00Z",
+            "2026-07-02T11:00:00Z",
+        )
+        .await;
+        // The upstream vehicle belongs to a different user: no same-user owner.
+        let other_user = seed_api_attributed_session(
+            &db.pool,
+            vehicle_a,
+            "rivian_api",
+            Some("txn-other-user"),
+            Some(&rivian_other_user),
+            "2026-07-03T10:00:00Z",
+            "2026-07-03T11:00:00Z",
+        )
+        .await;
+        let unknown_vehicle = seed_api_attributed_session(
+            &db.pool,
+            vehicle_a,
+            "rivian_api",
+            Some("txn-unknown"),
+            Some("unknown-upstream-vehicle"),
+            "2026-07-04T10:00:00Z",
+            "2026-07-04T11:00:00Z",
+        )
+        .await;
+        // An API-only label with charge-curve samples is not moved either.
+        let curve_backed = seed_api_attributed_session(
+            &db.pool,
+            vehicle_a,
+            "rivian_api",
+            Some("txn-curve"),
+            Some(&rivian_b),
+            "2026-07-06T10:00:00Z",
+            "2026-07-06T11:00:00Z",
+        )
+        .await;
+        sqlx::query(
+            "INSERT INTO riviamigo.rivian_charge_curve_points (vehicle_id, charge_session_id, ts, power_kw)
+             VALUES ($1, $2, '2026-07-06T10:30:00Z', 11)",
+        )
+        .bind(vehicle_a)
+        .bind(curve_backed)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        // B's own telemetry for the misattributed charge.
+        let b_telemetry = seed_api_attributed_session(
+            &db.pool,
+            vehicle_b,
+            "telemetry",
+            None,
+            None,
+            "2026-07-01T09:55:00Z",
+            "2026-07-01T11:05:00Z",
+        )
+        .await;
+
+        let before_a = charge_sessions::diagnose_charge_sessions(&db.pool, Some(vehicle_a))
+            .await
+            .unwrap();
+        assert_eq!(before_a.misattributed_sessions, 5);
+        let before_b = charge_sessions::diagnose_charge_sessions(&db.pool, Some(vehicle_b))
+            .await
+            .unwrap();
+        assert_eq!(before_b.misattributed_sessions, 1);
+
+        // Unrelated scope moves nothing.
+        assert_eq!(
+            charge_sessions::reassign_misattributed_api_sessions(
+                &db.pool,
+                Some(other_user_vehicle)
+            )
+            .await
+            .unwrap(),
+            0
+        );
+
+        // B's account-wide summary, as retained by B's own backfill.
+        let b_summary = json!({
+            "transactionId": "txn-b",
+            "vehicleId": rivian_b,
+            "startInstant": "2026-07-01T10:00:00Z",
+            "endInstant": "2026-07-01T11:00:00Z",
+            "totalEnergyKwh": 30.0
+        });
+        record_charge_payload_with_ref(
+            &db.pool,
+            vehicle_b,
+            "getCompletedSessionSummaries",
+            Some("txn-b"),
+            Some(&rivian_b),
+            b_summary.clone(),
+        )
+        .await
+        .unwrap();
+
+        // B's canonicalization handles both scopes: a row owned by B on A and
+        // a row owned by A on B.
+        let stats = charge_sessions::canonicalize_charge_sessions(&db.pool, Some(vehicle_b))
+            .await
+            .unwrap();
+        assert_eq!(stats.misattributed_sessions_reassigned, 2);
+        assert_eq!(session_vehicle(&db.pool, reverse_api).await, vehicle_a);
+        for untouched in [mixed, other_user, unknown_vehicle, curve_backed] {
+            assert_eq!(session_vehicle(&db.pool, untouched).await, vehicle_a);
+        }
+        // The moved row merged into B's telemetry session in the same run.
+        assert_eq!(stats.duplicate_rows_deleted, 1);
+        let b_sessions: Vec<(uuid::Uuid, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT id, rivian_session_id, source FROM riviamigo.charge_sessions
+             WHERE vehicle_id = $1",
+        )
+        .bind(vehicle_b)
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            b_sessions,
+            vec![(
+                b_telemetry,
+                Some("txn-b".to_string()),
+                Some("telemetry+rivian_api".to_string())
+            )]
+        );
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM riviamigo.charge_sessions WHERE id = $1)",
+        )
+        .bind(foreign_api)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert!(!exists);
+        let b_payload_session: Option<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT charge_session_id FROM riviamigo.rivian_charge_payloads WHERE vehicle_id = $1",
+        )
+        .bind(vehicle_b)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(b_payload_session, Some(b_telemetry));
+
+        // A subsequent backfill for B reconciles against B's session instead
+        // of colliding with the globally unique Rivian session ID.
+        let summary: charge_sessions::ChargeSessionSummaryPayload =
+            serde_json::from_value(b_summary).unwrap();
+        let reconciled = charge_sessions::reconcile_completed_session_summary(
+            &db.pool,
+            vehicle_b,
+            &summary,
+            UnmatchedInsertPolicy::Always,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reconciled, Some(b_telemetry));
+        let repeated = charge_sessions::canonicalize_charge_sessions(&db.pool, Some(vehicle_b))
+            .await
+            .unwrap();
+        assert_eq!(repeated.misattributed_sessions_reassigned, 0);
+        assert_eq!(repeated.duplicate_rows_deleted, 0);
+
+        let a_stats = charge_sessions::canonicalize_charge_sessions(&db.pool, Some(vehicle_a))
+            .await
+            .unwrap();
+        assert_eq!(a_stats.misattributed_sessions_reassigned, 0);
+        let after_a = charge_sessions::diagnose_charge_sessions(&db.pool, Some(vehicle_a))
+            .await
+            .unwrap();
+        assert_eq!(after_a.misattributed_sessions, 4);
+        let after_b = charge_sessions::diagnose_charge_sessions(&db.pool, Some(vehicle_b))
+            .await
+            .unwrap();
+        assert_eq!(after_b.misattributed_sessions, 0);
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn charge_history_merge_promotes_only_unowned_external_ids() {
+        let db = DisposableDatabase::new().await;
+        for foreign_owner in [false, true] {
+            let vehicle_id = seed_vehicle(&db.pool).await;
+            let canonical = seed_charge_session(&db.pool, vehicle_id).await;
+            let duplicate = seed_charge_session(&db.pool, vehicle_id).await;
+            let local_id = format!("local-{vehicle_id}");
+            let preferred_id = format!("preferred-{vehicle_id}");
+            sqlx::query(
+                "UPDATE riviamigo.charge_sessions
+                 SET source = 'telemetry', rivian_session_id = $2,
+                     ended_at = started_at + interval '1 hour'
+                 WHERE id = $1",
+            )
+            .bind(canonical)
+            .bind(&local_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+            sqlx::query("UPDATE riviamigo.charge_sessions SET source = 'rivian_api' WHERE id = $1")
+                .bind(duplicate)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+            let owner = if foreign_owner {
+                let other_vehicle = seed_vehicle(&db.pool).await;
+                seed_charge_session(&db.pool, other_vehicle).await
+            } else {
+                duplicate
+            };
+            sqlx::query(
+                "UPDATE riviamigo.charge_sessions SET rivian_session_id = $2 WHERE id = $1",
+            )
+            .bind(owner)
+            .bind(&preferred_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+            charge_sessions::upsert_external_aliases(
+                &db.pool,
+                duplicate,
+                &[ChargeSessionExternalAlias {
+                    external_id: preferred_id.clone(),
+                    alias_kind: ExternalAliasKind::Cdrs,
+                    transaction_id_grouping_key: None,
+                }],
+                None,
+            )
+            .await
+            .unwrap();
+
+            let stats = charge_sessions::canonicalize_charge_sessions(&db.pool, Some(vehicle_id))
+                .await
+                .unwrap();
+            assert_eq!(stats.clusters_merged, 1);
+            assert_eq!(stats.duplicate_rows_deleted, 1);
+            let sessions: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+                "SELECT id, rivian_session_id FROM riviamigo.charge_sessions WHERE vehicle_id = $1",
+            )
+            .bind(vehicle_id)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                sessions,
+                vec![(
+                    canonical,
+                    if foreign_owner {
+                        local_id
+                    } else {
+                        preferred_id.clone()
+                    }
+                )]
+            );
+            let alias_owner: uuid::Uuid = sqlx::query_scalar(
+                "SELECT charge_session_id FROM riviamigo.charge_session_external_aliases
+                 WHERE external_id = $1",
+            )
+            .bind(&preferred_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+            assert_eq!(alias_owner, canonical);
+            if foreign_owner {
+                let unchanged_owner: uuid::Uuid = sqlx::query_scalar(
+                    "SELECT id FROM riviamigo.charge_sessions WHERE rivian_session_id = $1",
+                )
+                .bind(&preferred_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+                assert_eq!(unchanged_owner, owner);
+            }
+            let repeated =
+                charge_sessions::canonicalize_charge_sessions(&db.pool, Some(vehicle_id))
+                    .await
+                    .unwrap();
+            assert_eq!(repeated.duplicate_rows_deleted, 0);
+        }
+        db.cleanup().await;
     }
 
     #[tokio::test]

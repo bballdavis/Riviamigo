@@ -12,7 +12,8 @@ import {
   type TimeFilterWindow,
 } from './timeFilter';
 import {
-  clampedControlPoints,
+  monotoneControlPoints,
+  monotoneCurveSlopes,
   DEFAULT_CURVE_SMOOTHNESS,
   normalizeCurveSmoothness,
   splitCurveSegments,
@@ -56,10 +57,12 @@ export function MiniSparkline({
   }
 
   const resolvedFilter = normalizeTimeFilter(timeFilter, DEFAULT_SPRITE_TIME_FILTER);
+  // The sparkline breaks its line at long gaps, so the filter stops there too.
   const filteredValues = filterTimeSeriesValues(
     chartData.map((point) => point.x),
     chartData.map((point) => point.value),
-    resolvedFilter
+    resolvedFilter,
+    { maximumGapMilliseconds: maximumContinuousTimeGapMilliseconds(resolvedFilter) }
   );
   const filteredData = chartData.map((point, index) => ({
     ...point,
@@ -247,8 +250,9 @@ function CanvasSparkline({
             for (const point of segment.slice(1)) context.lineTo(point.x, point.y);
             continue;
           }
+          const slopes = monotoneCurveSlopes(segment);
           for (let index = 0; index < segment.length - 1; index += 1) {
-            const [controlOne, controlTwo] = clampedControlPoints(segment, index, smoothness);
+            const [controlOne, controlTwo] = monotoneControlPoints(segment, slopes, index);
             const point = segment[index + 1]!;
             if (typeof context.bezierCurveTo === 'function') {
               context.bezierCurveTo(
@@ -280,8 +284,9 @@ function CanvasSparkline({
           if (smoothness === 'straight' || segment.length < 2) {
             for (const point of segment.slice(1)) context.lineTo(point.x, point.y);
           } else {
+            const slopes = monotoneCurveSlopes(segment);
             for (let index = 0; index < segment.length - 1; index += 1) {
-              const [controlOne, controlTwo] = clampedControlPoints(segment, index, smoothness);
+              const [controlOne, controlTwo] = monotoneControlPoints(segment, slopes, index);
               const point = segment[index + 1]!;
               if (typeof context.bezierCurveTo === 'function') {
                 context.bezierCurveTo(

@@ -278,7 +278,10 @@ pub async fn run_vehicle_worker(
             .ok()
             .flatten();
 
-    let mut redis_conn = match redis.get_multiplexed_async_connection().await {
+    // The worker holds this connection for its whole lifetime, so it must
+    // survive a Redis restart. A bare MultiplexedConnection stays dead after
+    // the server drops it; ConnectionManager reconnects on the next command.
+    let mut redis_conn = match redis.get_connection_manager().await {
         Ok(c) => c,
         Err(e) => {
             tracing::error!(err=%e, "redis connect failed");
@@ -296,6 +299,7 @@ pub async fn run_vehicle_worker(
             return;
         }
     };
+    let mut live_publish = LivePublishHealth::default();
 
     let mut worker_shutdown = shutdown.resubscribe();
     let spawn_ws_loop = || {
@@ -471,6 +475,7 @@ pub async fn run_vehicle_worker(
     // OTA available version tracking (triggers release notes fetch on change).
     let mut last_ota_available_version: Option<String> = None;
     let mut persistence_gate = TelemetryPersistenceGate::new(vehicle_id);
+    let mut facing_inputs = crate::services::vehicle_facing::FacingInputs::default();
     let mut raw_cleanup_tick: u64 = 0;
     // Shared counter batch — flushed every 50 events to amortize DB upserts.
     let mut counter_batch = CounterBatch::new(vehicle_id);
@@ -725,8 +730,21 @@ pub async fn run_vehicle_worker(
         let motion = closure_motion.observe(&event, Utc::now());
         let snapshot = build_snapshot(&event, motion.as_ref());
         let topic = format!("vehicle:{vehicle_id}:status");
-        if let Err(e) = redis_conn.publish::<_, _, ()>(&topic, &snapshot).await {
-            tracing::debug!(vehicle_id=%vehicle_id, err=%e, "redis publish failed");
+        let published = redis_conn.publish::<_, _, ()>(&topic, &snapshot).await;
+        match (live_publish.observe(published.is_ok()), published) {
+            (LivePublishTransition::Failed, Err(e)) => tracing::warn!(
+                vehicle_id=%vehicle_id,
+                err=%e,
+                "redis publish failed; live status updates are paused until Redis is reachable"
+            ),
+            (LivePublishTransition::Recovered, _) => tracing::info!(
+                vehicle_id=%vehicle_id,
+                "redis publish recovered; live status updates resumed"
+            ),
+            (_, Err(e)) => {
+                tracing::debug!(vehicle_id=%vehicle_id, err=%e, "redis publish failed");
+            }
+            _ => {}
         }
 
         // Update runtime state. A re-sent snapshot is state learned again,
@@ -776,6 +794,20 @@ pub async fn run_vehicle_worker(
             {
                 counter_batch.increment("telemetry_writes_persisted");
                 mark_persisted(&pool, vehicle_id, event.ts).await;
+                // The saved facing is worked out from stored telemetry, so it
+                // is marked stale only after the row that can change it commits.
+                if facing_inputs.stored(
+                    event.gear_status.as_deref(),
+                    event.speed_mph,
+                    event.heading_deg,
+                ) {
+                    match crate::services::vehicle_facing::mark_stale(&pool, vehicle_id).await {
+                        Ok(()) => facing_inputs.marked(),
+                        Err(error) => {
+                            tracing::warn!(vehicle_id=%vehicle_id, err=%error, "vehicle facing could not be marked stale; retrying with the next stored row");
+                        }
+                    }
+                }
             }
         } else if let PersistenceDecision::Suppress(reason) = persistence_decision {
             counter_batch.increment("telemetry_writes_suppressed");
@@ -1079,9 +1111,40 @@ async fn ensure_active_charge_session(
     Ok(())
 }
 
+/// Tracks whether live-status publishing is currently failing, so an outage
+/// is logged once at warn (and its recovery once at info) instead of once per
+/// telemetry frame.
+#[derive(Debug, Default)]
+struct LivePublishHealth {
+    failing: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum LivePublishTransition {
+    Failed,
+    Recovered,
+    Unchanged,
+}
+
+impl LivePublishHealth {
+    fn observe(&mut self, ok: bool) -> LivePublishTransition {
+        match (self.failing, ok) {
+            (false, false) => {
+                self.failing = true;
+                LivePublishTransition::Failed
+            }
+            (true, true) => {
+                self.failing = false;
+                LivePublishTransition::Recovered
+            }
+            _ => LivePublishTransition::Unchanged,
+        }
+    }
+}
+
 async fn apply_charging_session_update(
     pool: &PgPool,
-    redis_conn: &mut redis::aio::MultiplexedConnection,
+    redis_conn: &mut redis::aio::ConnectionManager,
     vehicle_id: Uuid,
     event: &parser::ChargingSessionEvent,
     received_at: DateTime<Utc>,
@@ -4096,7 +4159,7 @@ fn legacy_capture_fields(inbound: &WsInboundEvent) -> Option<(CaptureKind, serde
             CaptureKind::LegacyConnection,
             serde_json::json!({
                 "message_type": inbound.message_type,
-                "detail": raw.filter(serde_json::Value::is_object),
+                "detail": raw.as_ref().and_then(control_capture_detail),
             }),
         )),
         WsInboundKind::Telemetry | WsInboundKind::ChargingSession => {
@@ -4145,6 +4208,46 @@ fn legacy_capture_fields(inbound: &WsInboundEvent) -> Option<(CaptureKind, serde
             ))
         }
     }
+}
+
+/// Control-frame keys that carry only protocol state, never provider text.
+const CONTROL_DETAIL_KEYS: &[&str] = &[
+    "type",
+    "id",
+    "subscription_id",
+    "operation",
+    "hold_reason",
+    "backoff_seconds",
+    "http_status",
+    "disabled_vehicle_state_fields",
+    "invalid_fields",
+];
+
+/// The shareable part of a control frame. Rivian error messages and close
+/// reasons are free text that can name the vehicle, so only allowlisted keys
+/// and GraphQL error codes are kept.
+fn control_capture_detail(raw: &serde_json::Value) -> Option<serde_json::Value> {
+    let object = raw.as_object()?;
+    let mut detail: serde_json::Map<String, serde_json::Value> = CONTROL_DETAIL_KEYS
+        .iter()
+        .filter_map(|key| Some(((*key).to_owned(), object.get(*key)?.clone())))
+        .collect();
+    let errors = match object.get("payload") {
+        Some(serde_json::Value::Array(errors)) => errors.iter().collect::<Vec<_>>(),
+        Some(error @ serde_json::Value::Object(map)) if map.contains_key("message") => {
+            vec![error]
+        }
+        _ => Vec::new(),
+    };
+    if !errors.is_empty() {
+        let codes: Vec<&str> = errors
+            .iter()
+            .filter_map(|error| error.pointer("/extensions/code")?.as_str())
+            .collect();
+        detail.insert("error_count".into(), errors.len().into());
+        detail.insert("error_codes".into(), codes.into());
+    }
+    Some(serde_json::Value::Object(detail))
 }
 
 fn persistence_label(decision: &PersistenceDecision) -> &'static str {
@@ -4340,6 +4443,71 @@ mod diagnostic_capture_tests {
     }
 
     #[test]
+    fn control_frames_keep_protocol_state_but_not_provider_text() {
+        let control = |raw: serde_json::Value| WsInboundEvent {
+            kind: WsInboundKind::Control,
+            received_at: Utc::now(),
+            raw: raw.to_string(),
+            message_type: raw["type"].as_str().map(String::from),
+            telemetry: None,
+            charging_session: None,
+            battery_cell_type: None,
+        };
+        let rivian_vehicle_id = "01-234567890";
+
+        let (_, fields) = legacy_capture_fields(&control(serde_json::json!({
+            "type": "error",
+            "id": "1",
+            "payload": [{
+                "message": format!("vehicle {rivian_vehicle_id} is not accessible"),
+                "extensions": { "code": "FORBIDDEN" },
+            }],
+        })))
+        .unwrap();
+        assert_eq!(
+            fields["detail"],
+            serde_json::json!({
+                "type": "error",
+                "id": "1",
+                "error_count": 1,
+                "error_codes": ["FORBIDDEN"],
+            })
+        );
+
+        for raw in [
+            serde_json::json!({
+                "type": "ws_schema_rejected",
+                "reason": format!("Cannot query field for {rivian_vehicle_id}"),
+                "invalid_fields": ["cabinPreconditioningType"],
+            }),
+            serde_json::json!({
+                "type": "ws_no_active_subscriptions",
+                "reason": format!("no subscriptions for {rivian_vehicle_id}"),
+            }),
+            serde_json::json!({
+                "type": "connection_error",
+                "payload": { "message": format!("{rivian_vehicle_id} rejected") },
+            }),
+        ] {
+            let (_, fields) = legacy_capture_fields(&control(raw)).unwrap();
+            let text = fields.to_string();
+            assert!(!text.contains(rivian_vehicle_id), "{text}");
+            assert!(fields["detail"]["type"].is_string(), "{text}");
+        }
+
+        let (_, fields) = legacy_capture_fields(&control(serde_json::json!({
+            "type": "reconnect",
+            "hold_reason": "rate_limited",
+            "backoff_seconds": 30,
+        })))
+        .unwrap();
+        assert_eq!(
+            fields["detail"],
+            serde_json::json!({ "type": "reconnect", "hold_reason": "rate_limited", "backoff_seconds": 30 })
+        );
+    }
+
+    #[test]
     fn ingestion_fields_explain_the_parallax_charge_guard() {
         let mut event = TelemetryEvent::empty(Uuid::nil(), Utc::now());
         event.power_state = Some(PowerState::Ready);
@@ -4360,5 +4528,86 @@ mod diagnostic_capture_tests {
         assert_eq!(fields["persistence"], "persisted");
         assert_eq!(fields["values"]["power_state"], "ready");
         assert!(fields["values"].get("latitude").is_none());
+    }
+}
+
+#[cfg(test)]
+mod live_publish_health_tests {
+    use super::{LivePublishHealth, LivePublishTransition};
+
+    #[test]
+    fn outage_and_recovery_are_each_reported_once() {
+        let mut health = LivePublishHealth::default();
+        assert_eq!(health.observe(true), LivePublishTransition::Unchanged);
+        assert_eq!(health.observe(false), LivePublishTransition::Failed);
+        assert_eq!(health.observe(false), LivePublishTransition::Unchanged);
+        assert_eq!(health.observe(false), LivePublishTransition::Unchanged);
+        assert_eq!(health.observe(true), LivePublishTransition::Recovered);
+        assert_eq!(health.observe(true), LivePublishTransition::Unchanged);
+        assert_eq!(health.observe(false), LivePublishTransition::Failed);
+    }
+}
+
+// Needs a live Redis. Run with: cargo test -- --ignored
+#[cfg(test)]
+mod redis_reconnect_tests {
+    use redis::AsyncCommands;
+
+    fn redis_client() -> redis::Client {
+        let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
+        redis::Client::open(url).expect("redis client")
+    }
+
+    async fn kill_client(admin: &mut redis::aio::MultiplexedConnection, id: i64) {
+        let killed: i64 = redis::cmd("CLIENT")
+            .arg("KILL")
+            .arg("ID")
+            .arg(id)
+            .query_async(admin)
+            .await
+            .expect("CLIENT KILL");
+        assert_eq!(killed, 1, "expected to kill exactly one connection");
+    }
+
+    /// A Redis restart drops the worker's long-lived connection. The worker
+    /// must publish again afterwards without being restarted itself.
+    #[tokio::test]
+    #[ignore]
+    async fn worker_connection_recovers_after_server_drops_it() {
+        let client = redis_client();
+        let mut admin = client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("admin connection");
+        let mut conn = client
+            .get_connection_manager()
+            .await
+            .expect("connection manager");
+
+        let id: i64 = redis::cmd("CLIENT")
+            .arg("ID")
+            .query_async(&mut conn)
+            .await
+            .expect("CLIENT ID");
+        kill_client(&mut admin, id).await;
+
+        // The first command after the drop may fail while the manager
+        // notices; a later one must succeed on the new connection.
+        let mut recovered = false;
+        for _ in 0..20 {
+            if conn
+                .publish::<_, _, i64>("riviamigo:test:reconnect", "ping")
+                .await
+                .is_ok()
+            {
+                recovered = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(
+            recovered,
+            "ConnectionManager did not reconnect after the server dropped it"
+        );
     }
 }

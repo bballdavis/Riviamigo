@@ -976,10 +976,11 @@ async fn connect_and_subscribe(
                             crate::services::ingestion_capture::record(
                                 *vehicle_id,
                                 crate::services::ingestion_capture::Kind::LegacyConnection,
+                                // The close reason is provider text; the
+                                // message type already classifies it.
                                 json!({
                                     "message_type": "connection_ttl_expired",
                                     "close_code": frame.as_ref().map(|f| u16::from(f.code)),
-                                    "close_reason": frame.as_ref().map(|f| f.reason.to_string()),
                                 }),
                             );
                             return Ok(WsLoopEnd::ConnectionTtlExpired);
@@ -1219,11 +1220,12 @@ fn record_hold_close(vehicle_id: &Uuid, reason: HoldReason, frame: Option<&Close
     crate::services::ingestion_capture::record(
         *vehicle_id,
         crate::services::ingestion_capture::Kind::LegacyConnection,
+        // The hold reason classifies the close; its provider text stays out
+        // of the shareable capture.
         json!({
             "message_type": "session_hold",
             "hold_reason": reason.as_str(),
             "close_code": frame.map(|f| u16::from(f.code)),
-            "close_reason": frame.map(|f| f.reason.to_string()),
         }),
     );
 }

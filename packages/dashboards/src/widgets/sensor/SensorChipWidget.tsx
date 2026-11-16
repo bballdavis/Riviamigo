@@ -1,6 +1,5 @@
 import React from 'react';
 import type { ChartColorDefinition, ChartColorToken } from '@riviamigo/types';
-import { Icon } from '@iconify/react';
 import { CircleHelp } from 'lucide-react';
 import {
   useBatteryHealth,
@@ -14,26 +13,15 @@ import {
   DEFAULT_CURVE_SMOOTHNESS,
   DEFAULT_SPRITE_TIME_FILTER,
   getChartColor,
-  MiniSparkline,
   normalizeCurveSmoothness,
   normalizeTimeFilter,
   type CurveSmoothness,
   type MiniSparklineType,
   type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
-import { Badge, Card, Tooltip } from '@riviamigo/ui/primitives';
+import { Badge, Tooltip } from '@riviamigo/ui/primitives';
 import { useDocumentPalette, useDocumentTheme } from '@riviamigo/ui/hooks';
-import {
-  cn,
-  formatCurrency,
-  formatDuration,
-  formatEfficiency,
-  formatKwh,
-  formatMiles,
-  formatMph,
-  formatPressure,
-  formatTemp,
-} from '@riviamigo/ui/lib/utils';
+import { formatMiles } from '@riviamigo/ui/lib/utils';
 import { presentVehicleStatusDefinition, type StatusTone } from '@riviamigo/ui/lib/vehicleStatus';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
@@ -43,7 +31,6 @@ import {
   useDashboardMetric,
   type DashboardDataRequirements,
 } from '../../dashboardData';
-import { resolveIconId } from '../../editor/iconMigration';
 import { seriesToDailyDeltas, seriesToDailyTotals } from '../../editor/dailyDelta';
 import type { TripRow } from '@riviamigo/ui/tables';
 import { useTripSelection } from '../table/tripSelectionStore';
@@ -64,7 +51,15 @@ import {
   type SensorIconKey,
   type SensorValueColor,
 } from './sensorDefinitions';
-import { resolveSafeExpression } from '../../charts/expressions';
+import { SensorChipCard, SensorChipValue } from './SensorChipCard';
+import {
+  buildSourceValues,
+  formatMetricValue,
+  resolveConfiguredValue,
+  resolveFormula,
+  resolveNumberPath,
+  resolveTemplate,
+} from './sensorValueResolution';
 
 interface SensorChipOptions {
   metric?: string;
@@ -214,18 +209,20 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const chargingSummary = dashboardDataAvailable ? dashboardCharging : fetchedChargingSummary;
   const status = dashboardDataAvailable ? dashboardStatus : fetchedStatus;
   const title = instance.title ?? definition?.title ?? value?.label ?? options.metric;
-  const iconId = resolveIconId(options.icon);
   const sourceValues = buildSourceValues(options.dataSource, health, chargingSummary, efficiencySummary, status);
   const timeframeScope = options.timeframeScope;
   const isLifetimeTimeframe = ctx.timeframe?.kind === 'lifetime';
   const allowLatestFallback = timeframeScope !== 'range' || isLifetimeTimeframe;
+  // From the shared dashboard data, a chip is loading only until its own
+  // source has data: the refresh flag also covers other widgets' background
+  // polls, which must not blank values already on screen.
   const isLoading =
     options.dataSource === 'batteryHealth'
-      ? dashboardDataAvailable ? dashboardRefreshing : healthLoading || (needsStatus && statusLoading)
+      ? dashboardDataAvailable ? dashboardRefreshing && (!health || (needsStatus && !status)) : healthLoading || (needsStatus && statusLoading)
       : options.dataSource === 'chargingSummary'
-        ? dashboardDataAvailable ? dashboardRefreshing : chargingLoading
+        ? dashboardDataAvailable ? dashboardRefreshing && !chargingSummary : chargingLoading
         : options.dataSource === 'vehicleStatus'
-          ? dashboardDataAvailable ? dashboardRefreshing : statusLoading
+          ? dashboardDataAvailable ? dashboardRefreshing && !status : statusLoading
           : false;
   const hasFiniteSeriesPoint = series.some(
     (point) => typeof point.value === 'number' && Number.isFinite(point.value)
@@ -291,106 +288,67 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const spriteColor = metricColor;
 
   return (
-    <Card
-      padding="none"
-      className={cn(
-        'relative flex h-full min-h-[72px] flex-col overflow-hidden border p-3',
-        options.accentBorder
-          ? 'shadow-[inset_0_0_0_1px_var(--rm-border-accent)]'
-          : 'border-border'
-      )}
-      style={options.accentBorder ? { borderColor: metricColor } : undefined}
-      data-testid="sensor-chip"
-    >
-      {showSprite ? (
-        <div
-          className="pointer-events-none absolute h-9"
-          style={{ left: 0, right: 0, bottom: 0, zIndex: 0, opacity: 0.82 }}
-          data-testid="sensor-sprite-layer"
-        >
-          <MiniSparkline
-            data={spriteData}
-            type={sparklineType}
-            height={36}
-            color={spriteColor}
-            showFallback
-            timeFilter={options.timeFilter}
-            smoothness={options.smoothness}
-          />
-          <div
-            className="absolute inset-x-0 bottom-[2px] h-px"
-            style={{ backgroundColor: spriteColor, opacity: 0.35 }}
-            aria-hidden="true"
-          />
-        </div>
-      ) : null}
-
-      <div className={cn('relative z-10 flex flex-col', !activeTripSelectionStat && !showSprite && 'flex-1 justify-center')}>
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <p className="min-w-0 truncate text-xs font-medium uppercase tracking-wider text-fg-tertiary">
-                {title}
-                {options.labelSuffix ? (
-                  <span className="ml-1 text-[10px] font-normal normal-case tracking-normal">
-                    ({options.labelSuffix})
-                  </span>
-                ) : null}
-              </p>
-              {helpContent ? (
-                <Tooltip content={helpContent} align="start">
-                  <button
-                    type="button"
-                    aria-label={`${title} help`}
-                    className="inline-flex shrink-0 rounded text-fg-tertiary transition-colors hover:text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
-                  >
-                    <CircleHelp className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
-                </Tooltip>
-              ) : null}
-              {timeframeScope === 'lifetime' ? (
-                <Badge
-                  size="sm"
-                  variant="default"
-                  className="shrink-0 rounded-md px-1.5 py-0.5 font-semibold"
-                >
-                  Lifetime
-                </Badge>
-              ) : null}
-            </div>
-            {options.showSubtitle && options.subtitle ? (
-              <p className="mt-1 truncate text-xs text-fg-tertiary">{options.subtitle}</p>
-            ) : null}
-          </div>
-          <Icon
-            icon={iconId}
-            className={cn('h-4 w-4 shrink-0', hasVisualMetricColor ? 'text-fg' : 'text-accent')}
-            style={hasVisualMetricColor ? { color: metricColor } : undefined}
-          />
-        </div>
-
-        <div className="mt-1.5 flex items-baseline gap-1">
-          {renderStatusValue({
-            presentation: statusPresentation,
-            displayValue,
-            valueToneClass,
-            ...(valueToneStyle ? { valueToneStyle } : {}),
-            valueSize: options.valueSize,
-          })}
-          {inlineSecondary ? (
-            <span className="font-mono text-sm tabular-nums text-fg-tertiary">
-              {inlineSecondary}
-            </span>
+    <SensorChipCard
+      title={title}
+      {...(options.labelSuffix ? { labelSuffix: options.labelSuffix } : {})}
+      titleAddons={
+        <>
+          {helpContent ? (
+            <Tooltip content={helpContent} align="start">
+              <button
+                type="button"
+                aria-label={`${title} help`}
+                className="inline-flex shrink-0 rounded text-fg-tertiary transition-colors hover:text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+              >
+                <CircleHelp className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </Tooltip>
           ) : null}
-        </div>
-        {selectionLabel ? (
+          {timeframeScope === 'lifetime' ? (
+            <Badge
+              size="sm"
+              variant="default"
+              className="shrink-0 rounded-md px-1.5 py-0.5 font-semibold"
+            >
+              Lifetime
+            </Badge>
+          ) : null}
+        </>
+      }
+      {...(options.showSubtitle && options.subtitle ? { subtitle: options.subtitle } : {})}
+      icon={options.icon}
+      {...(hasVisualMetricColor ? { iconColor: metricColor } : {})}
+      accentBorder={options.accentBorder}
+      accentColor={metricColor}
+      {...(showSprite
+        ? {
+            sprite: {
+              data: spriteData,
+              type: sparklineType,
+              color: spriteColor,
+              timeFilter: options.timeFilter,
+              smoothness: options.smoothness,
+            },
+          }
+        : {})}
+      centered={!activeTripSelectionStat && !showSprite}
+      value={renderStatusValue({
+        presentation: statusPresentation,
+        displayValue,
+        valueToneClass,
+        ...(valueToneStyle ? { valueToneStyle } : {}),
+        valueSize: options.valueSize,
+      })}
+      {...(inlineSecondary ? { inlineSecondary } : {})}
+      footnote={
+        selectionLabel ? (
           <p className="mt-0.5 text-[10px] text-fg-tertiary">{selectionLabel}</p>
         ) : lastUpdatedLabel ? (
           <p className="mt-0.5 truncate text-[11px] text-fg-tertiary">{lastUpdatedLabel}</p>
-        ) : null}
-        {secondary ? <p className="mt-0.5 truncate text-xs text-fg-tertiary">{secondary}</p> : null}
-      </div>
-    </Card>
+        ) : null
+      }
+      secondary={secondary || null}
+    />
   );
 }
 
@@ -405,47 +363,6 @@ function resolveSensorVisualColor(
   return getChartColor(automaticColor);
 }
 
-function buildSourceValues(
-  dataSource: SensorDataSource,
-  health: unknown,
-  chargingSummary: unknown,
-  efficiencySummary: unknown,
-  status: unknown
-) {
-  const charging = objectValues(chargingSummary);
-  const primary =
-    dataSource === 'batteryHealth'
-      ? health
-      : dataSource === 'chargingSummary'
-        ? chargingSummary
-        : dataSource === 'efficiencySummary'
-          ? efficiencySummary
-        : dataSource === 'vehicleStatus'
-          ? status
-          : {};
-
-  return {
-    ...objectValues(primary),
-    ...(dataSource === 'chargingSummary'
-      ? {
-          away_kwh_including_unknown:
-            (typeof charging.away_kwh === 'number' && Number.isFinite(charging.away_kwh)
-              ? charging.away_kwh
-              : 0) +
-            (typeof charging.unknown_location_kwh === 'number' &&
-            Number.isFinite(charging.unknown_location_kwh)
-              ? charging.unknown_location_kwh
-              : 0),
-        }
-      : {}),
-    health,
-    battery: health,
-    charging: chargingSummary,
-    efficiency: efficiencySummary,
-    status,
-  } as Record<string, unknown>;
-}
-
 function getHelpContent(
   helpText: string,
   metric: string | null,
@@ -456,20 +373,6 @@ function getHelpContent(
     return helpText;
   }
   return `${helpText} Based on ${formatMiles(efficiencySummary.efficiency_miles)} of ${formatMiles(efficiencySummary.total_miles)} driven.`;
-}
-
-function objectValues(value: unknown) {
-  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
-}
-
-function resolveConfiguredValue(
-  options: Required<SensorChipOptions>,
-  values: Record<string, unknown>
-) {
-  if (options.valueFormula) return resolveFormula(options.valueFormula, values);
-  const value = resolveNumberPath(values, options.valuePath);
-  if (value != null) return value;
-  return resolveNumberPath(values, options.fallbackValuePath);
 }
 
 function resolveInlineSecondary(
@@ -486,47 +389,6 @@ function resolveInlineSecondary(
 
   if (value == null) return '';
   return `${options.inlineSecondaryPrefix}${formatMetricValue(value, options.inlineSecondaryUnit)}`;
-}
-
-function resolveTemplate(template: string, values: Record<string, unknown>) {
-  if (!template) return '';
-  let missingValue = false;
-  const resolved = template.replace(
-    /\[([^\]:]+)(?::([^\]]+))?\]/g,
-    (_match, rawPath: string, rawFormat: string | undefined) => {
-      const value = resolveNumberPath(values, rawPath.trim());
-      if (value == null) {
-        missingValue = true;
-        return '';
-      }
-      return formatTemplateValue(value, rawFormat);
-    }
-  );
-  return missingValue ? '' : resolved;
-}
-
-function formatTemplateValue(value: number, format: string | undefined) {
-  if (!format) return formatMetricValue(value, undefined);
-  if (format === 'int' || format === 'integer') return value.toFixed(0);
-  return formatMetricValue(value, format);
-}
-
-function resolveNumberPath(values: Record<string, unknown>, path: string) {
-  if (!path) return null;
-  const value = resolvePath(values, path);
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function resolvePath(values: Record<string, unknown>, path: string): unknown {
-  if (Object.prototype.hasOwnProperty.call(values, path)) return values[path];
-  return path.split('.').reduce<unknown>((current, part) => {
-    if (!current || typeof current !== 'object') return undefined;
-    return (current as Record<string, unknown>)[part];
-  }, values);
-}
-
-function resolveFormula(formula: string, values: Record<string, unknown>) {
-  return resolveSafeExpression(formula, values);
 }
 
 function usesStatus(options: Required<SensorChipOptions>) {
@@ -563,22 +425,6 @@ function isEventTotalMetric(metric: string) {
     || metric === 'total_cost';
 }
 
-function formatMetricValue(value: number | null | undefined, unit: string | null | undefined) {
-  if (value == null || !Number.isFinite(value)) return '-';
-  if (unit === 'mi') return formatMiles(value);
-  if (unit === 'kWh') return formatKwh(value);
-  if (unit === 'USD') return formatCurrency(value);
-  if (unit === 'Wh/mi') return formatEfficiency(value);
-  if (unit === 'min') return formatDuration(value);
-  if (unit === '%') return `${value.toFixed(value >= 10 ? 0 : 1)}%`;
-  if (unit === 'psi') return formatPressure(value);
-  if (unit === 'mph') return formatMph(value);
-  if (unit === 'kW') return `${value.toFixed(1)} kW`;
-  if (unit === 'C') return formatTemp(value);
-  if (!unit && Number.isInteger(value)) return value.toFixed(0);
-  return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1);
-}
-
 function renderStatusValue({
   presentation,
   displayValue,
@@ -606,16 +452,13 @@ function renderStatusValue({
   }
 
   const valueNode = (
-    <span
-      className={cn(
-        'font-mono font-semibold tabular-nums tracking-tight',
-        valueToneClass,
-        valueSize === 'sm' ? 'text-xl' : valueSize === 'lg' ? 'text-3xl' : 'text-2xl'
-      )}
-      style={{ textShadow: 'var(--rm-value-halo)', ...valueToneStyle }}
+    <SensorChipValue
+      toneClass={valueToneClass}
+      {...(valueToneStyle ? { style: valueToneStyle } : {})}
+      size={valueSize}
     >
       {displayValue}
-    </span>
+    </SensorChipValue>
   );
 
   return presentation?.tooltip ? (

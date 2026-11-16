@@ -112,7 +112,7 @@ function DashboardEditOverlay({
         <div
           data-testid={`widget-overlay-left-${instance.id}`}
           data-widget-move-control="true"
-          className="rgl-widget-control absolute left-2 top-2 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur"
+          className="rgl-widget-control absolute left-2 top-2 flex items-center gap-1"
         >
           {movable ? (
             <button
@@ -141,7 +141,7 @@ function DashboardEditOverlay({
           data-testid={`widget-overlay-right-${instance.id}`}
           data-widget-edit-control="true"
           data-widget-resizable={resizable ? 'true' : 'false'}
-          className="rgl-widget-control absolute right-2 top-2 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur"
+          className="rgl-widget-control absolute right-2 top-2 flex items-center gap-1"
         >
           <button
             type="button"

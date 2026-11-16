@@ -4,6 +4,20 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
+mod classification;
+mod matching;
+
+pub use classification::{
+    confidence_for_source, infer_api_charger_type, infer_is_rivian_network,
+    normalize_api_charger_type, normalize_grouping_key, parse_summary_aliases,
+    preferred_external_alias, ChargeSessionExternalAlias, ExternalAliasKind, UnmatchedInsertPolicy,
+};
+use classification::{infer_alias_kind_from_id, should_insert_unmatched_session, summarize_source};
+use matching::{
+    find_overlapping_session, find_session_by_external_alias, find_session_by_grouping_key,
+    find_time_window_session,
+};
+
 pub const CHARGE_SESSION_SOURCE_TELEMETRY: &str = "telemetry";
 pub const CHARGE_SESSION_SOURCE_RIVIAN_API: &str = "rivian_api";
 pub const CHARGE_SESSION_SOURCE_TELEMETRY_AND_API: &str = "telemetry+rivian_api";
@@ -33,62 +47,147 @@ pub struct ChargeSessionSummaryPayload {
     pub meta: Option<ChargeSessionSummaryMeta>,
 }
 
+/// How a completed-session summary's upstream `vehicleId` relates to the local
+/// vehicle being synced. `getCompletedSessionSummaries` returns account-wide
+/// history, so every summary must be classified before it is stored or
+/// matched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SummaryVehicleMatch {
+    /// The summary names the target vehicle's Rivian ID exactly.
+    Match,
+    /// The summary names a different Rivian vehicle; it is never attributed.
+    Foreign,
+    /// The summary has a null or empty `vehicleId`.
+    Unidentified,
+}
+
+impl ChargeSessionSummaryPayload {
+    pub fn vehicle_match(&self, rivian_vehicle_id: &str) -> SummaryVehicleMatch {
+        match self.vehicle_id.as_deref() {
+            None => SummaryVehicleMatch::Unidentified,
+            Some(id) if id.trim().is_empty() => SummaryVehicleMatch::Unidentified,
+            Some(id) if id == rivian_vehicle_id => SummaryVehicleMatch::Match,
+            Some(_) => SummaryVehicleMatch::Foreign,
+        }
+    }
+}
+
+/// Per-run tally of account-wide summaries that were filtered by vehicle.
+/// Only counts are logged; the other vehicle's Rivian ID is never recorded.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SummaryAttributionCounts {
+    pub skipped_foreign: u64,
+    pub skipped_unidentified: u64,
+    pub accepted_unidentified: u64,
+}
+
+impl SummaryAttributionCounts {
+    /// Applies the attribution rule and returns whether the summary may be
+    /// stored or replayed for the target vehicle. Unidentified summaries are
+    /// accepted only when `allow_unidentified` is set, which callers derive
+    /// from [`vehicles_accepting_unidentified_summaries`].
+    pub fn admit(&mut self, classification: SummaryVehicleMatch, allow_unidentified: bool) -> bool {
+        match classification {
+            SummaryVehicleMatch::Match => true,
+            SummaryVehicleMatch::Foreign => {
+                self.skipped_foreign += 1;
+                false
+            }
+            SummaryVehicleMatch::Unidentified if allow_unidentified => {
+                self.accepted_unidentified += 1;
+                true
+            }
+            SummaryVehicleMatch::Unidentified => {
+                self.skipped_unidentified += 1;
+                false
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn log(&self, vehicle_id: Option<Uuid>, context: &'static str) {
+        if self.is_empty() {
+            return;
+        }
+        tracing::info!(
+            vehicle_id = ?vehicle_id,
+            context,
+            skipped_foreign = self.skipped_foreign,
+            skipped_unidentified = self.skipped_unidentified,
+            accepted_unidentified = self.accepted_unidentified,
+            "charge history summaries filtered by upstream vehicle identity"
+        );
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct VehicleOwnershipRow {
+    id: Uuid,
+    user_id: Uuid,
+    rivian_vehicle_id: String,
+    has_foreign_payloads: bool,
+}
+
+/// Returns the local vehicles that may receive completed-session summaries
+/// whose upstream `vehicleId` is missing: a vehicle qualifies only when it is
+/// the sole non-demo vehicle owned (`vehicles.user_id`) by its user and none
+/// of its retained summaries names another upstream vehicle. Credentials are
+/// stored per vehicle, so a sole local vehicle can still share its Rivian
+/// account with vehicles that are untracked or owned by another user; any
+/// foreign summary proves that and disables the fallback. Live sync also
+/// refuses when the current response contains a foreign summary. When
+/// `vehicle_id` is set, only that vehicle's owner is considered.
+pub async fn vehicles_accepting_unidentified_summaries(
+    pool: &PgPool,
+    vehicle_id: Option<Uuid>,
+) -> Result<std::collections::HashSet<Uuid>> {
+    let rows = sqlx::query_as::<_, VehicleOwnershipRow>(
+        r#"
+        SELECT v.id, v.user_id, v.rivian_vehicle_id,
+               EXISTS (
+                   SELECT 1 FROM riviamigo.rivian_charge_payloads p
+                   WHERE p.vehicle_id = v.id
+                     AND p.operation = 'getCompletedSessionSummaries'
+                     AND p.rivian_vehicle_id IS NOT NULL
+                     AND btrim(p.rivian_vehicle_id) <> ''
+                     AND p.rivian_vehicle_id <> v.rivian_vehicle_id
+               ) AS has_foreign_payloads
+        FROM riviamigo.vehicles v
+        WHERE $1::uuid IS NULL
+           OR v.user_id = (SELECT target.user_id FROM riviamigo.vehicles target WHERE target.id = $1)
+        "#,
+    )
+    .bind(vehicle_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut real_vehicles_by_user = std::collections::HashMap::<Uuid, Vec<(Uuid, bool)>>::new();
+    for row in rows {
+        if !crate::db::vehicles::is_demo_vehicle_key(&row.rivian_vehicle_id) {
+            real_vehicles_by_user
+                .entry(row.user_id)
+                .or_default()
+                .push((row.id, row.has_foreign_payloads));
+        }
+    }
+
+    Ok(real_vehicles_by_user
+        .into_values()
+        .filter_map(|vehicles| match vehicles.as_slice() {
+            [(only, false)] => Some(*only),
+            _ => None,
+        })
+        .collect())
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ChargeSessionSummaryMeta {
     pub transaction_id_grouping_key: Option<String>,
     pub data_sources: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExternalAliasKind {
-    Cdrs,
-    Txn,
-    Vtxn,
-    NetworkSession,
-    Legacy,
-    Unknown,
-}
-
-impl ExternalAliasKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ExternalAliasKind::Cdrs => "cdrs",
-            ExternalAliasKind::Txn => "txn",
-            ExternalAliasKind::Vtxn => "vtxn",
-            ExternalAliasKind::NetworkSession => "network_session",
-            ExternalAliasKind::Legacy => "legacy",
-            ExternalAliasKind::Unknown => "unknown",
-        }
-    }
-
-    fn rank(self) -> i32 {
-        match self {
-            ExternalAliasKind::Cdrs => 0,
-            ExternalAliasKind::Txn => 1,
-            ExternalAliasKind::NetworkSession => 2,
-            ExternalAliasKind::Vtxn => 3,
-            ExternalAliasKind::Legacy => 4,
-            ExternalAliasKind::Unknown => 5,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ChargeSessionExternalAlias {
-    pub external_id: String,
-    pub alias_kind: ExternalAliasKind,
-    pub transaction_id_grouping_key: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum UnmatchedInsertPolicy {
-    Never,
-    Always,
-    RecentOnly {
-        now: DateTime<Utc>,
-        lookback_days: i64,
-    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -116,364 +215,6 @@ struct BackfillAliasSeedRow {
     id: Uuid,
     rivian_session_id: Option<String>,
     rivian_meta: Option<serde_json::Value>,
-}
-
-fn summarize_source(existing: Option<&str>, has_api: bool) -> &'static str {
-    if !has_api {
-        return CHARGE_SESSION_SOURCE_TELEMETRY;
-    }
-
-    match existing {
-        Some(CHARGE_SESSION_SOURCE_RIVIAN_API) => CHARGE_SESSION_SOURCE_RIVIAN_API,
-        Some(CHARGE_SESSION_SOURCE_TELEMETRY_AND_API) => CHARGE_SESSION_SOURCE_TELEMETRY_AND_API,
-        Some(CHARGE_SESSION_SOURCE_TELEMETRY) => CHARGE_SESSION_SOURCE_TELEMETRY_AND_API,
-        Some(_) => CHARGE_SESSION_SOURCE_TELEMETRY_AND_API,
-        None => CHARGE_SESSION_SOURCE_TELEMETRY_AND_API,
-    }
-}
-
-pub fn confidence_for_source(source: &str) -> &'static str {
-    match source {
-        CHARGE_SESSION_SOURCE_RIVIAN_API => CHARGE_SESSION_CONFIDENCE_API_ONLY,
-        CHARGE_SESSION_SOURCE_TELEMETRY_AND_API => CHARGE_SESSION_CONFIDENCE_TELEMETRY_ENRICHED,
-        _ => CHARGE_SESSION_CONFIDENCE_TELEMETRY,
-    }
-}
-
-pub fn infer_is_rivian_network(vendor: Option<&str>) -> Option<bool> {
-    let vendor = vendor?.trim();
-    if vendor.is_empty() {
-        return None;
-    }
-
-    let normalized = vendor.to_ascii_lowercase();
-    let known_network = matches!(
-        normalized.as_str(),
-        "rivian" | "electrify america" | "evgo" | "chargepoint" | "tesla"
-    );
-    Some(known_network)
-}
-
-pub fn normalize_api_charger_type(value: Option<&str>) -> Option<&'static str> {
-    match value?.trim().to_ascii_lowercase().as_str() {
-        "wallbox" | "ac" | "level1" | "level2" | "j1772" => Some("ac"),
-        "dc" | "dcfc" | "ran15_dispenser" | "supercharger" => Some("dc"),
-        _ => None,
-    }
-}
-
-pub fn infer_api_charger_type(vendor: Option<&str>, is_home: Option<bool>) -> Option<&'static str> {
-    if is_home == Some(true) {
-        return Some("ac");
-    }
-
-    match vendor?.trim().to_ascii_lowercase().as_str() {
-        "tesla" | "rivian" | "electrify america" | "evgo" => Some("dc"),
-        _ => None,
-    }
-}
-
-pub fn normalize_grouping_key(raw: Option<&str>) -> Option<String> {
-    let raw = raw?.trim();
-    if raw.is_empty() {
-        return None;
-    }
-
-    let mut pieces = raw
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    if pieces.is_empty() {
-        return None;
-    }
-    pieces.sort_unstable();
-    pieces.dedup();
-    Some(pieces.join(","))
-}
-
-fn parse_data_source_alias(data_source: &str) -> Option<(ExternalAliasKind, String)> {
-    let mut parts = data_source.splitn(2, ':');
-    let prefix = parts.next()?.trim();
-    let external_id = parts.next()?.trim();
-    if external_id.is_empty() {
-        return None;
-    }
-
-    let kind = match prefix {
-        "CDRS" => ExternalAliasKind::Cdrs,
-        "TXN" => ExternalAliasKind::Txn,
-        "VTXN" => ExternalAliasKind::Vtxn,
-        _ => ExternalAliasKind::Unknown,
-    };
-    Some((kind, external_id.to_string()))
-}
-
-fn infer_alias_kind_from_id(external_id: &str) -> ExternalAliasKind {
-    if external_id.starts_with("USCPI") {
-        ExternalAliasKind::NetworkSession
-    } else {
-        ExternalAliasKind::Legacy
-    }
-}
-
-pub fn parse_summary_aliases(
-    summary: &ChargeSessionSummaryPayload,
-) -> Vec<ChargeSessionExternalAlias> {
-    let grouping_key = normalize_grouping_key(
-        summary
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.transaction_id_grouping_key.as_deref()),
-    );
-    let mut aliases = Vec::<ChargeSessionExternalAlias>::new();
-
-    if let Some(data_sources) = summary
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.data_sources.as_ref())
-    {
-        for data_source in data_sources {
-            if let Some((alias_kind, external_id)) = parse_data_source_alias(data_source) {
-                aliases.push(ChargeSessionExternalAlias {
-                    external_id,
-                    alias_kind,
-                    transaction_id_grouping_key: grouping_key.clone(),
-                });
-            }
-        }
-    }
-
-    if let Some(transaction_id) = summary.transaction_id.as_ref().map(|value| value.trim()) {
-        if !transaction_id.is_empty()
-            && !aliases
-                .iter()
-                .any(|alias| alias.external_id == transaction_id)
-        {
-            aliases.push(ChargeSessionExternalAlias {
-                external_id: transaction_id.to_string(),
-                alias_kind: infer_alias_kind_from_id(transaction_id),
-                transaction_id_grouping_key: grouping_key.clone(),
-            });
-        }
-    }
-
-    aliases.sort_by(|left, right| {
-        left.alias_kind
-            .rank()
-            .cmp(&right.alias_kind.rank())
-            .then_with(|| left.external_id.cmp(&right.external_id))
-    });
-    aliases.dedup_by(|left, right| left.external_id == right.external_id);
-    aliases
-}
-
-pub fn preferred_external_alias(
-    aliases: &[ChargeSessionExternalAlias],
-) -> Option<&ChargeSessionExternalAlias> {
-    aliases
-        .iter()
-        .min_by(|left, right| left.alias_kind.rank().cmp(&right.alias_kind.rank()))
-}
-
-fn should_insert_unmatched_session(
-    policy: UnmatchedInsertPolicy,
-    started_at: Option<DateTime<Utc>>,
-) -> bool {
-    match policy {
-        UnmatchedInsertPolicy::Never => false,
-        UnmatchedInsertPolicy::Always => started_at.is_some(),
-        UnmatchedInsertPolicy::RecentOnly { now, lookback_days } => {
-            started_at.is_some_and(|start| start >= now - chrono::Duration::days(lookback_days))
-        }
-    }
-}
-
-async fn find_session_by_external_alias(
-    pool: &PgPool,
-    vehicle_id: Uuid,
-    aliases: &[ChargeSessionExternalAlias],
-) -> Result<Option<MatchRow>> {
-    if aliases.is_empty() {
-        return Ok(None);
-    }
-
-    let external_ids = aliases
-        .iter()
-        .map(|alias| alias.external_id.clone())
-        .collect::<Vec<_>>();
-
-    let matched = sqlx::query_as::<_, MatchRow>(
-        r#"
-        SELECT DISTINCT ON (cs.id)
-            cs.id,
-            cs.source
-        FROM riviamigo.charge_sessions cs
-        LEFT JOIN riviamigo.charge_session_external_aliases alias
-          ON alias.charge_session_id = cs.id
-        WHERE cs.vehicle_id = $1
-          AND (
-              cs.rivian_session_id = ANY($2)
-              OR alias.external_id = ANY($2)
-          )
-        ORDER BY cs.id,
-                 CASE COALESCE(cs.source, '')
-                     WHEN 'telemetry+rivian_api' THEN 4
-                     WHEN 'telemetry' THEN 3
-                     WHEN 'rivian_api' THEN 1
-                     ELSE 2
-                 END DESC
-        "#,
-    )
-    .bind(vehicle_id)
-    .bind(&external_ids)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(matched)
-}
-
-async fn find_session_by_grouping_key(
-    pool: &PgPool,
-    vehicle_id: Uuid,
-    grouping_key: Option<&str>,
-    started_at: Option<DateTime<Utc>>,
-) -> Result<Option<MatchRow>> {
-    let Some(grouping_key) = grouping_key else {
-        return Ok(None);
-    };
-
-    let matched = sqlx::query_as::<_, MatchRow>(
-        r#"
-        SELECT DISTINCT ON (cs.id)
-            cs.id,
-            cs.source
-        FROM riviamigo.charge_sessions cs
-        JOIN riviamigo.charge_session_external_aliases alias
-          ON alias.charge_session_id = cs.id
-        WHERE cs.vehicle_id = $1
-          AND alias.transaction_id_grouping_key = $2
-        ORDER BY cs.id,
-                 CASE COALESCE(cs.source, '')
-                     WHEN 'telemetry+rivian_api' THEN 4
-                     WHEN 'telemetry' THEN 3
-                     WHEN 'rivian_api' THEN 1
-                     ELSE 2
-                 END DESC,
-                 ABS(EXTRACT(EPOCH FROM (cs.started_at - COALESCE($3, cs.started_at)))) ASC
-        "#,
-    )
-    .bind(vehicle_id)
-    .bind(grouping_key)
-    .bind(started_at)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(matched)
-}
-
-async fn find_overlapping_session(
-    pool: &PgPool,
-    vehicle_id: Uuid,
-    started_at: Option<DateTime<Utc>>,
-    ended_at: Option<DateTime<Utc>>,
-) -> Result<Option<MatchRow>> {
-    let Some(started_at) = started_at else {
-        return Ok(None);
-    };
-    let end_bound = ended_at.unwrap_or(started_at);
-
-    let matched = sqlx::query_as::<_, MatchRow>(
-        r#"
-        SELECT
-            cs.id,
-            cs.source
-        FROM riviamigo.charge_sessions cs
-        WHERE cs.vehicle_id = $1
-          AND cs.started_at <= $3
-          AND COALESCE(cs.ended_at, cs.started_at) >= $2
-        ORDER BY CASE COALESCE(cs.source, '')
-                     WHEN 'telemetry+rivian_api' THEN 4
-                     WHEN 'telemetry' THEN 3
-                     WHEN 'rivian_api' THEN 1
-                     ELSE 2
-                 END DESC,
-                 ABS(EXTRACT(EPOCH FROM (cs.started_at - $2))) ASC,
-                 cs.started_at ASC,
-                 cs.id ASC
-        LIMIT 1
-        "#,
-    )
-    .bind(vehicle_id)
-    .bind(started_at)
-    .bind(end_bound)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(matched)
-}
-
-async fn find_time_window_session(
-    pool: &PgPool,
-    vehicle_id: Uuid,
-    started_at: Option<DateTime<Utc>>,
-) -> Result<Option<MatchRow>> {
-    let Some(started_at) = started_at else {
-        return Ok(None);
-    };
-    let window_start = started_at - chrono::Duration::minutes(60);
-    let window_end = started_at + chrono::Duration::minutes(60);
-
-    let matched = sqlx::query_as::<_, MatchRow>(
-        r#"
-        WITH ranked AS (
-            SELECT
-                cs.id,
-                cs.source,
-                ABS(EXTRACT(EPOCH FROM (cs.started_at - $4))) AS delta_secs,
-                ROW_NUMBER() OVER (
-                    ORDER BY
-                        CASE COALESCE(cs.source, '')
-                            WHEN 'telemetry+rivian_api' THEN 4
-                            WHEN 'telemetry' THEN 3
-                            WHEN 'rivian_api' THEN 1
-                            ELSE 2
-                        END DESC,
-                        ABS(EXTRACT(EPOCH FROM (cs.started_at - $4))) ASC,
-                        cs.started_at ASC,
-                        cs.id ASC
-                ) AS rn,
-                LEAD(ABS(EXTRACT(EPOCH FROM (cs.started_at - $4)))) OVER (
-                    ORDER BY
-                        CASE COALESCE(cs.source, '')
-                            WHEN 'telemetry+rivian_api' THEN 4
-                            WHEN 'telemetry' THEN 3
-                            WHEN 'rivian_api' THEN 1
-                            ELSE 2
-                        END DESC,
-                        ABS(EXTRACT(EPOCH FROM (cs.started_at - $4))) ASC,
-                        cs.started_at ASC,
-                        cs.id ASC
-                ) AS next_delta_secs
-            FROM riviamigo.charge_sessions cs
-            WHERE cs.vehicle_id = $1
-              AND cs.started_at BETWEEN $2 AND $3
-        )
-        SELECT id, source
-        FROM ranked
-        WHERE rn = 1
-          AND (next_delta_secs IS NULL OR (next_delta_secs - delta_secs) >= 900)
-        "#,
-    )
-    .bind(vehicle_id)
-    .bind(window_start)
-    .bind(window_end)
-    .bind(started_at)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(matched)
 }
 
 async fn update_session_from_summary(
@@ -999,6 +740,7 @@ pub async fn reconcile_completed_session_summary(
 
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct ChargeSessionCanonicalizationStats {
+    pub misattributed_sessions_reassigned: u64,
     pub source_backfills: u64,
     pub alias_backfills: u64,
     pub payload_reconciliations: u64,
@@ -1020,12 +762,16 @@ pub struct ChargeSessionDiagnostics {
     pub unlinked_payloads_outside_telemetry_window: i64,
     pub canonical_overlap_pairs: i64,
     pub null_source_rows: i64,
+    /// Sessions whose stored upstream `rivian_vehicle_id` names a different
+    /// vehicle than the local vehicle they are attached to.
+    pub misattributed_sessions: i64,
 }
 
 #[derive(Debug, Clone, FromRow)]
 struct PayloadReplayRow {
     id: Uuid,
     vehicle_id: Uuid,
+    rivian_vehicle_id: String,
     captured_at: DateTime<Utc>,
     payload: serde_json::Value,
 }
@@ -1161,17 +907,24 @@ pub async fn replay_charge_payload_summaries(
 ) -> Result<u64> {
     let payloads = sqlx::query_as::<_, PayloadReplayRow>(
         r#"
-        SELECT id, vehicle_id, captured_at, payload
-        FROM riviamigo.rivian_charge_payloads
-        WHERE operation = 'getCompletedSessionSummaries'
-          AND ($1::uuid IS NULL OR vehicle_id = $1)
-        ORDER BY captured_at ASC, id ASC
+        SELECT p.id, p.vehicle_id, v.rivian_vehicle_id, p.captured_at, p.payload
+        FROM riviamigo.rivian_charge_payloads p
+        JOIN riviamigo.vehicles v ON v.id = p.vehicle_id
+        WHERE p.operation = 'getCompletedSessionSummaries'
+          AND ($1::uuid IS NULL OR p.vehicle_id = $1)
+        ORDER BY p.captured_at ASC, p.id ASC
         "#,
     )
     .bind(vehicle_id)
     .fetch_all(pool)
     .await?;
 
+    let accepts_unidentified = if payloads.is_empty() {
+        std::collections::HashSet::new()
+    } else {
+        vehicles_accepting_unidentified_summaries(pool, vehicle_id).await?
+    };
+    let mut attribution = SummaryAttributionCounts::default();
     let mut linked = 0u64;
     for payload in payloads {
         let Ok(summary) =
@@ -1179,6 +932,13 @@ pub async fn replay_charge_payload_summaries(
         else {
             continue;
         };
+
+        if !attribution.admit(
+            summary.vehicle_match(&payload.rivian_vehicle_id),
+            accepts_unidentified.contains(&payload.vehicle_id),
+        ) {
+            continue;
+        }
 
         let payload_ref = ChargeSessionPayloadRef {
             payload_id: payload.id,
@@ -1208,7 +968,124 @@ pub async fn replay_charge_payload_summaries(
         }
     }
 
+    attribution.log(vehicle_id, "stored payload replay");
     Ok(linked)
+}
+
+#[derive(Debug, FromRow)]
+struct ReassignmentCandidateRow {
+    id: Uuid,
+    owner_vehicle_id: Uuid,
+}
+
+/// Moves API-only charge sessions that were attributed to the wrong local
+/// vehicle back to their owner.
+///
+/// Before account-wide completed-session summaries were filtered by vehicle,
+/// a summary for vehicle B could be stored on vehicle A. Such a row keeps the
+/// summary's upstream `rivian_vehicle_id`, which then differs from vehicle A's
+/// Rivian ID. A row is moved only when all of the following hold:
+///
+/// - its source is exactly [`CHARGE_SESSION_SOURCE_RIVIAN_API`] (no telemetry
+///   was merged into it) and no telemetry or charge-curve samples reference it;
+/// - another vehicle of the same user (`vehicles.user_id`) has the row's
+///   `rivian_vehicle_id`.
+///
+/// Mixed-source rows and rows with no same-user owner are left untouched and
+/// remain visible in [`ChargeSessionDiagnostics::misattributed_sessions`].
+/// Aliases and annotations follow the row by foreign key; retained payloads
+/// keep their original vehicle and are not modified. When `vehicle_id` is set,
+/// rows currently on that vehicle and rows owned by it but stored on a sibling
+/// are both considered. The move runs in one transaction.
+pub async fn reassign_misattributed_api_sessions(
+    pool: &PgPool,
+    vehicle_id: Option<Uuid>,
+) -> Result<u64> {
+    let mut transaction = pool.begin().await?;
+    let candidates = sqlx::query_as::<_, ReassignmentCandidateRow>(
+        r#"
+        SELECT cs.id, owner.id AS owner_vehicle_id
+        FROM riviamigo.charge_sessions cs
+        JOIN riviamigo.vehicles current_vehicle ON current_vehicle.id = cs.vehicle_id
+        JOIN riviamigo.vehicles owner
+          ON owner.user_id = current_vehicle.user_id
+         AND owner.rivian_vehicle_id = cs.rivian_vehicle_id
+        WHERE cs.source = $2
+          AND cs.rivian_vehicle_id IS NOT NULL
+          AND cs.rivian_vehicle_id <> current_vehicle.rivian_vehicle_id
+          AND ($1::uuid IS NULL OR cs.vehicle_id = $1 OR owner.id = $1)
+        ORDER BY cs.started_at, cs.id
+        FOR UPDATE OF cs
+        "#,
+    )
+    .bind(vehicle_id)
+    .bind(CHARGE_SESSION_SOURCE_RIVIAN_API)
+    .fetch_all(&mut *transaction)
+    .await?;
+
+    let mut reassigned = Vec::new();
+    for candidate in candidates {
+        // Each move is guarded individually so a row with telemetry-side
+        // evidence, or one that would collide with the owner's
+        // `(vehicle_id, started_at)` uniqueness for rows without a Rivian
+        // session ID, is skipped instead of failing the whole repair.
+        let moved = sqlx::query(
+            r#"
+            UPDATE riviamigo.charge_sessions cs
+            SET vehicle_id = $2
+            WHERE cs.id = $1
+              AND cs.source = $3
+              AND NOT EXISTS (
+                  SELECT 1 FROM timeseries.telemetry t WHERE t.charge_session_id = cs.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM riviamigo.rivian_charge_curve_points p
+                  WHERE p.charge_session_id = cs.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM timeseries.parallax_charge_curve_points p
+                  WHERE p.charge_session_id = cs.id
+              )
+              AND (
+                  cs.rivian_session_id IS NOT NULL
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM riviamigo.charge_sessions existing
+                      WHERE existing.vehicle_id = $2
+                        AND existing.started_at = cs.started_at
+                        AND existing.rivian_session_id IS NULL
+                  )
+              )
+            "#,
+        )
+        .bind(candidate.id)
+        .bind(candidate.owner_vehicle_id)
+        .bind(CHARGE_SESSION_SOURCE_RIVIAN_API)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        if moved > 0 {
+            reassigned.push(candidate.id);
+        }
+    }
+    transaction.commit().await?;
+
+    // Cost resolution depends on the vehicle (profile and network
+    // preferences), so price moved rows against their owner. Merging with the
+    // owner's telemetry session happens during the owner's canonicalization.
+    for session_id in &reassigned {
+        crate::services::cost::recompute_charge_session_cost(pool, *session_id).await?;
+    }
+
+    let reassigned = reassigned.len() as u64;
+    if reassigned > 0 {
+        tracing::info!(
+            vehicle_id = ?vehicle_id,
+            reassigned,
+            "reassigned misattributed API-only charge sessions to their owning vehicle"
+        );
+    }
+    Ok(reassigned)
 }
 
 pub async fn diagnose_charge_sessions(
@@ -1348,6 +1225,20 @@ pub async fn diagnose_charge_sessions(
     .fetch_one(pool)
     .await?;
 
+    let misattributed_sessions = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)::int8
+        FROM riviamigo.charge_sessions cs
+        JOIN riviamigo.vehicles v ON v.id = cs.vehicle_id
+        WHERE ($1::uuid IS NULL OR cs.vehicle_id = $1)
+          AND cs.rivian_vehicle_id IS NOT NULL
+          AND cs.rivian_vehicle_id <> v.rivian_vehicle_id
+        "#,
+    )
+    .bind(vehicle_id)
+    .fetch_one(pool)
+    .await?;
+
     Ok(ChargeSessionDiagnostics {
         alias_duplicate_clusters,
         api_telemetry_overlap_pairs,
@@ -1356,6 +1247,7 @@ pub async fn diagnose_charge_sessions(
         unlinked_payloads_outside_telemetry_window,
         canonical_overlap_pairs,
         null_source_rows,
+        misattributed_sessions,
     })
 }
 
@@ -1365,6 +1257,8 @@ pub async fn canonicalize_charge_sessions(
     vehicle_id: Option<Uuid>,
 ) -> Result<ChargeSessionCanonicalizationStats> {
     let mut stats = ChargeSessionCanonicalizationStats::default();
+    stats.misattributed_sessions_reassigned =
+        reassign_misattributed_api_sessions(pool, vehicle_id).await?;
     stats.source_backfills = backfill_charge_session_sources(pool, vehicle_id).await?;
     stats.alias_backfills = backfill_charge_session_aliases_from_rows(pool, vehicle_id).await?;
     stats.payload_reconciliations =
@@ -1567,16 +1461,6 @@ pub async fn canonicalize_charge_sessions(
             } else {
                 CHARGE_SESSION_SOURCE_RIVIAN_API
             };
-            let preferred_external_id = cluster_sessions
-                .iter()
-                .flat_map(|session| aliases_by_session.get(&session.id).into_iter().flatten())
-                .min_by(|left, right| {
-                    alias_rank_from_str(&left.alias_kind)
-                        .cmp(&alias_rank_from_str(&right.alias_kind))
-                        .then_with(|| left.external_id.cmp(&right.external_id))
-                })
-                .map(|alias| alias.external_id.clone());
-
             for duplicate in cluster_sessions
                 .iter()
                 .filter(|session| session.id != canonical.id)
@@ -1852,8 +1736,7 @@ pub async fn canonicalize_charge_sessions(
                         WHEN $3::timestamptz IS NOT NULL
                         THEN EXTRACT(EPOCH FROM ($3::timestamptz - $2::timestamptz))::int / 60
                         ELSE duration_minutes
-                    END,
-                    rivian_session_id = COALESCE($8, rivian_session_id)
+                    END
                 WHERE id = $1
                 "#,
             )
@@ -1864,7 +1747,6 @@ pub async fn canonicalize_charge_sessions(
             .bind(api_ended_at)
             .bind(source)
             .bind(confidence_for_source(source))
-            .bind(preferred_external_id.as_deref())
             .execute(pool)
             .await?;
             finalize_charge_session_aliases(pool, canonical.id).await?;
@@ -1876,74 +1758,4 @@ pub async fn canonicalize_charge_sessions(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::TimeZone;
-
-    #[test]
-    fn normalizes_grouping_keys_stably() {
-        assert_eq!(
-            normalize_grouping_key(Some("VTXN-2, TXN-1,TXN-1")),
-            Some("TXN-1,VTXN-2".to_string())
-        );
-    }
-
-    #[test]
-    fn prefers_txn_alias_over_vtxn_alias() {
-        let summary = ChargeSessionSummaryPayload {
-            transaction_id: Some("d284".to_string()),
-            start_instant: Some(Utc.with_ymd_and_hms(2026, 6, 20, 15, 17, 0).unwrap()),
-            end_instant: Some(Utc.with_ymd_and_hms(2026, 6, 20, 16, 1, 0).unwrap()),
-            charger_type: Some("dcfc".to_string()),
-            currency_code: Some("USD".to_string()),
-            total_energy_kwh: Some(45.2),
-            range_added_km: Some(120.0),
-            city: Some("Austin".to_string()),
-            vehicle_id: Some("veh-1".to_string()),
-            vehicle_name: Some("R1S".to_string()),
-            vendor: Some("Rivian".to_string()),
-            paid_total: Some(18.4),
-            is_public: Some(true),
-            is_home_charger: Some(false),
-            is_roaming_network: Some(false),
-            meta: Some(ChargeSessionSummaryMeta {
-                transaction_id_grouping_key: Some("8fbf,d284".to_string()),
-                data_sources: Some(vec![
-                    "VTXN:d284".to_string(),
-                    "TXN:8fbf".to_string(),
-                    "CDRS:USCPI123".to_string(),
-                ]),
-            }),
-        };
-
-        let aliases = parse_summary_aliases(&summary);
-        let preferred = preferred_external_alias(&aliases).expect("preferred alias");
-        assert_eq!(preferred.alias_kind, ExternalAliasKind::Cdrs);
-        assert_eq!(preferred.external_id, "USCPI123");
-        assert!(aliases
-            .iter()
-            .any(|alias| alias.alias_kind == ExternalAliasKind::Txn));
-        assert!(aliases
-            .iter()
-            .any(|alias| alias.alias_kind == ExternalAliasKind::Vtxn));
-    }
-
-    #[test]
-    fn recent_only_insert_policy_respects_lookback() {
-        let now = Utc.with_ymd_and_hms(2026, 6, 21, 12, 0, 0).unwrap();
-        assert!(should_insert_unmatched_session(
-            UnmatchedInsertPolicy::RecentOnly {
-                now,
-                lookback_days: 30,
-            },
-            Some(Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap()),
-        ));
-        assert!(!should_insert_unmatched_session(
-            UnmatchedInsertPolicy::RecentOnly {
-                now,
-                lookback_days: 30,
-            },
-            Some(Utc.with_ymd_and_hms(2026, 4, 10, 12, 0, 0).unwrap()),
-        ));
-    }
-}
+mod tests;

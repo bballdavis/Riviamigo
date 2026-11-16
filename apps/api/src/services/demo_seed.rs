@@ -778,6 +778,8 @@ async fn seed_latest_status(
               CASE WHEN $6::bool THEN TRUE END, CASE WHEN $6::bool THEN TRUE END,
               TRUE,TRUE,TRUE,TRUE,TRUE,'idle',FALSE,FALSE,FALSE,FALSE,$2)
            ON CONFLICT (vehicle_id) DO UPDATE SET
+             facing_reversed=NULL,
+             facing_epoch=riviamigo.vehicle_latest_status.facing_epoch + 1,
              ts=EXCLUDED.ts, battery_level=EXCLUDED.battery_level,
              battery_capacity_wh=EXCLUDED.battery_capacity_wh,
              distance_to_empty_mi=EXCLUDED.distance_to_empty_mi,

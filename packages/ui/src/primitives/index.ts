@@ -47,8 +47,14 @@ export type { StatusBarProps, VehicleOnlineState } from './StatusBar';
 
 export { AmbientOrbs } from './AmbientOrbs';
 
+export { AssistantWave } from './AssistantWave';
+export type { AssistantWaveProps } from './AssistantWave';
+
 export { MetricTabs } from './MetricTabs';
 export type { MetricTabsProps, MetricTab } from './MetricTabs';
+
+export { SegmentedControl } from './SegmentedControl';
+export type { SegmentedControlProps, SegmentedControlOption } from './SegmentedControl';
 
 export { Switch } from './Switch';
 export type { SwitchProps } from './Switch';
@@ -60,3 +66,6 @@ export { ColorPicker } from './ColorPicker';
 export type { ColorPickerProps, ColorPickerSwatch } from './ColorPicker';
 
 export { FrunkIcon, LiftgateIcon } from './ClosureIcons';
+
+export { UnsavedChangesBar, UnsavedChangesBarSpacer } from './UnsavedChangesBar';
+export type { UnsavedChangesBarProps } from './UnsavedChangesBar';

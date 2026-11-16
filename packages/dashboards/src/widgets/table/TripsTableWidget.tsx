@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Eraser, Moon, Plus, Save, Sun } from 'lucide-react';
 import { LuBadgeInfo } from 'react-icons/lu';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
-import { api, useAuth, useBasemapConfig, useTrips, useTripMapRoutes, useUpdateTripTagAssignments, useUserPreferences } from '@riviamigo/hooks';
+import { api, queryKeys, useAuth, useBasemapConfig, useTrips, useTripMapRoutes, useUpdateTripTagAssignments, useUserPreferences } from '@riviamigo/hooks';
 import { useDocumentTheme } from '@riviamigo/ui/hooks';
 import { DataTable, createTripColumns, type TripRow } from '@riviamigo/ui/tables';
 import { Badge, Button, SelectPicker, Tooltip } from '@riviamigo/ui/primitives';
@@ -204,7 +204,7 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
           )}
         </div>
       ) : mapQuery.isError ? (
-        <div className="shrink-0 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-fg-secondary">
+        <div className="shrink-0 rounded-lg border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-xs text-fg-secondary">
           Unable to load route map data.
         </div>
       ) : routes.length === 0 ? (
@@ -233,7 +233,7 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
   const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page, pageSize, deferredSearch.trim(), ctx.tripTagFilter);
   const updateAssignments = useUpdateTripTagAssignments(ctx.vehicleId);
   const placesQuery = useQuery({
-    queryKey: ['places'],
+    queryKey: queryKeys.places.all,
     queryFn: () => api.listPlaces(),
     staleTime: 5 * 60 * 1000,
   });

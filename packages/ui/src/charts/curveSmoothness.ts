@@ -6,6 +6,11 @@ export const CURVE_SMOOTHNESS_OPTIONS: ReadonlyArray<{ value: CurveSmoothness; l
   { value: 'smooth', label: 'Smooth' },
 ];
 
+/**
+ * `gentle` and `smooth` are kept as stored values for saved dashboards and
+ * chart definitions, and both draw the same shape-preserving curve. Only
+ * `straight` draws differently.
+ */
 export const DEFAULT_CURVE_SMOOTHNESS: CurveSmoothness = 'gentle';
 
 export function normalizeCurveSmoothness(value: unknown, fallback: CurveSmoothness = DEFAULT_CURVE_SMOOTHNESS): CurveSmoothness {
@@ -39,30 +44,60 @@ export function splitCurveSegments(points: Array<CurvePoint | null>): CurvePoint
   return segments;
 }
 
-export function curveTension(smoothness: CurveSmoothness): number {
-  return smoothness === 'smooth' ? 0.34 : 0.18;
+/**
+ * Slope at every point of a shape-preserving (monotone) cubic curve.
+ *
+ * This is the same curve uPlot's native spline draws for the rich charts, so a
+ * sparkline and a full chart bend the same way. Where the data rises or falls
+ * through a point the slope is the weighted harmonic mean of the two
+ * neighbouring segment slopes; at a peak, dip or plateau it is zero. That keeps
+ * the curve between each pair of recorded values: it never rises above or
+ * dips below them.
+ */
+export function monotoneCurveSlopes(points: CurvePoint[]): number[] {
+  const count = points.length;
+  if (count < 2) return points.map(() => 0);
+  const widths: number[] = [];
+  const secants: number[] = [];
+  for (let index = 0; index < count - 1; index += 1) {
+    const width = points[index + 1]!.x - points[index]!.x;
+    widths.push(width);
+    secants.push(width > 0 ? (points[index + 1]!.y - points[index]!.y) / width : 0);
+  }
+  const slopes = new Array<number>(count);
+  slopes[0] = secants[0]!;
+  slopes[count - 1] = secants[count - 2]!;
+  for (let index = 1; index < count - 1; index += 1) {
+    const before = secants[index - 1]!;
+    const after = secants[index]!;
+    if (before === 0 || after === 0 || (before > 0) !== (after > 0)) {
+      slopes[index] = 0;
+      continue;
+    }
+    const widthBefore = widths[index - 1]!;
+    const widthAfter = widths[index]!;
+    slopes[index] = 3 * (widthBefore + widthAfter)
+      / ((2 * widthAfter + widthBefore) / before + (widthAfter + 2 * widthBefore) / after);
+  }
+  return slopes;
 }
 
-export function clampedControlPoints(
+/**
+ * Bezier handles for the segment from `points[index]` to `points[index + 1]`,
+ * using slopes from `monotoneCurveSlopes`. A segment with no width, such as two
+ * samples at one instant, falls back to a straight line.
+ */
+export function monotoneControlPoints(
   points: CurvePoint[],
+  slopes: number[],
   index: number,
-  smoothness: CurveSmoothness,
 ): [CurvePoint, CurvePoint] {
   const first = points[index]!;
   const second = points[index + 1]!;
-  const before = points[Math.max(0, index - 1)]!;
-  const after = points[Math.min(points.length - 1, index + 2)]!;
-  const tension = curveTension(smoothness);
-  const minY = Math.min(first.y, second.y);
-  const maxY = Math.max(first.y, second.y);
+  const width = second.x - first.x;
+  if (!(width > 0)) return [{ ...first }, { ...second }];
   return [
-    {
-      x: first.x + (second.x - before.x) * tension,
-      y: Math.min(maxY, Math.max(minY, first.y + (second.y - before.y) * tension)),
-    },
-    {
-      x: second.x - (after.x - first.x) * tension,
-      y: Math.min(maxY, Math.max(minY, second.y - (after.y - first.y) * tension)),
-    },
+    { x: first.x + width / 3, y: first.y + (slopes[index] ?? 0) * width / 3 },
+    { x: second.x - width / 3, y: second.y - (slopes[index + 1] ?? 0) * width / 3 },
   ];
 }

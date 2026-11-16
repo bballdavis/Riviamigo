@@ -1,6 +1,7 @@
 export interface RgbColor { r: number; g: number; b: number }
 export interface HslColor { h: number; s: number; l: number }
 export interface OklchColor { l: number; c: number; h: number }
+export interface RgbaColor extends RgbColor { a: number }
 
 const clamp = (value: number, min = 0, max = 1) => Math.min(max, Math.max(min, value));
 const round = (value: number, digits = 3) => Number(value.toFixed(digits));
@@ -122,4 +123,49 @@ export function contrastRatio(first: string, second: string): number {
   };
   const a = luminance(first); const b = luminance(second);
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+/** Parses the color strings MapLibre styles and theme tokens use, with alpha. */
+export function parseRgba(value: string): RgbaColor | null {
+  const text = value.trim().toLowerCase();
+  if (text === 'transparent') return { r: 0, g: 0, b: 0, a: 0 };
+  if (text === 'white') return { r: 255, g: 255, b: 255, a: 1 };
+  if (text === 'black') return { r: 0, g: 0, b: 0, a: 1 };
+  const hex8 = /^#([0-9a-f]{4}|[0-9a-f]{8})$/.exec(text)?.[1];
+  if (hex8) {
+    const full = hex8.length === 4 ? [...hex8].map((digit) => digit + digit).join('') : hex8;
+    const channel = (index: number) => Number.parseInt(full.slice(index, index + 2), 16);
+    return { r: channel(0), g: channel(2), b: channel(4), a: channel(6) / 255 };
+  }
+  // `color(srgb r g b / a)` is what browsers report for computed color-mix().
+  const srgb = /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+%?))?\s*\)$/.exec(text);
+  if (srgb) {
+    return { r: Number(srgb[1]) * 255, g: Number(srgb[2]) * 255, b: Number(srgb[3]) * 255, a: parseAlpha(srgb[4]) };
+  }
+  const rgb = parseCssColor(text);
+  if (!rgb) return null;
+  // A fourth functional component is alpha: `rgba(1, 2, 3, 0.5)`, `rgb(1 2 3 / 50%)`.
+  const components = text.startsWith('#') ? [] : text.slice(text.indexOf('(') + 1, -1).split(/[\s,/]+/).filter(Boolean);
+  return { ...rgb, a: components.length >= 4 ? parseAlpha(components[3]) : 1 };
+}
+
+function parseAlpha(value: string | undefined) {
+  if (!value) return 1;
+  return clamp(value.endsWith('%') ? Number(value.slice(0, -1)) / 100 : Number(value));
+}
+
+/** sRGB interpolation, matching CSS `color-mix(in srgb, a, b amount)`. */
+export function mixRgba(from: RgbaColor, to: RgbaColor, amount: number): RgbaColor {
+  const t = clamp(amount);
+  return {
+    r: from.r + (to.r - from.r) * t,
+    g: from.g + (to.g - from.g) * t,
+    b: from.b + (to.b - from.b) * t,
+    a: from.a + (to.a - from.a) * t,
+  };
+}
+
+export function formatRgba({ r, g, b, a }: RgbaColor): string {
+  const channel = (value: number) => Math.round(clamp(value, 0, 255));
+  return `rgba(${channel(r)}, ${channel(g)}, ${channel(b)}, ${Number(clamp(a).toFixed(3))})`;
 }

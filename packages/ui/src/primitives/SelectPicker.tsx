@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Check, ChevronDown } from 'lucide-react';
+import { Check, ChevronDown, Search } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export interface SelectPickerOption<TValue extends string = string> {
@@ -8,6 +8,10 @@ export interface SelectPickerOption<TValue extends string = string> {
   description?: React.ReactNode;
   leading?: React.ReactNode;
   disabled?: boolean;
+  /** Heading the option is listed under. Options sharing a group should be adjacent. */
+  group?: string;
+  /** Extra text the search box matches, beyond the label, description and value. */
+  keywords?: string;
 }
 
 export interface SelectPickerProps<TValue extends string = string> {
@@ -23,11 +27,30 @@ export interface SelectPickerProps<TValue extends string = string> {
   menuClassName?: string;
   size?: 'sm' | 'md';
   align?: 'left' | 'right';
+  /** Adds a search box that filters the options; use it for long lists. */
+  searchable?: boolean;
+  searchPlaceholder?: string;
+  /** Shown when a search matches nothing. */
+  noResultsMessage?: React.ReactNode;
+}
+
+function textOf(node: React.ReactNode): string {
+  return typeof node === 'string' || typeof node === 'number' ? String(node) : '';
+}
+
+/** Every whitespace-separated term must appear somewhere in the option's searchable text. */
+function matchesQuery(option: SelectPickerOption, terms: string[]) {
+  if (terms.length === 0) return true;
+  const haystack = [textOf(option.label), textOf(option.description), option.keywords, option.group, option.value]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return terms.every((term) => haystack.includes(term));
 }
 
 export function SelectPicker<TValue extends string = string>({
   value,
-  options,
+  options: allOptions,
   onChange,
   id,
   'aria-label': ariaLabel,
@@ -38,15 +61,24 @@ export function SelectPicker<TValue extends string = string>({
   menuClassName,
   size = 'md',
   align = 'left',
+  searchable = false,
+  searchPlaceholder = 'Search',
+  noResultsMessage = 'No matches',
 }: SelectPickerProps<TValue>) {
   const [open, setOpen] = React.useState(false);
   const [activeIndex, setActiveIndex] = React.useState(-1);
+  const [query, setQuery] = React.useState('');
+  const searchRef = React.useRef<HTMLInputElement>(null);
   const rootRef = React.useRef<HTMLDivElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const optionRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
   const listboxId = React.useId();
+  const options = React.useMemo(() => {
+    const terms = searchable ? query.toLowerCase().split(/\s+/).filter(Boolean) : [];
+    return terms.length === 0 ? allOptions : allOptions.filter((option) => matchesQuery(option, terms));
+  }, [allOptions, query, searchable]);
   const selectedIndex = options.findIndex((option) => option.value === value);
-  const selectedOption = selectedIndex >= 0 ? options[selectedIndex] : undefined;
+  const selectedOption = allOptions.find((option) => option.value === value);
 
   const firstEnabledIndex = React.useMemo(
     () => options.findIndex((option) => !option.disabled),
@@ -79,6 +111,16 @@ export function SelectPicker<TValue extends string = string>({
     if (open && activeIndex >= 0) optionRefs.current[activeIndex]?.focus();
   }, [activeIndex, open]);
 
+  React.useEffect(() => {
+    if (!open || !searchable) return;
+    searchRef.current?.focus();
+    // Focus stays in the search box, so bring the current choice into view by hand.
+    const index = allOptions.findIndex((option) => option.value === value);
+    optionRefs.current[index]?.scrollIntoView?.({ block: 'nearest' });
+    // Only on open: later value or option changes must not steal focus from typing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, searchable]);
+
   function getEnabledIndex(start: number, direction: 1 | -1) {
     if (options.length === 0) return -1;
     let index = start;
@@ -93,7 +135,8 @@ export function SelectPicker<TValue extends string = string>({
 
   function openPicker() {
     if (disabled) return;
-    setActiveIndex(getEnabledIndex(selectedIndex >= 0 ? selectedIndex : firstEnabledIndex, 1));
+    setQuery('');
+    setActiveIndex(searchable ? -1 : getEnabledIndex(selectedIndex >= 0 ? selectedIndex : firstEnabledIndex, 1));
     setOpen(true);
   }
 
@@ -101,6 +144,22 @@ export function SelectPicker<TValue extends string = string>({
     onChange(nextValue);
     setOpen(false);
     triggerRef.current?.focus();
+  }
+
+  function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActiveIndex(getEnabledIndex(0, 1));
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActiveIndex(getEnabledIndex(options.length - 1, -1));
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      const first = options.find((option) => !option.disabled);
+      if (first) selectOption(first.value);
+    } else if (event.key === 'Tab') {
+      setOpen(false);
+    }
   }
 
   function handleTriggerKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
@@ -135,6 +194,10 @@ export function SelectPicker<TValue extends string = string>({
       if (option && !option.disabled) selectOption(option.value);
     } else if (event.key === 'Tab') {
       setOpen(false);
+    } else if (searchable && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey && event.key !== ' ') {
+      // A printable key while browsing the list goes back to the search box.
+      setActiveIndex(-1);
+      searchRef.current?.focus();
     }
   }
 
@@ -176,19 +239,45 @@ export function SelectPicker<TValue extends string = string>({
 
       {open ? (
         <div
-          id={listboxId}
-          role="listbox"
-          aria-label={ariaLabel}
           className={cn(
-            'absolute z-50 max-h-72 min-w-full overflow-y-auto rounded-lg border border-border bg-bg-elevated p-1 shadow-lg',
+            'absolute z-50 min-w-full overflow-hidden rounded-lg border border-border bg-bg-elevated shadow-lg',
             menuTop,
             align === 'right' ? 'right-0' : 'left-0',
             menuClassName
           )}
         >
+          {searchable ? (
+            <div className="border-b border-border p-2">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg-tertiary" />
+                <input
+                  ref={searchRef}
+                  type="search"
+                  value={query}
+                  onChange={(event) => {
+                    setQuery(event.target.value);
+                    setActiveIndex(-1);
+                  }}
+                  onKeyDown={handleSearchKeyDown}
+                  placeholder={searchPlaceholder}
+                  aria-label={`Search ${ariaLabel ?? 'options'}`}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="h-8 w-full rounded-md border border-border bg-bg-page/30 pl-8 pr-2 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-accent focus:ring-1 focus:ring-accent"
+                />
+              </div>
+            </div>
+          ) : null}
+          <div
+            id={listboxId}
+            role="listbox"
+            aria-label={ariaLabel}
+            className="max-h-72 overflow-y-auto p-1"
+          >
           {options.length > 0 ? (
             options.map((option, index) => {
               const isSelected = option.value === value;
+              const showGroup = option.group && option.group !== options[index - 1]?.group;
               const optionAriaLabel =
                 typeof option.label === 'string'
                   ? typeof option.description === 'string'
@@ -196,8 +285,16 @@ export function SelectPicker<TValue extends string = string>({
                     : option.label
                   : undefined;
               return (
+                <React.Fragment key={option.value}>
+                {showGroup ? (
+                  <div
+                    role="presentation"
+                    className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-fg-tertiary first:pt-1"
+                  >
+                    {option.group}
+                  </div>
+                ) : null}
                 <button
-                  key={option.value}
                   ref={(element) => {
                     optionRefs.current[index] = element;
                   }}
@@ -228,11 +325,15 @@ export function SelectPicker<TValue extends string = string>({
                   </span>
                   {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
                 </button>
+                </React.Fragment>
               );
             })
           ) : (
-            <div className="px-3 py-2 text-sm text-fg-tertiary">No options available</div>
+            <div className="px-3 py-2 text-sm text-fg-tertiary">
+              {searchable && query ? noResultsMessage : 'No options available'}
+            </div>
           )}
+          </div>
         </div>
       ) : null}
     </div>

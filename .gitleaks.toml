@@ -38,7 +38,7 @@ description = "Known non-functional Age identity used by historical route tests"
 condition = "AND"
 regexTarget = "secret"
 regexes = ['''^AGE-SECRET-KEY-1Q+$''']
-paths = ['''^apps/api/src/routes/[a-z_]+\.rs$''']
+paths = ['''^apps/api/src/routes/[a-z_]+(?:/[a-z_]+)*\.rs$''']
 
 [[rules]]
 id = "curl-auth-header"

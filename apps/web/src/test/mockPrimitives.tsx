@@ -235,3 +235,46 @@ export const FrunkIcon = ({ className }: { className?: string }) => (
 export const LiftgateIcon = ({ className }: { className?: string }) => (
   <svg className={className} data-testid="liftgate-icon" />
 );
+
+export const UnsavedChangesBar = ({ message, error, saving, onSave, onDiscard, saveLabel = 'Save', discardLabel = 'Discard' }: {
+  message: React.ReactNode; error?: string | null; saving?: boolean; onSave: () => void; onDiscard: () => void; saveLabel?: string; discardLabel?: string;
+}) => (
+  <div role="region" aria-label="Unsaved changes">
+    <p>{message}</p>
+    {error ? <p role="alert">{error}</p> : null}
+    <button type="button" onClick={onDiscard} disabled={saving}>{discardLabel}</button>
+    <button type="button" onClick={onSave} disabled={saving}>{saveLabel}</button>
+  </div>
+);
+
+export const UnsavedChangesBarSpacer = () => <div />;
+
+export const ResponsiveDialog = ({ titleId, onClose, children }: { titleId: string; onClose: () => void; children: React.ReactNode; className?: string }) => {
+  // Mirrors the real primitive's Escape dismissal so tests can exercise it.
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onCloseRef.current(); };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, []);
+  return <div role="dialog" aria-modal="true" aria-labelledby={titleId}>{children}</div>;
+};
+
+export function SegmentedControl<TValue extends string>({ label, value, options, onChange }: {
+  label: string; value: TValue; options: Array<{ value: TValue; label: React.ReactNode }>; onChange: (value: TValue) => void;
+}) {
+  return (
+    <div role="group" aria-label={label}>
+      {options.map((option) => (
+        <button key={option.value} type="button" aria-pressed={option.value === value} onClick={() => onChange(option.value)}>
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function AssistantWave({ label = 'Loading' }: { label?: string; size?: 'sm' | 'md'; className?: string }) {
+  return <div role="status" data-testid="assistant-wave">{label}</div>;
+}

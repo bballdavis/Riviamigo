@@ -22,6 +22,7 @@ The usual local entrypoints are:
 
 ```bash
 pnpm run dev:stack
+pnpm stop
 pnpm typecheck
 pnpm lint
 pnpm test
@@ -49,6 +50,25 @@ mixed, or production Compose identity metadata fails closed; set
 `DEV_COMPOSE_PROJECT_NAME` to a unique isolated name to avoid a same-named
 production project.
 
+A development database is often a copy of production, including the
+production Rivian sign-in. Two servers polling one Rivian account interfere
+with each other, and Rivian requests start failing with
+`User is unauthenticated`. Before connecting a copy, pause collection for each
+copied vehicle in **Settings > Vehicles** (the pause button on the vehicle
+card), or start the API with `RIVIAMIGO_RIVIAN_WORKERS_ENABLED=false` to keep
+every vehicle offline. A paused vehicle stays paused across restarts.
+
+`pnpm stop` ends this checkout's host-run dev servers: any `dev:stack`
+launcher, the Vite web server, the API, and the restore agent. It matches
+processes by this checkout's paths, so Vite servers from other repositories
+or other worktrees are left alone. On Windows, pnpm starts the launcher with a
+relative path that names no checkout, so the launcher records its process ID in
+`data/dev-launcher.pid` and `pnpm stop` matches that ID. Docker services keep
+running and keep their data. `pnpm dev:stack` runs the same cleanup (without the launcher step) before
+it allocates ports. If two stacks run at once, the second one moves to fallback
+ports, and signing in to the wrong one fails because each Compose project has
+its own users.
+
 `pnpm dev:stack` also starts the local restore supervisor alongside the
 host-run API. Its capability key is generated under the ignored `data/`
 directory, while backup artifacts continue to use the local `/backups` path.
@@ -56,6 +76,17 @@ This keeps the in-app restore path testable without putting development
 credentials or restore data in Git.
 Vite proxies restore-runtime status requests directly to that supervisor so
 the status poll can survive the API process restart.
+
+`pnpm dev:stack` always starts the host-run API with password login enabled and
+SSO disabled (`RIVIAMIGO_PASSWORD_LOGIN_ENABLED=true`,
+`RIVIAMIGO_OIDC_ENABLED=false`, `RIVIAMIGO_OIDC_AUTO_LOGIN=false`), and blanks
+every other `RIVIAMIGO_OIDC_*` variable inherited from the shell. SSO needs a
+public HTTPS callback and a reachable provider, so it cannot work on a
+development stack, and a restored production backup that had SSO enabled would
+otherwise leave you unable to sign in. Environment values win over the database
+per field, so the saved SSO settings are left untouched and the Authentication
+settings page shows these fields as environment-managed while the stack runs.
+Sign in with the account's local password.
 
 Before allocating ports, the launcher reads the selected Compose project's
 existing service metadata. Sharing a project still makes migration and
@@ -70,6 +101,31 @@ file. Production must use HTTPS and leave `COOKIE_INSECURE` unset.
 
 The launcher builds only the API and restore-supervisor binaries that it runs;
 maintenance binaries remain available through their explicit Cargo commands.
+Repairs that are safe to repeat can also be offered in **Settings > Jobs**:
+register a kind in `apps/api/src/services/maintenance_jobs.rs` with its scope
+(site-wide or vehicle) and its runs are recorded in
+`riviamigo.maintenance_job_runs` (migrations `0041_maintenance_job_runs` and
+`0042_site_maintenance_jobs`; site-wide runs have no `vehicle_id`). Admins list
+and start site-wide jobs with `GET /v1/maintenance-jobs` and
+`POST /v1/maintenance-jobs/{kind}`. Vehicle managers start vehicle jobs with
+`POST /v1/vehicles/{id}/maintenance-jobs/{kind}`, and members read them with
+`GET /v1/vehicles/{id}/maintenance-jobs`. Only one run per job (and vehicle)
+can be running; a run still marked running after two hours is recorded as
+interrupted, and finished runs older than 90 days are pruned apart from each
+job's latest.
+Background workers can report through the same table: wrap each pass in
+`maintenance_jobs::run_automatic`, which records it with `trigger =
+'automatic'` and skips the pass while a manual run of the same job is going.
+The location and weather catch-up (`trip_enrichment::run_catch_up_pass`) and
+the security log retention worker do this. The weather lookup and scheduled
+backup rows are read from `weather_enrichment_jobs` and `backup_runs` instead.
+The manual jobs share their work with the matching binaries
+(`recompute_charging_costs`, `recompute_trip_energy`). "Recover missed charging
+sessions" (`services/charge_session_recovery.rs`) is a deliberately narrower
+version of `repair_charge_sessions_from_telemetry`: it only inserts sessions
+for unrecorded charging windows and closes open telemetry sessions, while the
+binary also rewrites, merges, and deletes overlapping sessions and stays an
+operator-only repair.
 The build uses the checked-in SQLx query metadata so a brand-new development
 database can compile before the API process applies its embedded migrations.
 When a compile-time query changes, refresh and commit the SQLx metadata before
@@ -77,6 +133,37 @@ expecting a clean `pnpm dev:stack` startup to pass.
 On Windows it limits that build to four concurrent Cargo jobs to keep the host
 responsive. Set `DEV_CARGO_BUILD_JOBS` to a positive integer when a different
 limit is appropriate for the machine.
+
+## Local CI gate
+
+Catch CI failures before they reach GitHub:
+
+- `pnpm verify:ci` runs the same checks as the GitHub workflows: the
+  gitleaks secret scan over the branch's commits (install with
+  `brew install gitleaks`), dependency policy, lint, typecheck, docs, workspace tests, the build, Rust format, SQLx
+  metadata, Clippy, and the database-backed API tests. It starts a separate
+  `riviamigo-ci-local` Compose project on ports 55432 (TimescaleDB) and 56379
+  (Redis), never your development database, and removes it, volumes included,
+  when it finishes. Rust builds go to `apps/api/target-ci-local`. The backup
+  integration tests need PostgreSQL 18 client tools (`pg_dump`,
+  `pg_restore`), as CI installs them: on macOS run `brew install libpq` (the
+  gate finds Homebrew's keg-only install without changing your `PATH`); on
+  Debian or Ubuntu install `postgresql-client-18`. The gate runs database tests
+  four at a time (`RUST_TEST_THREADS`, overridable), because every test creates
+  and migrates its own database and unbounded parallelism exhausts connection
+  pools on a local Docker database. The Security workflow's cargo audit, pnpm
+  audit, and Semgrep scans are not part of the local gate.
+- `pnpm pr:create -- <gh pr create arguments>` runs `pnpm verify:ci` and opens
+  the pull request only if it passes. Use it instead of `gh pr create`.
+- `pnpm hooks:install` points Git at `.githooks/`. Every commit and push runs
+  the fast hygiene, secret-scan (skipped with a warning when gitleaks is not
+  installed), and migration-integrity gate. A push whose branch changes
+  `apps/api` (compared with the merge base of `origin/dev` or `origin/main`,
+  whichever is closer) also runs Rust format, SQLx metadata, Clippy, and the
+  database-backed API tests against the isolated database. Set
+  `RIVIAMIGO_FULL_LOCAL_CI=1` to run the complete gate on every hook, or
+  `SKIP_LOCAL_CI=1` to bypass it in an emergency. `pnpm hooks:uninstall`
+  removes the hooks.
 
 ## Architecture
 

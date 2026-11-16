@@ -12,6 +12,7 @@ export type {
   DepartureComfortSettings,
   LiveSession,
   BackfillStatus,
+  MaintenanceJobStatus,
 } from './api/transport';
 export {
   analyticsClient,

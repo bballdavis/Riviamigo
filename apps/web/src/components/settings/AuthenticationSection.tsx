@@ -1,7 +1,7 @@
 import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, queryKeys } from '@riviamigo/hooks';
-import type { AuthenticationSettingsUpdate } from '@riviamigo/types';
+import type { AuthenticationSettings, AuthenticationSettingsUpdate } from '@riviamigo/types';
 import {
   Badge,
   Button,
@@ -13,6 +13,8 @@ import {
   SelectPicker,
   Switch,
 } from '@riviamigo/ui/primitives';
+import { useSettingsDraft } from '../../features/settings/drafts/SettingsDraftProvider';
+import { useStagedValue } from '../../features/settings/drafts/useStagedValue';
 
 const fields: Array<keyof AuthenticationSettingsUpdate> = [
   'oidc_enabled',
@@ -46,6 +48,44 @@ const defaults: AuthenticationSettingsUpdate = {
   required_claim_name: null,
   required_claim_value: null,
 };
+
+function formFromSettings(settings: AuthenticationSettings): AuthenticationSettingsUpdate {
+  const next: AuthenticationSettingsUpdate = { ...defaults };
+  fields.forEach((key) => {
+    const value = settings[key];
+    if (value && typeof value === 'object' && 'value' in value) next[key] = value.value as never;
+  });
+  return next;
+}
+
+function settingSource(settings: AuthenticationSettings, key: keyof AuthenticationSettingsUpdate) {
+  const value = settings[key];
+  return value && typeof value === 'object' && 'source' in value ? String(value.source) : undefined;
+}
+
+/** Changed, non-environment fields plus the write-only client secret. */
+function changedFields(
+  settings: AuthenticationSettings,
+  form: AuthenticationSettingsUpdate,
+  secret: string,
+  removeSecret: boolean,
+): AuthenticationSettingsUpdate {
+  const body: AuthenticationSettingsUpdate = {};
+  fields.forEach((key) => {
+    const setting = settings[key];
+    const original = setting && typeof setting === 'object' && 'value' in setting
+      ? setting.value
+      : undefined;
+    const current = form[key];
+    if (settingSource(settings, key) !== 'environment' && JSON.stringify(current) !== JSON.stringify(original)) {
+      Object.assign(body, { [key]: current });
+    }
+  });
+  if (removeSecret) body.client_secret = null;
+  else if (secret.trim()) body.client_secret = secret;
+  return body;
+}
+
 function Source({ source }: { source: string | undefined }) {
   if (source !== 'environment') return null;
   return (
@@ -72,42 +112,60 @@ export function AuthenticationSection() {
     queryFn: () => api.getAuthenticationSettings(),
     retry: false,
   });
-  const [form, setForm] = React.useState<AuthenticationSettingsUpdate>(defaults);
+  const savedForm = React.useMemo(
+    () => (settings.data ? formFromSettings(settings.data) : defaults),
+    [settings.data],
+  );
+  const staged = useStagedValue(savedForm);
+  const form = staged.value;
   const [secret, setSecret] = React.useState('');
   const [removeSecret, setRemoveSecret] = React.useState(false);
   const [showAdvancedAccess, setShowAdvancedAccess] = React.useState(false);
   const [message, setMessage] = React.useState('');
   const [messageRole, setMessageRole] = React.useState<'status' | 'alert'>('status');
   React.useEffect(() => {
-    if (!settings.data) return;
-    const next = { ...defaults };
-    fields.forEach((key) => {
-      const value = settings.data[key];
-      if (value && typeof value === 'object' && 'value' in value) next[key] = value.value as never;
-    });
-    setForm(next);
-    setShowAdvancedAccess(Boolean(
-      next.allowed_email_domains?.length ||
-      next.required_claim_name ||
-      next.required_claim_value
-    ));
-  }, [settings.data]);
-  const save = useMutation({
-    mutationFn: (body: AuthenticationSettingsUpdate) => api.updateAuthenticationSettings(body),
-    onSuccess: (data) => {
-      client.setQueryData(queryKeys.auth.authenticationSettings, data);
-      void client.invalidateQueries({ queryKey: queryKeys.auth.config });
+    if (
+      savedForm.allowed_email_domains?.length ||
+      savedForm.required_claim_name ||
+      savedForm.required_claim_value
+    ) {
+      setShowAdvancedAccess(true);
+    }
+  }, [savedForm]);
+
+  const secretPending = removeSecret || secret.trim().length > 0;
+  const saveSettings = async () => {
+    const data = settings.data;
+    if (!data) throw new Error('Authentication settings are not loaded yet.');
+    const submitted = form;
+    const submittedSecret = secret;
+    const submittedRemoveSecret = removeSecret;
+    let saved: AuthenticationSettings;
+    try {
+      saved = await api.updateAuthenticationSettings(
+        changedFields(data, submitted, submittedSecret, submittedRemoveSecret),
+      );
+    } catch (error) {
+      const detail = (error as { detail?: { message?: string } } | null)?.detail?.message;
+      throw new Error(detail ?? 'Unable to save authentication settings.', { cause: error });
+    }
+    client.setQueryData(queryKeys.auth.authenticationSettings, saved);
+    void client.invalidateQueries({ queryKey: queryKeys.auth.config });
+    // Edits typed while the request was in flight stay staged; only the submitted part is adopted.
+    staged.commit(formFromSettings(saved), submitted);
+    setSecret((current) => (current === submittedSecret ? '' : current));
+    setRemoveSecret((current) => (current === submittedRemoveSecret ? false : current));
+  };
+  useSettingsDraft('authentication', {
+    isDirty: staged.isDirty || secretPending,
+    save: saveSettings,
+    discard: () => {
+      staged.reset();
       setSecret('');
       setRemoveSecret(false);
-      setMessageRole('status');
-      setMessage('Authentication settings saved.');
-    },
-    onError: (error) => {
-      const detail = (error as { detail?: { message?: string } }).detail?.message;
-      setMessageRole('alert');
-      setMessage(detail ?? 'Unable to save authentication settings.');
     },
   });
+
   const test = useMutation({
     mutationFn: () => api.testAuthenticationSettings(),
     onSuccess: () => {
@@ -142,35 +200,13 @@ export function AuthenticationSection() {
       </Card>
     );
   const data = settings.data;
-  const source = (key: keyof AuthenticationSettingsUpdate) => {
-    const value = data[key];
-    return value && typeof value === 'object' && 'source' in value
-      ? String(value.source)
-      : undefined;
-  };
+  const source = (key: keyof AuthenticationSettingsUpdate) => settingSource(data, key);
   const environmentOwned = (key: keyof AuthenticationSettingsUpdate) =>
     source(key) === 'environment';
   const update = (key: keyof AuthenticationSettingsUpdate, value: unknown) => {
     setMessageRole('status');
     setMessage('');
-    setForm((current) => ({ ...current, [key]: value }));
-  };
-  const submit = (event: React.FormEvent) => {
-    event.preventDefault();
-    const body: AuthenticationSettingsUpdate = {};
-    fields.forEach((key) => {
-      const setting = data[key];
-      const original = setting && typeof setting === 'object' && 'value' in setting
-        ? setting.value
-        : undefined;
-      const current = form[key];
-      if (!environmentOwned(key) && JSON.stringify(current) !== JSON.stringify(original)) {
-        Object.assign(body, { [key]: current });
-      }
-    });
-    if (removeSecret) body.client_secret = null;
-    else if (secret.trim()) body.client_secret = secret;
-    save.mutate(body);
+    staged.setValue((current) => ({ ...current, [key]: value }));
   };
   const textField = (key: keyof AuthenticationSettingsUpdate, label: string, placeholder?: string) => (
     <label className="grid gap-1 text-sm text-fg">
@@ -211,7 +247,7 @@ export function AuthenticationSection() {
           <strong>Recovery warning:</strong> Keep a working password account until SSO has been
           tested. Environment overrides can disable SSO immediately if the provider fails.
         </div>
-        <form className="grid gap-4" onSubmit={submit}>
+        <div className="grid gap-4">
           <Group title="Sign-in options" description="Choose how people enter Riviamigo after SSO is configured and tested.">
             <div className="grid gap-3 md:grid-cols-2">
               {toggle('oidc_enabled', 'Enable SSO')}
@@ -268,9 +304,6 @@ export function AuthenticationSection() {
             </div>
           </Group>
           <div className="flex flex-wrap gap-2">
-            <Button type="submit" loading={save.isPending}>
-              Save settings
-            </Button>
             <Button
               type="button"
               variant="secondary"
@@ -293,7 +326,7 @@ export function AuthenticationSection() {
               {message}
             </p>
           )}
-        </form>
+        </div>
       </CardContent>
     </Card>
   );

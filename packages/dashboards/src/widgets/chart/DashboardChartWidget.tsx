@@ -25,7 +25,8 @@ import {
 } from '@riviamigo/hooks';
 import {
   CHART_COLORS,
-  CURVE_SMOOTHNESS_OPTIONS,
+  chartSmoothingOptions,
+  chartSmoothingSettings,
   DEFAULT_CHART_TIME_FILTER,
   DEFAULT_CURVE_SMOOTHNESS,
   DailyChargeSessionsChart,
@@ -35,12 +36,11 @@ import {
   getAdaptiveDecimalPrecision,
   getChartColor,
   normalizeTimeFilter,
-  curveSmoothnessLabel,
   normalizeCurveSmoothness,
+  resolveChartSmoothingLevel,
   RichTimeSeriesChart,
   TirePressureTripsChart,
-  TIME_FILTER_OPTIONS,
-  timeFilterLabel,
+  type ChartSmoothingLevel,
   type TimeFilterWindow,
   type CurveSmoothness,
   type RichSeries,
@@ -497,11 +497,8 @@ function DashboardChartFrame({
         suggestedRanges={activeAxisRanges}
         persistent={persistent}
         onClose={() => setSettingsOpen(false)}
-        onTimeFilterChange={(next) =>
-          onUpdateSettings((current) => ({ ...current, timeFilter: next }))
-        }
-        onSmoothnessChange={(next) =>
-          onUpdateSettings((current) => ({ ...current, smoothness: next }))
+        onSmoothingChange={(next) =>
+          onUpdateSettings((current) => ({ ...current, ...chartSmoothingSettings(next) }))
         }
         onAxisModeChange={(axisId, mode) =>
           onUpdateSettings((current) => ({
@@ -609,13 +606,16 @@ function AssignedChartRuntime({
   }, [chartIdsSignature, defaultChartId, resolvedFavorite, storageKey, available.length]);
 
   const active = available.find((chart) => chart.slug === chartId) ?? available[0];
-  const settings = resolveChartDisplaySettings(
-    draftChartSettings,
-    active?.slug ?? '',
-    options.legacyTimeFilter,
-    options.legacySmoothness
-  );
   const activeDefinition = active ? getChartDefinition(active.slug) : undefined;
+  const settings =
+    active && !activeDefinition
+      ? resolveAuthoredChartDisplaySettings(draftChartSettings, active)
+      : resolveChartDisplaySettings(
+          draftChartSettings,
+          active?.slug ?? '',
+          options.legacyTimeFilter,
+          options.legacySmoothness
+        );
   const activeCapabilities = activeDefinition
     ? {
         ...getChartSettingsCapabilities(activeDefinition),
@@ -625,7 +625,7 @@ function AssignedChartRuntime({
       ? {
           timeFilter: active.config.x.kind === 'time',
           smoothness: active.config.series.some(
-            (item) => item.mark === 'line' || item.mark === 'area' || item.mark === 'step'
+            (item) => item.mark === 'line' || item.mark === 'area'
           ),
           axes: {
             x: {
@@ -2994,6 +2994,25 @@ function resolveChartDisplaySettings(
   };
 }
 
+/**
+ * A custom chart keeps the smoothing its author chose in the chart editor
+ * until this dashboard sets its own. Bundled charts have no authored choice,
+ * so they fall back to the widget defaults instead.
+ */
+export function resolveAuthoredChartDisplaySettings(
+  allSettings: Record<string, DashboardChartDisplaySettings>,
+  chart: ChartRecord
+) {
+  const chartSettings = allSettings[chart.slug] ?? {};
+  return {
+    timeFilter:
+      chartSettings.timeFilter ?? normalizeTimeFilter(chart.config.display.timeFilter, 'raw'),
+    axes: chartSettings.axes ?? {},
+    smoothness:
+      chartSettings.smoothness ?? normalizeCurveSmoothness(chart.config.display.curveSmoothness),
+  };
+}
+
 function setChartSettingsEntry(
   current: Record<string, DashboardChartDisplaySettings>,
   chartId: string,
@@ -3050,8 +3069,7 @@ interface ChartSettingsPanelProps {
   suggestedRanges: DashboardChartResolvedAxisRanges;
   persistent: boolean;
   onClose: () => void;
-  onTimeFilterChange: (next: TimeFilterWindow) => void;
-  onSmoothnessChange: (next: CurveSmoothness) => void;
+  onSmoothingChange: (next: ChartSmoothingLevel) => void;
   onAxisModeChange: (axisId: DashboardChartAxisId, mode: DashboardChartAxisMode) => void;
   onAxisValueChange: (
     axisId: DashboardChartAxisId,
@@ -3069,27 +3087,32 @@ function ChartSettingsPanel({
   suggestedRanges,
   persistent,
   onClose,
-  onTimeFilterChange,
-  onSmoothnessChange,
+  onSmoothingChange,
   onAxisModeChange,
   onAxisValueChange,
 }: ChartSettingsPanelProps) {
   const panelRef = React.useRef<HTMLDivElement | null>(null);
-  const timeFilterIndex = Math.max(
-    0,
-    TIME_FILTER_OPTIONS.findIndex((option) => option.value === settings.timeFilter)
+  // Averaging over a time window only applies to lines, so a chart that draws
+  // none offers no smoothing at all.
+  const smoothingSupport = {
+    timeWindows: capabilities.timeFilter && capabilities.smoothness === true,
+    curve: capabilities.smoothness === true,
+  };
+  const smoothingOptions = chartSmoothingOptions(smoothingSupport);
+  const smoothingLevel = resolveChartSmoothingLevel(
+    settings.timeFilter,
+    settings.smoothness ?? DEFAULT_CURVE_SMOOTHNESS,
+    smoothingSupport
   );
-  const smoothnessIndex = Math.max(
+  const smoothingIndex = Math.max(
     0,
-    CURVE_SMOOTHNESS_OPTIONS.findIndex(
-      (option) => option.value === (settings.smoothness ?? DEFAULT_CURVE_SMOOTHNESS)
-    )
+    smoothingOptions.findIndex((option) => option.value === smoothingLevel)
   );
+  const smoothingOption = smoothingOptions[smoothingIndex];
   const axisEntries = AXIS_ORDER.flatMap((axisId) =>
     capabilities.axes[axisId] ? [[axisId, capabilities.axes[axisId]] as const] : []
   );
-  const hasControls =
-    capabilities.timeFilter || capabilities.smoothness === true || axisEntries.length > 0;
+  const hasControls = smoothingOption != null || axisEntries.length > 0;
 
   React.useEffect(() => {
     if (!open) return;
@@ -3145,7 +3168,7 @@ function ChartSettingsPanel({
             </button>
           </div>
           <div className="grid gap-3 p-4">
-            {capabilities.timeFilter || capabilities.smoothness ? (
+            {smoothingOption ? (
               <details
                 open
                 className="group overflow-hidden rounded-xl border border-border bg-bg-elevated/50"
@@ -3155,7 +3178,7 @@ function ChartSettingsPanel({
                     <span className="block text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">
                       Display
                     </span>
-                    <span>Filter &amp; curve</span>
+                    <span>Smoothing</span>
                   </span>
                   <ChevronDown
                     className="h-4 w-4 shrink-0 text-fg-tertiary transition-transform group-open:rotate-180"
@@ -3163,68 +3186,31 @@ function ChartSettingsPanel({
                   />
                 </summary>
                 <div className="grid gap-3 border-t border-border p-3">
-                  {capabilities.timeFilter ? (
-                    <section className="grid gap-2 rounded-lg border border-border bg-bg-surface/70 p-3">
-                      <div>
-                        <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">
-                          Display filter
-                        </p>
-                        <p className="text-sm text-fg">Time window</p>
-                      </div>
-                      <div>
-                        <div className="mb-1.5 flex items-center justify-between text-xs text-fg-tertiary">
-                          <span>All compatible curves keep their recorded timestamps.</span>
-                          <span>{timeFilterLabel(settings.timeFilter)}</span>
-                        </div>
-                        <input
-                          aria-label="Display filter"
-                          type="range"
-                          min={0}
-                          max={TIME_FILTER_OPTIONS.length - 1}
-                          step={1}
-                          value={timeFilterIndex}
-                          onChange={(event) =>
-                            onTimeFilterChange(
-                              TIME_FILTER_OPTIONS[Number(event.target.value)]!.value
-                            )
-                          }
-                          className="rm-accent-range w-full"
-                        />
-                      </div>
-                    </section>
-                  ) : null}
-                  {capabilities.smoothness ? (
-                    <section className="grid gap-2 rounded-lg border border-border bg-bg-surface/70 p-3">
-                      <div>
-                        <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">
-                          Curve smoothness
-                        </p>
-                        <p className="text-sm text-fg">Path between recorded points</p>
-                      </div>
-                      <div>
-                        <div className="mb-1.5 flex items-center justify-between text-xs text-fg-tertiary">
-                          <span>Values and timestamps stay unchanged.</span>
-                          <span>
-                            {curveSmoothnessLabel(settings.smoothness ?? DEFAULT_CURVE_SMOOTHNESS)}
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min={0}
-                          max={CURVE_SMOOTHNESS_OPTIONS.length - 1}
-                          step={1}
-                          value={smoothnessIndex}
-                          onChange={(event) =>
-                            onSmoothnessChange(
-                              CURVE_SMOOTHNESS_OPTIONS[Number(event.target.value)]!.value
-                            )
-                          }
-                          className="rm-accent-range w-full"
-                          aria-label="Curve smoothness"
-                        />
-                      </div>
-                    </section>
-                  ) : null}
+                  <section className="grid gap-2 rounded-lg border border-border bg-bg-surface/70 p-3">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">
+                        Level
+                      </p>
+                      <p className="text-sm text-fg">{smoothingOption.label}</p>
+                    </div>
+                    <input
+                      aria-label="Smoothing"
+                      aria-valuetext={smoothingOption.label}
+                      type="range"
+                      min={0}
+                      max={smoothingOptions.length - 1}
+                      step={1}
+                      value={smoothingIndex}
+                      onChange={(event) =>
+                        onSmoothingChange(smoothingOptions[Number(event.target.value)]!.value)
+                      }
+                      className="rm-accent-range w-full"
+                    />
+                    <p className="text-xs text-fg-tertiary">
+                      {smoothingOption.description} Only the drawing changes; recorded data and
+                      timestamps stay as they are.
+                    </p>
+                  </section>
                 </div>
               </details>
             ) : null}

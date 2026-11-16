@@ -4,6 +4,8 @@ import {
   formatDistanceKm,
   formatEfficiencyFromWhPerKm,
   formatMassKg,
+  formatMph,
+  formatSpeedParts,
   setEfficiencyDisplay,
   setUnitPreferences,
 } from './utils';
@@ -26,6 +28,24 @@ beforeEach(() => {
 
 afterEach(() => {
   window.localStorage.clear();
+});
+
+describe('formatSpeedParts', () => {
+  it('keeps mph for imperial preferences', () => {
+    expect(formatSpeedParts(41.6)).toEqual({ value: '42', unit: 'mph' });
+    expect(formatMph(41.6)).toBe('42 mph');
+  });
+
+  it('follows a custom km/h speed unit even when distances stay in miles', () => {
+    setUnitPreferences({ ...imperialPreferences, mode: 'custom', speed_unit: 'kmh' }, { suppressEvent: true });
+    expect(formatSpeedParts(41.6)).toEqual({ value: '67', unit: 'km/h' });
+    expect(formatMph(41.6)).toBe('67 km/h');
+  });
+
+  it('returns null when there is no speed', () => {
+    expect(formatSpeedParts(null)).toBeNull();
+    expect(formatMph(undefined)).toBe('-');
+  });
 });
 
 describe('formatDistanceKm', () => {

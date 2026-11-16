@@ -1,7 +1,7 @@
 import React from 'react';
 import { createRoute, useNavigate, useParams, useSearch } from '@tanstack/react-router';
-import { z } from 'zod';
 import { rootRoute } from './__root';
+import { dashboardSearchSchema } from './dashboardSearch';
 import {
   useCloneDashboard,
   downloadDashboardYaml,
@@ -11,15 +11,10 @@ import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { Copy, Download, Upload } from 'lucide-react';
 import { DashboardPageShell } from '../components/dashboard/DashboardPageShell';
 
-const searchSchema = z.object({
-  edit: z.literal(1).optional(),
-  dashboardId: z.string().uuid().optional(),
-});
-
 export const userDashboardRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/d/$slug',
-  validateSearch: searchSchema,
+  validateSearch: dashboardSearchSchema,
   component: UserDashboardPageWrapper,
 });
 

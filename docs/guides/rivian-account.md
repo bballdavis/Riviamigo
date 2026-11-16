@@ -23,6 +23,35 @@ saving a vehicle does not require a container restart. Riviamigo uses Rivian's
 unofficial API and WebSocket behavior, so upstream changes can occasionally
 require a project update.
 
+## Vehicle generation and battery capacity
+
+In **Settings > Vehicles**, the R1 battery generation uses the vehicle's model
+year: 2025 and newer are Gen 2; earlier model years are Gen 1. Riviamigo
+decodes the year from the vehicle's saved VIN each time Settings loads, so a
+vehicle with a valid VIN shows its year immediately after upgrading, without
+another Rivian request. R2 vehicles default to the R2 pack; model year does not
+select an R1 generation for them.
+
+Riviamigo saves the VIN when you add a vehicle and refreshes it when you renew
+the Rivian connection or the collector starts, including for vehicles added
+before the VIN was captured. If the year is missing, let the collector connect
+successfully, then reload Settings. Removing and re-adding the vehicle is not
+necessary. If the year remains unavailable, check the app logs for
+`fetch_vehicle_enrichment failed` or `vehicle model year unavailable`; a
+connected telemetry stream alone does not prove that account metadata was
+fetched successfully.
+
+If the model year is unavailable, Riviamigo uses a generation hint in the model
+name or a matching saved battery-capacity preset, falling back to Gen 1 when
+neither is available.
+
+A corrected generation does not overwrite your saved factory battery capacity.
+If that capacity matches only the other generation's presets, it appears as
+**Custom** under the corrected generation, with a note that the saved capacity
+matches the other generation's pack. Select the appropriate pack and save to
+correct a previously saved default. Model year identifies the generation, not
+whether the vehicle has a Standard, Large, or Max pack.
+
 ## Estimated connection renewal
 
 Riviamigo records the time of each complete Rivian sign-in and shows an
@@ -43,6 +72,35 @@ sidebar, vehicle list, health state, and live telemetry connection then refresh
 without a browser reload. If credentials are saved but telemetry is still
 starting, Riviamigo keeps the new credentials and shows a recoverable waiting
 state.
+
+## Pausing data collection
+
+An owner or manager can pause the Rivian connection for one vehicle with the
+pause button on its card in **Settings → Vehicles**. While paused, Riviamigo
+stops live data, charge history sync, and artwork repair for that vehicle, and
+the card shows **Paused**. Recorded history stays available. The play button
+resumes collection. The choice is saved, so a paused vehicle stays paused after
+a restart. Refreshing the Rivian login for a paused vehicle saves the new
+credentials but leaves collection paused; resume the vehicle to reconnect.
+
+Pause a vehicle before running a second copy of the same data, such as a
+restored backup on a test machine. Two servers polling one Rivian account
+interfere with each other, and Rivian requests start failing with
+`User is unauthenticated`.
+
+## Several vehicles on one Rivian account
+
+Rivian reports charging history for the whole account, so each session is
+matched to a vehicle before it is stored. A session Rivian ties to one of your
+vehicles goes to that vehicle, and a session tied to a different vehicle is
+never stored against yours. A session Rivian reports without a vehicle is kept
+only when your vehicle is the only one on the account; once a second vehicle or
+a second user shares the Rivian login, those sessions are skipped rather than
+guessed. Charge-history backfill and the history repairs also move a session
+that an earlier release stored against the wrong one of your vehicles, when
+Rivian's record names the right one. For the details and the repair commands,
+see the
+[vehicle history rebuild runbook](../runbooks/vehicle-history-rebuild.md).
 
 ## Troubleshooting
 

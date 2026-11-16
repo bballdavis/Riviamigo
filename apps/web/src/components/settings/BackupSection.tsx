@@ -4,10 +4,8 @@ import { api, queryKeys } from '@riviamigo/hooks';
 import type {
   BackupFrequency,
   BackupOverview,
-  BackupTargetType,
   RestoreJob,
   RestorePlan,
-  UpdateBackupSettingsBody,
 } from '@riviamigo/types';
 import {
   Badge,
@@ -16,6 +14,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  ResponsiveDialog,
   SelectPicker,
 } from '@riviamigo/ui/primitives';
 import {
@@ -31,13 +30,22 @@ import {
   History,
   Play,
   RotateCcw,
-  Save,
   Timer,
   Trash2,
   Upload,
   X,
 } from 'lucide-react';
 import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
+import { useSettingsDraft } from '../../features/settings/drafts/SettingsDraftProvider';
+import { useStagedValue } from '../../features/settings/drafts/useStagedValue';
+import { saveFailure } from '../../features/settings/drafts/saveFailure';
+import { SettingsConfirmationDialog, type SettingsConfirmation } from '../../features/settings/SettingsConfirmationDialog';
+import {
+  backupValidationError,
+  buildDraft,
+  buildPayload,
+  type BackupDraft,
+} from './backupSettingsDraft';
 
 const WEEKDAYS = [
   { value: 0, label: 'Sunday' },
@@ -64,80 +72,12 @@ function estimateRestoreRange(sizeBytes: number | null): string {
   return `${formatRestoreDuration(minimum)}–${formatRestoreDuration(maximum)}`;
 }
 
-interface BackupDraft {
-  enabled: boolean;
-  frequency: BackupFrequency;
-  run_at: string;
-  timezone: string;
-  day_of_week: number | null;
-  day_of_month: number | null;
-  retention_count: string;
-  local_enabled: boolean;
-  s3_enabled: boolean;
-  target_type: BackupTargetType;
-  endpoint: string;
-  region: string;
-  bucket: string;
-  prefix: string;
-  access_key: string;
-}
-
 function emitToast(title: string, message: string) {
   window.dispatchEvent(
     new CustomEvent('riviamigo:toast', {
       detail: { title, message, variant: 'error' },
     })
   );
-}
-
-function buildDraft(overview: BackupOverview): BackupDraft {
-  const s = overview.settings;
-  return {
-    enabled: s.enabled,
-    frequency: s.frequency,
-    run_at: s.run_at,
-    timezone: s.timezone || 'UTC',
-    day_of_week: s.day_of_week,
-    day_of_month: s.day_of_month,
-    retention_count: String(s.retention_count),
-    local_enabled: s.local_enabled ?? true,
-    s3_enabled: s.s3_enabled ?? false,
-    target_type: s.target_type,
-    endpoint: s.endpoint,
-    region: s.region ?? '',
-    bucket: s.bucket,
-    prefix: s.prefix,
-    access_key: s.access_key ?? '',
-  };
-}
-
-function buildPayload(
-  draft: BackupDraft,
-  secretKey: string,
-  clearSecretKey: boolean
-): UpdateBackupSettingsBody | null {
-  const retention = Number.parseInt(draft.retention_count, 10);
-  if (!Number.isFinite(retention) || retention < 1) return null;
-
-  return {
-    enabled: draft.enabled,
-    frequency: draft.frequency,
-    run_at: draft.run_at,
-    timezone: draft.timezone.trim(),
-    day_of_week: draft.frequency === 'weekly' ? draft.day_of_week : null,
-    day_of_month: draft.frequency === 'monthly' ? draft.day_of_month : null,
-    retention_count: retention,
-    local_enabled: draft.local_enabled,
-    s3_enabled: draft.s3_enabled,
-    target_type: draft.target_type,
-    endpoint: draft.s3_enabled ? draft.endpoint.trim() : '',
-    region: draft.s3_enabled ? draft.region.trim() || null : null,
-    bucket: draft.s3_enabled ? draft.bucket.trim() : '',
-    prefix: draft.s3_enabled ? draft.prefix.trim() : '',
-    access_key: draft.s3_enabled ? draft.access_key.trim() || null : null,
-    ...(secretKey.trim() ? { secret_key: secretKey.trim() } : {}),
-    ...(clearSecretKey ? { clear_secret_key: true } : {}),
-  };
 }
 
 function describeSchedule(overview: BackupOverview) {
@@ -339,7 +279,9 @@ export function BackupSection() {
         : false;
     },
   });
-  const [draft, setDraft] = React.useState<BackupDraft | null>(null);
+  const savedDraft = React.useMemo(() => (overview.data ? buildDraft(overview.data) : null), [overview.data]);
+  const staged = useStagedValue(savedDraft);
+  const draft = staged.value;
   const [secretKey, setSecretKey] = React.useState('');
   const [clearSecretKey, setClearSecretKey] = React.useState(false);
   const [expandedArtifactId, setExpandedArtifactId] = React.useState<string | null>(null);
@@ -349,6 +291,7 @@ export function BackupSection() {
     BackupOverview['artifacts'][number] | null
   >(null);
   const [pendingRestorePlan, setPendingRestorePlan] = React.useState<RestorePlan | null>(null);
+  const [deleteImportConfirmation, setDeleteImportConfirmation] = React.useState<SettingsConfirmation | null>(null);
   const [restoreConfirmation, setRestoreConfirmation] = React.useState('');
   const [uploadProgress, setUploadProgress] = React.useState<number | null>(null);
   const [activeRestore, setActiveRestore] = React.useState<{
@@ -358,13 +301,6 @@ export function BackupSection() {
   const [activeRestoreSizeBytes, setActiveRestoreSizeBytes] = React.useState<number | null>(null);
   const [restoreStatusUnavailable, setRestoreStatusUnavailable] = React.useState(false);
   const uploadInputRef = React.useRef<HTMLInputElement>(null);
-
-  React.useEffect(() => {
-    if (!overview.data) return;
-    setDraft(buildDraft(overview.data));
-    setSecretKey('');
-    setClearSecretKey(false);
-  }, [overview.data?.settings.updated_at]);
 
   React.useEffect(() => {
     if (!overview.data) return;
@@ -385,19 +321,32 @@ export function BackupSection() {
     );
   }, [overview.data?.artifacts]);
 
-  const saveSettings = useMutation({
-    mutationFn: async () => {
-      if (!draft) throw new Error('Backup settings are not ready yet.');
-      const payload = buildPayload(draft, secretKey, clearSecretKey);
-      if (!payload) throw new Error('Retention must be a whole number greater than zero.');
-      return api.updateBackupSettings(payload);
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.backups.all }),
-    onError: (error) => {
-      emitToast(
-        'Backup settings',
-        error instanceof Error ? error.message : 'Backup settings could not be saved.'
-      );
+  const saveSettings = async () => {
+    const submitted = draft;
+    const submittedSecret = secretKey;
+    const submittedClear = clearSecretKey;
+    if (!submitted) throw new Error('Backup settings are not ready yet.');
+    const payload = buildPayload(submitted, submittedSecret, submittedClear);
+    const problem = backupValidationError(submitted, overview.data?.settings.has_secret_key ?? false, submittedSecret);
+    if (!payload || problem) throw new Error(problem ?? 'Backup settings are invalid.');
+    try {
+      await api.updateBackupSettings(payload);
+    } catch (error) {
+      throw saveFailure(error, 'Backup settings could not be saved. Try again.');
+    }
+    // Edits typed while the request was in flight stay staged; only the submitted part is adopted.
+    staged.commit(submitted, submitted);
+    setSecretKey((current) => (current === submittedSecret ? '' : current));
+    setClearSecretKey((current) => (current === submittedClear ? false : current));
+    void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all });
+  };
+  useSettingsDraft('backup', {
+    isDirty: staged.isDirty || secretKey.trim().length > 0 || clearSecretKey,
+    save: saveSettings,
+    discard: () => {
+      staged.reset();
+      setSecretKey('');
+      setClearSecretKey(false);
     },
   });
 
@@ -561,7 +510,7 @@ export function BackupSection() {
   }, [activeRestore?.job.id, activeRestore?.job.phase, activeRestore?.token]);
 
   function updateDraft<K extends keyof BackupDraft>(key: K, value: BackupDraft[K]) {
-    setDraft((cur) => (cur ? { ...cur, [key]: value } : cur));
+    staged.setValue((cur) => (cur ? { ...cur, [key]: value } : cur));
   }
 
   const activeRestoreEstimate = estimateRestoreRange(activeRestoreSizeBytes);
@@ -585,12 +534,6 @@ export function BackupSection() {
     (draft.bucket.trim().length > 0 &&
       draft.access_key.trim().length > 0 &&
       (currentSettings.has_secret_key || secretKey.trim().length > 0));
-  const canSave =
-    draft.run_at.trim().length === 5 &&
-    draft.timezone.trim().length > 0 &&
-    Number.parseInt(draft.retention_count, 10) >= 1 &&
-    (draft.local_enabled || draft.s3_enabled) &&
-    s3Valid;
   const recentRunsTotal = overview.data.recent_runs_total;
   const recentRunsPageCount = Math.max(1, Math.ceil(recentRunsTotal / recentRunsPerPage));
   const runNowAllowed = overview.data.runtime_readiness?.run_now_allowed ?? true;
@@ -659,15 +602,6 @@ export function BackupSection() {
               onClick={() => runBackupNow.mutate()}
             >
               {activeBackupRun ? 'Backup running' : 'Run now'}
-            </Button>
-            <Button
-              size="sm"
-              iconLeft={<Save className="h-3.5 w-3.5" />}
-              loading={saveSettings.isPending}
-              disabled={!canSave}
-              onClick={() => saveSettings.mutate()}
-            >
-              Save settings
             </Button>
           </div>
         </CardHeader>
@@ -1193,13 +1127,12 @@ export function BackupSection() {
                             }
                             onClick={(event) => {
                               event.stopPropagation();
-                              if (
-                                window.confirm(
-                                  `Delete imported recovery package "${artifact.file_name}"?`
-                                )
-                              ) {
-                                deleteUploadedArtifact.mutate(artifact.id);
-                              }
+                              setDeleteImportConfirmation({
+                                title: `Delete imported recovery package "${artifact.file_name}"?`,
+                                description: 'The uploaded file is removed from this server.',
+                                confirmLabel: 'Delete package',
+                                run: () => deleteUploadedArtifact.mutateAsync(artifact.id),
+                              });
                             }}
                           />
                         )}
@@ -1323,15 +1256,25 @@ export function BackupSection() {
         </CardContent>
       </Card>
 
+      {deleteImportConfirmation ? (
+        <SettingsConfirmationDialog
+          confirmation={deleteImportConfirmation}
+          onClose={() => setDeleteImportConfirmation(null)}
+        />
+      ) : null}
+
       {pendingRestoreArtifact && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-page/80 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-2xl border border-border bg-bg-surface p-5 shadow-2xl">
+        <ResponsiveDialog
+          titleId="restore-confirmation-title"
+          onClose={() => { if (!requestRestore.isPending) closeRestoreConfirmation(); }}
+        >
+          <div className="flex-1 overflow-y-auto px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1.25rem,env(safe-area-inset-top))] sm:p-5">
             <div className="flex items-start gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-status-warning/30 bg-status-warning/10 text-status-warning">
                 <AlertTriangle className="h-5 w-5" />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-fg">Restore this backup?</p>
+                <h2 id="restore-confirmation-title" className="text-sm font-semibold text-fg">Restore this backup?</h2>
                 <p className="mt-1 text-sm text-fg-tertiary">
                   This replaces the current users, dashboards, telemetry, settings, and artwork with{' '}
                   <span className="font-mono text-fg">{pendingRestoreArtifact.file_name}</span>.
@@ -1343,6 +1286,7 @@ export function BackupSection() {
                 type="button"
                 className="rounded-md p-1 text-fg-tertiary hover:bg-bg-elevated hover:text-fg"
                 aria-label="Close restore confirmation"
+                disabled={requestRestore.isPending}
                 onClick={closeRestoreConfirmation}
               >
                 <X className="h-4 w-4" />
@@ -1407,7 +1351,7 @@ export function BackupSection() {
               />
             </label>
             <div className="mt-4 flex items-center justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={closeRestoreConfirmation}>
+              <Button variant="secondary" size="sm" disabled={requestRestore.isPending} onClick={closeRestoreConfirmation}>
                 Cancel
               </Button>
               <Button
@@ -1431,7 +1375,7 @@ export function BackupSection() {
               </p>
             )}
           </div>
-        </div>
+        </ResponsiveDialog>
       )}
 
       {activeRestore && (

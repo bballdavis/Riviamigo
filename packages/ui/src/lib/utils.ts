@@ -196,11 +196,20 @@ export function formatKwh(value: number | null | undefined): string {
   return `${formatNumber(value, 1)} kWh`;
 }
 
+/**
+ * Splits a speed stored in mph into the number and unit label for the user's
+ * speed unit (Settings > Units, including a Custom mix), for layouts that set
+ * the unit apart from the number. Returns null when there is no speed.
+ */
+export function formatSpeedParts(valueMph: number | null | undefined): { value: string; unit: string } | null {
+  if (valueMph === null || valueMph === undefined || Number.isNaN(valueMph)) return null;
+  if (getUnitPreferences().speed_unit === 'kmh') return { value: formatNumber(valueMph * MPH_TO_KMH, 0), unit: 'km/h' };
+  return { value: formatNumber(valueMph, 0), unit: 'mph' };
+}
+
 export function formatMph(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
-  const prefs = getUnitPreferences();
-  if (prefs.speed_unit === 'kmh') return `${formatNumber(value * MPH_TO_KMH, 0)} km/h`;
-  return `${formatNumber(value, 0)} mph`;
+  const parts = formatSpeedParts(value);
+  return parts ? `${parts.value} ${parts.unit}` : '-';
 }
 
 export function formatEfficiency(value: number | null | undefined): string {

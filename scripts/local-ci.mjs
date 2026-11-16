@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { colorTokenViolations } from './check-color-tokens.mjs';
-import { selectHookGate } from './local-ci-policy.mjs';
+import { ghPrCreateArgs, selectHookGate, selectPushBase } from './local-ci-policy.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 process.env.CARGO_TARGET_DIR ??= join(root, 'apps/api/target-ci-local');
@@ -16,7 +16,21 @@ const ciEnv = {
   DATABASE_URL: 'postgresql://riviamigo:devpassword@127.0.0.1:55432/riviamigo',
   REDIS_URL: 'redis://127.0.0.1:56379',
   RIVIAMIGO_ENV: 'development',
+  // Each API integration test creates and migrates its own database. Unbounded
+  // parallelism exhausts connection pools against the local Docker database
+  // (PoolTimedOut during setup) even though the same tests pass on CI runners.
+  RUST_TEST_THREADS: process.env.RUST_TEST_THREADS ?? '4',
 };
+
+/** Minimum `pg_dump` major version; Backend checks installs postgresql-client-18. */
+const PG_CLIENT_MAJOR = 18;
+/** Keg-only installs Homebrew does not link onto PATH. */
+const PG_CLIENT_FALLBACK_DIRS = [
+  '/opt/homebrew/opt/libpq/bin',
+  '/opt/homebrew/opt/postgresql@18/bin',
+  '/usr/local/opt/libpq/bin',
+  '/usr/local/opt/postgresql@18/bin',
+];
 
 function commandName(command) {
   return process.platform === 'win32' && command === 'pnpm' ? 'pnpm.cmd' : command;
@@ -71,14 +85,34 @@ function hygiene() {
   run('git', ['diff', '--check', 'HEAD'], { label: 'Repository whitespace check' });
 }
 
+/**
+ * The Security workflow's gitleaks scan, over the same range it covers: the
+ * commits this branch adds. Moving code re-adds its lines, so fixtures that
+ * were allowed by path can surface here too.
+ */
+function secretScan({ required }) {
+  const probe = spawnSync('gitleaks', ['version'], { stdio: 'ignore', shell: process.platform === 'win32', windowsHide: true });
+  if (probe.status !== 0) {
+    const message = 'gitleaks is not installed, so the Security workflow\'s secret scan cannot run locally (macOS: brew install gitleaks).';
+    if (required) throw new Error(message);
+    console.warn(`Skipping secret scan: ${message}`);
+    return;
+  }
+  const base = pushBase();
+  const range = base?.mergeBase ? `${base.mergeBase}..HEAD` : 'HEAD~1..HEAD';
+  run('gitleaks', ['git', '--no-banner', '--redact', '--config', '.gitleaks.toml', '--log-opts', range, '.'], { label: `Secret scan (gitleaks, ${range})` });
+}
+
 function fastHookChecks() {
   hygiene();
+  secretScan({ required: false });
   run('node', ['tools/migration-integrity.mjs'], { label: 'Migration integrity' });
 }
 
 function commonChecks({ includeInstall = false, includeBuild = false, apiTests = 'lib', env = {} } = {}) {
   if (includeInstall) run('pnpm', ['install', '--frozen-lockfile'], { label: 'Install locked dependencies' });
   hygiene();
+  secretScan({ required: true });
   run('node', ['tools/migration-integrity.mjs'], { label: 'Migration integrity' });
   run('pnpm', ['deps:check'], { label: 'Dependency policy' });
   run('pnpm', ['peers', 'check'], { label: 'Peer dependencies' });
@@ -106,13 +140,53 @@ function compose(args, env = {}) {
   run('docker', ['compose', ...ciCompose, ...args], { env: { ...ciEnv, ...env }, label: `Docker Compose ${args.join(' ')}` });
 }
 
+function pgDumpMajor(pathValue) {
+  const probe = spawnSync('pg_dump', ['--version'], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: pathValue },
+    shell: process.platform === 'win32',
+    windowsHide: true,
+  });
+  const major = probe.status === 0 ? Number.parseInt(/(\d+)(?:\.\d+)*/.exec(probe.stdout)?.[1] ?? '', 10) : Number.NaN;
+  return Number.isInteger(major) ? major : null;
+}
+
+/**
+ * The backup integration tests shell out to `pg_dump`/`pg_restore`; without them
+ * backup readiness reports "pg_dump unavailable" and most backup tests fail.
+ * Use a keg-only Homebrew client when one is installed, else stop with a clear
+ * install hint instead of a wall of unrelated-looking test failures.
+ */
+function ensurePostgresClient() {
+  const current = process.env.PATH ?? '';
+  if ((pgDumpMajor(current) ?? 0) >= PG_CLIENT_MAJOR) return;
+  for (const dir of PG_CLIENT_FALLBACK_DIRS) {
+    if (!existsSync(join(dir, 'pg_dump'))) continue;
+    const candidate = `${dir}${delimiter}${current}`;
+    if ((pgDumpMajor(candidate) ?? 0) >= PG_CLIENT_MAJOR) {
+      process.env.PATH = candidate;
+      console.log(`Using PostgreSQL client tools from ${dir}`);
+      return;
+    }
+  }
+  throw new Error(
+    `PostgreSQL ${PG_CLIENT_MAJOR}+ client tools (pg_dump, pg_restore) are required for the backup integration tests. `
+      + 'On macOS: brew install libpq (Homebrew leaves it off PATH; this gate finds it). On Debian/Ubuntu: install postgresql-client-18.',
+  );
+}
+
 function ensureSqlxCli() {
   const probe = spawnSync('cargo', ['sqlx', '--version'], { cwd: join(root, 'apps/api'), stdio: 'ignore', shell: process.platform === 'win32', windowsHide: true });
   if (probe.status === 0) return;
   run('cargo', ['install', 'sqlx-cli', '--no-default-features', '--features', 'postgres', '--locked'], { cwd: join(root, 'apps/api'), label: 'Install sqlx-cli' });
 }
 
-function ciChecks() {
+/**
+ * Starts the isolated `riviamigo-ci-local` database and Redis (ports 55432 and
+ * 56379, never the development project), applies migrations, runs `body`, and
+ * always removes the containers and volumes afterwards.
+ */
+function withCiDatabase(body) {
   let cleaned = false;
   const cleanup = () => {
     if (cleaned) return;
@@ -122,6 +196,7 @@ function ciChecks() {
   process.once('exit', cleanup);
   try {
     Object.assign(process.env, ciEnv);
+    ensurePostgresClient();
     ensureSqlxCli();
     compose(['up', '-d', '--wait', 'timescaledb', 'redis']);
     runWithRetries('cargo', ['sqlx', 'migrate', 'run'], {
@@ -131,31 +206,68 @@ function ciChecks() {
       attempts: 5,
       retryDelayMs: 2_000,
     });
-    commonChecks({ includeInstall: true, includeBuild: true, apiTests: 'none', env: ciEnv });
-    run('cargo', ['sqlx', 'prepare', '--check', '--workspace', '--', '--all-targets', '--all-features'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'SQLx offline metadata' });
-    run('cargo', ['clippy', '--all-targets', '--all-features', '--', '-D', 'warnings'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'Clippy' });
-    run('cargo', ['test', '--all', '--all-features'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'Database-backed API tests' });
-    run('cargo', ['test', '--lib', 'db::migrations::tests::valid_public_ledger_removes_empty_legacy_ledger', '--', '--ignored', '--exact', '--test-threads=1'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'Disposable migration ledger repair' });
-    console.log('\nLocal CI parity gate passed.');
+    body();
   } finally {
     cleanup();
   }
 }
 
-function hookMode() {
-  const gate = selectHookGate(process.env);
+/** The Backend checks workflow's Rust steps, against the isolated database. */
+function apiDatabaseChecks() {
+  run('cargo', ['fmt', '--all', '--check'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'Rust format check' });
+  run('cargo', ['sqlx', 'prepare', '--check', '--workspace', '--', '--all-targets', '--all-features'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'SQLx offline metadata' });
+  run('cargo', ['clippy', '--all-targets', '--all-features', '--', '-D', 'warnings'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'Clippy' });
+  run('cargo', ['test', '--all', '--all-features'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'Database-backed API tests' });
+}
+
+function ciChecks() {
+  withCiDatabase(() => {
+    commonChecks({ includeInstall: true, includeBuild: true, apiTests: 'none', env: ciEnv });
+    apiDatabaseChecks();
+    run('cargo', ['test', '--lib', 'db::migrations::tests::valid_public_ledger_removes_empty_legacy_ledger', '--', '--ignored', '--exact', '--test-threads=1'], { cwd: join(root, 'apps/api'), env: ciEnv, label: 'Disposable migration ledger repair' });
+    console.log('\nLocal CI parity gate passed.');
+  });
+}
+
+/** The integration branch (and merge base) the current branch most likely targets. */
+function pushBase() {
+  const candidates = ['origin/dev', 'origin/main'].map((ref) => {
+    const mergeBase = git(['merge-base', 'HEAD', ref]);
+    const ahead = mergeBase ? Number.parseInt(git(['rev-list', '--count', `${mergeBase}..HEAD`]), 10) : Number.NaN;
+    return { ref, mergeBase, aheadCount: Number.isInteger(ahead) ? ahead : null };
+  });
+  return selectPushBase(candidates);
+}
+
+/** Files the branch changes relative to the integration branch it most likely targets. */
+function changedPathsForPush() {
+  const base = pushBase();
+  if (!base) return [];
+  return git(['diff', '--name-only', `${base.mergeBase}...HEAD`]).split(/\r?\n/).filter(Boolean);
+}
+
+function hookMode(hook) {
+  const changedPaths = hook === 'pre-push' ? changedPathsForPush() : [];
+  const gate = selectHookGate(process.env, { hook, changedPaths });
   if (gate === 'bypass') {
     console.warn('SKIP_LOCAL_CI=1: local verification bypassed.');
     return;
   }
-  if (gate === 'full') ciChecks();
-  else fastHookChecks();
+  if (gate === 'full') {
+    ciChecks();
+    return;
+  }
+  fastHookChecks();
+  if (gate === 'api') {
+    console.log('\nThis push changes apps/api, so the database-backed API checks run before it leaves (set SKIP_LOCAL_CI=1 to bypass in an emergency).');
+    withCiDatabase(apiDatabaseChecks);
+  }
 }
 
 function installHooks() {
   mkdirSync(hookPath, { recursive: true });
   run('git', ['config', 'core.hooksPath', '.githooks'], { label: 'Install repository Git hooks' });
-  console.log('Hooks installed. Commits and pushes use the fast local gate by default; set RIVIAMIGO_FULL_LOCAL_CI=1 for the full CI gate.');
+  console.log('Hooks installed. Commits use the fast local gate; pushes that change apps/api also run the database-backed API checks. Set RIVIAMIGO_FULL_LOCAL_CI=1 for the full CI gate.');
 }
 
 function uninstallHooks() {
@@ -165,7 +277,7 @@ function uninstallHooks() {
 
 function createPr(args) {
   ciChecks();
-  run('gh', ['pr', 'create', ...args], { label: 'Create GitHub pull request' });
+  run('gh', ['pr', 'create', ...ghPrCreateArgs(args)], { label: 'Create GitHub pull request' });
 }
 
 const [mode, ...args] = process.argv.slice(2);

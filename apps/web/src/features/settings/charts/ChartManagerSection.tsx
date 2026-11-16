@@ -21,8 +21,17 @@ import type { ChartManagerEntry, ChartRecord } from '@riviamigo/types';
 import { useDashboards } from '@riviamigo/dashboards';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, ResponsiveDialog, Switch } from '@riviamigo/ui/primitives';
 import { Download, Ellipsis, Pencil, Plus, Upload, Copy, Search, LockKeyhole, RotateCcw, Tag, X } from 'lucide-react';
+import { useSettingsDraft } from '../drafts/SettingsDraftProvider';
 
 type ChartFilter = 'all' | 'defaults' | 'mine' | 'customized' | 'disabled' | 'unassigned';
+
+/** Staged state for one chart: whether it is enabled, and the dashboards it is assigned to (slugs, sorted). */
+interface ChartDraftEntry {
+  enabled: boolean;
+  placements: string[];
+}
+
+type ChartDraft = Record<string, ChartDraftEntry>;
 
 function downloadText(filename: string, contents: string) {
   const blob = new Blob([contents], { type: 'application/json;charset=utf-8' });
@@ -36,6 +45,30 @@ function downloadText(filename: string, contents: string) {
 
 function recordExport(record: ChartRecord) {
   return exportChartJson(record);
+}
+
+function sortedSlugs(placements: Array<{ dashboardSlug: string }>) {
+  return placements.map((placement) => placement.dashboardSlug).sort();
+}
+
+function savedEntryDraft(entry: ChartManagerEntry): ChartDraftEntry {
+  return { enabled: entry.effective.isEnabled, placements: sortedSlugs(entry.effective.config.placements) };
+}
+
+function sameEntryDraft(left: ChartDraftEntry, right: ChartDraftEntry) {
+  return left.enabled === right.enabled && left.placements.join('\n') === right.placements.join('\n');
+}
+
+/**
+ * Staged edits are kept sparse (only charts the user touched) and compared with
+ * the current server data, so charts that load, appear, or are replaced by a
+ * saved override later can never hide or invent a change.
+ */
+function hasChartEdits(edits: ChartDraft, saved: ChartDraft) {
+  return Object.entries(edits).some(([id, edit]) => {
+    const current = saved[id];
+    return current !== undefined && !sameEntryDraft(edit, current);
+  });
 }
 
 export function ChartManagerSection() {
@@ -66,22 +99,42 @@ export function ChartManagerSection() {
     () => new Map((dashboards.data ?? []).map((dashboard) => [dashboard.slug, dashboard.name])),
     [dashboards.data],
   );
+
+  // Enable switches and dashboard assignments are staged for the whole page and
+  // saved together by the Settings bar.
+  const savedDraft = React.useMemo<ChartDraft>(
+    () => Object.fromEntries((charts.data ?? []).map((entry) => [entry.effective.id, savedEntryDraft(entry)])),
+    [charts.data],
+  );
+  const [chartEdits, setChartEdits] = React.useState<ChartDraft>({});
+  const { saving } = useSettingsDraft('charts', {
+    isDirty: hasChartEdits(chartEdits, savedDraft),
+    save: saveChartDraft,
+    discard: () => setChartEdits({}),
+  });
+
   const entries = React.useMemo(() => {
     const needle = query.trim().toLowerCase();
     return (charts.data ?? []).filter((entry) => {
       const chart = entry.effective;
-      const assigned = chart.config.placements.length > 0;
+      const staged = chartEdits[chart.id] ?? savedEntryDraft(entry);
+      const assigned = staged.placements.length > 0;
       const matchesFilter = filter === 'all'
         || (filter === 'defaults' && entry.origin === 'system')
         || (filter === 'mine' && entry.origin === 'personal')
         || (filter === 'customized' && entry.origin === 'override')
-        || (filter === 'disabled' && !chart.isEnabled)
+        || (filter === 'disabled' && !staged.enabled)
         || (filter === 'unassigned' && !assigned);
       if (!matchesFilter) return false;
       if (!needle) return true;
       return `${chart.name} ${chart.slug} ${chart.description ?? ''}`.toLowerCase().includes(needle);
     });
-  }, [charts.data, filter, query]);
+  }, [chartEdits, charts.data, filter, query]);
+
+  function stageEntry(entry: ChartManagerEntry, update: (draft: ChartDraftEntry) => ChartDraftEntry) {
+    const id = entry.effective.id;
+    setChartEdits((current) => ({ ...current, [id]: update(current[id] ?? savedEntryDraft(entry)) }));
+  }
 
   async function handleImport(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -124,9 +177,34 @@ export function ChartManagerSection() {
     }
     if (patch.placements) {
       await setPlacements.mutateAsync({ id: entry.effective.id, placements: patch.placements });
-    } else if (patch.isEnabled !== undefined) {
+    }
+    if (patch.isEnabled !== undefined) {
       await setEnabled.mutateAsync({ id: entry.effective.id, isEnabled: patch.isEnabled });
     }
+  }
+
+  /** Settings bar save: applies each changed chart in turn, refreshing between charts so a retry after a failure only repeats what is still unsaved. */
+  async function saveChartDraft() {
+    const staged = chartEdits;
+    for (const entry of charts.data ?? []) {
+      const next = staged[entry.effective.id];
+      if (!next) continue;
+      const saved = savedEntryDraft(entry);
+      const patch: { isEnabled?: boolean; placements?: Array<{ dashboardSlug: string }> } = {};
+      if (next.enabled !== saved.enabled) patch.isEnabled = next.enabled;
+      if (next.placements.join('\n') !== saved.placements.join('\n')) {
+        patch.placements = next.placements.map((dashboardSlug) => ({ dashboardSlug }));
+      }
+      if (patch.isEnabled === undefined && patch.placements === undefined) continue;
+      try {
+        await saveEffectiveUpdate(entry, patch);
+      } catch {
+        throw new Error(`Unable to update ${entry.effective.name}. Other staged chart changes are still unsaved.`);
+      }
+      await charts.refetch();
+    }
+    // Keep edits made while the save was running.
+    setChartEdits((current) => (current === staged ? {} : current));
   }
 
   async function handleDelete(entry: ChartManagerEntry) {
@@ -209,38 +287,39 @@ export function ChartManagerSection() {
               <option value="unassigned">Unassigned</option>
             </select>
           </div>
-          {mutationError ? <p role="alert" className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{mutationError}</p> : null}
+          {mutationError ? <p role="alert" className="rounded-lg border border-status-danger/40 bg-status-danger/10 px-3 py-2 text-sm text-status-danger">{mutationError}</p> : null}
           {entries.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-fg-tertiary">No charts match this filter.</div>
           ) : (
             <div className="grid gap-2">
-              {entries.map((entry) => (
-                <ChartManagerRow
-                  key={entry.effective.id}
-                  entry={entry}
-                  sourceLabels={sourceLabels}
-                  dashboardLabels={dashboardLabels}
-                  dashboards={dashboards.data ?? []}
-                  assignmentOpen={openAssignments === entry.effective.id}
-                  onAssignmentToggle={() => setOpenAssignments((current) => current === entry.effective.id ? null : entry.effective.id)}
-                  onAssignmentsChange={async (placements) => {
-                    try {
-                      await saveEffectiveUpdate(entry, { placements });
+              {entries.map((entry) => {
+                const staged = chartEdits[entry.effective.id] ?? savedEntryDraft(entry);
+                return (
+                  <ChartManagerRow
+                    key={entry.effective.id}
+                    entry={entry}
+                    staged={staged}
+                    dirty={!sameEntryDraft(staged, savedEntryDraft(entry))}
+                    saving={saving}
+                    sourceLabels={sourceLabels}
+                    dashboardLabels={dashboardLabels}
+                    dashboards={dashboards.data ?? []}
+                    assignmentOpen={openAssignments === entry.effective.id}
+                    onAssignmentToggle={() => setOpenAssignments((current) => current === entry.effective.id ? null : entry.effective.id)}
+                    onAssignmentsChange={(placements) => {
+                      stageEntry(entry, (draft) => ({ ...draft, placements }));
                       setOpenAssignments(null);
-                      setMutationError(null);
-                    } catch (error) {
-                      setMutationError(error instanceof Error ? error.message : 'Unable to update assignments.');
-                    }
-                  }}
-                  onEdit={() => navigate({ to: '/settings/charts/$chartId', params: { chartId: entry.effective.id } })}
-                  onDuplicate={() => { void handleDuplicate(entry); }}
-                  onExport={() => downloadText(`${entry.effective.slug}.riviamigo-chart.json`, recordExport(entry.effective))}
-                  onToggle={() => { void saveEffectiveUpdate(entry, { isEnabled: !entry.effective.isEnabled }).catch((error) => setMutationError(error instanceof Error ? error.message : 'Unable to update chart.')); }}
-                  onDelete={() => { void handleDelete(entry); }}
-                  {...(entry.permissions.lock ? { onLock: () => { void handleLock(entry); } } : {})}
-                  {...(entry.permissions.restore ? { onRestore: () => { void handleRestore(entry); } } : {})}
-                />
-              ))}
+                    }}
+                    onEdit={() => navigate({ to: '/settings/charts/$chartId', params: { chartId: entry.effective.id } })}
+                    onDuplicate={() => { void handleDuplicate(entry); }}
+                    onExport={() => downloadText(`${entry.effective.slug}.riviamigo-chart.json`, recordExport(entry.effective))}
+                    onToggle={() => stageEntry(entry, (draft) => ({ ...draft, enabled: !draft.enabled }))}
+                    onDelete={() => { void handleDelete(entry); }}
+                    {...(entry.permissions.lock ? { onLock: () => { void handleLock(entry); } } : {})}
+                    {...(entry.permissions.restore ? { onRestore: () => { void handleRestore(entry); } } : {})}
+                  />
+                );
+              })}
             </div>
           )}
         </CardContent>
@@ -278,6 +357,9 @@ function ChartConfirmationDialog({
 
 function ChartManagerRow({
   entry,
+  staged,
+  dirty,
+  saving,
   sourceLabels,
   dashboardLabels,
   dashboards,
@@ -293,12 +375,15 @@ function ChartManagerRow({
   onRestore,
 }: {
   entry: ChartManagerEntry;
+  staged: ChartDraftEntry;
+  dirty: boolean;
+  saving: boolean;
   sourceLabels: Map<string, string>;
   dashboardLabels: Map<string, string>;
   dashboards: Array<{ slug: string; name: string }>;
   assignmentOpen: boolean;
   onAssignmentToggle: () => void;
-  onAssignmentsChange: (placements: Array<{ dashboardSlug: string }>) => Promise<void>;
+  onAssignmentsChange: (placements: string[]) => void;
   onEdit: () => void;
   onDuplicate: () => void;
   onExport: () => void;
@@ -308,20 +393,19 @@ function ChartManagerRow({
   onRestore?: () => void;
 }) {
   const chart = entry.effective;
-  const placements = chart.config.placements;
 
   return (
     <article className="relative grid gap-4 rounded-xl border border-border bg-bg-elevated/25 p-4 pb-14 md:grid-cols-[minmax(0,1fr)_auto] md:items-start md:pb-4">
       <div className="min-w-0">
-        <div className="flex min-w-0 flex-wrap items-center gap-2"><h3 className="truncate text-sm font-semibold text-fg">{chart.name}</h3><OriginBadge entry={entry} />{statusBadgesForRow(entry)}</div>
+        <div className="flex min-w-0 flex-wrap items-center gap-2"><h3 className="truncate text-sm font-semibold text-fg">{chart.name}</h3><OriginBadge entry={entry} />{statusBadgesForRow(entry, staged, dirty)}</div>
         <p className="mt-1 truncate text-xs text-fg-tertiary">{chart.slug} · {chart.config.series.length} series · {chart.config.sources.map((source) => sourceLabels.get(source.sourceId) ?? source.sourceId).join(', ')}</p>
         {chart.description ? <p className="mt-1 line-clamp-2 text-sm text-fg-secondary">{chart.description}</p> : null}
         <div className="mt-4">
           <p className="mb-2 text-xs font-medium text-fg-secondary">Assigned dashboards</p>
           <div className="flex flex-wrap items-center gap-1.5">
-            {placements.map((placement) => <DashboardBadge key={placement.dashboardSlug} slug={placement.dashboardSlug} name={dashboardLabels.get(placement.dashboardSlug) ?? placement.dashboardSlug} />)}
-            {placements.length === 0 ? <span className="text-xs text-fg-tertiary">None assigned</span> : null}
-            <button type="button" aria-label={`Edit dashboard assignments for ${chart.name}`} title="Edit dashboard assignments" className="inline-flex h-6 items-center gap-1 rounded-md border border-dashed border-border px-2 text-[10px] font-medium text-fg-secondary transition-colors hover:border-accent hover:text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent" onClick={onAssignmentToggle}><Pencil className="h-3 w-3" /><span className="sr-only">Edit dashboards</span></button>
+            {staged.placements.map((slug) => <DashboardBadge key={slug} slug={slug} name={dashboardLabels.get(slug) ?? slug} />)}
+            {staged.placements.length === 0 ? <span className="text-xs text-fg-tertiary">None assigned</span> : null}
+            <button type="button" disabled={saving} aria-label={`Edit dashboard assignments for ${chart.name}`} title="Edit dashboard assignments" className="inline-flex h-6 items-center gap-1 rounded-md border border-dashed border-border px-2 text-[10px] font-medium text-fg-secondary transition-colors hover:border-accent hover:text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60" onClick={onAssignmentToggle}><Pencil className="h-3 w-3" /><span className="sr-only">Edit dashboards</span></button>
           </div>
         </div>
       </div>
@@ -336,8 +420,8 @@ function ChartManagerRow({
           <span className="pointer-events-none absolute right-0 top-12 z-10 hidden w-44 rounded-lg border border-border bg-bg-surface p-2 text-xs text-fg-secondary shadow-xl group-focus-within:block">{entry.origin === 'override' ? 'Reset to app default' : 'Delete personal chart'}</span>
         </div>
       </div>
-      <div className="absolute bottom-3 right-4 flex items-center gap-2 text-xs font-medium text-fg-secondary"><span>{chart.isEnabled ? 'Enabled' : 'Disabled'}</span><Switch checked={chart.isEnabled} onChange={onToggle} aria-label={`${chart.isEnabled ? 'Disable' : 'Enable'} ${chart.name}`} /></div>
-      {assignmentOpen ? <DashboardAssignmentsDialog chartName={chart.name} dashboards={dashboards} placements={placements} onClose={onAssignmentToggle} onSave={onAssignmentsChange} /> : null}
+      <div className="absolute bottom-3 right-4 flex items-center gap-2 text-xs font-medium text-fg-secondary"><span>{staged.enabled ? 'Enabled' : 'Disabled'}</span><Switch checked={staged.enabled} onChange={onToggle} disabled={saving} aria-label={`${staged.enabled ? 'Disable' : 'Enable'} ${chart.name}`} /></div>
+      {assignmentOpen ? <DashboardAssignmentsDialog chartName={chart.name} dashboards={dashboards} assigned={staged.placements} onClose={onAssignmentToggle} onDone={onAssignmentsChange} /> : null}
     </article>
   );
 }
@@ -346,9 +430,8 @@ function OriginBadge({ entry }: { entry: ChartManagerEntry }) {
   return <Badge variant={entry.origin === 'system' ? 'info' : 'default'} size="sm">{entry.origin === 'system' ? 'App default' : entry.origin === 'override' ? 'Customized' : 'My chart'}</Badge>;
 }
 
-function statusBadgesForRow(entry: ChartManagerEntry) {
-  const chart = entry.effective;
-  return <span className="flex flex-wrap items-center gap-1.5">{chart.isLocked ? <Badge variant="warning" size="sm">Locked</Badge> : null}{chart.config.placements.length === 0 ? <Badge variant="default" size="sm">Unassigned</Badge> : null}</span>;
+function statusBadgesForRow(entry: ChartManagerEntry, staged: ChartDraftEntry, dirty: boolean) {
+  return <span className="flex flex-wrap items-center gap-1.5">{entry.effective.isLocked ? <Badge variant="warning" size="sm">Locked</Badge> : null}{staged.placements.length === 0 ? <Badge variant="default" size="sm">Unassigned</Badge> : null}{dirty ? <Badge variant="accent" size="sm">Unsaved</Badge> : null}</span>;
 }
 
 const DASHBOARD_VARIANTS: Array<NonNullable<React.ComponentProps<typeof Badge>['variant']>> = ['accent', 'info', 'success', 'warning', 'danger'];
@@ -366,11 +449,11 @@ function IconButton({ label, icon, onClick, compact = false }: { label: string; 
   return <button type="button" aria-label={label} title={label} onClick={onClick} className={`${compact ? 'h-9 w-9' : 'h-11 w-11'} inline-flex items-center justify-center rounded-lg border border-border text-fg-secondary transition-colors hover:bg-bg-elevated hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}>{icon}</button>;
 }
 
-function DashboardAssignmentsDialog({ chartName, dashboards, placements, onClose, onSave }: { chartName: string; dashboards: Array<{ slug: string; name: string }>; placements: Array<{ dashboardSlug: string }>; onClose: () => void; onSave: (placements: Array<{ dashboardSlug: string }>) => Promise<void> }) {
+/** Choose a chart's dashboards. Done stages the choice into the page draft; nothing is saved until the Settings bar saves. */
+function DashboardAssignmentsDialog({ chartName, dashboards, assigned, onClose, onDone }: { chartName: string; dashboards: Array<{ slug: string; name: string }>; assigned: string[]; onClose: () => void; onDone: (placements: string[]) => void }) {
   const [query, setQuery] = React.useState('');
-  const [selected, setSelected] = React.useState(() => new Set(placements.map((placement) => placement.dashboardSlug)));
-  const [saving, setSaving] = React.useState(false);
+  const [selected, setSelected] = React.useState(() => new Set(assigned));
   const normalized = query.trim().toLowerCase();
   const visible = dashboards.filter((dashboard) => !normalized || `${dashboard.name} ${dashboard.slug}`.toLowerCase().includes(normalized));
-  return <ResponsiveDialog titleId="chart-assignments-title" onClose={onClose}><header className="flex items-start justify-between gap-3 border-b border-border px-4 pb-3 pt-[max(1rem,env(safe-area-inset-top))] sm:p-5"><div><h2 id="chart-assignments-title" className="text-base font-semibold text-fg">Assigned dashboards</h2><p className="mt-1 text-sm text-fg-tertiary">Choose where {chartName} is available.</p></div><IconButton label="Close dashboard assignments" icon={<X className="h-4 w-4" />} onClick={onClose} compact /></header><div className="min-h-0 flex-1 overflow-y-auto p-4 sm:px-5"><label className="relative block"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-tertiary" /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search dashboards" aria-label="Search dashboards" className="h-10 w-full rounded-lg border border-border bg-bg-elevated pl-9 pr-3 text-sm text-fg outline-none focus:border-accent" /></label><div className="mt-3 grid gap-1">{visible.map((dashboard) => { const checked = selected.has(dashboard.slug); return <button key={dashboard.slug} type="button" role="checkbox" aria-checked={checked} onClick={() => setSelected((current) => { const next = new Set(current); if (next.has(dashboard.slug)) next.delete(dashboard.slug); else next.add(dashboard.slug); return next; })} className={`flex min-h-11 items-center gap-3 rounded-lg px-3 text-left text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${checked ? 'bg-accent/10 text-fg' : 'text-fg-secondary hover:bg-bg-elevated'}`}><DashboardBadge slug={dashboard.slug} name={dashboard.name} /><span className="ml-auto text-xs text-fg-tertiary">{checked ? 'Assigned' : 'Not assigned'}</span></button>; })}{visible.length === 0 ? <p className="px-3 py-6 text-center text-sm text-fg-tertiary">No dashboards found.</p> : null}</div></div><footer className="flex flex-col-reverse gap-2 border-t border-border bg-bg-surface px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:flex-row sm:justify-end sm:p-5"><Button type="button" variant="secondary" size="md" onClick={onClose}>Cancel</Button><Button type="button" variant="primary" size="md" loading={saving} onClick={() => { setSaving(true); void onSave([...selected].sort().map((dashboardSlug) => ({ dashboardSlug }))).finally(() => setSaving(false)); }}>Save assignments</Button></footer></ResponsiveDialog>;
+  return <ResponsiveDialog titleId="chart-assignments-title" onClose={onClose}><header className="flex items-start justify-between gap-3 border-b border-border px-4 pb-3 pt-[max(1rem,env(safe-area-inset-top))] sm:p-5"><div><h2 id="chart-assignments-title" className="text-base font-semibold text-fg">Assigned dashboards</h2><p className="mt-1 text-sm text-fg-tertiary">Choose where {chartName} is available. Changes are saved with the page.</p></div><IconButton label="Close dashboard assignments" icon={<X className="h-4 w-4" />} onClick={onClose} compact /></header><div className="min-h-0 flex-1 overflow-y-auto p-4 sm:px-5"><label className="relative block"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-tertiary" /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search dashboards" aria-label="Search dashboards" className="h-10 w-full rounded-lg border border-border bg-bg-elevated pl-9 pr-3 text-sm text-fg outline-none focus:border-accent" /></label><div className="mt-3 grid gap-1">{visible.map((dashboard) => { const checked = selected.has(dashboard.slug); return <button key={dashboard.slug} type="button" role="checkbox" aria-checked={checked} onClick={() => setSelected((current) => { const next = new Set(current); if (next.has(dashboard.slug)) next.delete(dashboard.slug); else next.add(dashboard.slug); return next; })} className={`flex min-h-11 items-center gap-3 rounded-lg px-3 text-left text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${checked ? 'bg-accent/10 text-fg' : 'text-fg-secondary hover:bg-bg-elevated'}`}><DashboardBadge slug={dashboard.slug} name={dashboard.name} /><span className="ml-auto text-xs text-fg-tertiary">{checked ? 'Assigned' : 'Not assigned'}</span></button>; })}{visible.length === 0 ? <p className="px-3 py-6 text-center text-sm text-fg-tertiary">No dashboards found.</p> : null}</div></div><footer className="flex flex-col-reverse gap-2 border-t border-border bg-bg-surface px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:flex-row sm:justify-end sm:p-5"><Button type="button" variant="secondary" size="md" onClick={onClose}>Cancel</Button><Button type="button" variant="primary" size="md" onClick={() => onDone([...selected].sort())}>Done</Button></footer></ResponsiveDialog>;
 }

@@ -16,6 +16,7 @@ Use this file for command references, architecture reminders, and Claude-oriente
 
 ```bash
 pnpm run dev:stack
+pnpm stop
 ```
 
 Before it allocates ports, `dev:stack` clears only stale host processes that
@@ -23,6 +24,12 @@ belong to this checkout: the local `riviamigo-api` binary and Vite processes
 launched from `apps/web`. It does not terminate unrelated applications that
 happen to use the usual development ports; those still trigger fallback-port
 allocation.
+
+`pnpm stop` ends this checkout's dev servers (launcher, Vite, API, restore
+agent) and leaves Docker services running. The dev stack always runs the API
+with password login on and SSO off. Pause Rivian collection per vehicle in
+Settings > Vehicles when the dev database is a copy of production; see
+`docs/development.md`.
 
 The launcher uses the existing `riviamigo` Docker Compose project by default
 for the infrastructure services it starts: TimescaleDB, Redis, and Garage.

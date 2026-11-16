@@ -133,17 +133,20 @@ describe('GridEditor overlays', () => {
       />
     );
 
-    const slider = screen.getByLabelText(/Display filter/);
-    fireEvent.change(slider, { target: { value: '1' } });
+    // Off, Curve, then the six time windows.
+    const slider = screen.getByLabelText('Smoothing');
+    expect(slider).toHaveAttribute('max', '7');
+    expect(slider).toHaveValue('5');
+    fireEvent.change(slider, { target: { value: '2' } });
     expect(onChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        options: expect.objectContaining({ timeFilter: '15m' }),
+        options: expect.objectContaining({ timeFilter: '15m', smoothness: 'gentle' }),
       })
     );
 
   });
 
-  it('persists all three sensor smoothing positions independently from the display filter', () => {
+  it('writes the off and curve smoothing levels as raw values with a straight or rounded line', () => {
     const onChange = vi.fn();
     const widget = {
       ...BASE_CONFIG.widgets[0]!,
@@ -162,21 +165,19 @@ describe('GridEditor overlays', () => {
       />
     );
 
-    const smoothness = screen.getByLabelText('Curve smoothness');
-    expect(smoothness).toHaveAttribute('min', '0');
-    expect(smoothness).toHaveAttribute('max', '2');
-    expect(smoothness).toHaveValue('1');
-    fireEvent.change(smoothness, { target: { value: '2' } });
+    expect(screen.queryByLabelText('Curve smoothness')).toBeNull();
+    const smoothing = screen.getByLabelText('Smoothing');
+    fireEvent.change(smoothing, { target: { value: '1' } });
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
-      options: expect.objectContaining({ smoothness: 'smooth', timeFilter: '24h' }),
+      options: expect.objectContaining({ smoothness: 'gentle', timeFilter: 'raw' }),
     }));
-    fireEvent.change(smoothness, { target: { value: '0' } });
+    fireEvent.change(smoothing, { target: { value: '0' } });
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
-      options: expect.objectContaining({ smoothness: 'straight', timeFilter: '24h' }),
+      options: expect.objectContaining({ smoothness: 'straight', timeFilter: 'raw' }),
     }));
   });
 
-  it('offers the display filter for bar sprites and persists a time bin', () => {
+  it('offers time bins instead of smoothing for bar sprites and persists a bin', () => {
     const onChange = vi.fn();
     const widget = {
       ...BASE_CONFIG.widgets[0]!,
@@ -194,8 +195,9 @@ describe('GridEditor overlays', () => {
       />
     );
 
-    expect(screen.getByText(/non-raw windows sum bars within each time bin/i)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText(/Display filter/), { target: { value: '4' } });
+    expect(screen.getByText(/adds the readings in each time bin into one bar/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Smoothing')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Time bins'), { target: { value: '4' } });
     expect(onChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
         options: expect.objectContaining({ timeFilter: '24h' }),
@@ -304,6 +306,31 @@ describe('GridEditor overlays', () => {
     expect(styles).toContain('.rgl-editor .react-grid-item.react-draggable-dragging .rgl-widget-control');
     expect(styles).toContain('.rgl-editor .rgl-card[data-editing="true"] .rgl-widget-control');
     expect(styles).toContain('@media (hover: none), (pointer: coarse)');
+  });
+
+  it('renders each overlay icon as a single chip, not nested inside a second bordered box', () => {
+    render(
+      <GridEditor
+        config={BASE_CONFIG}
+        ctx={BASE_CTX}
+        onConfigChange={() => undefined}
+      />
+    );
+
+    const nestedChrome = /(^|\s)(border|bg-|p-\d|shadow|backdrop-blur|rounded)/;
+    const overlays = [
+      screen.getByTestId('widget-overlay-left-22222222-2222-2222-2222-222222222222'),
+      screen.getByTestId('widget-overlay-right-22222222-2222-2222-2222-222222222222'),
+      screen.getByTestId('widget-overlay-left-33333333-3333-3333-3333-333333333333'),
+      screen.getByTestId('widget-overlay-right-33333333-3333-3333-3333-333333333333'),
+    ];
+    for (const overlay of overlays) {
+      // The wrapper only positions; the icon controls own the border/background.
+      expect(overlay.className).not.toMatch(nestedChrome);
+      const actions = overlay.querySelectorAll('.rgl-action');
+      expect(actions.length).toBeGreaterThan(0);
+      actions.forEach((action) => expect(action.parentElement).toBe(overlay));
+    }
   });
 
   it('keeps move and edit overlays visible while the widget editor drawer is open', () => {

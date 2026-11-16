@@ -91,7 +91,8 @@ test.describe('dashboard editability in a browser', () => {
     });
     await page.goto('/');
 
-    const fallbackArtwork = page.locator('img[src="/vehicle-images/fallbacks/r1t/overview.webp"]').first();
+    // Light and dark artwork layers share the fallback source; check the one the app theme shows.
+    const fallbackArtwork = page.locator('img[src="/vehicle-images/fallbacks/r1t/overview.webp"]').filter({ visible: true });
     await expect(fallbackArtwork).toBeVisible();
     await expect(fallbackArtwork).toHaveAttribute('data-artwork-fallback', 'true');
     const fallbackTransform = await fallbackArtwork.evaluate((image) => image.style.transform);
@@ -159,6 +160,87 @@ test.describe('dashboard editability in a browser', () => {
       await expect(frame).toHaveAttribute('data-editing', 'true');
     });
   }
+
+  test('charging art meets the connection chip\'s right edge in dark and light themes', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const art = (design: 'light' | 'dark') =>
+      `/v1/vehicle-image-cache/vehicle-1/side-charging-${design}.png`;
+    const apiState = await installApiMocks(page, {
+      vehicle: {
+        model: 'R1S',
+        display_name: 'Test R1S',
+        images: {
+          all: (['light', 'dark'] as const).map((design) => ({
+            placement: 'side-charging',
+            design,
+            size: 'large',
+            resolution: '@3x',
+            url: art(design),
+          })),
+        },
+      },
+      vehicleStatus: {
+        vehicle_id: 'vehicle-1',
+        battery_level: 16,
+        battery_limit: 100,
+        charger_state: 'Charging',
+        charger_status: 'chrgr_sts_connected_charging',
+        time_to_end_of_charge_min: 344,
+      },
+    });
+    // Rivian's charging art crops the vehicle body at the image's right edge,
+    // so that edge must sit on the chip's right edge in either theme.
+    for (const theme of ['dark', 'light'] as const) {
+      // `dark:` follows the app's theme preference, not the OS colour scheme.
+      apiState.setThemeMode(theme);
+      await page.goto('/charging');
+      await page.getByRole('button', { name: 'Edit dashboard' }).click();
+      await page.getByRole('button', { name: 'Plugged in' }).click();
+      const chip = page.getByTestId('charging-connection-chip');
+      await expect(chip).toBeVisible();
+      const image = chip.locator(`[data-testid="charging-side-image-frame"][data-theme-variant="${theme}"] img`);
+      await expect(image).toBeVisible();
+      await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBeGreaterThan(0);
+      const edges = await chip.evaluate((element, imageSelector) => {
+        const chipRect = element.getBoundingClientRect();
+        const border = parseFloat(getComputedStyle(element).borderRightWidth) || 0;
+        const imageRect = element.querySelector(imageSelector)!.getBoundingClientRect();
+        return { chipInnerRight: chipRect.right - border, imageRight: imageRect.right, chipWidth: chipRect.width };
+      }, `[data-testid="charging-side-image-frame"][data-theme-variant="${theme}"] img`);
+      expect(Math.abs(edges.imageRight - edges.chipInnerRight), `${theme} art right edge`).toBeLessThanOrEqual(2);
+    }
+  });
+
+  test('dark: styles follow the app theme rather than the OS colour scheme', async ({ page }) => {
+    await page.setViewportSize({ width: 1240, height: 760 });
+    // The Overview renders its light artwork layer first and its `dark:` layer second.
+    const artwork = page.locator('img[src="/vehicle-images/fallbacks/r1t/overview.webp"]');
+    const expectEffectiveMode = async (mode: 'light' | 'dark', label: string) => {
+      await expect(page.locator('html'), label).toHaveClass(new RegExp(`(^|\\s)${mode}(\\s|$)`));
+      await expect(artwork.nth(mode === 'light' ? 0 : 1), `${label}: ${mode} artwork`).toBeVisible();
+      await expect(artwork.nth(mode === 'light' ? 1 : 0), `${label}: other artwork`).toBeHidden();
+    };
+
+    const apiState = await installApiMocks(page);
+    for (const appMode of ['light', 'dark'] as const) {
+      for (const osScheme of ['light', 'dark'] as const) {
+        apiState.setThemeMode(appMode);
+        await page.emulateMedia({ colorScheme: osScheme });
+        await page.goto('/');
+        await expectEffectiveMode(appMode, `app ${appMode}, OS ${osScheme}`);
+        // An OS change while the app is pinned to a mode must not restyle it.
+        await page.emulateMedia({ colorScheme: osScheme === 'light' ? 'dark' : 'light' });
+        await expectEffectiveMode(appMode, `app ${appMode}, OS switched from ${osScheme}`);
+      }
+    }
+
+    apiState.setThemeMode('system');
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.goto('/');
+    await expectEffectiveMode('dark', 'app system, OS dark');
+    await page.emulateMedia({ colorScheme: 'light' });
+    await expectEffectiveMode('light', 'app system, OS switched to light');
+  });
 
   test('fixed-size widgets keep edit and move controls but never expose a resize handle', async ({ page }) => {
     await installApiMocks(page);
@@ -377,13 +459,25 @@ function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8')) as T;
 }
 
-async function installApiMocks(page: Page, options: { vehicleStatus?: Record<string, unknown> } = {}) {
+async function installApiMocks(
+  page: Page,
+  options: { vehicleStatus?: Record<string, unknown>; vehicle?: Record<string, unknown> } = {},
+) {
   const createdDashboards: Array<{ config: DashboardConfig }> = [];
+  let themeMode: 'light' | 'dark' | 'system' = 'dark';
 
   await page.addInitScript(() => {
     window.localStorage.setItem('rm-show-dashboard-edit-button:e2e-user', 'true');
   });
   await page.routeWebSocket('**/v1/vehicles/live**', (socket) => socket.close());
+  // Account theme preferences moved to /v2; without a mock the request falls
+  // through unauthenticated and the 401 signs the test user out.
+  await page.route('**/v2/auth/preferences/theme', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    headers: { etag: `"theme-${themeMode}"` },
+    body: JSON.stringify({ schemaVersion: 2, mode: themeMode, selection: { kind: 'builtin', themeId: 'classic' } }),
+  }));
   await page.route('**/v1/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -405,7 +499,10 @@ async function installApiMocks(page: Page, options: { vehicleStatus?: Record<str
       return json(route, { units: unitPreferences() });
     }
     if (path === '/v1/vehicles') {
-      return json(route, { vehicles: [testVehicle()] });
+      return json(route, { vehicles: [{ ...testVehicle(), ...options.vehicle }] });
+    }
+    if (path.startsWith('/v1/vehicle-image-cache/')) {
+      return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: chargingArtworkSvg() });
     }
     if (/^\/v1\/vehicles\/[^/]+\/status$/.test(path)) {
       return json(route, options.vehicleStatus ?? {});
@@ -457,7 +554,12 @@ async function installApiMocks(page: Page, options: { vehicleStatus?: Record<str
     return json(route, fallbackApiResponse(path));
   });
 
-  return { createdDashboards };
+  return {
+    createdDashboards,
+    setThemeMode(mode: 'light' | 'dark' | 'system') {
+      themeMode = mode;
+    },
+  };
 }
 
 async function controlHitTest(button: ReturnType<Page['locator']>) {
@@ -557,6 +659,14 @@ function unitPreferences() {
     place_radius_unit: 'feet',
     efficiency_display: 'distance_per_energy',
   };
+}
+
+// Stands in for Rivian's R1S side-charging art: same 1125x912 frame, with
+// the vehicle body running into the right edge.
+function chargingArtworkSvg() {
+  return '<svg xmlns="http://www.w3.org/2000/svg" width="1125" height="912" viewBox="0 0 1125 912">'
+    + '<rect x="200" y="260" width="925" height="420" fill="#5f7a55"/>'
+    + '<circle cx="575" cy="630" r="170" fill="#222"/></svg>';
 }
 
 function json(route: Route, body: unknown) {

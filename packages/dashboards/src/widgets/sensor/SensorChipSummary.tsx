@@ -1,24 +1,32 @@
 import React from 'react';
-import { Icon } from '@iconify/react';
-import { cn } from '@riviamigo/ui/lib/utils';
-import { Card } from '@riviamigo/ui/primitives';
 import {
   CHART_COLORS,
   getChartColor,
-  MiniSparkline,
   type MiniSparklineYDomain,
   type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
-import { resolveIconId } from '../../editor/iconMigration';
 import { useDocumentPalette, useDocumentTheme } from '@riviamigo/ui/hooks';
-import { resolveSensorValueColor, type SensorDataAccent, type SensorIconKey, type SensorValueColor } from './sensorDefinitions';
+import {
+  getSensorDefinition,
+  resolveSensorValueColor,
+  type SensorDataAccent,
+  type SensorIconKey,
+  type SensorValueColor,
+} from './sensorDefinitions';
+import { SensorChipCard, SensorChipValue } from './SensorChipCard';
 
 type SensorChipHistoryPoint = { ts?: string; value: number | null | undefined };
 type SensorValueTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
 
 export interface SensorChipSummaryProps {
   title: string;
-  value: string;
+  value: React.ReactNode;
+  /**
+   * Shared sensor definition to inherit icon, data accent, value color, and
+   * accent border from, so page headline chips match their dashboard twins.
+   * Explicit props still win.
+   */
+  definitionId?: string;
   icon?: SensorIconKey;
   secondary?: string | undefined;
   labelSuffix?: string;
@@ -34,16 +42,29 @@ export interface SensorChipSummaryProps {
   historyTimeFilter?: TimeFilterWindow;
 }
 
+const TONE_CLASS: Record<Exclude<SensorValueTone, 'neutral'>, string> = {
+  success: 'text-status-positive',
+  warning: 'text-status-warning',
+  danger: 'text-status-danger',
+  info: 'text-status-info',
+};
+
+/**
+ * A sensor chip for page headlines, fed a value directly instead of a
+ * dashboard data source. It renders through the same `SensorChipCard` as the
+ * dashboard sensor widget, so it is the same chip, not a look-alike.
+ */
 export function SensorChipSummary({
   title,
   value,
-  icon = 'lucide:activity',
+  definitionId,
+  icon: iconProp,
   secondary,
   labelSuffix,
   subtitle,
-  accentBorder = false,
-  dataAccent,
-  valueColor = 'accent',
+  accentBorder: accentBorderProp,
+  dataAccent: dataAccentProp,
+  valueColor: valueColorProp,
   valueTone,
   valueSize = 'md',
   history,
@@ -51,107 +72,48 @@ export function SensorChipSummary({
   historyDomain,
   historyTimeFilter,
 }: SensorChipSummaryProps) {
+  const definition = getSensorDefinition(definitionId);
+  const icon = iconProp ?? definition?.icon;
+  const dataAccent = dataAccentProp ?? definition?.dataAccent;
+  const valueColor = valueColorProp ?? definition?.valueColor ?? 'accent';
+  const accentBorder = accentBorderProp ?? definition?.accent ?? false;
   const palette = useDocumentPalette();
-  const metricColor = getChartColor(palette === 'rad' && dataAccent ? dataAccent : 'accent');
   const isDark = useDocumentTheme();
-  const metricValueColor = resolveSensorValueColor(
-    undefined,
-    palette === 'rad' && dataAccent ? dataAccent : 'accent',
-    metricColor,
-    isDark,
-  );
-  const resolvedHistoryColor = historyColor ?? metricColor ?? CHART_COLORS.accent;
-  return (
-    <Card
-      padding="none"
-      className={cn(
-        'relative flex h-full min-h-[72px] flex-col overflow-hidden border p-3',
-        accentBorder
-          ? 'shadow-[inset_0_0_0_1px_var(--rm-border-accent)]'
-          : 'border-border'
-      )}
-      style={accentBorder ? { borderColor: metricColor } : undefined}
-      data-testid="sensor-chip"
-    >
-      {history?.length ? (
-        <div
-          className="pointer-events-none absolute h-9"
-          style={{ left: 0, right: 0, bottom: 0, zIndex: 0, opacity: 0.82 }}
-          data-testid="sensor-sprite-layer"
-        >
-          <MiniSparkline
-            data={history}
-            type="line"
-            height={36}
-            color={resolvedHistoryColor}
-            showFallback
-            {...(historyTimeFilter ? { timeFilter: historyTimeFilter } : {})}
-            yDomain={historyDomain}
-          />
-          <div
-            className="absolute inset-x-0 bottom-[2px] h-px"
-            style={{ backgroundColor: resolvedHistoryColor, opacity: 0.35 }}
-            aria-hidden="true"
-          />
-        </div>
-      ) : null}
-      <div className="relative z-10 flex flex-col flex-1 justify-center">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="truncate text-xs font-medium uppercase tracking-wider text-fg-tertiary">
-              {title}
-              {labelSuffix ? (
-                <span className="ml-1 text-[10px] font-normal normal-case tracking-normal">
-                  ({labelSuffix})
-                </span>
-              ) : null}
-            </p>
-            {subtitle ? <p className="mt-1 truncate text-xs text-fg-tertiary">{subtitle}</p> : null}
-          </div>
-          <Icon
-            icon={resolveIconId(icon)}
-            className={cn(
-              'h-4 w-4 shrink-0',
-              valueTone === 'success'
-                ? 'text-status-positive'
-                : valueTone === 'warning'
-                  ? 'text-status-warning'
-                  : valueTone === 'danger'
-                    ? 'text-status-danger'
-                    : valueTone === 'info'
-                      ? 'text-status-info'
-                      : dataAccent ? 'text-fg' : 'text-accent'
-            )}
-            style={dataAccent && !valueTone ? { color: metricColor } : undefined}
-          />
-        </div>
+  const colorToken = palette === 'rad' && dataAccent ? dataAccent : 'accent';
+  const metricColor = getChartColor(colorToken);
+  const metricValueColor = resolveSensorValueColor(undefined, colorToken, metricColor, isDark);
+  const toneClass = valueTone && valueTone !== 'neutral' ? TONE_CLASS[valueTone] : undefined;
+  const valueToneClass = toneClass ?? (valueColor === 'accent' ? 'text-accent' : 'text-fg');
+  const valueStyle = !toneClass && valueColor === 'data' ? { color: metricValueColor } : undefined;
+  const spriteColor = historyColor ?? metricColor ?? CHART_COLORS.accent;
 
-        <div className="mt-1.5 flex items-baseline gap-1">
-          <span
-            className={cn(
-              'font-mono font-semibold tabular-nums tracking-tight',
-              valueTone === 'success'
-                ? 'text-status-positive'
-                : valueTone === 'warning'
-                  ? 'text-status-warning'
-                  : valueTone === 'danger'
-                    ? 'text-status-danger'
-                    : valueTone === 'info'
-                      ? 'text-status-info'
-                      : valueColor === 'data'
-                        ? 'text-fg'
-                        : valueColor === 'accent'
-                          ? 'text-accent'
-                          : 'text-fg',
-              valueSize === 'sm' ? 'text-xl' : valueSize === 'lg' ? 'text-3xl' : 'text-2xl'
-            )}
-            style={{ textShadow: 'var(--rm-value-halo)', ...(valueColor === 'data' && !valueTone ? { color: metricValueColor } : {}) }}
-          >
-            {value}
-          </span>
-        </div>
-        {secondary ? <p className="mt-0.5 truncate text-xs text-fg-tertiary">{secondary}</p> : null}
-      </div>
-    </Card>
+  return (
+    <SensorChipCard
+      title={title}
+      {...(labelSuffix ? { labelSuffix } : {})}
+      {...(subtitle ? { subtitle } : {})}
+      icon={icon}
+      {...(dataAccent ? { iconColor: metricColor } : {})}
+      {...(toneClass ? { iconToneClass: toneClass } : {})}
+      accentBorder={accentBorder}
+      accentColor={metricColor}
+      {...(history?.length
+        ? {
+            sprite: {
+              data: history,
+              type: 'line' as const,
+              color: spriteColor,
+              ...(historyTimeFilter ? { timeFilter: historyTimeFilter } : {}),
+              ...(historyDomain ? { yDomain: historyDomain } : {}),
+            },
+          }
+        : {})}
+      value={
+        <SensorChipValue toneClass={valueToneClass} {...(valueStyle ? { style: valueStyle } : {})} size={valueSize}>
+          {value}
+        </SensorChipValue>
+      }
+      secondary={secondary ?? null}
+    />
   );
 }

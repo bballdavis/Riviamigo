@@ -64,17 +64,23 @@ Do not use one widget to coordinate the rest of a page.
 ### Sensor Background Graphs
 
 Sensor widgets can render a compact background graph through `options.chartType`.
-Use `line` or `area` for curve interpolation and store the amount in
-`options.curveSmoothing` as a number from `0` to `1`:
+A `line` or `area` graph has one **Smoothing** setting in the widget editor,
+stored as two options:
 
-- `0` renders straight segments.
-- A positive value renders a cubic curve when at least three finite data points are available.
-- One- or two-point series render straight because there are not enough neighboring points to define a curve.
-- `bar` and `daily_delta` renderers do not use curve smoothing.
+| Level | `options.timeFilter` | `options.smoothness` | What is drawn |
+| --- | --- | --- | --- |
+| Off | `raw` | `straight` | Recorded values joined by straight lines |
+| Curve | `raw` | `gentle` | Recorded values joined by a rounded line |
+| `15 min` to `7 days` | `15m`, `1h`, `6h`, `24h`, `3d`, `7d` | `gentle` | Values averaged over that window, joined by a rounded line |
 
-This setting changes the visual path between samples; it is not a moving-average
-or other data-smoothing operation. Keep the option on the shared sensor widget
-contract so edited, imported, and saved dashboards behave consistently.
+- New sensor graphs default to `24h`.
+- One- and two-point series render straight because there are not enough neighboring points to define a curve.
+- `bar` and `daily_delta` graphs are not smoothed. Their editor shows **Time bins**, which stores only `options.timeFilter`: `raw` keeps one bar per reading and any other window sums the readings in each bin.
+- The older numeric `options.curveSmoothing` (`0` for straight, any positive value for curved) is still read for saved dashboards. Write `timeFilter` and `smoothness` in new ones.
+
+Smoothing changes only the drawing, never the value shown on the card. Keep
+these options on the shared sensor widget contract so edited, imported, and
+saved dashboards behave consistently.
 
 ### Dashboard Data Requirements
 

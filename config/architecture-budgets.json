@@ -1,10 +1,10 @@
 {
   "hotspots": {
-    "apps/web/src/features/settings/SettingsPage.tsx": { "maxLines": 1933, "maxBytes": 101666 },
-    "apps/web/src/components/settings/BackupSection.tsx": { "maxLines": 1700, "maxBytes": 71666 },
+    "apps/web/src/features/settings/SettingsPage.tsx": { "maxLines": 795, "maxBytes": 34750 },
+    "apps/web/src/components/settings/BackupSection.tsx": { "maxLines": 1690, "maxBytes": 71666 },
     "apps/web/src/components/layout/AppLayout.tsx": { "maxLines": 485, "maxBytes": 18642 },
     "apps/web/src/components/dashboard/DashboardPageShell.tsx": { "maxLines": 485, "maxBytes": 18178 },
-    "apps/api/src/routes/vehicles.rs": { "maxLines": 5676, "maxBytes": 201797 },
+    "apps/api/src/routes/vehicles.rs": { "maxLines": 4285, "maxBytes": 153500 },
     "apps/api/src/routes/charging.rs": { "maxLines": 2260, "maxBytes": 85127 },
     "apps/api/src/routes/trips.rs": { "maxLines": 1835, "maxBytes": 65589 },
     "apps/api/src/services/backups.rs": { "maxLines": 2675, "maxBytes": 98964 },
@@ -24,6 +24,8 @@
     ],
     "extensions": [".ts", ".tsx", ".rs"],
     "existingExceptions": {
+      "apps/api/src/services/maintenance_jobs.rs": "Settings > Jobs runner, ledger and job bodies in one file; split into a module directory next.",
+      "apps/web/src/features/settings/VehiclesSection.tsx": "Vehicle cards with pause, battery and sharing controls; extract the card body next.",
       "apps/api/src/routes/vehicles.rs": "Existing route hotspot; split in A3.",
       "apps/api/src/services/backups.rs": "Existing lifecycle hotspot; split in A6.",
       "packages/hooks/src/api/transport.ts": "Existing transport facade; split in D1.",
@@ -82,12 +84,7 @@
     "windowConfirm": {
       "pattern": "window\\.confirm\\s*\\(",
       "directories": ["apps/web/src", "packages/ui/src", "packages/hooks/src", "packages/dashboards/src"],
-      "allow": [
-        "apps/web/src/features/settings/SettingsPage.tsx",
-        "apps/web/src/components/settings/BackupSection.tsx",
-        "apps/web/src/components/settings/ExternalConnectionsSection.tsx"
-      ],
-      "maxMatches": 6,
+      "maxMatches": 0,
       "message": "Production web source must use shared confirmation overlays instead of window.confirm"
     },
     "roleSwitch": {
@@ -113,9 +110,10 @@
         "packages/dashboards/src/widgets/chart/DashboardChartWidget.tsx",
         "packages/dashboards/src/editor/EditorDrawer.tsx",
         "packages/dashboards/src/editor/IconPicker.tsx",
-        "packages/ui/src/primitives/ResponsiveDialog.tsx"
+        "packages/ui/src/primitives/ResponsiveDialog.tsx",
+        "packages/ui/src/charts/TripMapChart.tsx"
       ],
-      "maxMatches": 9,
+      "maxMatches": 10,
       "message": "Production overlays must use the shared overlay foundation"
     },
     "directToastDispatch": {

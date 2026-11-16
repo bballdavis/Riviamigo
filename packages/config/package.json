@@ -2,13 +2,16 @@
   "name": "@riviamigo/config",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "exports": {
     "./typescript/base.json": "./typescript/base.json",
     "./typescript/react.json": "./typescript/react.json",
-    "./tailwind/*": "./tailwind/*.ts"
+    "./tailwind/*": "./tailwind/*.ts",
+    "./vitest": "./vitest/base.ts"
   },
   "devDependencies": {
     "tailwindcss": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

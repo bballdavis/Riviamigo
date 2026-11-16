@@ -45,6 +45,14 @@ Browsers discard `Secure` cookies on plain-HTTP origins (loopback such as
 cookie never sticks, so every session ends when its 15-minute access token
 expires. The sign-in page detects that combination and shows a warning.
 
+Plain-HTTP LAN addresses are also not a browser "secure context", so
+`navigator.locks`, `crypto.randomUUID`, and the clipboard API are unavailable
+there. Session renewal falls back to an IndexedDB lease that works without
+them; copy-to-clipboard buttons may do nothing. Releases up to 2026.11.1
+lacked a working fallback, so sessions still ended after 15 minutes on a LAN IP
+even with this exception enabled. `http://localhost` is a secure context and
+was never affected.
+
 HTTPS behind the authenticated gateway remains the supported production shape.
 For a trusted private network that cannot provide HTTPS, the Compose default
 includes `ALLOW_INSECURE_LAN_HTTP_AUTH=false`. Change it to `true` only with
