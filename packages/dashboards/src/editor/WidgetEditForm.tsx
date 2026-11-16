@@ -691,7 +691,7 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
         {overviewVehicleMode ? (
           <Section title="Location map">
             <p className="text-[11px] text-fg-tertiary">
-              Adds a cluster and map toggle to the overview header. The cluster view stays the default; the map view replaces the vehicle image with its current location.
+              Adds a cluster and map toggle to the overview header. The cluster view stays the default; the map view shows the current location in place of the stat rows.
             </p>
             <ToggleSwitch
               label="Offer location map"

@@ -384,3 +384,19 @@ code {
     width: 100%;
   }
 }
+
+/* Guide screenshots are captured at 2x. Editor drawer, dialog, and phone
+   crops are narrow, so cap them near their natural on-screen width instead of
+   stretching them across the article. File names carry the size class. */
+.markdown img[src*='/drawer-'] {
+  max-width: min(100%, 400px);
+}
+
+.markdown img[src*='/dialog-'],
+.markdown img[src*='/detail-'] {
+  max-width: min(100%, 580px);
+}
+
+.markdown img[src*='/phone-'] {
+  max-width: min(100%, 320px);
+}

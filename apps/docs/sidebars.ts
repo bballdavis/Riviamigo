@@ -47,9 +47,16 @@ const sidebars: SidebarsConfig = {
     'using-riviamigo',
     {
       type: 'category',
-      label: 'Personalize your dashboard',
+      label: 'Customize your dashboards',
       collapsed: false,
-      items: ['guides/dashboard-customization', 'guides/chart-customization', 'guides/themes'],
+      items: [
+        'guides/dashboard-editing',
+        'guides/vehicle-overview',
+        'guides/sensor-chips',
+        'guides/chart-customization',
+        'guides/dashboard-customization',
+        'guides/themes',
+      ],
     },
     {
       type: 'category',
