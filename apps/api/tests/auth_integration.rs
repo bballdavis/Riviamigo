@@ -19,7 +19,7 @@ use axum::{
     Router,
 };
 use serde_json::{json, Value};
-use sqlx::{postgres::PgPoolOptions, Executor, PgPool};
+use sqlx::{postgres::PgPoolOptions, Connection, Executor, PgPool};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -1333,23 +1333,28 @@ async fn cancelled_metric_and_grafana_reads_cancel_active_database_work_before_r
                 .is_err(),
             "{route}"
         );
+        // Observe from a dedicated connection: a pooled one could be the
+        // request's own backend, just returned to the pool, which would then
+        // report itself as active.
+        let mut observer = sqlx::PgConnection::connect_with(&app.pool.connect_options())
+            .await
+            .unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             loop {
+                // Sample admission before the backend. A permit obtained here
+                // was released earlier, so a backend still active afterwards
+                // is a genuine early release. Sampling the backend first races
+                // with a release that lands between the two reads.
+                let permit = app.state.resources.heavy(user, &app.state.config.security);
                 let active: bool = sqlx::query_scalar(
                     "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND state='active')",
                 )
                 .bind(pid)
-                .fetch_one(&app.pool)
+                .fetch_one(&mut observer)
                 .await
                 .unwrap();
-                let permit = app.state.resources.heavy(user, &app.state.config.security);
-                if active {
-                    assert!(
-                        permit.is_err(),
-                        "active {route} backend must retain admission"
-                    );
-                }
-                if !active && permit.is_ok() {
+                if permit.is_ok() {
+                    assert!(!active, "active {route} backend must retain admission");
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1375,9 +1380,21 @@ async fn cancelled_metric_and_grafana_reads_cancel_active_database_work_before_r
         Some(&token), None,
     )).await.expect("database deadline returns while table is still locked");
     assert!(!timed.status.is_success());
-    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND state='active' AND wait_event_type='Lock' AND query LIKE '%timeseries.telemetry%'")
-        .fetch_one(&app.pool).await.unwrap();
-    assert_eq!(pending, 0, "Grafana server statement ended at its deadline");
+    // The response can return on the request's own deadline while cleanup is
+    // still cancelling the statement, so wait briefly for it to end. The table
+    // stays locked throughout, so ending proves cancellation, not completion.
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND state='active' AND wait_event_type='Lock' AND query LIKE '%timeseries.telemetry%'")
+                .fetch_one(&app.pool).await.unwrap();
+            if pending == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Grafana server statement ended at its deadline");
     blocker.rollback().await.unwrap();
 }
 
