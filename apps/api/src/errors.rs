@@ -55,8 +55,38 @@ pub enum AppError {
     Redis(#[from] redis::RedisError),
 }
 
+impl AppError {
+    /// Logs variants whose cause is not recorded where the response is built.
+    ///
+    /// Server faults (`Database`, `Io`, `Redis`, `Internal`) log at `ERROR`
+    /// inside `into_response`, where the underlying error is in hand. The
+    /// rest are classified here so every response has exactly one entry:
+    /// upstream and capacity problems the operator can act on are `WARN`;
+    /// problems the caller caused are `DEBUG` because they are expected
+    /// traffic, not faults.
+    fn log_outcome(&self) {
+        match self {
+            AppError::Database(_)
+            | AppError::Io(_)
+            | AppError::Redis(_)
+            | AppError::Internal(_) => {}
+            AppError::DependencyUnavailable(message)
+            | AppError::RivianApi(message)
+            | AppError::RecoveryInsufficientStorage(message)
+            | AppError::RecoveryDeadline(message) => {
+                tracing::warn!(error = %self, detail = %message, "request failed: dependency or capacity problem");
+            }
+            AppError::ResourceLimited(class) => {
+                tracing::warn!(class = *class, "request rejected: server capacity reached");
+            }
+            _ => tracing::debug!(error = %self, "request rejected"),
+        }
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        self.log_outcome();
         let (status, code, message) = match &self {
             AppError::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND", self.to_string()),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED", self.to_string()),
@@ -108,7 +138,7 @@ impl IntoResponse for AppError {
                 m.clone(),
             ),
             AppError::Io(e) => {
-                tracing::error!(err = %e, "io error");
+                tracing::error!(error = %e, "request failed: filesystem error");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "INTERNAL",
@@ -116,7 +146,7 @@ impl IntoResponse for AppError {
                 )
             }
             AppError::Redis(e) => {
-                tracing::error!(err = %e, "redis error");
+                tracing::error!(error = %e, "request failed: redis error");
                 (
                     StatusCode::SERVICE_UNAVAILABLE,
                     "DEPENDENCY_UNAVAILABLE",
@@ -124,7 +154,7 @@ impl IntoResponse for AppError {
                 )
             }
             AppError::Database(e) => {
-                tracing::error!(err = %e, "database error");
+                tracing::error!(error = %e, "request failed: database error");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "INTERNAL",
@@ -149,7 +179,7 @@ impl IntoResponse for AppError {
                     .into(),
             ),
             AppError::Internal(e) => {
-                tracing::error!(err = %e, "internal error");
+                tracing::error!(error = ?e, "request failed: internal error");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "INTERNAL",

@@ -104,7 +104,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Architecture',
       collapsed: false,
-      items: ['architecture/backend-data-flow', 'architecture/unification-baseline', 'architecture/theming', 'architecture/frontend-error-observability', 'frontend/dashboard-architecture', 'frontend/chart-architecture', 'rivian-auth'],
+      items: ['architecture/backend-data-flow', 'architecture/unification-baseline', 'architecture/theming', 'architecture/frontend-error-observability', 'architecture/logging', 'frontend/dashboard-architecture', 'frontend/chart-architecture', 'rivian-auth'],
     },
     {
       type: 'category',

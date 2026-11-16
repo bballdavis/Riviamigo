@@ -11,12 +11,13 @@ use http::{
 use tower_governor::governor::GovernorConfigBuilder;
 use tower_governor::GovernorLayer;
 use tower_http::{
+    classify::ServerErrorsFailureClass,
     compression::CompressionLayer,
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
     limit::RequestBodyLimitLayer,
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     set_header::SetResponseHeaderLayer,
-    trace::{DefaultMakeSpan, DefaultOnFailure, TraceLayer},
+    trace::TraceLayer,
 };
 
 use crate::middleware::{
@@ -139,7 +140,7 @@ async fn log_server_errors(
     }
 
     if response.status().is_server_error() {
-        tracing::error!(%method, %path, status = %response.status(), "request returned server error");
+        tracing::error!(%method, %path, status = response.status().as_u16(), "request returned server error");
     }
 
     response
@@ -358,13 +359,51 @@ pub fn build_router(state: AppState) -> Router {
         ))
         .layer(cors)
         .layer(CompressionLayer::new())
-        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
-        .layer(PropagateRequestIdLayer::x_request_id())
+        // Router layers run last-added first: the id is generated, then copied to
+        // the response, then the trace layer's span can carry it; every log line written while handling the
+        // request then includes `request_id` without each call site naming it.
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::new().include_headers(false))
-                .on_failure(DefaultOnFailure::new()),
+                .make_span_with(|request: &http::Request<_>| {
+                    let request_id = request
+                        .headers()
+                        .get("x-request-id")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("-");
+                    tracing::info_span!(
+                        "http",
+                        method = %request.method(),
+                        path = %request.uri().path(),
+                        request_id,
+                    )
+                })
+                .on_request(())
+                .on_response(
+                    |response: &http::Response<_>, latency: Duration, _span: &tracing::Span| {
+                        tracing::debug!(
+                            status = response.status().as_u16(),
+                            latency_ms = latency.as_millis() as u64,
+                            "request completed"
+                        );
+                    },
+                )
+                // Server-error statuses are logged once, with their cause, by
+                // `AppError` and `log_server_errors`; only transport-level
+                // failures that never produced a response are reported here.
+                .on_failure(
+                    |class: ServerErrorsFailureClass, latency: Duration, _span: &tracing::Span| {
+                        if let ServerErrorsFailureClass::Error(message) = class {
+                            tracing::warn!(
+                                error = %message,
+                                latency_ms = latency.as_millis() as u64,
+                                "request failed before a response was produced"
+                            );
+                        }
+                    },
+                ),
         )
+        .layer(PropagateRequestIdLayer::x_request_id())
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         .layer(SetResponseHeaderLayer::overriding(
             STRICT_TRANSPORT_SECURITY,
             HeaderValue::from_static("max-age=31536000; includeSubDomains"),
