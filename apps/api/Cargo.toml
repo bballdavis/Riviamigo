@@ -98,6 +98,13 @@ proptest                = "1"
 tokio                   = { version = "1", features = ["full", "test-util"] }
 axum-test               = "21"
 
+# Dev and test builds keep only line tables. macOS otherwise defaults to
+# unpacked full debug info, which leaves tens of GB of per-binary object files
+# in target/ across the many bin and integration-test targets.
+[profile.dev]
+debug           = "line-tables-only"
+split-debuginfo = "off"
+
 [profile.release]
 opt-level     = 3
 lto           = true
