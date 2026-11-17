@@ -11,7 +11,7 @@ use super::VehicleArtworkCacheStateRow;
 pub(super) async fn mark_vehicle_artwork_repair_attempt(pool: &sqlx::PgPool, vehicle_id: Uuid) {
     // `attempts` counts consecutive failed repairs for backoff, so a pass
     // inside a repair only refreshes the active-repair lease.
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_artwork_cache_state
               (vehicle_id, status, last_repair_attempt_at, updated_at)
            VALUES ($1, 'repairing', now(), now())
@@ -21,7 +21,10 @@ pub(super) async fn mark_vehicle_artwork_repair_attempt(pool: &sqlx::PgPool, veh
     )
     .bind(vehicle_id)
     .execute(pool)
-    .await;
+    .await
+    {
+        warn!(vehicle_id = %vehicle_id, error = %error, "artwork repair attempt not recorded");
+    }
 }
 
 /// How a cache-state write affects repair scheduling.
@@ -54,7 +57,7 @@ pub(super) async fn refresh_vehicle_artwork_cache_state(
     let rows = match fetch_vehicle_image_rows(pool, vehicle_id).await {
         Ok(rows) => rows,
         Err(error) => {
-            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.cache_state_rows_failed");
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle images cache state rows failed");
             return;
         }
     };
@@ -63,7 +66,7 @@ pub(super) async fn refresh_vehicle_artwork_cache_state(
         write_vehicle_artwork_cache_state(pool, vehicle_id, asset_count, ready_asset_count, update)
             .await
     {
-        warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.cache_state_write_failed");
+        warn!(vehicle_id = %vehicle_id, error = %error, "vehicle images cache state write failed");
     }
 }
 
@@ -156,6 +159,9 @@ pub(super) async fn vehicle_artwork_cache_state_json(
     .bind(vehicle_id)
     .fetch_optional(pool)
     .await
+    .inspect_err(|error| {
+        warn!(vehicle_id = %vehicle_id, error = %error, "vehicle images cache state read failed");
+    })
     .ok()
     .flatten();
     match state {

@@ -102,7 +102,16 @@ pub async fn load_home_plan(pool: &PgPool, vehicle_id: Uuid) -> Result<Option<Ho
         billing_type: row.billing_type,
         rate: row.rate,
         // A malformed period list only loses the window detail, not the plan.
-        tou_periods: serde_json::from_value(row.tou_periods).unwrap_or_default(),
+        tou_periods: match serde_json::from_value(row.tou_periods) {
+            Ok(periods) => periods,
+            Err(error) => {
+                tracing::debug!(
+                    error = %error,
+                    "stored plan time-of-use periods unreadable, window detail dropped"
+                );
+                Default::default()
+            }
+        },
     }))
 }
 

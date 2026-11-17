@@ -1,4 +1,117 @@
+/**
+ * Browser logging mirrors the server ladder in docs/architecture/logging.md:
+ * error, warn, info (lifecycle), debug (decisions), trace (per-message detail).
+ * The default threshold is `info`. Raise it in the console with
+ * `localStorage.setItem('rm-log-level', 'debug')` and reload, or at runtime with
+ * `riviamigoLog.setLevel('trace')`.
+ */
+export type ClientLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
+export type ClientLogFieldValue = string | number | boolean | null | undefined;
+export type ClientLogFields = Record<string, ClientLogFieldValue>;
+
 export type ClientErrorSeverity = 'warn' | 'error';
+
+const LEVEL_RANK: Record<ClientLogLevel, number> = { trace: 10, debug: 20, info: 30, warn: 40, error: 50 };
+const LEVEL_STORAGE_KEY = 'rm-log-level';
+const DEFAULT_LEVEL: ClientLogLevel = 'info';
+// Never logged at any level, mirroring the server's "never log" list.
+const SENSITIVE_FIELD = /^(password|passwd|secret|token|access_token|refresh_token|api_key|apikey|cookie|authorization|email|vin|lat|lon|lng|latitude|longitude|address)$/i;
+const UUID_VALUE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Kept whole so a browser line can be matched to the server log line.
+const CORRELATION_FIELDS = new Set(['request_id']);
+
+let levelOverride: ClientLogLevel | undefined;
+
+function isLevel(value: unknown): value is ClientLogLevel {
+  return typeof value === 'string' && value in LEVEL_RANK;
+}
+
+/** The active threshold: runtime override, then the saved choice, then `info`. */
+export function getClientLogLevel(): ClientLogLevel {
+  if (levelOverride) return levelOverride;
+  try {
+    const saved = typeof localStorage === 'undefined' ? null : localStorage.getItem(LEVEL_STORAGE_KEY);
+    if (isLevel(saved)) return saved;
+  } catch {
+    // Storage can be blocked; the default applies.
+  }
+  return DEFAULT_LEVEL;
+}
+
+export function setClientLogLevel(level: ClientLogLevel | undefined, persist = false): void {
+  levelOverride = level;
+  if (!persist) return;
+  try {
+    if (level) localStorage.setItem(LEVEL_STORAGE_KEY, level);
+    else localStorage.removeItem(LEVEL_STORAGE_KEY);
+  } catch {
+    // Persistence is a convenience only.
+  }
+}
+
+export function isClientLogEnabled(level: ClientLogLevel): boolean {
+  return LEVEL_RANK[level] >= LEVEL_RANK[getClientLogLevel()];
+}
+
+function formatFieldValue(key: string, value: Exclude<ClientLogFieldValue, undefined>): string {
+  if (typeof value === 'string') {
+    const text = CORRELATION_FIELDS.has(key) || !UUID_VALUE.test(value) ? sanitizeText(value) : `${value.slice(0, 8)}…`;
+    return /[\s="]/.test(text) ? JSON.stringify(text) : text;
+  }
+  return String(value);
+}
+
+function formatFields(fields: ClientLogFields | undefined): string {
+  if (!fields) return '';
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined || SENSITIVE_FIELD.test(key)) continue;
+    parts.push(`${key}=${value === null ? 'null' : formatFieldValue(key, value)}`);
+  }
+  return parts.length ? ` ${parts.join(' ')}` : '';
+}
+
+/** `[riviamigo][LEVEL] area: message key=value`, the browser twin of the server line. */
+function formatLine(level: ClientLogLevel, area: string, message: string, fields?: ClientLogFields): string {
+  return `[riviamigo][${level.toUpperCase()}] ${area}: ${message}${formatFields(fields)}`;
+}
+
+function write(level: ClientLogLevel, line: string, detail?: unknown): void {
+  const args = detail === undefined ? [line] : [line, detail];
+  switch (level) {
+    case 'error': console.error(...args); break;
+    case 'warn': console.warn(...args); break;
+    case 'info': console.info(...args); break;
+    default: console.debug(...args);
+  }
+}
+
+function emit(level: ClientLogLevel, area: string, message: string, fields?: ClientLogFields): void {
+  if (!isClientLogEnabled(level)) return;
+  write(level, formatLine(level, area, message, fields));
+}
+
+/**
+ * Leveled browser logger. `area` names the subsystem (`auth`, `api`, `live`,
+ * `route`, `query`, `map`), `message` is a short lowercase event, and values go
+ * in `fields` using the server's names (`vehicle_id`, `status`, `latency_ms`,
+ * `reason`, `error`). Passwords, tokens, emails, VINs and coordinates are
+ * dropped by field name; UUIDs other than `request_id` are shortened.
+ */
+export const clientLog = {
+  trace: (area: string, message: string, fields?: ClientLogFields) => emit('trace', area, message, fields),
+  debug: (area: string, message: string, fields?: ClientLogFields) => emit('debug', area, message, fields),
+  info: (area: string, message: string, fields?: ClientLogFields) => emit('info', area, message, fields),
+  warn: (area: string, message: string, fields?: ClientLogFields) => emit('warn', area, message, fields),
+  error: (area: string, message: string, fields?: ClientLogFields) => emit('error', area, message, fields),
+};
+
+if (typeof window !== 'undefined') {
+  (window as unknown as { riviamigoLog?: unknown }).riviamigoLog = {
+    level: getClientLogLevel,
+    setLevel: (level: ClientLogLevel | undefined) => setClientLogLevel(level, true),
+  };
+}
 
 export interface ClientErrorContext {
   event: string;
@@ -75,12 +188,9 @@ export function reportClientError(
   recentReports.set(dedupeKey, now);
 
   const severity = context.severity ?? defaultSeverity(context.area);
-  const summary = `[Riviamigo client] ${record.event}: ${record.error.name}: ${record.error.message}`;
-  if (severity === 'error') {
-    console.error(summary, record);
-  } else {
-    console.warn(summary, record);
-  }
+  if (!isClientLogEnabled(severity)) return;
+  const summary = `[riviamigo][${severity.toUpperCase()}] ${record.area}: ${record.event} error=${JSON.stringify(`${record.error.name}: ${record.error.message}`)}`;
+  write(severity, summary, record);
 }
 
 /** Install global browser diagnostics and return a cleanup function for tests. */
@@ -179,6 +289,11 @@ function pruneRecentReports(now: number) {
   for (const [key, timestamp] of recentReports) {
     if (now - timestamp >= REPORT_DEDUPE_WINDOW_MS) recentReports.delete(key);
   }
+}
+
+/** A URL path safe to log: no query string, ids, or map tile coordinates. */
+export function redactPath(value: string | undefined): string | undefined {
+  return sanitizePath(value);
 }
 
 function sanitizePath(value: string | undefined): string | undefined {

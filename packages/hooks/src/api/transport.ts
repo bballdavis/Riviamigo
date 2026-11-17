@@ -117,7 +117,7 @@ import {
   tripPowerSource,
 } from './normalizers';
 import { withSessionLock } from './sessionLock';
-import { reportClientError } from '@riviamigo/ui/lib/clientDiagnostics';
+import { clientLog, redactPath, reportClientError } from '@riviamigo/ui/lib/clientDiagnostics';
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
 
@@ -330,6 +330,7 @@ export class AuthenticatedTransport {
   }
 
   private applyTokens(tokens: AuthTokens) {
+    clientLog.debug('auth', 'access token renewed');
     this.setToken(tokens.access_token);
     this.authExpiredReported = false;
     this.authChangeHandler?.(tokens);
@@ -540,6 +541,9 @@ export class AuthenticatedTransport {
     const shouldRetryOnUnauthorized = retryOnUnauthorized && !isPublicAuthPath(path);
 
     let res: Response;
+    const startedAt = typeof performance === 'undefined' ? Date.now() : performance.now();
+    const logPath = redactPath(path);
+    clientLog.trace('api', 'request started', { method, path: logPath });
     try {
       res = await fetch(url, {
         method,
@@ -579,6 +583,14 @@ export class AuthenticatedTransport {
       }
       throw networkError;
     }
+
+    clientLog.debug('api', 'request completed', {
+      method,
+      path: logPath,
+      status: res.status,
+      latency_ms: Math.round((typeof performance === 'undefined' ? Date.now() : performance.now()) - startedAt),
+      request_id: res.headers.get('x-request-id') ?? undefined,
+    });
 
     if (!res.ok) {
       const rateLimitHeaders = parseRateLimitHeaders(res.headers, method, path);

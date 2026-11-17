@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { create } from 'zustand';
 import type { Vehicle, VehicleStatus } from '@riviamigo/types';
-import { reportClientError } from '@riviamigo/ui/lib/clientDiagnostics';
+import { clientLog, isClientLogEnabled, reportClientError } from '@riviamigo/ui/lib/clientDiagnostics';
 import { api } from './api';
 import { useAuthReady } from './useAuthState';
 import { useAuth } from './useAuth';
@@ -54,42 +54,32 @@ const PROBE_RESPONSE_TIMEOUT_MS = 10_000;
 const LIVE_PROBE_MESSAGE = JSON.stringify({ type: 'probe' });
 
 // ---------------------------------------------------------------------------
-// WS debug logger — enable in the browser console:
-//   localStorage.setItem('rm-ws-debug', '1'); location.reload()
-//   localStorage.removeItem('rm-ws-debug');    location.reload()
+// Frame trace. Enable in the browser console with
+//   riviamigoLog.setLevel('trace')    (then reload)
+// It records each frame's shape (message type, changed field names, and fields
+// the frame would have blanked), never the values, which include location.
 // ---------------------------------------------------------------------------
 
-function isWsDebug(): boolean {
-  try {
-    return typeof localStorage !== 'undefined' && localStorage.getItem('rm-ws-debug') === '1';
-  } catch {
-    return false;
-  }
-}
-
-function wsDebugLog(
+function traceFrame(
   vehicleId: string,
   messageType: 'partial' | 'snapshot' | 'ignored',
-  raw: unknown,
   patch: Partial<VehicleStatus> | null,
 ): void {
-  if (!isWsDebug()) return;
-  const existing = useLiveStatusStore.getState().status[vehicleId];
-  const dropouts: string[] = [];
-  if (patch && existing) {
-    const existingFields = existing as unknown as Record<string, unknown>;
-    for (const [k, v] of Object.entries(patch)) {
-      const prev = existingFields[k];
-      if (prev !== null && prev !== undefined && (v === null || v === undefined)) {
-        dropouts.push(`${k}: ${JSON.stringify(prev)} → ${String(v)}`);
-      }
-    }
-  }
-  console.group(`[WS ${vehicleId}] ${messageType} @ ${new Date().toISOString()}`);
-  console.log('raw   :', raw);
-  console.log('patch :', patch);
-  if (dropouts.length > 0) console.warn('would-dropout:', dropouts);
-  console.groupEnd();
+  if (!isClientLogEnabled('trace')) return;
+  const existing = useLiveStatusStore.getState().status[vehicleId] as unknown as Record<string, unknown> | undefined;
+  const changed = patch ? Object.keys(patch) : [];
+  const dropouts = patch && existing
+    ? Object.entries(patch)
+      .filter(([k, v]) => existing[k] != null && v == null)
+      .map(([k]) => k)
+    : [];
+  clientLog.trace('live', 'frame received', {
+    vehicle_id: vehicleId,
+    message_type: messageType,
+    count: changed.length,
+    fields: changed.join(',') || undefined,
+    would_dropout: dropouts.join(',') || undefined,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +179,9 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
     lastMessageAtRef.current = null;
     setConnectionState('connecting');
 
+    clientLog.debug('live', 'connecting', { vehicle_id: vehicleId, attempt: reconnectAttemptsRef.current + 1 });
     ws.onopen = () => {
+      clientLog.info('live', 'connection open', { vehicle_id: vehicleId });
       refreshAttemptedRef.current = false;
       backoffRef.current = 1000;
       reconnectAttemptsRef.current = 0;
@@ -240,15 +232,15 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
             last_updated: message.ts ?? new Date().toISOString(),
             ...patch,
           } as VehicleStatus;
-          wsDebugLog(vehicleId, 'partial', message, data);
+          traceFrame(vehicleId, 'partial', data);
           setStatus(vehicleId, data);
         } else if ('vehicle_id' in message) {
           // Full status snapshot — nulls here are intentional.
-          wsDebugLog(vehicleId, 'snapshot', message, message as VehicleStatus);
+          traceFrame(vehicleId, 'snapshot', message as VehicleStatus);
           setStatus(vehicleId, message as VehicleStatus);
         } else {
           // Heartbeat / control frame — ignore.
-          wsDebugLog(vehicleId, 'ignored', message, null);
+          traceFrame(vehicleId, 'ignored', null);
         }
       } catch (error) {
         reportClientError(error, {
@@ -268,7 +260,9 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
       socketOpenedAtRef.current = null;
       lastMessageAtRef.current = null;
       setConnected(vehicleId, false);
+      clientLog.debug('live', 'connection closed', { vehicle_id: vehicleId, code: event?.code });
       if (event?.code === 4403) {
+        clientLog.warn('live', 'vehicle access removed', { vehicle_id: vehicleId });
         shouldReconnectRef.current = false;
         removedVehicleRef.current = vehicleId;
         useLiveStatusStore.getState().removeVehicle(vehicleId);
@@ -285,6 +279,10 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
         return;
       }
       if (event?.code === 4401) {
+        clientLog.info('live', 'session rejected; renewing', {
+          vehicle_id: vehicleId,
+          retry: refreshAttemptedRef.current,
+        });
         shouldReconnectRef.current = false;
         setConnectionState('connecting');
         if (refreshAttemptedRef.current) { useAuth.getState().clearSession(); return; }
@@ -316,6 +314,14 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
       }
 
       reconnectAttemptsRef.current += 1;
+      clientLog.debug('live', 'reconnect scheduled', {
+        vehicle_id: vehicleId,
+        attempt: reconnectAttemptsRef.current,
+        delay_ms: backoffRef.current,
+      });
+      if (reconnectAttemptsRef.current === MAX_RECONNECT_ATTEMPTS + 1) {
+        clientLog.warn('live', 'connection unavailable; still retrying', { vehicle_id: vehicleId });
+      }
       if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS) {
         // Signal persistent failure so the UI can show a warning, but keep
         // retrying at the max-backoff interval rather than giving up forever.

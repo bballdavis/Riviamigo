@@ -6,6 +6,7 @@ use crate::{errors::AppError, middleware::auth::Claims};
 
 pub async fn require_enabled_session(pool: &PgPool, claims: &Claims) -> Result<(), AppError> {
     if claims.exp <= chrono::Utc::now().timestamp() {
+        tracing::debug!(reason = "token_expired", "session rejected");
         return Err(AppError::Unauthorized);
     }
     let enabled =
@@ -13,8 +14,12 @@ pub async fn require_enabled_session(pool: &PgPool, claims: &Claims) -> Result<(
             .bind(claims.sub)
             .fetch_optional(pool)
             .await?
-            .ok_or(AppError::Unauthorized)?;
+            .ok_or_else(|| {
+                tracing::debug!(reason = "user_missing", "session rejected");
+                AppError::Unauthorized
+            })?;
     if !enabled {
+        tracing::debug!(reason = "account_disabled", "session rejected");
         return Err(AppError::Forbidden);
     }
     // Old JWTs have no sid and expire within the existing 15-minute lifetime.
@@ -30,6 +35,7 @@ pub async fn require_enabled_session(pool: &PgPool, claims: &Claims) -> Result<(
         .fetch_one(pool)
         .await?;
         if !active {
+            tracing::debug!(reason = "session_inactive", "session rejected");
             return Err(AppError::Unauthorized);
         }
     }

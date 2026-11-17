@@ -174,6 +174,7 @@ pub async fn seed_demo_vehicle(
     model: &str,
     anchor: DateTime<Utc>,
 ) -> Result<DemoSeedSummary, AppError> {
+    let started = std::time::Instant::now();
     let fixture = load_fixture()?;
     let profile = model_profile(model)?;
     let anchor = anchor.with_nanosecond(0).unwrap_or(anchor);
@@ -208,6 +209,18 @@ pub async fn seed_demo_vehicle(
         )));
     }
 
+    // Logged before the caller commits the transaction; a commit failure after
+    // this line is reported by the caller's error log.
+    tracing::info!(
+        vehicle_id = %vehicle_id,
+        model,
+        telemetry = counts.telemetry,
+        trips = counts.trips,
+        charges = counts.charges,
+        weather_samples = counts.weather_samples,
+        duration_ms = started.elapsed().as_millis() as u64,
+        "demo vehicle data seeded"
+    );
     Ok(DemoSeedSummary {
         seeded_at: anchor,
         window_start,

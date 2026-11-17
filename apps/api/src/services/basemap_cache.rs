@@ -77,18 +77,33 @@ pub async fn store(
     }
     .await;
     if let Err(error) = result {
-        tracing::debug!(?error, "basemap cache write skipped");
+        // Cache writes are best-effort; a Redis outage must not log per tile request.
+        tracing::debug!(error = %error, "basemap cache write skipped");
     }
 }
 
 pub async fn touch(connection: &mut redis::aio::MultiplexedConnection, key: &str) {
-    let _: Result<i64, _> = redis::cmd("ZADD")
+    let result: Result<i64, redis::RedisError> = redis::cmd("ZADD")
         .arg(INDEX)
         .arg("XX")
         .arg(chrono::Utc::now().timestamp_millis())
         .arg(key)
         .query_async(connection)
         .await;
+    if let Err(error) = result {
+        tracing::debug!(error = %error, "basemap cache recency update skipped");
+    }
+}
+
+/// Maintenance retries every second while Redis is down. Warn on the first
+/// failure and keep the rest at debug; the caller logs the recovery.
+fn note_maintenance_failure(failing: &mut bool, error: &redis::RedisError) {
+    if *failing {
+        tracing::debug!(error = %error, suppressed = true, "basemap cache maintenance failed");
+    } else {
+        tracing::warn!(error = %error, "basemap cache maintenance failed");
+        *failing = true;
+    }
 }
 
 /// Invalidate legacy permanent entries in bounded SCAN batches. New entries
@@ -96,14 +111,19 @@ pub async fn touch(connection: &mut redis::aio::MultiplexedConnection, key: &str
 pub fn start_maintenance(client: redis::Client) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut cursor = 0u64;
+        let mut failing = false;
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            let Ok(mut connection) = client.get_multiplexed_async_connection().await else {
-                continue;
+            let mut connection = match client.get_multiplexed_async_connection().await {
+                Ok(connection) => connection,
+                Err(error) => {
+                    note_maintenance_failure(&mut failing, &error);
+                    continue;
+                }
             };
-            let Ok((next, keys)) = redis::cmd("SCAN")
+            let (next, keys) = match redis::cmd("SCAN")
                 .arg(cursor)
                 .arg("MATCH")
                 .arg("external:basemap:*")
@@ -111,16 +131,34 @@ pub fn start_maintenance(client: redis::Client) -> tokio::task::JoinHandle<()> {
                 .arg(100)
                 .query_async::<(u64, Vec<String>)>(&mut connection)
                 .await
-            else {
-                continue;
+            {
+                Ok(scan) => scan,
+                Err(error) => {
+                    note_maintenance_failure(&mut failing, &error);
+                    continue;
+                }
             };
+            if failing {
+                tracing::info!("basemap cache maintenance recovered");
+                failing = false;
+            }
+            let mut invalidated = 0_u64;
             for key in keys {
                 if matches!(connection.ttl::<_, i64>(&key).await, Ok(-1)) {
-                    let _: Result<i64, _> = redis::cmd("UNLINK")
+                    match redis::cmd("UNLINK")
                         .arg(&key)
-                        .query_async(&mut connection)
-                        .await;
+                        .query_async::<i64>(&mut connection)
+                        .await
+                    {
+                        Ok(_) => invalidated += 1,
+                        Err(error) => {
+                            tracing::debug!(error = %error, "legacy basemap entry invalidation skipped");
+                        }
+                    }
                 }
+            }
+            if invalidated > 0 {
+                tracing::debug!(count = invalidated, "legacy basemap entries invalidated");
             }
             cursor = next;
             if cursor == 0 {

@@ -8,6 +8,7 @@ pub mod rivian_poll;
 pub mod rivian_ws_backoff;
 pub mod session_store;
 pub mod supervisor;
+pub mod tire_validity;
 pub mod trip_detector;
 pub mod trip_signals;
 pub mod worker;
@@ -52,7 +53,7 @@ pub async fn start_workers(
     if !workers_enabled {
         tracing::warn!(
             env = RIVIAN_WORKERS_ENABLED_ENV,
-            "Rivian connection is off: live vehicle data, charge history sync, and artwork repair are paused"
+            "rivian connection is off: live vehicle data, charge history sync, and artwork repair are paused"
         );
         return Ok(handle);
     }
@@ -71,6 +72,10 @@ pub async fn start_workers(
     .fetch_all(&pool)
     .await?;
 
+    tracing::info!(
+        count = enrolled.len(),
+        "vehicle workers requested at startup"
+    );
     for vid in enrolled {
         if !handle
             .send(supervisor::SupervisorCommand::StartWorker { vehicle_id: vid })

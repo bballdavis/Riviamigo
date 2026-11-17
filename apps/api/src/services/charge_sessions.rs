@@ -112,8 +112,10 @@ impl SummaryAttributionCounts {
         if self.is_empty() {
             return;
         }
-        tracing::info!(
-            vehicle_id = ?vehicle_id,
+        // Recurs on every sync that sees the same foreign summaries, so this is
+        // a decision trail rather than an operator summary.
+        tracing::debug!(
+            vehicle_id = vehicle_id.map(|id| id.to_string()),
             context,
             skipped_foreign = self.skipped_foreign,
             skipped_unidentified = self.skipped_unidentified,
@@ -340,7 +342,16 @@ async fn update_session_from_summary(
     .bind(summary.vehicle_id.as_deref())
     .bind(summary.vehicle_name.as_deref())
     .bind(summary.is_public)
-    .bind(serde_json::to_value(summary).ok())
+    .bind(
+        serde_json::to_value(summary)
+            .inspect_err(|error| {
+                tracing::warn!(
+                    error = %error,
+                    "charge session summary could not be serialized, stored without payload"
+                );
+            })
+            .ok(),
+    )
     .execute(pool)
     .await?;
 
@@ -425,7 +436,16 @@ async fn insert_api_only_session(
     .bind(summary.vehicle_id.as_deref())
     .bind(summary.vehicle_name.as_deref())
     .bind(summary.is_public)
-    .bind(serde_json::to_value(summary).ok())
+    .bind(
+        serde_json::to_value(summary)
+            .inspect_err(|error| {
+                tracing::warn!(
+                    error = %error,
+                    "charge session summary could not be serialized, stored without payload"
+                );
+            })
+            .ok(),
+    )
     .fetch_optional(pool)
     .await?;
 
@@ -618,9 +638,12 @@ pub async fn backfill_charge_session_aliases_from_rows(
     .await?;
 
     let mut written = 0u64;
+    let mut unreadable_summaries = 0u64;
     for row in rows {
         let summary = row.rivian_meta.as_ref().and_then(|value| {
-            serde_json::from_value::<ChargeSessionSummaryPayload>(value.clone()).ok()
+            serde_json::from_value::<ChargeSessionSummaryPayload>(value.clone())
+                .inspect_err(|_| unreadable_summaries += 1)
+                .ok()
         });
         let aliases = if let Some(summary) = summary.as_ref() {
             let parsed = parse_summary_aliases(summary);
@@ -659,6 +682,13 @@ pub async fn backfill_charge_session_aliases_from_rows(
         finalize_charge_session_aliases(pool, row.id).await?;
     }
 
+    if unreadable_summaries > 0 {
+        tracing::warn!(
+            vehicle_id = vehicle_id.map(|id| id.to_string()),
+            count = unreadable_summaries,
+            "stored charge summaries unreadable, aliases taken from session ids"
+        );
+    }
     Ok(written)
 }
 
@@ -926,10 +956,12 @@ pub async fn replay_charge_payload_summaries(
     };
     let mut attribution = SummaryAttributionCounts::default();
     let mut linked = 0u64;
+    let mut unreadable = 0u64;
     for payload in payloads {
         let Ok(summary) =
             serde_json::from_value::<ChargeSessionSummaryPayload>(payload.payload.clone())
         else {
+            unreadable += 1;
             continue;
         };
 
@@ -968,6 +1000,18 @@ pub async fn replay_charge_payload_summaries(
         }
     }
 
+    if unreadable > 0 {
+        tracing::warn!(
+            vehicle_id = vehicle_id.map(|id| id.to_string()),
+            count = unreadable,
+            "stored charge payload summaries unreadable, skipped"
+        );
+    }
+    tracing::debug!(
+        vehicle_id = vehicle_id.map(|id| id.to_string()),
+        linked,
+        "stored charge payload summaries replayed"
+    );
     attribution.log(vehicle_id, "stored payload replay");
     Ok(linked)
 }
@@ -1080,7 +1124,7 @@ pub async fn reassign_misattributed_api_sessions(
     let reassigned = reassigned.len() as u64;
     if reassigned > 0 {
         tracing::info!(
-            vehicle_id = ?vehicle_id,
+            vehicle_id = vehicle_id.map(|id| id.to_string()),
             reassigned,
             "reassigned misattributed API-only charge sessions to their owning vehicle"
         );
@@ -1754,6 +1798,15 @@ pub async fn canonicalize_charge_sessions(
         }
     }
 
+    if stats.clusters_merged > 0 || stats.duplicate_rows_deleted > 0 {
+        tracing::info!(
+            vehicle_id = vehicle_id.map(|id| id.to_string()),
+            clusters_merged = stats.clusters_merged,
+            duplicate_rows_deleted = stats.duplicate_rows_deleted,
+            alias_rows_rehomed = stats.alias_rows_rehomed,
+            "charge sessions canonicalized"
+        );
+    }
     Ok(stats)
 }
 

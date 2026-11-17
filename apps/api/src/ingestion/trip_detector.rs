@@ -132,6 +132,8 @@ pub struct TripDetectorState {
     // a backdated start also gets the matching start time and place.
     gear_at: Option<DateTime<Utc>>,
     last_parked_fix: Option<TrackPoint>,
+    // Last start decision seen, so a deferred start is logged once per change.
+    last_start_decision: &'static str,
 }
 
 /// A gear shift older than this no longer describes the trip that starts
@@ -225,6 +227,16 @@ impl TripDetectorState {
 
     pub fn process(&mut self, event: &TelemetryEvent) -> TripEvent {
         let start_decision = self.start_decision(event);
+        if start_decision != self.last_start_decision {
+            if !matches!(start_decision, "eligible" | "already_active") {
+                tracing::debug!(
+                    vehicle_id = %self.vehicle_id,
+                    reason = start_decision,
+                    "trip start deferred"
+                );
+            }
+            self.last_start_decision = start_decision;
+        }
         let power = event.power_state.as_ref();
         let speed = event.speed_mph.unwrap_or(0.0);
         let ts = event.ts;
@@ -251,6 +263,13 @@ impl TripDetectorState {
                 && gear_engaged(event.gear_status.as_deref()).unwrap_or(false));
 
         if let Some(in_gear) = in_gear_now(event) {
+            if in_gear != self.in_gear {
+                tracing::debug!(
+                    vehicle_id = %self.vehicle_id,
+                    in_gear,
+                    "trip detector gear state changed"
+                );
+            }
             if in_gear && !self.in_gear {
                 self.gear_odometer = prior_odometer.or(event.odometer_miles);
                 // The shift happened when the deciding signal was observed,
@@ -262,6 +281,16 @@ impl TripDetectorState {
             }
             self.in_gear = in_gear;
         }
+
+        tracing::trace!(
+            vehicle_id = %self.vehicle_id,
+            start_decision,
+            is_moving,
+            is_asleep,
+            in_gear = self.in_gear,
+            active = self.active_trip_id.is_some(),
+            "trip signals evaluated"
+        );
 
         if self.active_trip_id.is_some() {
             if let Some((lat, lng)) = valid_location_pair(event.latitude, event.longitude) {
@@ -400,6 +429,16 @@ impl TripDetectorState {
                     altitude_m: event.altitude_m,
                 });
             }
+            tracing::debug!(
+                vehicle_id = %self.vehicle_id,
+                trip_id = %trip_id,
+                reason = start_decision,
+                power_state = ?event.power_state,
+                in_gear = self.in_gear,
+                speed_mph = speed,
+                backdated,
+                "trip detector moved to driving"
+            );
             return TripEvent::TripStarted {
                 trip_id,
                 started_at,
@@ -417,6 +456,15 @@ impl TripDetectorState {
                 .is_some_and(|last| (ts - last).num_seconds() > STOPPED_DURATION_SECS);
 
             if is_asleep || stopped_long_enough {
+                if let Some(trip_id) = self.active_trip_id {
+                    tracing::debug!(
+                        vehicle_id = %self.vehicle_id,
+                        trip_id = %trip_id,
+                        reason = if is_asleep { "asleep" } else { "stopped" },
+                        duration_ms = (ts - self.trip_started_at.unwrap_or(ts)).num_milliseconds(),
+                        "trip detector left driving"
+                    );
+                }
                 return self.close_trip(ts);
             }
         }

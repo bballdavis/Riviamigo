@@ -1,7 +1,7 @@
 //! Capture lifecycle: startup restore, start and stop, and the expiry and purge
 //! tasks that bound each capture's life and storage.
 
-use std::{future::Future, sync::atomic::Ordering, time::Duration};
+use std::{collections::HashSet, future::Future, sync::atomic::Ordering, time::Duration};
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -34,19 +34,22 @@ pub async fn init(pool: PgPool) -> anyhow::Result<()> {
         anyhow::bail!("ingestion capture service already initialised");
     }
 
-    sqlx::query(
+    let expired = sqlx::query(
         "UPDATE riviamigo.vehicle_ingestion_diagnostics \
          SET stopped_at = enabled_until, stop_reason = 'expired', updated_at = now() \
          WHERE stopped_at IS NULL AND enabled_until <= now()",
     )
     .execute(&pool)
-    .await?;
+    .await?
+    .rows_affected();
     let open = sqlx::query_as::<_, (Uuid, Uuid, DateTime<Utc>)>(
         "SELECT vehicle_id, capture_id, enabled_until FROM riviamigo.vehicle_ingestion_diagnostics \
          WHERE stopped_at IS NULL",
     )
     .fetch_all(&pool)
     .await?;
+    tracing::debug!(expired, "ingestion captures expired at startup");
+    tracing::info!(count = open.len(), "ingestion captures restored");
     for (vehicle_id, capture_id, ends_at) in open {
         register(vehicle_id, capture_id, ends_at);
     }
@@ -73,6 +76,7 @@ where
     let _serialized = LIFECYCLE.lock().await;
     let (capture_id, ends_at) = commit().await?;
     register(vehicle_id, capture_id, ends_at);
+    tracing::info!(vehicle_id = %vehicle_id, capture_id = %capture_id, "ingestion capture started");
     Ok(())
 }
 
@@ -182,6 +186,15 @@ async fn end_capture(
     )
     .await?;
     tx.commit().await?;
+    if dropped > 0 {
+        tracing::warn!(vehicle_id = %vehicle_id, dropped, "ingestion capture dropped events under load");
+    }
+    tracing::info!(
+        vehicle_id = %vehicle_id,
+        capture_id = %capture_id,
+        reason = reason.as_str(),
+        "ingestion capture stopped"
+    );
     Ok(true)
 }
 
@@ -214,12 +227,26 @@ where
 async fn run_expiry(pool: PgPool) {
     let mut interval = tokio::time::interval(EXPIRY_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Expiry retries every tick while a stop keeps failing; warn once per
+    // vehicle and log the recovery, instead of once per retry.
+    let mut failing: HashSet<Uuid> = HashSet::new();
     loop {
         interval.tick().await;
         let now = Utc::now();
         for vehicle_id in registry::expired(now) {
-            if let Err(error) = stop(&pool, vehicle_id, StopReason::Expired).await {
-                tracing::warn!(vehicle_id = %vehicle_id, err = %error, "ingestion capture expiry failed");
+            match stop(&pool, vehicle_id, StopReason::Expired).await {
+                Ok(_) => {
+                    if failing.remove(&vehicle_id) {
+                        tracing::info!(vehicle_id = %vehicle_id, "ingestion capture expiry recovered");
+                    }
+                }
+                Err(error) => {
+                    if failing.insert(vehicle_id) {
+                        tracing::warn!(vehicle_id = %vehicle_id, error = ?error, "ingestion capture expiry failed");
+                    } else {
+                        tracing::debug!(vehicle_id = %vehicle_id, error = ?error, suppressed = true, "ingestion capture expiry failed");
+                    }
+                }
             }
         }
     }
@@ -249,7 +276,7 @@ async fn run_purge(pool: PgPool) {
                 )
             }
             Ok(_) => {}
-            Err(error) => tracing::warn!(err = %error, "ingestion capture purge failed"),
+            Err(error) => tracing::warn!(error = %error, "ingestion capture purge failed"),
         }
     }
 }

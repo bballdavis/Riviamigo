@@ -14,6 +14,7 @@ use crate::{
         closure_motion::{ClosureMotionMap, ClosureMotionTracker},
         parser, rivian_poll,
         session_store::{decrypt_tokens, RivianTokenBundle},
+        tire_validity::TireValidityGate,
         trip_detector::{
             compute_distance_odometer_or_gps, compute_trip_energy, TripDetectorState, TripEvent,
         },
@@ -143,6 +144,21 @@ struct StateTailRow {
     is_online: Option<bool>,
 }
 
+/// Why a vehicle worker returned, so the supervisor knows whether to start it
+/// again on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerExit {
+    /// It was told to stop.
+    Stopped,
+    /// It cannot run until something changes (credentials, the server key, the
+    /// vehicle row, the collection pause). The action that changes it (a
+    /// reconnect, a resume) starts the worker again.
+    NeedsAction,
+    /// A dependency was unavailable (the database, Redis, or the collector lock
+    /// held by another instance). Starting again later can succeed.
+    Retry,
+}
+
 pub async fn run_vehicle_worker(
     vehicle_id: Uuid,
     pool: PgPool,
@@ -150,14 +166,19 @@ pub async fn run_vehicle_worker(
     age_key: String,
     config: Config,
     shutdown: broadcast::Receiver<()>,
-) {
-    tracing::info!(vehicle_id = %vehicle_id, "worker starting");
+) -> WorkerExit {
+    tracing::debug!(vehicle_id = %vehicle_id, "worker task starting");
 
     let identity = match age_key.parse::<age::x25519::Identity>() {
         Ok(k) => k,
         Err(e) => {
-            tracing::error!(vehicle_id=%vehicle_id, err=%e, "bad age key");
-            return;
+            tracing::error!(
+                vehicle_id=%vehicle_id,
+                error=%e,
+                reason="age_key_invalid",
+                "worker stopped: server age key is invalid"
+            );
+            return WorkerExit::NeedsAction;
         }
     };
 
@@ -173,7 +194,12 @@ pub async fn run_vehicle_worker(
         Ok(Some(encrypted_tokens)) => match decrypt_tokens(&encrypted_tokens, &identity) {
             Ok(t) => t,
             Err(e) => {
-                tracing::error!(vehicle_id=%vehicle_id, err=%e, "decrypt failed");
+                tracing::error!(
+                    vehicle_id=%vehicle_id,
+                    error=?e,
+                    reason="credentials_invalid",
+                    "worker stopped: stored rivian credentials could not be decrypted"
+                );
                 upsert_health(
                     &pool,
                     vehicle_id,
@@ -184,17 +210,14 @@ pub async fn run_vehicle_worker(
                     Some("credentials_invalid"),
                 )
                 .await;
-                return;
+                return WorkerExit::NeedsAction;
             }
         },
         Ok(None) => {
             tracing::error!(
                 vehicle_id=%vehicle_id,
-                worker_health="error",
-                auth_state="needs_reauth",
-                reason_code="credentials_missing",
-                action="reconnect_vehicle",
-                "Rivian telemetry feed unavailable: credentials are missing"
+                reason="credentials_missing",
+                "worker stopped: rivian credentials are missing; reconnect the vehicle"
             );
             upsert_health(
                 &pool,
@@ -206,11 +229,16 @@ pub async fn run_vehicle_worker(
                 Some("credentials_missing"),
             )
             .await;
-            return;
+            return WorkerExit::NeedsAction;
         }
         Err(e) => {
-            tracing::error!(vehicle_id=%vehicle_id, err=%e, "db error");
-            return;
+            tracing::warn!(
+                vehicle_id=%vehicle_id,
+                error=%e,
+                reason="credentials_lookup_failed",
+                "worker stopped on a transient failure; it will restart"
+            );
+            return WorkerExit::Retry;
         }
     };
 
@@ -228,12 +256,17 @@ pub async fn run_vehicle_worker(
                 None,
             )
             .await;
-            tracing::info!(vehicle_id = %vehicle_id, "collector lock held; worker staying passive");
-            return;
+            tracing::info!(vehicle_id = %vehicle_id, "collector lock held by another instance; worker staying passive");
+            return WorkerExit::Retry;
         }
         Err(e) => {
-            tracing::error!(vehicle_id=%vehicle_id, err=%e, "collector lock failed");
-            return;
+            tracing::warn!(
+                vehicle_id=%vehicle_id,
+                error=%e,
+                reason="collector_lock_failed",
+                "worker stopped on a transient failure; it will restart"
+            );
+            return WorkerExit::Retry;
         }
     };
 
@@ -252,31 +285,53 @@ pub async fn run_vehicle_worker(
     // Keep Parallax delivery bounded and independent from the legacy socket.
     let (parallax_tx, mut parallax_rx) = mpsc::channel::<crate::parallax::ForwardedTelemetry>(256);
 
-    // Get rivian_vehicle_id
-    let riv_id: Option<String> =
+    // Get rivian_vehicle_id. A failed read is not the same as a missing row:
+    // only a vehicle that is gone should stop the worker for good.
+    let riv_id: Result<Option<String>, sqlx::Error> =
         sqlx::query_scalar("SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id = $1")
             .bind(vehicle_id)
             .fetch_optional(&pool)
-            .await
-            .ok()
-            .flatten();
+            .await;
 
     let rivian_vehicle_id = match riv_id {
-        Some(id) => id,
-        None => {
-            tracing::error!(vehicle_id=%vehicle_id, "no rivian_vehicle_id");
-            let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
-            return;
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            tracing::warn!(
+                vehicle_id=%vehicle_id,
+                reason="vehicle_missing",
+                "worker stopped: vehicle row not found"
+            );
+            release_collector_lock_logged(&mut lock_conn, vehicle_id).await;
+            return WorkerExit::NeedsAction;
+        }
+        Err(e) => {
+            tracing::warn!(
+                vehicle_id=%vehicle_id,
+                error=%e,
+                reason="vehicle_lookup_failed",
+                "worker stopped on a transient failure; it will restart"
+            );
+            release_collector_lock_logged(&mut lock_conn, vehicle_id).await;
+            return WorkerExit::Retry;
         }
     };
     // Fetch owner user_id (needed for wallbox enrichment).
     let user_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT user_id FROM riviamigo.vehicles WHERE id = $1")
+        match sqlx::query_scalar("SELECT user_id FROM riviamigo.vehicles WHERE id = $1")
             .bind(vehicle_id)
             .fetch_optional(&pool)
             .await
-            .ok()
-            .flatten();
+        {
+            Ok(user_id) => user_id,
+            Err(error) => {
+                tracing::warn!(
+                    vehicle_id=%vehicle_id,
+                    error=%error,
+                    "owner lookup failed; wallbox enrichment runs without an owner"
+                );
+                None
+            }
+        };
 
     // The worker holds this connection for its whole lifetime, so it must
     // survive a Redis restart. A bare MultiplexedConnection stays dead after
@@ -284,7 +339,12 @@ pub async fn run_vehicle_worker(
     let mut redis_conn = match redis.get_connection_manager().await {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!(err=%e, "redis connect failed");
+            tracing::warn!(
+                vehicle_id=%vehicle_id,
+                error=%e,
+                reason="redis_connect_failed",
+                "redis connection failed; worker will retry"
+            );
             upsert_health(
                 &pool,
                 vehicle_id,
@@ -295,11 +355,12 @@ pub async fn run_vehicle_worker(
                 None,
             )
             .await;
-            let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
-            return;
+            release_collector_lock_logged(&mut lock_conn, vehicle_id).await;
+            return WorkerExit::Retry;
         }
     };
     let mut live_publish = LivePublishHealth::default();
+    let mut frame_writes = FrameWriteHealth::default();
 
     let mut worker_shutdown = shutdown.resubscribe();
     let spawn_ws_loop = || {
@@ -325,7 +386,14 @@ pub async fn run_vehicle_worker(
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .unwrap_or_default();
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                vehicle_id=%vehicle_id,
+                error=%error,
+                "http client build failed; using a client without the request timeout"
+            );
+            reqwest::Client::default()
+        });
 
     // ── Poll tasks ───────────────────────────────────────────────────────────
     // Channel to push PowerState changes from the main event loop to the poll loop.
@@ -343,7 +411,7 @@ pub async fn run_vehicle_worker(
     if let Err(error) =
         crate::services::charge_session_repair::heal_active_tail(&pool, vehicle_id).await
     {
-        tracing::warn!(vehicle_id=%vehicle_id, err=%error, "active charge-session startup healing failed");
+        tracing::warn!(vehicle_id=%vehicle_id, error=%error, "active charge-session startup healing failed");
     }
 
     let mut trip_det = TripDetectorState::new(vehicle_id);
@@ -382,7 +450,7 @@ pub async fn run_vehicle_worker(
                     Ok(stats) if stats.scanned == 250 => continue,
                     Ok(_) => break,
                     Err(error) => {
-                        tracing::warn!(vehicle_id=%vehicle_id, err=%error, "historical Parallax session reconciliation failed");
+                        tracing::warn!(vehicle_id=%vehicle_id, error=%error, "historical parallax session reconciliation failed");
                         break;
                     }
                 }
@@ -439,12 +507,15 @@ pub async fn run_vehicle_worker(
             shutdown.resubscribe(),
         ))
     } else {
-        let _ = sqlx::query(
+        if let Err(error) = sqlx::query(
             "INSERT INTO riviamigo.parallax_collector_state(vehicle_id,status,last_error,schema_version) VALUES($1,'disabled','PARALLAX_ENABLED=false',1) ON CONFLICT(vehicle_id) DO UPDATE SET status='disabled',last_error='PARALLAX_ENABLED=false',updated_at=now()",
         )
         .bind(vehicle_id)
         .execute(&pool)
-        .await;
+        .await
+        {
+            tracing::warn!(vehicle_id=%vehicle_id, error=%error, "parallax disabled state write failed");
+        }
         None
     };
     // ────────────────────────────────────────────────────────────────────────
@@ -459,11 +530,11 @@ pub async fn run_vehicle_worker(
     let mut active_state_period = match reconcile_state_period_tail(&pool, vehicle_id, None).await {
         Ok(period) => period,
         Err(error) => {
-            tracing::warn!(vehicle_id=%vehicle_id, err=%error, "state-period startup reconciliation failed; will retry during ingestion");
+            tracing::warn!(vehicle_id=%vehicle_id, error=%error, "state-period startup reconciliation failed; will retry during ingestion");
             match load_open_state_period(&pool, vehicle_id).await {
                 Ok(period) => period,
                 Err(error) => {
-                    tracing::warn!(vehicle_id=%vehicle_id, err=%error, "state-period startup rehydration failed");
+                    tracing::warn!(vehicle_id=%vehicle_id, error=%error, "state-period startup rehydration failed");
                     None
                 }
             }
@@ -490,22 +561,23 @@ pub async fn run_vehicle_worker(
     // connection that stays silently wedged while still holding the worker lock.
     let mut last_ws_inbound_at = tokio::time::Instant::now();
     let mut closure_motion = ClosureMotionTracker::default();
+    let mut tire_validity = TireValidityGate::default();
     let mut state_reconcile_interval = tokio::time::interval(STATE_PERIOD_RECONCILE_INTERVAL);
     state_reconcile_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Startup reconciliation above already covered the current tail.
     state_reconcile_interval.tick().await;
-    loop {
+    let exit = loop {
         // Set (with the vehicle's original timestamp) for Parallax state
         // re-learned from a re-sent snapshot.
         let mut snapshot_source_at: Option<DateTime<Utc>> = None;
         let inbound = tokio::select! {
             _ = worker_shutdown.recv() => {
-                break;
+                break WorkerExit::Stopped;
             }
             _ = state_reconcile_interval.tick() => {
                 match reconcile_state_period_tail(&pool, vehicle_id, active_state_period.clone()).await {
                     Ok(period) => active_state_period = period,
-                    Err(error) => tracing::warn!(vehicle_id=%vehicle_id, err=%error, "state-period tail reconciliation failed"),
+                    Err(error) => tracing::warn!(vehicle_id=%vehicle_id, error=%error, "state-period tail reconciliation failed"),
                 }
                 continue;
             }
@@ -513,7 +585,8 @@ pub async fn run_vehicle_worker(
                 tracing::warn!(
                     vehicle_id=%vehicle_id,
                     timeout_seconds=WS_WATCHDOG_TIMEOUT.as_secs(),
-                    "worker watchdog detected a silent Rivian WS stream; restarting websocket collector"
+                    reason="rivian_ws_silent",
+                    "websocket silent past the watchdog timeout; restarting websocket collector"
                 );
                 upsert_health(
                     &pool,
@@ -534,7 +607,16 @@ pub async fn run_vehicle_worker(
             // Normal event path.
             msg = ev_rx.recv() => match msg {
                 Some(ev) => ev,
-                None => break,
+                // Unexpected: the worker keeps a sender for its websocket
+                // loop. Let the supervisor start a fresh worker.
+                None => {
+                    tracing::warn!(
+                        vehicle_id=%vehicle_id,
+                        reason="event_channel_closed",
+                        "worker stopped on a transient failure; it will restart"
+                    );
+                    break WorkerExit::Retry;
+                }
             },
             parallax_event = parallax_rx.recv(), if parallax_handle.is_some() && !parallax_rx.is_closed() => match parallax_event {
                 Some(forwarded) => {
@@ -554,9 +636,9 @@ pub async fn run_vehicle_worker(
             // Monitor the WS task; log if it exits unexpectedly.
             result = &mut ws_handle => {
                 match result {
-                    Ok(()) => tracing::warn!(vehicle_id=%vehicle_id, "WS task exited cleanly; restarting websocket collector"),
-                    Err(e) if e.is_panic() => tracing::error!(vehicle_id=%vehicle_id, "WS task panicked; restarting websocket collector"),
-                    Err(e) => tracing::warn!(vehicle_id=%vehicle_id, err=%e, "WS task exited with error; restarting websocket collector"),
+                    Ok(()) => tracing::warn!(vehicle_id=%vehicle_id, reason="ws_task_exited", "websocket task exited cleanly; restarting websocket collector"),
+                    Err(e) if e.is_panic() => tracing::error!(vehicle_id=%vehicle_id, reason="ws_task_panicked", "websocket task panicked; restarting websocket collector"),
+                    Err(e) => tracing::warn!(vehicle_id=%vehicle_id, error=%e, reason="ws_task_failed", "websocket task exited with an error; restarting websocket collector"),
                 }
                 upsert_health(
                     &pool,
@@ -577,6 +659,14 @@ pub async fn run_vehicle_worker(
             .message_type
             .as_deref()
             .is_some_and(|kind| kind.starts_with("parallax:"));
+        tracing::trace!(
+            vehicle_id=%vehicle_id,
+            kind=?inbound.kind,
+            message_type=inbound.message_type.as_deref().unwrap_or("none"),
+            is_parallax=is_parallax,
+            has_telemetry=inbound.telemetry.is_some(),
+            "frame received"
+        );
         let capturing = ingestion_capture::is_capturing(vehicle_id);
         if capturing && !is_parallax {
             if let Some((kind, fields)) = legacy_capture_fields(&inbound) {
@@ -635,11 +725,11 @@ pub async fn run_vehicle_worker(
         if let Some(battery_cell_type) = inbound.battery_cell_type.as_deref() {
             if let Err(error) = upsert_battery_cell_type(&pool, vehicle_id, battery_cell_type).await
             {
-                tracing::warn!(vehicle_id=%vehicle_id, err=%error, "battery cell type upsert failed");
+                tracing::warn!(vehicle_id=%vehicle_id, error=%error, "battery cell type upsert failed");
             }
         }
 
-        let Some(event) = inbound.telemetry else {
+        let Some(mut event) = inbound.telemetry else {
             // A chargingSession frame can arrive without a telemetry sample.
             // Keep the live projection fresh when a canonical session is known.
             if let Some(charging_session) = inbound.charging_session.as_ref() {
@@ -669,6 +759,10 @@ pub async fn run_vehicle_worker(
             continue;
         }
 
+        // Before anything reads the sample: a parked vehicle's "not valid"
+        // tire flags must not reach the live stream or the stored status.
+        tire_validity.observe(&mut event);
+
         let trip_id = trip_det.active_trip_id();
         let charge_event = if is_parallax {
             // Parallax frames are partial vehicle state, not charge lifecycle
@@ -681,6 +775,9 @@ pub async fn run_vehicle_worker(
 
         if matches!(charge_event, ChargeEvent::SessionStarted) {
             active_session_started_at = Some(event.ts);
+            if let Some(started_session_id) = charge_det.active_session_id() {
+                tracing::info!(vehicle_id=%vehicle_id, session_id=%started_session_id, "charge session started");
+            }
         }
         let context = match &charge_event {
             ChargeEvent::SessionEnded(session) => ActiveSessionContext {
@@ -704,10 +801,29 @@ pub async fn run_vehicle_worker(
         };
 
         if let Some(session_id) = session_id {
-            if let Err(error) =
-                ensure_active_charge_session(&pool, vehicle_id, session_id, &event).await
-            {
-                tracing::warn!(vehicle_id=%vehicle_id, charge_session_id=%session_id, err=%error, "active charge session materialization failed");
+            let materialized =
+                ensure_active_charge_session(&pool, vehicle_id, session_id, &event).await;
+            match (
+                frame_writes.charge_session.observe(materialized.is_ok()),
+                &materialized,
+            ) {
+                (OutageTransition::Failed, Err(error)) => tracing::warn!(
+                    vehicle_id=%vehicle_id,
+                    session_id=%session_id,
+                    error=?error,
+                    "active charge session materialization failed"
+                ),
+                (OutageTransition::Recovered, _) => tracing::info!(
+                    vehicle_id=%vehicle_id,
+                    "active charge session materialization recovered"
+                ),
+                (_, Err(error)) => tracing::trace!(
+                    vehicle_id=%vehicle_id,
+                    session_id=%session_id,
+                    error=?error,
+                    "active charge session materialization failed"
+                ),
+                _ => {}
             }
         }
 
@@ -734,7 +850,7 @@ pub async fn run_vehicle_worker(
         match (live_publish.observe(published.is_ok()), published) {
             (LivePublishTransition::Failed, Err(e)) => tracing::warn!(
                 vehicle_id=%vehicle_id,
-                err=%e,
+                error=%e,
                 "redis publish failed; live status updates are paused until Redis is reachable"
             ),
             (LivePublishTransition::Recovered, _) => tracing::info!(
@@ -742,7 +858,7 @@ pub async fn run_vehicle_worker(
                 "redis publish recovered; live status updates resumed"
             ),
             (_, Err(e)) => {
-                tracing::debug!(vehicle_id=%vehicle_id, err=%e, "redis publish failed");
+                tracing::trace!(vehicle_id=%vehicle_id, error=%e, "redis publish failed");
             }
             _ => {}
         }
@@ -772,8 +888,27 @@ pub async fn run_vehicle_worker(
             }
             None => upsert_latest_status(&pool, &event).await,
         };
-        if let Err(error) = latest_status_result {
-            tracing::warn!(vehicle_id=%vehicle_id, err=%error, "latest-status upsert failed");
+        match (
+            frame_writes
+                .latest_status
+                .observe(latest_status_result.is_ok()),
+            &latest_status_result,
+        ) {
+            (OutageTransition::Failed, Err(error)) => tracing::warn!(
+                vehicle_id=%vehicle_id,
+                error=?error,
+                "latest-status upsert failed; live status is stale until the database recovers"
+            ),
+            (OutageTransition::Recovered, _) => tracing::info!(
+                vehicle_id=%vehicle_id,
+                "latest-status upsert recovered"
+            ),
+            (_, Err(error)) => tracing::trace!(
+                vehicle_id=%vehicle_id,
+                error=?error,
+                "latest-status upsert failed"
+            ),
+            _ => {}
         }
 
         // Re-learned state is a re-sent value, not a new reading: it adds no
@@ -787,11 +922,31 @@ pub async fn run_vehicle_worker(
             PersistenceDecision::Persist
         };
 
+        tracing::trace!(
+            vehicle_id=%vehicle_id,
+            persistence=persistence_label(&persistence_decision),
+            "telemetry frame persistence decided"
+        );
         if matches!(persistence_decision, PersistenceDecision::Persist) {
-            if write_telemetry(&pool, &event, trip_id, session_id)
-                .await
-                .is_ok()
-            {
+            let written = write_telemetry(&pool, &event, trip_id, session_id).await;
+            match (frame_writes.telemetry.observe(written.is_ok()), &written) {
+                (OutageTransition::Failed, Err(error)) => tracing::error!(
+                    vehicle_id=%vehicle_id,
+                    error=?error,
+                    "telemetry write failed; samples are not stored until the database recovers"
+                ),
+                (OutageTransition::Recovered, _) => tracing::info!(
+                    vehicle_id=%vehicle_id,
+                    "telemetry write recovered"
+                ),
+                (_, Err(error)) => tracing::trace!(
+                    vehicle_id=%vehicle_id,
+                    error=?error,
+                    "telemetry write failed"
+                ),
+                _ => {}
+            }
+            if written.is_ok() {
                 counter_batch.increment("telemetry_writes_persisted");
                 mark_persisted(&pool, vehicle_id, event.ts).await;
                 // The saved facing is worked out from stored telemetry, so it
@@ -801,11 +956,27 @@ pub async fn run_vehicle_worker(
                     event.speed_mph,
                     event.heading_deg,
                 ) {
-                    match crate::services::vehicle_facing::mark_stale(&pool, vehicle_id).await {
-                        Ok(()) => facing_inputs.marked(),
-                        Err(error) => {
-                            tracing::warn!(vehicle_id=%vehicle_id, err=%error, "vehicle facing could not be marked stale; retrying with the next stored row");
-                        }
+                    let marked =
+                        crate::services::vehicle_facing::mark_stale(&pool, vehicle_id).await;
+                    match (frame_writes.facing.observe(marked.is_ok()), &marked) {
+                        (OutageTransition::Failed, Err(error)) => tracing::warn!(
+                            vehicle_id=%vehicle_id,
+                            error=%error,
+                            "vehicle facing could not be marked stale; retrying with the next stored row"
+                        ),
+                        (OutageTransition::Recovered, _) => tracing::info!(
+                            vehicle_id=%vehicle_id,
+                            "vehicle facing mark stale recovered"
+                        ),
+                        (_, Err(error)) => tracing::trace!(
+                            vehicle_id=%vehicle_id,
+                            error=%error,
+                            "vehicle facing mark stale failed"
+                        ),
+                        _ => {}
+                    }
+                    if marked.is_ok() {
+                        facing_inputs.marked();
                     }
                 }
             }
@@ -819,19 +990,38 @@ pub async fn run_vehicle_worker(
         let lifecycle = lifecycle_updates(&event, is_parallax, charge_active);
         if lifecycle.state_period && !is_snapshot {
             let current_state = infer_vehicle_state(&event);
-            match transition_state_period(
+            let transitioned = transition_state_period(
                 &pool,
                 vehicle_id,
                 active_state_period.clone(),
                 current_state,
                 event.ts,
             )
-            .await
-            {
-                Ok(period) => active_state_period = period,
-                Err(error) => {
-                    tracing::warn!(vehicle_id=%vehicle_id, event_ts=%event.ts, err=%error, "state-period transition failed; durable state will be retried")
-                }
+            .await;
+            match (
+                frame_writes.state_period.observe(transitioned.is_ok()),
+                &transitioned,
+            ) {
+                (OutageTransition::Failed, Err(error)) => tracing::warn!(
+                    vehicle_id=%vehicle_id,
+                    event_ts=%event.ts,
+                    error=?error,
+                    "state-period transition failed; durable state will be retried"
+                ),
+                (OutageTransition::Recovered, _) => tracing::info!(
+                    vehicle_id=%vehicle_id,
+                    "state-period transition recovered"
+                ),
+                (_, Err(error)) => tracing::trace!(
+                    vehicle_id=%vehicle_id,
+                    event_ts=%event.ts,
+                    error=?error,
+                    "state-period transition failed"
+                ),
+                _ => {}
+            }
+            if let Ok(period) = transitioned {
+                active_state_period = period;
             }
         }
 
@@ -867,10 +1057,10 @@ pub async fn run_vehicle_worker(
                 if let (Some(prev_ver), Some(_started)) =
                     (last_software_version.take(), sw_version_start.take())
                 {
-                    let _ = close_software_version(&pool, vehicle_id, &prev_ver, event.ts).await;
+                    close_software_version(&pool, vehicle_id, &prev_ver, event.ts).await;
                 }
                 // Open new version record
-                let _ = open_software_version(&pool, vehicle_id, ver, event.ts).await;
+                open_software_version(&pool, vehicle_id, ver, event.ts).await;
                 sw_version_start = Some(event.ts);
                 last_software_version = Some(ver.clone());
             }
@@ -882,7 +1072,7 @@ pub async fn run_vehicle_worker(
         // for logging purposes.
         if let Some(avail_ver) = &event.ota_available_version {
             if Some(avail_ver) != last_ota_available_version.as_ref() {
-                tracing::info!(vehicle_id=%vehicle_id, version=%avail_ver, "OTA available version changed");
+                tracing::debug!(vehicle_id=%vehicle_id, version=%avail_ver, "OTA available version changed");
                 last_ota_available_version = Some(avail_ver.clone());
             }
         }
@@ -916,7 +1106,29 @@ pub async fn run_vehicle_worker(
                 &trip.points,
             );
             if distance >= MIN_TRIP_DISTANCE_MILES {
-                let _ = persist_trip(&pool, &http_client, &trip, distance).await;
+                match persist_trip(&pool, &http_client, &trip, distance).await {
+                    Ok(()) => tracing::info!(
+                        vehicle_id=%vehicle_id,
+                        trip_id=%trip.trip_id,
+                        distance_miles=distance,
+                        duration_ms=(trip.ended_at - trip.started_at).num_milliseconds(),
+                        "trip closed"
+                    ),
+                    Err(error) => tracing::error!(
+                        vehicle_id=%vehicle_id,
+                        trip_id=%trip.trip_id,
+                        error=?error,
+                        "trip persist failed"
+                    ),
+                }
+            } else {
+                tracing::debug!(
+                    vehicle_id=%vehicle_id,
+                    trip_id=%trip.trip_id,
+                    distance_miles=distance,
+                    reason="below_min_distance",
+                    "trip discarded"
+                );
             }
         }
 
@@ -927,10 +1139,21 @@ pub async fn run_vehicle_worker(
             // frame cannot resurrect a closed session.
             let live_key = rivian_poll::live_session_redis_key(vehicle_id);
             if let Err(error) = redis_conn.del::<_, ()>(&live_key).await {
-                tracing::debug!(vehicle_id=%vehicle_id, err=%error, "live session Redis delete on canonical end failed");
+                tracing::warn!(vehicle_id=%vehicle_id, error=%error, "live session cache delete failed; the entry expires by ttl");
             }
-            if let Err(error) = persist_charge_session(&pool, &session).await {
-                tracing::warn!(vehicle_id=%vehicle_id, session_id=%session.session_id, error=%error, "worker.persist_charge_session_failed");
+            match persist_charge_session(&pool, &session).await {
+                Ok(()) => tracing::info!(
+                    vehicle_id=%vehicle_id,
+                    session_id=%session.session_id,
+                    duration_ms=(session.ended_at - session.started_at).num_milliseconds(),
+                    "charge session closed"
+                ),
+                Err(error) => tracing::error!(
+                    vehicle_id=%vehicle_id,
+                    session_id=%session.session_id,
+                    error=?error,
+                    "charge session persist failed"
+                ),
             }
             // Trigger incremental charge history sync to enrich the new session
             // with Rivian API fields (network vendor, range added, etc.).
@@ -947,18 +1170,18 @@ pub async fn run_vehicle_worker(
                 )
                 .await
                 {
-                    tracing::debug!(vehicle_id=%vehicle_id, err=%e, "live charge history sync failed");
+                    tracing::warn!(vehicle_id=%vehicle_id, error=?e, "live charge history sync failed");
                 }
                 if let Err(e) = rivian_poll::fetch_charge_history_for_vehicle(
                     vehicle_id, &pool2, &client2, &age_key2,
                 )
                 .await
                 {
-                    tracing::warn!(vehicle_id=%vehicle_id, err=%e, "post-session charge history sync failed");
+                    tracing::warn!(vehicle_id=%vehicle_id, error=?e, "post-session charge history sync failed");
                 }
             });
         }
-    }
+    };
 
     // Flush any remaining accumulated counters before the worker exits.
     counter_batch.flush(&pool).await;
@@ -982,7 +1205,16 @@ pub async fn run_vehicle_worker(
             }
         }
     }
-    let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
+    release_collector_lock_logged(&mut lock_conn, vehicle_id).await;
+    exit
+}
+
+/// Releases the collector lock on a path that is already leaving the worker.
+/// A failed release is logged here because nothing else would report it.
+async fn release_collector_lock_logged(conn: &mut PoolConnection<Postgres>, vehicle_id: Uuid) {
+    if let Err(error) = release_collector_lock(conn, vehicle_id).await {
+        tracing::warn!(vehicle_id=%vehicle_id, error=?error, "collector lock release failed");
+    }
 }
 
 async fn flush_legacy_charging_diagnostics(
@@ -1017,7 +1249,7 @@ async fn flush_legacy_charging_diagnostics(
      .bind(counts[0]).bind(counts[1]).bind(counts[2]).bind(counts[3]).bind(counts[4])
      .execute(pool).await;
     if let Err(error) = result {
-        tracing::debug!(vehicle_id=%vehicle_id, err=%error, "legacy charging diagnostics flush failed");
+        tracing::warn!(vehicle_id=%vehicle_id, error=%error, "legacy charging diagnostics flush failed; counts are kept for the next flush");
     } else {
         *counts = [0; 5];
     }
@@ -1111,35 +1343,50 @@ async fn ensure_active_charge_session(
     Ok(())
 }
 
-/// Tracks whether live-status publishing is currently failing, so an outage
-/// is logged once at warn (and its recovery once at info) instead of once per
-/// telemetry frame.
+/// Tracks whether a write that runs once per telemetry frame is failing, so an
+/// outage is logged once at its first failure (and its recovery once at info)
+/// instead of once per frame. Later failures of the same outage are trace only.
 #[derive(Debug, Default)]
-struct LivePublishHealth {
+struct OutageLatch {
     failing: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum LivePublishTransition {
+enum OutageTransition {
     Failed,
     Recovered,
     Unchanged,
 }
 
-impl LivePublishHealth {
-    fn observe(&mut self, ok: bool) -> LivePublishTransition {
+impl OutageLatch {
+    fn observe(&mut self, ok: bool) -> OutageTransition {
         match (self.failing, ok) {
             (false, false) => {
                 self.failing = true;
-                LivePublishTransition::Failed
+                OutageTransition::Failed
             }
             (true, true) => {
                 self.failing = false;
-                LivePublishTransition::Recovered
+                OutageTransition::Recovered
             }
-            _ => LivePublishTransition::Unchanged,
+            _ => OutageTransition::Unchanged,
         }
     }
+}
+
+/// Live-status publishing latch. The names predate `OutageLatch`; they are kept
+/// so the publish-health tests read unchanged.
+type LivePublishHealth = OutageLatch;
+type LivePublishTransition = OutageTransition;
+
+/// Outage latches for the writes the worker performs on every telemetry frame.
+#[derive(Debug, Default)]
+struct FrameWriteHealth {
+    telemetry: OutageLatch,
+    latest_status: OutageLatch,
+    charge_session: OutageLatch,
+    state_period: OutageLatch,
+    facing: OutageLatch,
 }
 
 async fn apply_charging_session_update(
@@ -1160,27 +1407,27 @@ async fn apply_charging_session_update(
                     .set_ex::<_, _, ()>(&live_key, json, rivian_poll::LIVE_SESSION_TTL_SECONDS)
                     .await
                 {
-                    tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session Redis write failed");
+                    tracing::warn!(vehicle_id=%vehicle_id, error=%error, "live session Redis write failed");
                 }
             }
             if let Err(error) =
                 rivian_poll::persist_live_session_data(pool, active_session_id, &live).await
             {
-                tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session database update failed");
+                tracing::warn!(vehicle_id=%vehicle_id, error=%error, "live session database update failed");
             }
         }
         Some(_) => {
             // A late legacy frame cannot recreate state after canonical
             // vehicleState ended the session.
             if let Err(error) = redis_conn.del::<_, ()>(&live_key).await {
-                tracing::debug!(vehicle_id=%vehicle_id, err=%error, "late live session Redis cleanup failed");
+                tracing::trace!(vehicle_id=%vehicle_id, error=%error, "late live session Redis cleanup failed");
             }
         }
         None if should_clear_live_session(event) => {
             // An explicit root null means the legacy projection is no longer
             // meaningful. Never leave a stale Redis snapshot visible.
             if let Err(error) = redis_conn.del::<_, ()>(&live_key).await {
-                tracing::debug!(vehicle_id=%vehicle_id, err=%error, "null live session Redis cleanup failed");
+                tracing::trace!(vehicle_id=%vehicle_id, error=%error, "null live session Redis cleanup failed");
             }
         }
         None => {
@@ -1198,7 +1445,7 @@ async fn apply_charging_session_update(
     )
     .await
     {
-        tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live charge curve update failed");
+        tracing::warn!(vehicle_id=%vehicle_id, error=%error, "live charge curve update failed");
     }
 }
 
@@ -1784,6 +2031,8 @@ fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 struct CounterBatch {
     vehicle_id: Uuid,
     counts: std::collections::HashMap<&'static str, i64>,
+    flush_health: OutageLatch,
+    raw_event_health: OutageLatch,
 }
 
 impl CounterBatch {
@@ -1791,6 +2040,8 @@ impl CounterBatch {
         Self {
             vehicle_id,
             counts: std::collections::HashMap::new(),
+            flush_health: OutageLatch::default(),
+            raw_event_health: OutageLatch::default(),
         }
     }
 
@@ -1829,7 +2080,24 @@ impl CounterBatch {
         for col in &cols {
             q = q.bind(*self.counts.get(col).unwrap_or(&0));
         }
-        let _ = q.execute(pool).await;
+        let result = q.execute(pool).await;
+        match (self.flush_health.observe(result.is_ok()), &result) {
+            (OutageTransition::Failed, Err(error)) => tracing::warn!(
+                vehicle_id=%self.vehicle_id,
+                error=%error,
+                "stewardship counter flush failed; this batch's counts were dropped"
+            ),
+            (OutageTransition::Recovered, _) => tracing::info!(
+                vehicle_id=%self.vehicle_id,
+                "stewardship counter flush recovered"
+            ),
+            (_, Err(error)) => tracing::trace!(
+                vehicle_id=%self.vehicle_id,
+                error=%error,
+                "stewardship counter flush failed"
+            ),
+            _ => {}
+        }
         self.counts.clear();
     }
 }
@@ -1864,6 +2132,7 @@ async fn handle_inbound_accounting(
     match inbound.message_type.as_deref() {
         Some("connection_ack") => {
             batch.increment("ws_connections_opened");
+            tracing::info!(vehicle_id=%vehicle_id, "rivian websocket connected");
             // The account card reflects a successful authenticated Rivian
             // session, rather than only the time credentials were saved.
             crate::services::external_connections::record_attempt(
@@ -1934,6 +2203,23 @@ async fn persist_raw_event(
     .execute(pool)
     .await;
 
+    match (batch.raw_event_health.observe(result.is_ok()), &result) {
+        (OutageTransition::Failed, Err(error)) => tracing::warn!(
+            vehicle_id=%vehicle_id,
+            error=%error,
+            "raw event persist failed; raw capture is incomplete until the database recovers"
+        ),
+        (OutageTransition::Recovered, _) => tracing::info!(
+            vehicle_id=%vehicle_id,
+            "raw event persist recovered"
+        ),
+        (_, Err(error)) => tracing::trace!(
+            vehicle_id=%vehicle_id,
+            error=%error,
+            "raw event persist failed"
+        ),
+        _ => {}
+    }
     if result.is_ok() {
         batch.increment("raw_events_persisted");
     }
@@ -1942,32 +2228,47 @@ async fn persist_raw_event(
 async fn cleanup_raw_events(pool: &PgPool, retention_days: i64) {
     // Use a non-blocking advisory lock (id 0x726d_5241 = "rmRA") so that
     // concurrent workers skip the DELETE rather than pile up on the same rows.
-    let got_lock: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(0x726d5241::bigint)")
+    let got_lock: bool = match sqlx::query_scalar("SELECT pg_try_advisory_lock(0x726d5241::bigint)")
         .fetch_one(pool)
         .await
-        .unwrap_or(false);
+    {
+        Ok(got_lock) => got_lock,
+        Err(error) => {
+            tracing::warn!(error=%error, "raw event cleanup skipped: lock query failed");
+            return;
+        }
+    };
     if !got_lock {
         return;
     }
 
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         "DELETE FROM riviamigo.rivian_ws_raw_events WHERE received_at < now() - ($1::int * INTERVAL '1 day')",
     )
     .bind(retention_days.max(1) as i32)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!(error=%error, "websocket raw event retention cleanup failed");
+    }
 
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         "DELETE FROM riviamigo.rivian_parallax_events WHERE received_at < now() - ($1::int * INTERVAL '1 day')",
     )
     .bind(retention_days.max(1) as i32)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!(error=%error, "parallax event retention cleanup failed");
+    }
 
     // Release the session-level lock immediately so other workers can take it next cycle.
-    let _ = sqlx::query("SELECT pg_advisory_unlock(0x726d5241::bigint)")
+    if let Err(error) = sqlx::query("SELECT pg_advisory_unlock(0x726d5241::bigint)")
         .execute(pool)
-        .await;
+        .await
+    {
+        tracing::warn!(error=%error, "raw event cleanup advisory unlock failed");
+    }
 }
 
 async fn increment_counter(pool: &PgPool, vehicle_id: Uuid, column: &str) {
@@ -1980,10 +2281,13 @@ async fn increment_counter(pool: &PgPool, vehicle_id: Uuid, column: &str) {
          ON CONFLICT (vehicle_id, day) DO UPDATE \
          SET {column} = riviamigo.rivian_stewardship_counters.{column} + 1, updated_at = now()"
     );
-    let _ = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
+    if let Err(error) = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
         .bind(vehicle_id)
         .execute(pool)
-        .await;
+        .await
+    {
+        tracing::warn!(vehicle_id=%vehicle_id, column=%column, error=%error, "stewardship counter update failed");
+    }
 }
 
 fn stewardship_counter_column(column: &str) -> Option<&'static str> {
@@ -2020,7 +2324,7 @@ async fn load_active_charge_snapshot(
     pool: &PgPool,
     vehicle_id: Uuid,
 ) -> Option<ActiveChargeSessionSnapshot> {
-    let row = sqlx::query_as::<_, ActiveChargeDetectorRow>(
+    let row = match sqlx::query_as::<_, ActiveChargeDetectorRow>(
         r#"
         WITH active_samples AS (
             SELECT
@@ -2100,8 +2404,17 @@ async fn load_active_charge_snapshot(
     .bind(CHARGE_DETECTOR_REHYDRATE_STALENESS_MINUTES)
     .fetch_optional(pool)
     .await
-    .ok()
-    .flatten()?;
+    {
+        Ok(row) => row?,
+        Err(error) => {
+            tracing::warn!(
+                vehicle_id=%vehicle_id,
+                error=%error,
+                "active charge snapshot lookup failed; charge detector starts without rehydration"
+            );
+            return None;
+        }
+    };
 
     Some(ActiveChargeSessionSnapshot {
         session_id: row.session_id,
@@ -2967,7 +3280,7 @@ mod snapshot_tests {
 }
 
 async fn last_battery_level_at(pool: &PgPool, vehicle_id: Uuid, at: DateTime<Utc>) -> Option<f64> {
-    sqlx::query_scalar(
+    match sqlx::query_scalar(
         r#"SELECT battery_level
            FROM timeseries.telemetry
            WHERE vehicle_id = $1 AND ts <= $2 AND battery_level IS NOT NULL
@@ -2978,8 +3291,17 @@ async fn last_battery_level_at(pool: &PgPool, vehicle_id: Uuid, at: DateTime<Utc
     .bind(at)
     .fetch_optional(pool)
     .await
-    .ok()
-    .flatten()
+    {
+        Ok(level) => level,
+        Err(error) => {
+            tracing::warn!(
+                vehicle_id=%vehicle_id,
+                error=%error,
+                "battery level lookup failed; trip state of charge is left unset"
+            );
+            None
+        }
+    }
 }
 
 async fn persist_trip(
@@ -3173,7 +3495,7 @@ async fn charge_session_coordinates(
         Ok(Some((Some(lat), Some(lng)))) => return (Some(lat), Some(lng)),
         Ok(_) => {}
         Err(error) => {
-            tracing::warn!(session_id=%session.session_id, error=%error, "worker.charge_session_stored_location_failed");
+            tracing::warn!(session_id=%session.session_id, error=%error, "stored charge location lookup failed; trying the nearest telemetry fix");
         }
     }
 
@@ -3187,7 +3509,7 @@ async fn charge_session_coordinates(
         Ok(Some((lat, lng))) => (Some(lat), Some(lng)),
         Ok(None) => (None, None),
         Err(error) => {
-            tracing::warn!(session_id=%session.session_id, error=%error, "worker.charge_session_telemetry_fix_failed");
+            tracing::warn!(session_id=%session.session_id, error=%error, "nearest telemetry fix lookup failed; charge location is left unset");
             (None, None)
         }
     }
@@ -3201,7 +3523,14 @@ async fn persist_charge_session(
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .unwrap_or_default();
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                session_id=%session.session_id,
+                error=%error,
+                "http client build failed; using a client without the request timeout"
+            );
+            reqwest::Client::default()
+        });
     let owner_id = get_vehicle_owner_id(pool, session.vehicle_id).await?;
     let (location_lat, location_lng) = charge_session_coordinates(pool, session).await;
     let location_match = match (owner_id, location_lat, location_lng) {
@@ -3343,7 +3672,7 @@ async fn reverse_geocode_and_store(pool: &PgPool, lat: f64, lon: f64) -> Option<
     {
         Ok(c) => c,
         Err(e) => {
-            tracing::warn!(error=%e, "worker.reverse_geocode_client_build_failed");
+            tracing::warn!(error=%e, provider="nominatim", "reverse geocode client build failed");
             return None;
         }
     };
@@ -3368,7 +3697,7 @@ async fn reverse_geocode_and_store(pool: &PgPool, lat: f64, lon: f64) -> Option<
         Ok(r) => r,
         Err(e) => {
             crate::services::nominatim::report_outcome(None, None).await;
-            tracing::warn!(error=%e, lat=%lat, lon=%lon, "worker.reverse_geocode_request_failed");
+            tracing::warn!(error=%e, provider="nominatim", "reverse geocode request failed");
             return None;
         }
     };
@@ -3380,14 +3709,13 @@ async fn reverse_geocode_and_store(pool: &PgPool, lat: f64, lon: f64) -> Option<
     if !status.is_success() {
         tracing::warn!(
             status=%status,
-            lat=%lat,
-            lon=%lon,
+            provider="nominatim",
             lane=?slot.lane,
             queued_ms=slot.queued_ms,
             gate_wait_ms=slot.gate_wait_ms,
             scheduled_interval_ms=slot.effective_interval_ms,
-            retry_after_s = retry_after.map(|duration| duration.as_secs()),
-            "worker.reverse_geocode_http_error"
+            retry_seconds = retry_after.map(|duration| duration.as_secs()),
+            "reverse geocode upstream returned an error"
         );
         return None;
     }
@@ -3395,13 +3723,24 @@ async fn reverse_geocode_and_store(pool: &PgPool, lat: f64, lon: f64) -> Option<
     let raw: serde_json::Value = match resp.json().await {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!(error=%e, "worker.reverse_geocode_decode_failed");
+            tracing::warn!(error=%e, provider="nominatim", "reverse geocode response decode failed");
             return None;
         }
     };
 
     // ── parse ─────────────────────────────────────────────────────────────
-    let display_name = raw.get("display_name")?.as_str()?.to_string();
+    let Some(display_name) = raw
+        .get("display_name")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+    else {
+        tracing::debug!(
+            provider = "nominatim",
+            reason = "no_display_name",
+            "reverse geocode returned no result"
+        );
+        return None;
+    };
     let osm_id = raw.get("osm_id").and_then(|v| v.as_i64());
     let addr = raw.get("address").and_then(|v| v.as_object());
 
@@ -3485,7 +3824,7 @@ async fn reverse_geocode_and_store(pool: &PgPool, lat: f64, lon: f64) -> Option<
     match result {
         Ok(id) => Some(id),
         Err(e) => {
-            tracing::warn!(error=%e, "worker.reverse_geocode_db_insert_failed");
+            tracing::warn!(error=%e, provider="nominatim", "reverse geocode address write failed; the location is saved without an address");
             None
         }
     }
@@ -3739,7 +4078,7 @@ async fn open_software_version(
     version: &str,
     installed_at: chrono::DateTime<Utc>,
 ) {
-    let current_open = sqlx::query_scalar::<_, Option<String>>(
+    let current_open = match sqlx::query_scalar::<_, Option<String>>(
         r#"SELECT version
            FROM riviamigo.software_versions
            WHERE vehicle_id = $1 AND observed_until IS NULL
@@ -3749,15 +4088,24 @@ async fn open_software_version(
     .bind(vehicle_id)
     .fetch_optional(pool)
     .await
-    .ok()
-    .flatten();
+    {
+        Ok(current_open) => current_open,
+        Err(error) => {
+            tracing::warn!(
+                vehicle_id=%vehicle_id,
+                error=%error,
+                "software version lookup failed; the previous version is not closed"
+            );
+            None
+        }
+    };
 
     if current_open.as_ref().and_then(|v| v.as_deref()) == Some(version) {
         return;
     }
 
     if current_open.is_some() {
-        let _ = sqlx::query(
+        if let Err(error) = sqlx::query(
             r#"UPDATE riviamigo.software_versions
                SET observed_until = $1
                WHERE vehicle_id = $2 AND observed_until IS NULL"#,
@@ -3765,10 +4113,13 @@ async fn open_software_version(
         .bind(installed_at)
         .bind(vehicle_id)
         .execute(pool)
-        .await;
+        .await
+        {
+            tracing::error!(vehicle_id=%vehicle_id, error=%error, "software version history close failed");
+        }
     }
 
-    let _ = sqlx::query(
+    match sqlx::query(
         r#"INSERT INTO riviamigo.software_versions (vehicle_id, version, installed_at)
            VALUES ($1, $2, $3)"#,
     )
@@ -3776,7 +4127,15 @@ async fn open_software_version(
     .bind(version)
     .bind(installed_at)
     .execute(pool)
-    .await;
+    .await
+    {
+        Ok(_) => {
+            tracing::debug!(vehicle_id=%vehicle_id, version=%version, "software version recorded");
+        }
+        Err(error) => {
+            tracing::error!(vehicle_id=%vehicle_id, error=%error, "software version history insert failed");
+        }
+    }
 }
 
 async fn close_software_version(
@@ -3785,7 +4144,7 @@ async fn close_software_version(
     version: &str,
     observed_until: chrono::DateTime<Utc>,
 ) {
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         r#"UPDATE riviamigo.software_versions
            SET observed_until = $1
            WHERE vehicle_id = $2 AND version = $3 AND observed_until IS NULL"#,
@@ -3794,7 +4153,10 @@ async fn close_software_version(
     .bind(vehicle_id)
     .bind(version)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::error!(vehicle_id=%vehicle_id, error=%error, "software version history close failed");
+    }
 }
 
 async fn upsert_health(
@@ -3806,7 +4168,7 @@ async fn upsert_health(
     auth_state: Option<&str>,
     auth_reason_code: Option<&str>,
 ) {
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_runtime_state
            (vehicle_id, is_online, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at)
            VALUES ($1,$2,$3,$4,$5,$6,now())
@@ -3836,7 +4198,10 @@ async fn upsert_health(
     .bind(auth_state)
     .bind(auth_reason_code)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!(vehicle_id=%vehicle_id, error=%error, worker_health=health, "runtime health write failed");
+    }
 }
 
 async fn upsert_seen(
@@ -3851,7 +4216,7 @@ async fn upsert_seen(
         SeenKind::Payload => (Some(ts), None, Some(received_at), None),
         SeenKind::Heartbeat => (None, Some(ts), None, Some(received_at)),
     };
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_runtime_state
            (vehicle_id, is_online, last_event_at, last_seen_at, last_payload_at, last_heartbeat_at,
             last_ws_received_at, last_ws_payload_received_at, last_ws_heartbeat_received_at, updated_at)
@@ -3876,11 +4241,16 @@ async fn upsert_seen(
     .bind(payload_received_at)
     .bind(heartbeat_received_at)
     .execute(pool)
-    .await;
+    .await
+    {
+        // Runs on every frame, so it is trace only; the telemetry write latch
+        // reports a database outage once.
+        tracing::trace!(vehicle_id=%vehicle_id, error=%error, "runtime seen-state write failed");
+    }
 }
 
 async fn mark_persisted(pool: &PgPool, vehicle_id: Uuid, ts: DateTime<Utc>) {
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_runtime_state
            (vehicle_id, last_persisted_at, updated_at)
            VALUES ($1,$2,now())
@@ -3890,7 +4260,12 @@ async fn mark_persisted(pool: &PgPool, vehicle_id: Uuid, ts: DateTime<Utc>) {
     .bind(vehicle_id)
     .bind(ts)
     .execute(pool)
-    .await;
+    .await
+    {
+        // Runs on every persisted frame, so it is trace only; the telemetry
+        // write latch reports a database outage once.
+        tracing::trace!(vehicle_id=%vehicle_id, error=%error, "persisted-at write failed");
+    }
 }
 
 #[cfg(test)]

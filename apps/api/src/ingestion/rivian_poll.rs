@@ -91,7 +91,7 @@ async fn try_refresh_csrf(
     pool: &PgPool,
     age_key: &str,
 ) -> Result<RivianTokenBundle> {
-    tracing::info!(vehicle_id=%vehicle_id, "refreshing Rivian CSRF session");
+    tracing::debug!(vehicle_id = %vehicle_id, "rivian csrf session refresh started");
     let identity = age_key
         .parse::<age::x25519::Identity>()
         .map_err(|e| anyhow!("bad age key: {e}"))?;
@@ -111,7 +111,11 @@ async fn try_refresh_csrf(
         // Another request refreshed while this caller waited for the row lock.
         // Reuse that newer bundle instead of rotating a second time.
         tx.commit().await?;
-        tracing::debug!(vehicle_id=%vehicle_id, "reusing concurrently refreshed Rivian session");
+        tracing::debug!(
+            vehicle_id = %vehicle_id,
+            reason = "concurrent_refresh",
+            "rivian csrf session refresh skipped"
+        );
         return Ok(current_tokens);
     }
     let new_tokens = rivian_refresh_csrf(client, &current_tokens)
@@ -135,7 +139,7 @@ async fn try_refresh_csrf(
     .await?;
     tx.commit().await?;
 
-    tracing::info!(vehicle_id=%vehicle_id, "Rivian CSRF session refreshed");
+    tracing::debug!(vehicle_id = %vehicle_id, "rivian csrf session refreshed");
     Ok(new_tokens)
 }
 
@@ -204,21 +208,23 @@ where
             // CSRF/app-session may have expired — rotate them and retry once.
             // This mirrors the HA integration's RivianExpiredTokenError handler.
             // The access token itself is long-lived and is never refreshed here.
-            tracing::info!(
-                vehicle_id=%vehicle_id,
-                operation=operation_name,
-                "Rivian auth failed; rotating CSRF and retrying"
+            tracing::debug!(
+                vehicle_id = %vehicle_id,
+                operation = operation_name,
+                "rivian auth rejected; rotating csrf and retrying"
             );
 
             let refreshed_tokens =
                 match try_refresh_csrf(vehicle_id, &current_tokens, client, pool, age_key).await {
                     Ok(tokens) => tokens,
                     Err(refresh_error) => {
-                        tracing::warn!(
-                            vehicle_id=%vehicle_id,
-                            operation=operation_name,
-                            err=%refresh_error,
-                            "CSRF refresh failed"
+                        // The caller that receives this error logs the failure
+                        // once; this line only records the refresh step.
+                        tracing::debug!(
+                            vehicle_id = %vehicle_id,
+                            operation = operation_name,
+                            error = ?refresh_error,
+                            "rivian csrf refresh failed"
                         );
                         record_auth_failure(pool, vehicle_id, &refresh_error.to_string()).await;
                         return Err(refresh_error);
@@ -234,10 +240,10 @@ where
                     // Transient 401s can survive a single CSRF refresh.  Don't
                     // flip needs_reauth on the first occurrence — only after we
                     // see this happen consecutively over a meaningful window.
-                    tracing::info!(
-                        vehicle_id=%vehicle_id,
-                        operation=operation_name,
-                        "operation still unauthenticated after CSRF refresh"
+                    tracing::debug!(
+                        vehicle_id = %vehicle_id,
+                        operation = operation_name,
+                        "rivian operation still unauthenticated after csrf refresh"
                     );
                     record_auth_failure(pool, vehicle_id, &retry_error.to_string()).await;
                     Err(retry_error)
@@ -257,7 +263,7 @@ const NEEDS_REAUTH_FAILURE_THRESHOLD: i32 = 3;
 /// Increment the consecutive-failure counter.  Flip `auth_state` to
 /// `needs_reauth` only after the counter crosses the threshold.
 async fn record_auth_failure(pool: &PgPool, vehicle_id: Uuid, reason: &str) {
-    let updated: Option<i32> = sqlx::query_scalar(
+    let updated: Option<i32> = match sqlx::query_scalar(
         r#"INSERT INTO riviamigo.vehicle_runtime_state
                (vehicle_id, consecutive_auth_failures, last_auth_failure_at, updated_at)
            VALUES ($1, 1, now(), now())
@@ -270,23 +276,42 @@ async fn record_auth_failure(pool: &PgPool, vehicle_id: Uuid, reason: &str) {
     .bind(vehicle_id)
     .fetch_optional(pool)
     .await
-    .ok()
-    .flatten();
+    {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(
+                vehicle_id = %vehicle_id,
+                error = %error,
+                "rivian auth failure counter update failed"
+            );
+            None
+        }
+    };
 
     let count = updated.unwrap_or(1);
     tracing::debug!(
-        vehicle_id=%vehicle_id,
-        consecutive_auth_failures=count,
+        vehicle_id = %vehicle_id,
+        consecutive_auth_failures = count,
         "rivian auth failure counted"
     );
 
+    if count == NEEDS_REAUTH_FAILURE_THRESHOLD {
+        // Logged once per incident: the counter crosses the threshold here and
+        // only resets after a successful call.
+        tracing::warn!(
+            vehicle_id = %vehicle_id,
+            reason = "rivian_auth_expired",
+            consecutive_auth_failures = count,
+            "rivian reauthentication required"
+        );
+    }
     if count >= NEEDS_REAUTH_FAILURE_THRESHOLD {
         mark_needs_reauth(pool, vehicle_id, reason).await;
     }
 }
 
 async fn reset_auth_failure_counter(pool: &PgPool, vehicle_id: Uuid) {
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         "UPDATE riviamigo.vehicle_runtime_state
             SET consecutive_auth_failures = 0,
                 last_auth_failure_at = NULL,
@@ -296,13 +321,20 @@ async fn reset_auth_failure_counter(pool: &PgPool, vehicle_id: Uuid) {
     )
     .bind(vehicle_id)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!(
+            vehicle_id = %vehicle_id,
+            error = %error,
+            "rivian auth failure counter reset failed"
+        );
+    }
 }
 
 /// Write an auth-required state into `vehicle_runtime_state` while keeping
 /// collector health separate from credential status.
 async fn mark_needs_reauth(pool: &PgPool, vehicle_id: Uuid, reason: &str) {
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_runtime_state
            (vehicle_id, is_online, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at)
            VALUES ($1, false, 'error', $2, 'needs_reauth', 'rivian_auth_expired', now())
@@ -317,14 +349,24 @@ async fn mark_needs_reauth(pool: &PgPool, vehicle_id: Uuid, reason: &str) {
     .bind(vehicle_id)
     .bind(reason)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!(
+            vehicle_id = %vehicle_id,
+            error = %error,
+            "rivian needs-reauth state write failed"
+        );
+    }
 }
 
 // ── Stewardship counter ──────────────────────────────────────────────────────
 
 pub async fn increment_poll_counter(pool: &PgPool, vehicle_id: Uuid) {
     let today = Utc::now().date_naive();
-    let _ = sqlx::query(
+    // Best-effort metric on every outbound call. A failing database also fails
+    // the call itself, which is logged once by its caller, so this stays at
+    // DEBUG to avoid a warning per request during an outage.
+    if let Err(error) = sqlx::query(
         "INSERT INTO riviamigo.rivian_stewardship_counters
              (vehicle_id, day, outbound_graphql_requests)
          VALUES ($1, $2, 1)
@@ -335,7 +377,14 @@ pub async fn increment_poll_counter(pool: &PgPool, vehicle_id: Uuid) {
     .bind(vehicle_id)
     .bind(today)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::debug!(
+            vehicle_id = %vehicle_id,
+            error = %error,
+            "rivian stewardship counter update failed"
+        );
+    }
 }
 
 // ── Vehicle enrichment (getUserInfo static fields) ───────────────────────────
@@ -526,7 +575,11 @@ async fn save_vehicle_enrichment(
             .and_then(crate::models::vehicle::model_year_from_vin)
             .is_none()
         {
-            tracing::warn!(vehicle_id=%vehicle_id, "vehicle model year unavailable: no usable VIN on record");
+            tracing::warn!(
+                vehicle_id = %vehicle_id,
+                reason = "no_decodable_vin",
+                "vehicle model year unavailable"
+            );
         }
     }
     Ok(())
@@ -625,7 +678,7 @@ pub async fn fetch_wallboxes(
     }
 
     increment_poll_counter(pool, vehicle_id).await;
-    tracing::debug!(vehicle_id=%vehicle_id, count=%boxes.len(), "wallboxes upserted");
+    tracing::debug!(vehicle_id = %vehicle_id, count = boxes.len(), "wallboxes upserted");
     Ok(())
 }
 
@@ -732,7 +785,7 @@ const RECENT_INCREMENTAL_INSERT_LOOKBACK_DAYS: i64 = 30;
 const LIVE_CURVE_OVERLAP_MINUTES: i64 = 5;
 
 async fn record_charge_history_sync_started(pool: &PgPool, vehicle_id: Uuid) {
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_runtime_state
            (vehicle_id, last_charge_history_sync_at, updated_at)
            VALUES ($1, now(), now())
@@ -742,11 +795,18 @@ async fn record_charge_history_sync_started(pool: &PgPool, vehicle_id: Uuid) {
     )
     .bind(vehicle_id)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!(
+            vehicle_id = %vehicle_id,
+            error = %error,
+            "charge history sync start record failed"
+        );
+    }
 }
 
 async fn record_charge_history_sync_succeeded(pool: &PgPool, vehicle_id: Uuid) {
-    let _ = sqlx::query(
+    if let Err(error) = sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_runtime_state
            (vehicle_id, last_charge_history_sync_at, last_charge_history_success_at, updated_at)
            VALUES ($1, now(), now(), now())
@@ -757,7 +817,14 @@ async fn record_charge_history_sync_succeeded(pool: &PgPool, vehicle_id: Uuid) {
     )
     .bind(vehicle_id)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!(
+            vehicle_id = %vehicle_id,
+            error = %error,
+            "charge history sync success record failed"
+        );
+    }
 }
 
 /// Fetch completed charge sessions from Rivian's charging endpoint.
@@ -847,12 +914,17 @@ async fn fetch_charge_history_inner_v2(
     )
     .await;
     if let Err(error) = lock_transaction.rollback().await {
-        tracing::error!(vehicle_id=%vehicle_id, error=%error, "charge history lock release failed");
         if result.is_ok() {
+            // Returned to the caller, which logs it once.
             return Err(anyhow!(
                 "failed to release charge-history transaction lock: {error}"
             ));
         }
+        tracing::error!(
+            vehicle_id = %vehicle_id,
+            error = %error,
+            "charge history lock release failed"
+        );
     }
 
     result
@@ -1017,16 +1089,17 @@ async fn fetch_charge_history_locked(
     attribution.log(Some(vehicle_id), "charge history sync");
     if payloads_repaired > 0 || payload_audit_failures > 0 {
         tracing::warn!(
-            vehicle_id=%vehicle_id,
+            vehicle_id = %vehicle_id,
             payloads_repaired,
             payload_audit_failures,
             error_sample = payload_audit_error_sample.as_deref().unwrap_or("none"),
-            "charge history payload audit required repair"
+            "charge history payload audit needed repair"
         );
     }
     if payloads_evidence_expired > 0 {
-        tracing::info!(
-            vehicle_id=%vehicle_id,
+        // Retention expiry recurs on every sync that revisits an old session.
+        tracing::debug!(
+            vehicle_id = %vehicle_id,
             payloads_evidence_expired,
             "charge history retained payload evidence expired"
         );
@@ -1861,7 +1934,12 @@ pub async fn fetch_ota_details(
     }
 
     increment_poll_counter(pool, vehicle_id).await;
-    tracing::debug!(vehicle_id=%vehicle_id, url=?url, "OTA details upserted");
+    // The release notes URL is not logged: it is provider output and may carry a query string.
+    tracing::debug!(
+        vehicle_id = %vehicle_id,
+        release_notes_present = url.is_some(),
+        "ota details upserted"
+    );
     Ok(())
 }
 
@@ -2301,24 +2379,34 @@ pub async fn run_startup_polls(
     age_key: String,
     baseline_tx: mpsc::Sender<WsInboundEvent>,
 ) {
-    tracing::info!(vehicle_id=%vehicle_id, "startup polls begin");
+    tracing::debug!(vehicle_id = %vehicle_id, "startup polls started");
 
     // Proactively rotate the CSRF/app-session pair before any operation runs.
     // The stored pair from the last session may have expired during downtime;
     // doing this once at boot avoids the otherwise-guaranteed "first poll 401
     // → CSRF refresh → retry" dance on every restart.
-    if let Ok((_, current_tokens)) = load_vehicle_tokens(vehicle_id, &pool, &age_key).await {
-        match try_refresh_csrf(vehicle_id, &current_tokens, &client, &pool, &age_key).await {
-            Ok(_) => {
-                tracing::debug!(vehicle_id=%vehicle_id, "boot CSRF rotation complete");
+    match load_vehicle_tokens(vehicle_id, &pool, &age_key).await {
+        Ok((_, current_tokens)) => {
+            match try_refresh_csrf(vehicle_id, &current_tokens, &client, &pool, &age_key).await {
+                Ok(_) => {
+                    tracing::debug!(vehicle_id = %vehicle_id, "boot csrf rotation complete");
+                }
+                Err(error) => {
+                    // The first poll repeats the refresh and logs any failure it leaves.
+                    tracing::debug!(
+                        vehicle_id = %vehicle_id,
+                        error = ?error,
+                        "boot csrf rotation failed; first poll will retry"
+                    );
+                }
             }
-            Err(e) => {
-                tracing::debug!(
-                    vehicle_id=%vehicle_id,
-                    err=%e,
-                    "boot CSRF rotation failed (will retry on first poll)"
-                );
-            }
+        }
+        Err(error) => {
+            tracing::debug!(
+                vehicle_id = %vehicle_id,
+                error = ?error,
+                "boot csrf rotation skipped: credentials unavailable"
+            );
         }
     }
 
@@ -2356,7 +2444,16 @@ pub async fn run_startup_polls(
         Ok(data) => {
             increment_poll_counter(&pool, vehicle_id).await;
             let raw = serde_json::json!({"type":"next","payload":{"data":data}}).to_string();
-            if let Ok(Some(event)) = parser::parse_ws_message(&raw, vehicle_id) {
+            let parsed = parser::parse_ws_message(&raw, vehicle_id);
+            if let Err(error) = &parsed {
+                tracing::warn!(
+                    vehicle_id = %vehicle_id,
+                    source = "vehicle_state_baseline",
+                    error = %error,
+                    "vehicle-state baseline skipped: parse failed"
+                );
+            }
+            if let Ok(Some(event)) = parsed {
                 let baseline_event = WsInboundEvent {
                     kind: WsInboundKind::Telemetry,
                     received_at: Utc::now(),
@@ -2375,25 +2472,38 @@ pub async fn run_startup_polls(
                         mpsc::error::TrySendError::Closed(_) => "closed",
                     };
                     tracing::debug!(
-                        vehicle_id=%vehicle_id,
-                        source="vehicle_state_baseline",
+                        vehicle_id = %vehicle_id,
+                        source = "vehicle_state_baseline",
                         reason,
-                        "vehicle-state baseline could not reach canonical worker"
+                        "vehicle-state baseline dropped"
                     );
                     if count == 1 || count.is_power_of_two() {
                         tracing::warn!(
-                            vehicle_id=%vehicle_id,
-                            source="vehicle_state_baseline",
+                            vehicle_id = %vehicle_id,
+                            source = "vehicle_state_baseline",
                             reason,
-                            sampled_drop_count=count,
-                            "vehicle-state baseline could not reach canonical worker"
+                            sampled_drop_count = count,
+                            "vehicle-state baseline dropped"
                         );
                     }
                 }
             }
         }
         Err(error) => {
-            tracing::debug!(vehicle_id=%vehicle_id, err=%error, "vehicle-state baseline unavailable")
+            if is_auth_error(&error) {
+                tracing::debug!(
+                    vehicle_id = %vehicle_id,
+                    source = "vehicle_state_baseline",
+                    "vehicle-state baseline skipped: authentication required"
+                );
+            } else {
+                tracing::warn!(
+                    vehicle_id = %vehicle_id,
+                    source = "vehicle_state_baseline",
+                    error = ?error,
+                    "vehicle-state baseline failed"
+                );
+            }
         }
     }
 
@@ -2407,9 +2517,18 @@ pub async fn run_startup_polls(
     );
     if let Err(e) = enrichment {
         if is_auth_error(&e) {
-            tracing::info!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment skipped: authentication required");
+            tracing::debug!(
+                vehicle_id = %vehicle_id,
+                operation = "fetch_vehicle_enrichment",
+                "vehicle enrichment skipped: authentication required"
+            );
         } else {
-            tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment failed");
+            tracing::warn!(
+                vehicle_id = %vehicle_id,
+                operation = "fetch_vehicle_enrichment",
+                error = ?e,
+                "vehicle enrichment failed"
+            );
         }
     }
 
@@ -2417,44 +2536,76 @@ pub async fn run_startup_polls(
         fetch_wallboxes_for_vehicle(user_id, vehicle_id, &pool, &client, &age_key).await;
     capture_poll(vehicle_id, "wallboxes", &wallboxes, serde_json::Value::Null);
     if let Err(e) = wallboxes {
-        tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_wallboxes failed");
+        tracing::warn!(
+            vehicle_id = %vehicle_id,
+            operation = "fetch_wallboxes",
+            error = ?e,
+            "wallbox sync failed"
+        );
     }
 
-    // Check whether this vehicle has already been fully backfilled.
-    let needs_full_backfill: bool = sqlx::query_scalar(
+    // Check whether this vehicle has already been fully backfilled. If the
+    // check itself fails, assume a backfill is needed, as before.
+    let needs_full_backfill: bool = match sqlx::query_scalar::<_, bool>(
         "SELECT history_backfilled_at IS NULL FROM riviamigo.vehicles WHERE id = $1",
     )
     .bind(vehicle_id)
     .fetch_optional(&pool)
     .await
-    .ok()
-    .flatten()
-    .unwrap_or(true);
+    {
+        Ok(value) => value.unwrap_or(true),
+        Err(error) => {
+            tracing::warn!(
+                vehicle_id = %vehicle_id,
+                error = %error,
+                reason = "backfill_state_unknown",
+                "charge history backfill check failed; assuming backfill required"
+            );
+            true
+        }
+    };
 
     if needs_full_backfill {
-        tracing::info!(vehicle_id=%vehicle_id, "starting full charge history backfill");
+        tracing::info!(vehicle_id = %vehicle_id, "full charge history backfill started");
 
         match charge_backfill::run(&pool, &client, &age_key, vehicle_id).await {
             Ok(count) => {
-                tracing::info!(vehicle_id=%vehicle_id, count, "full backfill complete");
+                tracing::info!(vehicle_id = %vehicle_id, count, "full charge history backfill complete");
             }
             Err(ChargeBackfillError::AlreadyRunning) => {
-                tracing::info!(vehicle_id=%vehicle_id, "full backfill already running; running incremental charge sync");
+                tracing::debug!(
+                    vehicle_id = %vehicle_id,
+                    reason = "backfill_in_progress",
+                    "charge history backfill skipped: running incremental sync"
+                );
                 match fetch_charge_history_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
-                    Ok(n) => {
-                        tracing::info!(vehicle_id=%vehicle_id, enriched=%n, "incremental charge history sync complete")
+                    Ok(count) => {
+                        tracing::debug!(vehicle_id = %vehicle_id, count, "charge history sync complete");
                     }
                     Err(e) => {
                         if is_auth_error(&e) {
-                            tracing::info!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history skipped: authentication required")
+                            tracing::debug!(
+                                vehicle_id = %vehicle_id,
+                                operation = "fetch_charge_history",
+                                "charge history sync skipped: authentication required"
+                            );
                         } else {
-                            tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history failed")
+                            tracing::warn!(
+                                vehicle_id = %vehicle_id,
+                                operation = "fetch_charge_history",
+                                error = ?e,
+                                "charge history sync failed"
+                            );
                         }
                     }
                 }
             }
             Err(e) => {
-                tracing::warn!(vehicle_id=%vehicle_id, err=%e, "full backfill failed");
+                tracing::warn!(
+                    vehicle_id = %vehicle_id,
+                    error = %e,
+                    "full charge history backfill failed"
+                );
             }
         }
     } else {
@@ -2466,14 +2617,23 @@ pub async fn run_startup_polls(
         );
         capture_poll(vehicle_id, "charge_history", &history, detail);
         match history {
-            Ok(n) => {
-                tracing::info!(vehicle_id=%vehicle_id, enriched=%n, "incremental charge history sync complete")
+            Ok(count) => {
+                tracing::debug!(vehicle_id = %vehicle_id, count, "charge history sync complete");
             }
             Err(e) => {
                 if is_auth_error(&e) {
-                    tracing::info!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history skipped: authentication required")
+                    tracing::debug!(
+                        vehicle_id = %vehicle_id,
+                        operation = "fetch_charge_history",
+                        "charge history sync skipped: authentication required"
+                    );
                 } else {
-                    tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history failed")
+                    tracing::warn!(
+                        vehicle_id = %vehicle_id,
+                        operation = "fetch_charge_history",
+                        error = ?e,
+                        "charge history sync failed"
+                    );
                 }
             }
         }
@@ -2488,16 +2648,25 @@ pub async fn run_startup_polls(
     );
     if let Err(e) = schedule {
         if is_auth_error(&e) {
-            tracing::debug!(vehicle_id=%vehicle_id, err=%e, "fetch_charging_schedule skipped: authentication required");
+            tracing::debug!(
+                vehicle_id = %vehicle_id,
+                operation = "fetch_charging_schedule",
+                "charging schedule sync skipped: authentication required"
+            );
         } else {
-            tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charging_schedule failed");
+            tracing::warn!(
+                vehicle_id = %vehicle_id,
+                operation = "fetch_charging_schedule",
+                error = ?e,
+                "charging schedule sync failed"
+            );
         }
     }
 
     // NOTE: `getDepartureSchedules` does not exist in Rivian's schema — departure
     // schedules are subscription-only.  The call has been intentionally removed.
 
-    tracing::info!(vehicle_id=%vehicle_id, "startup polls complete");
+    tracing::info!(vehicle_id = %vehicle_id, "startup polls complete");
 }
 
 /// Periodic and event-driven poll loop.
@@ -2526,8 +2695,9 @@ pub(crate) async fn run_poll_loop(
     } = signals;
 
     use crate::ingestion::poller::poll_interval;
-    tracing::info!(vehicle_id=%vehicle_id, "poll loop started");
+    tracing::info!(vehicle_id = %vehicle_id, "poll loop started");
     let mut last_charge_history_sync = tokio::time::Instant::now();
+    let mut periodic_sync_failures: u32 = 0;
 
     loop {
         let current_power = power_state_rx.borrow().clone();
@@ -2537,6 +2707,12 @@ pub(crate) async fn run_poll_loop(
         } else {
             poll_interval(current_power.as_ref())
         };
+        tracing::trace!(
+            vehicle_id = %vehicle_id,
+            sleep_seconds = sleep_dur.as_secs(),
+            actively_charging,
+            "poll cycle scheduled"
+        );
 
         // Adaptive sleep — bail early on shutdown or power state change.
         tokio::select! {
@@ -2548,7 +2724,7 @@ pub(crate) async fn run_poll_loop(
                 // Charger status changed; re-evaluate immediately.
             },
             _ = shutdown.recv() => {
-                tracing::info!(vehicle_id=%vehicle_id, "poll loop shutdown");
+                tracing::info!(vehicle_id = %vehicle_id, "poll loop stopped");
                 return;
             }
         }
@@ -2578,13 +2754,43 @@ pub(crate) async fn run_poll_loop(
             capture_poll(vehicle_id, "charge_history_periodic", &history, detail);
             match history {
                 Ok(count) => {
-                    tracing::debug!(vehicle_id=%vehicle_id, reconciled=count, "periodic charge history sync complete");
+                    if periodic_sync_failures > 0 {
+                        tracing::info!(
+                            vehicle_id = %vehicle_id,
+                            attempts = periodic_sync_failures,
+                            "periodic charge history sync recovered"
+                        );
+                        periodic_sync_failures = 0;
+                    }
+                    tracing::debug!(vehicle_id = %vehicle_id, reconciled = count, "periodic charge history sync complete");
                 }
                 Err(error) => {
                     if is_auth_error(&error) {
-                        tracing::debug!(vehicle_id=%vehicle_id, err=%error, "periodic charge history sync skipped: authentication required");
+                        tracing::debug!(
+                            vehicle_id = %vehicle_id,
+                            operation = "fetch_charge_history",
+                            "periodic charge history sync skipped: authentication required"
+                        );
                     } else {
-                        tracing::warn!(vehicle_id=%vehicle_id, err=%error, "periodic charge history sync failed");
+                        // Repeats on every cadence tick while Rivian is failing:
+                        // warn once, then count the rest at DEBUG until recovery.
+                        periodic_sync_failures = periodic_sync_failures.saturating_add(1);
+                        if periodic_sync_failures == 1 {
+                            tracing::warn!(
+                                vehicle_id = %vehicle_id,
+                                operation = "fetch_charge_history",
+                                error = ?error,
+                                "periodic charge history sync failed"
+                            );
+                        } else {
+                            tracing::debug!(
+                                vehicle_id = %vehicle_id,
+                                operation = "fetch_charge_history",
+                                attempt = periodic_sync_failures,
+                                error = ?error,
+                                "periodic charge history sync failed again"
+                            );
+                        }
                     }
                 }
             }

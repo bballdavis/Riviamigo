@@ -427,12 +427,12 @@ pub async fn recompute_charge_session_cost(
         .await
         {
             Ok(readings) => readings,
-            Err(e) => {
+            Err(error) => {
                 tracing::warn!(
-                    error = %e,
+                    error = ?error,
                     session_id = %session.id,
                     vehicle_id = %session.vehicle_id,
-                    "failed to fetch energy readings; falling back to time-weighted TOU"
+                    "energy readings fetch failed, using time-weighted pricing"
                 );
                 vec![]
             }
@@ -563,6 +563,12 @@ pub async fn recompute_charging_costs(
             summary.changed += 1;
         }
     }
+    tracing::debug!(
+        vehicle_id = vehicle_id.map(|id| id.to_string()),
+        processed = summary.processed,
+        changed = summary.changed,
+        "charge session costs recomputed"
+    );
     Ok(summary)
 }
 

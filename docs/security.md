@@ -183,7 +183,7 @@ removed automatically; only a durable restore handoff retains its package.
   names, coordinates, and credential-like fields before storage and again on
   export. Each vehicle keeps one capture, which stops after one hour and is
   purged 24 hours after it stops.
-- Structured `[riviamigo][LEVEL]` key-value logs are written to stdout/stderr; Docker supplies the outer timestamp. The production wrapper normalizes Nginx error lines into the same shape.
+- Structured `[riviamigo][LEVEL]` key-value logs are written to stdout/stderr; Docker supplies the outer timestamp. The production wrapper normalizes Nginx error lines into the same shape. Logs never carry credentials, tokens, emails, VINs, coordinates, addresses, or raw vehicle payloads at any level; the rules are in [Logging conventions](./architecture/logging.md). As a backstop the log formatter also masks URL passwords, `password`/`secret` assignments, and bearer tokens, and keeps every event on one line so a logged value cannot forge another line.
 
 ## Security regression controls
 

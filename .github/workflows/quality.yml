@@ -44,6 +44,8 @@ jobs:
         run: pnpm turbo lint
       - name: Color-token guard
         run: pnpm colors:check
+      - name: Logging conventions
+        run: pnpm logging:check
       - name: Docs check
         run: pnpm docs:check
       - name: Compose deployment contracts

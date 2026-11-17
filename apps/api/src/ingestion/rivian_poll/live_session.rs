@@ -48,7 +48,10 @@ pub fn normalize_charging_session(
     event: &crate::ingestion::parser::ChargingSessionEvent,
     received_at: DateTime<Utc>,
 ) -> Option<LiveSessionData> {
-    let live = event.live_data.as_ref()?;
+    let Some(live) = event.live_data.as_ref() else {
+        tracing::trace!(reason = "no_live_data", "charging session frame ignored");
+        return None;
+    };
     let has_live_value = live.power_kw.is_some()
         || live.kilometers_charged_per_hour.is_some()
         || live.range_added_this_session.is_some()
@@ -69,6 +72,7 @@ pub fn normalize_charging_session(
             || point.vehicle_charger_state.is_some()
     });
     if !has_live_value && !has_chart_value {
+        tracing::trace!(reason = "no_values", "charging session frame ignored");
         return None;
     }
     Some(LiveSessionData {
@@ -98,10 +102,11 @@ pub async fn persist_live_session_data(
     live: &LiveSessionData,
 ) -> Result<()> {
     let Some(session_id) = active_session_id else {
+        tracing::trace!(reason = "no_active_session", "live session update skipped");
         return Ok(());
     };
 
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE riviamigo.charge_sessions SET
              live_current_price       = COALESCE($2, live_current_price),
              live_current_currency    = COALESCE($3, live_current_currency),
@@ -150,6 +155,13 @@ pub async fn persist_live_session_data(
     )
     .execute(pool)
     .await?;
+    if result.rows_affected() == 0 {
+        tracing::debug!(
+            session_id = %session_id,
+            reason = "session_not_open",
+            "live session update matched no open session"
+        );
+    }
 
     // Do not compute a final billing amount while the session is open.  The
     // live price is retained above for an estimate; final cost is recomputed
@@ -171,6 +183,11 @@ pub async fn persist_charging_session_chart(
         .filter_map(|point| point.start_time.map(|ts| (ts, point.power_kw)))
         .collect::<Vec<_>>();
     if selected.is_empty() {
+        tracing::trace!(
+            vehicle_id = %vehicle_id,
+            reason = "no_timed_points",
+            "live charge curve update skipped"
+        );
         return Ok(0);
     }
 
@@ -210,5 +227,10 @@ pub async fn persist_charging_session_chart(
     .bind(&power)
     .fetch_all(pool)
     .await?;
+    tracing::trace!(
+        vehicle_id = %vehicle_id,
+        count = actions.len(),
+        "live charge curve points upserted"
+    );
     Ok(actions.len())
 }

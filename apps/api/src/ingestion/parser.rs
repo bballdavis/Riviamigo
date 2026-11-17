@@ -60,14 +60,27 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
 
     match msg.get("type").and_then(Value::as_str) {
         Some("next") => {}
-        _ => return Ok(None),
+        _ => {
+            tracing::trace!(reason = "not_data_message", "websocket message ignored");
+            return Ok(None);
+        }
     }
 
     let state = msg
         .pointer("/payload/data/vehicleState")
         .ok_or(ParseError::MissingVehicleState)?;
 
-    let ts = extract_latest_timestamp(state).unwrap_or_else(Utc::now);
+    let ts = match extract_latest_timestamp(state) {
+        Some(ts) => ts,
+        None => {
+            tracing::trace!(
+                reason = "no_timestamp",
+                "vehicle state frame timestamped at receipt"
+            );
+            Utc::now()
+        }
+    };
+    trace_frame_shape(state);
     let is_online = state
         .pointer("/cloudConnection/isOnline")
         .and_then(Value::as_bool);
@@ -91,15 +104,15 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
         distance_to_empty_mi_ts: extract_timestamp(state, "/distanceToEmpty/timeStamp"),
         battery_limit_ts: extract_timestamp(state, "/batteryLimit/timeStamp"),
 
-        power_state: extract_str(state, "/powerState/value").and_then(|s| s.parse().ok()),
-        charger_state: extract_str(state, "/chargerState/value").and_then(|s| s.parse().ok()),
+        power_state: parse_enum(state, "/powerState/value", "power_state"),
+        charger_state: parse_enum(state, "/chargerState/value", "charger_state"),
         charger_status: extract_str(state, "/chargerStatus/value").map(String::from),
         time_to_end_of_charge_min: extract_i32(state, "/timeToEndOfCharge/value"),
         power_state_ts: extract_timestamp(state, "/powerState/timeStamp"),
         charger_state_ts: extract_timestamp(state, "/chargerState/timeStamp"),
         charger_status_ts: extract_timestamp(state, "/chargerStatus/timeStamp"),
         time_to_end_of_charge_min_ts: extract_timestamp(state, "/timeToEndOfCharge/timeStamp"),
-        drive_mode: extract_str(state, "/driveMode/value").and_then(|s| s.parse().ok()),
+        drive_mode: parse_enum(state, "/driveMode/value", "drive_mode"),
         gear_status: extract_str(state, "/gearStatus/value").map(String::from),
         gear_status_ts: extract_timestamp(state, "/gearStatus/timeStamp"),
 
@@ -212,9 +225,14 @@ pub fn parse_charging_session_message(
 ) -> Result<Option<ChargingSessionEvent>, ParseError> {
     let msg: Value = serde_json::from_str(raw)?;
     if msg.get("type").and_then(Value::as_str) != Some("next") {
+        tracing::trace!(reason = "not_data_message", "websocket message ignored");
         return Ok(None);
     }
     let Some(session) = msg.pointer("/payload/data/chargingSession") else {
+        tracing::trace!(
+            reason = "no_charging_session",
+            "charging session message ignored"
+        );
         return Ok(None);
     };
     if session.is_null() {
@@ -226,7 +244,13 @@ pub fn parse_charging_session_message(
             ts: Utc::now(),
         }));
     }
-    Ok(Some(parse_charging_session_value(session)))
+    let event = parse_charging_session_value(session);
+    tracing::trace!(
+        count = event.chart_data.len(),
+        live_data_present = event.live_data_present,
+        "charging session frame parsed"
+    );
+    Ok(Some(event))
 }
 
 fn extract_ota_available_version(state: &Value) -> Option<String> {
@@ -345,6 +369,44 @@ fn extract_bool_like(v: &Value, ptr: &str) -> Option<bool> {
 
 fn extract_str<'a>(v: &'a Value, ptr: &str) -> Option<&'a str> {
     v.pointer(ptr)?.as_str()
+}
+
+/// A string-valued enum field. An unrecognised value is dropped as before;
+/// the trace names the field, never the value.
+fn parse_enum<T: std::str::FromStr>(v: &Value, ptr: &str, field: &'static str) -> Option<T> {
+    let raw = extract_str(v, ptr)?;
+    let parsed = raw.parse::<T>().ok();
+    if parsed.is_none() {
+        tracing::trace!(
+            field,
+            reason = "unrecognized_value",
+            "vehicle state field rejected"
+        );
+    }
+    parsed
+}
+
+/// Shape of one vehicle-state frame: how many fields it carries and their
+/// names. Values are never traced, so coordinates stay out of the log.
+fn trace_frame_shape(state: &Value) {
+    if !tracing::enabled!(tracing::Level::TRACE) {
+        return;
+    }
+    let names: Vec<&str> = state
+        .as_object()
+        .map(|fields| {
+            fields
+                .iter()
+                .filter(|(_, value)| !value.is_null())
+                .map(|(name, _)| name.as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+    tracing::trace!(
+        count = names.len(),
+        fields = %names.join(","),
+        "vehicle state frame parsed"
+    );
 }
 
 fn value_as_f64(value: &Value) -> Option<f64> {

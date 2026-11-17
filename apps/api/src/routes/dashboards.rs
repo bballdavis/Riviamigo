@@ -196,6 +196,7 @@ async fn create(
     .bind(config)
     .fetch_one(&state.pool)
     .await?;
+    tracing::info!(dashboard_id = %row.id, user_id = %auth.user_id, "dashboard created");
 
     Ok((StatusCode::CREATED, Json(row)))
 }
@@ -244,6 +245,7 @@ async fn update(
     .bind(id)
     .fetch_one(&state.pool)
     .await?;
+    tracing::debug!(dashboard_id = %row.id, user_id = %auth.user_id, "dashboard updated");
 
     Ok(Json(row))
 }
@@ -261,6 +263,7 @@ async fn remove(
         .bind(id)
         .execute(&state.pool)
         .await?;
+    tracing::info!(dashboard_id = %id, user_id = %auth.user_id, "dashboard deleted");
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -311,6 +314,7 @@ async fn clone_dashboard(
         }
         AppError::Database(e)
     })?;
+    tracing::info!(dashboard_id = %row.id, source_dashboard_id = %id, user_id = %auth.user_id, "dashboard cloned");
 
     Ok((StatusCode::CREATED, Json(row)))
 }
@@ -361,6 +365,7 @@ async fn admin_update(
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
+    tracing::info!(dashboard_id = %row.id, user_id = %auth.user_id, "dashboard updated by administrator");
 
     Ok(Json(row))
 }
@@ -390,6 +395,7 @@ async fn admin_set_lock(
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
+    tracing::info!(dashboard_id = %row.id, locked = row.is_locked, user_id = %auth.user_id, "dashboard lock changed by administrator");
 
     Ok(Json(row))
 }
@@ -444,6 +450,7 @@ async fn admin_restore_default(
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
+    tracing::info!(dashboard_id = %row.id, user_id = %auth.user_id, "system dashboard restored to bundled default");
 
     Ok(Json(row))
 }
@@ -557,7 +564,13 @@ fn bundled_default_config(id: Uuid) -> Option<Value> {
         _ => return None,
     };
 
-    serde_json::from_str(json_str).ok()
+    match serde_json::from_str(json_str) {
+        Ok(config) => Some(config),
+        Err(error) => {
+            tracing::error!(dashboard_id = %id, error = %error, "bundled dashboard config is invalid");
+            None
+        }
+    }
 }
 
 // ─── Seed ────────────────────────────────────────────────────────────────────
@@ -599,7 +612,7 @@ pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
         let config =
             dashboard_config_with_metadata(config, id, None, &slug, &name, None, true, true);
 
-        sqlx::query(UPSERT_SYSTEM_DEFAULT_SQL)
+        let result = sqlx::query(UPSERT_SYSTEM_DEFAULT_SQL)
             .bind(id)
             .bind(slug)
             .bind(name)
@@ -607,6 +620,13 @@ pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
             .bind(BUNDLED_DASHBOARD_BASELINE_REVISION)
             .execute(pool)
             .await?;
+        if result.rows_affected() > 0 {
+            tracing::info!(
+                dashboard_id = %id,
+                baseline_revision = BUNDLED_DASHBOARD_BASELINE_REVISION,
+                "system dashboard seeded or upgraded"
+            );
+        }
     }
 
     migrate_user_owned_managed_widgets(pool, defaults).await?;
@@ -624,6 +644,7 @@ async fn migrate_user_owned_managed_widgets(
     pool: &sqlx::PgPool,
     defaults: &[(&str, &str)],
 ) -> anyhow::Result<()> {
+    let mut migrated = 0_u64;
     for (_id_str, json_str) in defaults {
         let bundled: Value = serde_json::from_str(json_str)?;
         let Some(slug) = bundled["slug"].as_str() else {
@@ -659,9 +680,13 @@ async fn migrate_user_owned_managed_widgets(
             .bind(id)
             .execute(pool)
             .await?;
+            migrated += 1;
         }
     }
 
+    if migrated > 0 {
+        tracing::info!(count = migrated, "user dashboard managed widgets migrated");
+    }
     Ok(())
 }
 

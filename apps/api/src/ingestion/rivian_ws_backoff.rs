@@ -88,11 +88,16 @@ fn with_holds<T>(f: impl FnOnce(&mut HashMap<[u8; 16], HoldState>) -> T) -> T {
 
 /// Drop sessions whose last hold ended at least [`HOLD_STATE_TTL`] before `now`.
 fn prune_stale_holds(holds: &mut HashMap<[u8; 16], HoldState>, now: Instant) {
+    let before = holds.len();
     holds.retain(|_, state| {
         state
             .retry_at
             .is_some_and(|retry_at| now.saturating_duration_since(retry_at) < HOLD_STATE_TTL)
     });
+    let pruned = before - holds.len();
+    if pruned > 0 {
+        tracing::debug!(count = pruned, "stale session holds dropped");
+    }
 }
 
 /// The delay for the `attempt`-th consecutive hold, before the shared state
@@ -126,13 +131,30 @@ pub(crate) fn start_hold(key: [u8; 16], reason: HoldReason) -> Duration {
                 if retry_at > current {
                     state.retry_at = Some(retry_at);
                     state.reason = Some(reason);
+                    tracing::debug!(
+                        reason = reason.as_str(),
+                        retry_seconds = retry_at.saturating_duration_since(now).as_secs(),
+                        "session hold extended for rejected credentials"
+                    );
                 }
             }
-            return state
+            let remaining = state
                 .retry_at
                 .map_or(Duration::ZERO, |at| at.saturating_duration_since(now));
+            tracing::debug!(
+                reason = reason.as_str(),
+                retry_seconds = remaining.as_secs(),
+                "session hold already running; reusing it"
+            );
+            return remaining;
         }
         let delay = hold_delay(reason, state.attempt);
+        tracing::debug!(
+            reason = reason.as_str(),
+            attempt = state.attempt,
+            retry_seconds = delay.as_secs(),
+            "session hold started"
+        );
         state.attempt = state.attempt.saturating_add(1);
         let retry_at = now + delay;
         if state.retry_at.is_none_or(|current| retry_at > current) {
@@ -160,6 +182,12 @@ pub(crate) fn remaining_hold(key: [u8; 16]) -> Option<(Duration, HoldReason)> {
 pub(crate) fn mark_healthy(key: [u8; 16]) {
     with_holds(|holds| {
         if let Some(state) = holds.get_mut(&key) {
+            if state.attempt != 0 {
+                tracing::debug!(
+                    attempt = state.attempt,
+                    "session hold backoff reset after healthy data"
+                );
+            }
             state.attempt = 0;
         }
     });

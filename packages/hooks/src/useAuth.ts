@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { clientLog } from '@riviamigo/ui/lib/clientDiagnostics';
 import { api } from './api';
 
 const EXPLICIT_LOGOUT_INTENT_KEY = 'rm-explicit-logout-intent';
@@ -101,6 +102,7 @@ export const useAuth = create<AuthState>()(
       },
 
       clearSession: () => {
+        clientLog.info('auth', 'session cleared');
         api.setToken(null);
         set({
           accessToken: null,
@@ -119,6 +121,7 @@ export const useAuth = create<AuthState>()(
       login: async (email, password) => {
         const tokens = await api.login(email, password);
         const userId = userIdFromToken(tokens.access_token);
+        clientLog.info('auth', 'signed in', { user_id: userId });
         api.setToken(tokens.access_token);
         set({
           accessToken: tokens.access_token,
@@ -133,6 +136,7 @@ export const useAuth = create<AuthState>()(
       register: async (email, password, setupToken) => {
         const tokens = await api.register(email, password, setupToken);
         const userId = userIdFromToken(tokens.access_token);
+        clientLog.info('auth', 'account registered', { user_id: userId });
         api.setToken(tokens.access_token);
         set({
           accessToken: tokens.access_token,
@@ -147,6 +151,7 @@ export const useAuth = create<AuthState>()(
       acceptAccountInvitation: async (token, password) => {
         const tokens = await api.acceptAccountInvitation(token, password);
         const userId = userIdFromToken(tokens.access_token);
+        clientLog.info('auth', 'invitation accepted', { user_id: userId });
         api.setToken(tokens.access_token);
         set({
           accessToken: tokens.access_token,
@@ -159,19 +164,29 @@ export const useAuth = create<AuthState>()(
       },
 
       logout: async () => {
+        clientLog.info('auth', 'signing out');
         recordExplicitLogoutIntent();
         get().clearSession();
-        try { await api.logout(); } catch { /* session state is already cleared */ }
+        try {
+          await api.logout();
+        } catch (error) {
+          // Session state is already cleared; the server session may outlive it.
+          clientLog.warn('auth', 'server sign-out failed', {
+            error: error instanceof Error ? error.message : 'unknown',
+          });
+        }
       },
 
       resumeSession: async () => {
         try {
           const tokens = await api.resumeSession();
           if (!tokens) {
+            clientLog.debug('auth', 'no session to resume');
             set({ isBootstrapping: false });
             return false;
           }
           const userId = userIdFromToken(tokens.access_token);
+          clientLog.info('auth', 'session resumed', { user_id: userId });
           api.setToken(tokens.access_token);
           set({
             accessToken: tokens.access_token,
@@ -186,10 +201,13 @@ export const useAuth = create<AuthState>()(
             isBootstrapping: false,
           });
           return true;
-        } catch {
+        } catch (error) {
           // A failed bootstrap must finish the loading state so AuthGuard can
           // report the real session outcome rather than leaving a hard refresh
           // in a brittle half-authenticated state.
+          clientLog.warn('auth', 'session resume failed', {
+            error: error instanceof Error ? error.message : 'unknown',
+          });
           set({ isBootstrapping: false });
           return false;
         }

@@ -117,6 +117,13 @@ pub async fn reconcile_unassociated_parallax_samples(
         .await?;
     }
     tx.commit().await?;
+    tracing::debug!(
+        vehicle_id = %vehicle_id,
+        scanned = stats.scanned,
+        attached = stats.attached,
+        ambiguous = stats.ambiguous,
+        "parallax charge sample reconciliation pass"
+    );
     Ok(stats)
 }
 
@@ -237,6 +244,7 @@ pub async fn rollback_repair(pool: &PgPool, journal_id: i64) -> Result<()> {
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    tracing::info!(journal_id, "charge session repair rolled back");
     Ok(())
 }
 
@@ -498,6 +506,16 @@ pub async fn heal_active_tail(pool: &PgPool, vehicle_id: Uuid) -> Result<RepairS
     }
 
     tx.commit().await?;
+    if stats.merged > 0 || stats.closed > 0 {
+        tracing::info!(
+            vehicle_id = %vehicle_id,
+            merged = stats.merged,
+            closed = stats.closed,
+            "active charge session tail repaired"
+        );
+    } else {
+        tracing::debug!(vehicle_id = %vehicle_id, "active charge session tail needed no repair");
+    }
     Ok(stats)
 }
 

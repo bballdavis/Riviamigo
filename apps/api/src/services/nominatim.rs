@@ -161,6 +161,7 @@ pub async fn search(
     external_connections::record_attempt(pool, external_connections::NOMINATIM).await;
     let allowlist = crate::services::outbound::configured_private_network_allowlist(&settings)?;
     let client = crate::services::outbound::outbound_client_for_url(&endpoint, &allowlist).await?;
+    let request_started = Instant::now();
     let response = match client
         .get(endpoint)
         .header(reqwest::header::USER_AGENT, user_agent(&settings))
@@ -175,6 +176,12 @@ pub async fn search(
     {
         Ok(response) => response,
         Err(_) => {
+            // The caller logs the returned error once; this keeps the attempt detail.
+            tracing::debug!(
+                provider = external_connections::NOMINATIM,
+                duration_ms = request_started.elapsed().as_millis() as u64,
+                "address search request failed"
+            );
             external_connections::record_failure(
                 pool,
                 external_connections::NOMINATIM,
@@ -196,7 +203,16 @@ pub async fn search(
             &format!("HTTP {status}"),
         )
         .await;
-        tracing::warn!(status = %status, lane = ?slot.lane, queued_ms = slot.queued_ms, gate_wait_ms = slot.gate_wait_ms, "nominatim.search_http_error");
+        // The caller logs the returned error once; this keeps the provider detail.
+        tracing::debug!(
+            provider = external_connections::NOMINATIM,
+            status = status.as_u16(),
+            lane = ?slot.lane,
+            queued_ms = slot.queued_ms,
+            gate_wait_ms = slot.gate_wait_ms,
+            duration_ms = request_started.elapsed().as_millis() as u64,
+            "address search failed"
+        );
         return Err(AppError::DependencyUnavailable(
             "Address provider returned an error".into(),
         ));
@@ -227,6 +243,7 @@ pub async fn reverse(
     external_connections::record_attempt(pool, external_connections::NOMINATIM).await;
     let allowlist = crate::services::outbound::configured_private_network_allowlist(&settings)?;
     let client = crate::services::outbound::outbound_client_for_url(&endpoint, &allowlist).await?;
+    let request_started = Instant::now();
     let response = match client
         .get(endpoint)
         .header(reqwest::header::USER_AGENT, user_agent(&settings))
@@ -262,7 +279,16 @@ pub async fn reverse(
             &format!("HTTP {status}"),
         )
         .await;
-        tracing::warn!(status = %status, lane = ?slot.lane, queued_ms = slot.queued_ms, gate_wait_ms = slot.gate_wait_ms, "nominatim.reverse_http_error");
+        // Handled here as a fallback: the caller sees `None` and skips the address.
+        tracing::warn!(
+            provider = external_connections::NOMINATIM,
+            status = status.as_u16(),
+            lane = ?slot.lane,
+            queued_ms = slot.queued_ms,
+            gate_wait_ms = slot.gate_wait_ms,
+            duration_ms = request_started.elapsed().as_millis() as u64,
+            "reverse geocode failed, address skipped"
+        );
         return Ok(None);
     }
     let value = crate::services::outbound::read_json::<Value>(

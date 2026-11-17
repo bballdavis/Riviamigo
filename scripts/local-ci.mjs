@@ -124,6 +124,7 @@ function commonChecks({ includeInstall = false, includeBuild = false, apiTests =
   run('pnpm', ['release-workflows:check'], { label: 'Release workflow contract' });
   run('pnpm', ['compose:render-check'], { label: 'Compose render check' });
   run('pnpm', ['architecture:check'], { label: 'Architecture guards' });
+  run('pnpm', ['logging:check'], { label: 'Logging conventions' });
   run('pnpm', ['security:routes'], { label: 'Route security inventory' });
   run('pnpm', ['dashboards:sync-defaults', '--check'], { label: 'Dashboard default drift' });
   run('pnpm', ['charts:sync-defaults', '--check'], { label: 'Chart default drift' });

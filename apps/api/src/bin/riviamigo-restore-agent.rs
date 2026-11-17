@@ -18,7 +18,6 @@ use uuid::Uuid;
 
 use riviamigo_api::{
     config::Config,
-    logging,
     services::{
         backups, restore_compatibility, restore_history,
         restore_jobs::{self, RestorePhase},
@@ -34,11 +33,66 @@ struct AgentState {
     agent_key: String,
 }
 
+/// Reports a best-effort cleanup step that failed after the restore outcome was
+/// decided. The restore keeps its result; the leftover may need an operator.
+fn report_cleanup_failure(step: &'static str, error: &dyn std::fmt::Display) {
+    tracing::warn!(step, error = %error, "restore cleanup step failed");
+}
+
+/// Reports a best-effort removal. A path that is already gone is not a failure.
+fn report_removal(step: &'static str, result: std::io::Result<()>) {
+    if let Err(error) = result {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            report_cleanup_failure(step, &error);
+        }
+    }
+}
+
+/// Existence check for a restore path. An I/O error is reported and treated as
+/// absent, which is how the callers have always handled it.
+async fn path_exists(step: &'static str, path: &Path) -> bool {
+    match fs::try_exists(path).await {
+        Ok(exists) => exists,
+        Err(error) => {
+            tracing::warn!(step, error = %error, "restore path check failed");
+            false
+        }
+    }
+}
+
+/// Database presence check with the same reporting as `path_exists`.
+async fn database_present(config: &Config, database: &str) -> bool {
+    match database_exists(config, database).await {
+        Ok(present) => present,
+        Err(error) => {
+            tracing::warn!(error = ?error, "restore database presence check failed");
+            false
+        }
+    }
+}
+
+/// Drops a candidate database on a failure path. The failure is reported,
+/// because the caller is already returning the restore error.
+async fn drop_candidate(config: &Config, database: &str) {
+    if let Err(error) = drop_database(config, database).await {
+        report_cleanup_failure("drop candidate database", &error);
+    }
+}
+
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    logging::init();
-    let config = Config::from_env()?;
-    cleanup_restore_roles(&config).await?;
+async fn main() -> std::process::ExitCode {
+    riviamigo_api::logging::run(Box::pin(run())).await
+}
+
+async fn run() -> anyhow::Result<()> {
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "restore agent starting"
+    );
+    let config = Config::from_env().context("loading configuration from the environment")?;
+    cleanup_restore_roles(&config)
+        .await
+        .context("cleaning up expired restore roles")?;
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
     if let Some(command) = arguments.first().map(String::as_str) {
         match command {
@@ -69,7 +123,9 @@ async fn main() -> anyhow::Result<()> {
             _ => {}
         }
     }
-    let agent_key = fs::read_to_string(restore_jobs::agent_key_path(&config)).await?;
+    let agent_key = fs::read_to_string(restore_jobs::agent_key_path(&config))
+        .await
+        .context("reading the restore agent key")?;
     let state = AgentState {
         config,
         agent_key: agent_key.trim().into(),
@@ -81,14 +137,24 @@ async fn main() -> anyhow::Result<()> {
         .route("/internal/jobs/{job_id}/execute", post(execute_job))
         .with_state(state);
     let port = std::env::var("RESTORE_AGENT_PORT").unwrap_or_else(|_| "3002".into());
-    let address: SocketAddr = format!("127.0.0.1:{port}").parse()?;
-    let listener = TcpListener::bind(address).await?;
+    let address: SocketAddr = format!("127.0.0.1:{port}")
+        .parse()
+        .context("parsing the restore agent listen address")?;
+    let listener = TcpListener::bind(address)
+        .await
+        .with_context(|| format!("binding {address}"))?;
+    tracing::info!(listen_addr = %address, "restore agent listening");
     tokio::spawn(async move {
         if let Err(error) = retry_interrupted_restore(&recovery_state).await {
             tracing::error!(error = ?error, "interrupted restore retry failed");
         }
     });
-    axum::serve(listener, app).await?;
+    tokio::select! {
+        result = axum::serve(listener, app) => result.context("serving restore agent HTTP")?,
+        signal = riviamigo_api::logging::shutdown_signal() => {
+            tracing::info!(signal, "shutdown signal received; stopping");
+        }
+    }
     Ok(())
 }
 
@@ -138,7 +204,7 @@ async fn host_restore_inner(
     job_id: Uuid,
 ) -> anyhow::Result<()> {
     let state_path = host_restore_state_path(config);
-    if fs::try_exists(&state_path).await.unwrap_or(false) {
+    if path_exists("host restore state check", &state_path).await {
         anyhow::bail!("a host restore is already awaiting finalize or rollback");
     }
     let validated =
@@ -196,7 +262,13 @@ async fn host_restore_inner(
                 .join(" ")
         );
     }
-    let target_history = restore_jobs::snapshot_catalog(&current_pool).await.ok();
+    let target_history = match restore_jobs::snapshot_catalog(&current_pool).await {
+        Ok(snapshot) => Some(snapshot),
+        Err(error) => {
+            tracing::warn!(error = %error, "target catalog snapshot unavailable; restore history will not include it");
+            None
+        }
+    };
 
     let staging = Path::new(&config.backup_artifact_dir)
         .join(".restore-staging")
@@ -208,7 +280,7 @@ async fn host_restore_inner(
     let staged_validation =
         backups::validate_recovery_package_with_limits(&staged_package, &config.recovery).await?;
     if staged_validation.checksum_sha256 != validated.checksum_sha256 {
-        let _ = fs::remove_dir_all(&staging).await;
+        report_removal("host staging", fs::remove_dir_all(&staging).await);
         anyhow::bail!("recovery package changed while it was being staged");
     }
     extract_package(&config, &staged_package, &staging).await?;
@@ -235,7 +307,7 @@ async fn host_restore_inner(
         .map(|transform| transform.id.as_str())
         .collect::<Vec<_>>();
     if planned_transforms != applied_transforms {
-        let _ = drop_database(&config, &prepared.candidate_database).await;
+        drop_candidate(&config, &prepared.candidate_database).await;
         current_pool.close().await;
         anyhow::bail!(
             "candidate compatibility transforms changed after preflight: planned={planned_transforms:?}, actual={applied_transforms:?}"
@@ -244,7 +316,7 @@ async fn host_restore_inner(
     if prepared.validation_report.target_schema.schema_fingerprint
         != plan.target.schema_fingerprint.clone().unwrap_or_default()
     {
-        let _ = drop_database(&config, &prepared.candidate_database).await;
+        drop_candidate(&config, &prepared.candidate_database).await;
         current_pool.close().await;
         anyhow::bail!("candidate final schema contract differs from the preflight target contract");
     }
@@ -267,7 +339,7 @@ async fn host_restore_inner(
     }
     .await;
     if let Err(error) = safety_and_merge {
-        let _ = drop_database(&config, &prepared.candidate_database).await;
+        drop_candidate(&config, &prepared.candidate_database).await;
         current_pool.close().await;
         return Err(error);
     }
@@ -292,14 +364,11 @@ async fn host_restore_inner(
     }
     .await
     {
-        let _ = drop_database(&config, &state.candidate_database).await;
-        let _ = fs::remove_dir_all(&state.staging).await;
+        drop_candidate(&config, &state.candidate_database).await;
+        report_removal("host staging", fs::remove_dir_all(&state.staging).await);
         return Err(error);
     }
-    println!(
-        "host restore candidate prepared and validated; state={}",
-        state_path.display()
-    );
+    tracing::info!(state_path = %state_path.display(), "host restore candidate prepared and validated");
     Ok(())
 }
 
@@ -351,7 +420,7 @@ async fn activate_host_restore(config: &Config) -> anyhow::Result<()> {
         rollback_artwork(&artwork_activation_from_state(&state)?).await?;
         return Err(error.into());
     }
-    println!("host restore candidate activated");
+    tracing::info!("host restore candidate activated");
     Ok(())
 }
 
@@ -376,7 +445,7 @@ async fn finalize_host_restore(config: &Config) -> anyhow::Result<()> {
     record_host_restore_history(config, &state, "completed", None).await?;
     drop_database(config, &state.previous_database).await?;
     finalize_artwork(&artwork_activation_from_state(&state)?).await;
-    let _ = fs::remove_dir_all(&state.staging).await;
+    report_removal("host staging", fs::remove_dir_all(&state.staging).await);
     write_host_restore_report(config, &state, "completed", None).await?;
     fs::remove_file(host_restore_state_path(config)).await?;
     Ok(())
@@ -385,10 +454,7 @@ async fn finalize_host_restore(config: &Config) -> anyhow::Result<()> {
 async fn rollback_host_restore(config: &Config) -> anyhow::Result<()> {
     let state = read_host_restore_state(config).await?;
     if state.activated
-        || (state.activation_started
-            && database_exists(config, &state.previous_database)
-                .await
-                .unwrap_or(false))
+        || (state.activation_started && database_present(config, &state.previous_database).await)
     {
         rollback_databases(config, &state.previous_database, &state.candidate_database).await?;
         if state.artwork_destination.is_some() && state.artwork_previous.is_some() {
@@ -404,7 +470,7 @@ async fn rollback_host_restore(config: &Config) -> anyhow::Result<()> {
         Some("Application verification failed after candidate activation; rollback succeeded"),
     )
     .await?;
-    let _ = fs::remove_dir_all(&state.staging).await;
+    report_removal("host staging", fs::remove_dir_all(&state.staging).await);
     write_host_restore_report(
         config,
         &state,
@@ -505,7 +571,7 @@ async fn write_host_restore_report(
 
 async fn retry_interrupted_restore(state: &AgentState) -> anyhow::Result<()> {
     let directory = restore_jobs::jobs_dir(&state.config);
-    if !fs::try_exists(&directory).await.unwrap_or(false) {
+    if !path_exists("jobs directory check", &directory).await {
         return Ok(());
     }
     let mut entries = fs::read_dir(directory).await?;
@@ -524,7 +590,10 @@ async fn retry_interrupted_restore(state: &AgentState) -> anyhow::Result<()> {
         };
         let job = match restore_jobs::read(&state.config, id).await {
             Ok(job) => job,
-            Err(_) => continue,
+            Err(error) => {
+                tracing::warn!(job_id = %id, error = %error, "restore job skipped: unreadable");
+                continue;
+            }
         };
         if matches!(job.phase, RestorePhase::Completed | RestorePhase::Queued)
             || !job.retryable
@@ -535,30 +604,40 @@ async fn retry_interrupted_restore(state: &AgentState) -> anyhow::Result<()> {
         let staging = Path::new(&state.config.backup_artifact_dir)
             .join(".restore-staging")
             .join(job.id.to_string());
-        if !fs::try_exists(staging.join("manifest.json"))
+        if !path_exists(
+            "interrupted restore manifest check",
+            &staging.join("manifest.json"),
+        )
+        .await
+            || !path_exists(
+                "interrupted restore dump check",
+                &staging.join("database.dump"),
+            )
             .await
-            .unwrap_or(false)
-            || !fs::try_exists(staging.join("database.dump"))
-                .await
-                .unwrap_or(false)
         {
+            tracing::debug!(job_id = %job.id, reason = "staging_incomplete", "interrupted restore skipped");
             continue;
         }
 
         if let Some(previous) = job.previous_database.as_deref() {
-            if database_exists(&state.config, previous)
-                .await
-                .unwrap_or(false)
-            {
+            if database_present(&state.config, previous).await {
                 let candidate = job
                     .candidate_database
                     .clone()
                     .unwrap_or_else(|| format!("riviamigo_restore_{}", job.id.simple()));
-                let _ = fs::write(restore_marker_path(), job.id.to_string()).await;
-                let _ = stop_api_process().await;
+                if let Err(error) = fs::write(restore_marker_path(), job.id.to_string()).await {
+                    tracing::warn!(job_id = %job.id, error = %error, "restore marker write failed");
+                }
+                if let Err(error) = stop_api_process().await {
+                    tracing::warn!(job_id = %job.id, error = ?error, "could not stop API before interrupted restore rollback");
+                }
                 rollback_databases(&state.config, previous, &candidate).await?;
-                let _ = drop_database(&state.config, &candidate).await;
-                let _ = fs::remove_file(restore_marker_path()).await;
+                drop_candidate(&state.config, &candidate).await;
+                report_removal(
+                    "restore marker",
+                    fs::remove_file(restore_marker_path()).await,
+                );
+                tracing::warn!(job_id = %job.id, "interrupted restore rolled back");
             }
         }
 
@@ -571,9 +650,16 @@ async fn retry_interrupted_restore(state: &AgentState) -> anyhow::Result<()> {
         retry.automatic_retry_count = next_retry_count;
         retry.updated_at = Utc::now();
         restore_jobs::write(&state.config, &retry).await?;
+        tracing::info!(job_id = %retry.id, attempt = next_retry_count, "retrying interrupted restore");
         if let Err(error) = perform_restore(&state.config, retry.id).await {
-            let _ = fs::remove_file(restore_marker_path()).await;
-            let _ = restore_jobs::fail(&state.config, retry.id, error).await;
+            tracing::error!(job_id = %retry.id, error = ?error, "interrupted restore retry failed");
+            report_removal(
+                "restore marker",
+                fs::remove_file(restore_marker_path()).await,
+            );
+            if let Err(fail_error) = restore_jobs::fail(&state.config, retry.id, &error).await {
+                tracing::error!(job_id = %retry.id, error = %fail_error, "restore failure could not be recorded");
+            }
         }
         return Ok(());
     }
@@ -629,10 +715,16 @@ async fn execute_job(
                 error = ?error,
                 "restore agent job failed"
             );
-            let _ = restore_jobs::fail(&state.config, job_id, &error).await;
-            let _ = fs::remove_file(restore_marker_path()).await;
-            if let Ok(job) = restore_jobs::read(&state.config, job_id).await {
-                cleanup_remote_staging(&job.artifact_path).await;
+            if let Err(fail_error) = restore_jobs::fail(&state.config, job_id, &error).await {
+                tracing::error!(job_id = %job_id, error = %fail_error, "restore failure could not be recorded");
+            }
+            report_removal(
+                "restore marker",
+                fs::remove_file(restore_marker_path()).await,
+            );
+            match restore_jobs::read(&state.config, job_id).await {
+                Ok(job) => cleanup_remote_staging(&job.artifact_path).await,
+                Err(error) => report_cleanup_failure("read job for staging cleanup", &error),
             }
         }
     });
@@ -643,10 +735,15 @@ async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
     let lock_pool = riviamigo_api::db::pool::create_pool(&config.database_url).await?;
     let config = config_with_active_keys(config, &lock_pool).await?;
     let lock = backups::acquire_recovery_mutation_lock(&lock_pool).await?;
+    tracing::info!(job_id = %job_id, "restore started");
+    let started = std::time::Instant::now();
     let result =
         with_restore_deadline(&config, job_id, perform_restore_inner(&config, job_id)).await;
     lock.release().await;
     lock_pool.close().await;
+    if result.is_ok() {
+        tracing::info!(job_id = %job_id, duration_ms = started.elapsed().as_millis() as u64, "restore completed");
+    }
     result
 }
 
@@ -663,6 +760,11 @@ async fn with_restore_deadline<T>(
     {
         Ok(result) => result,
         Err(_) => {
+            tracing::warn!(
+                job_id = %job_id,
+                deadline_seconds = config.recovery.restore_deadline_seconds,
+                "restore deadline exceeded; cleaning up candidate"
+            );
             // Dropping the inner future skips its ordinary Err cleanup. This
             // cleanup runs while the outer recovery lock remains held.
             cleanup_failed_candidate(config, job_id)
@@ -729,7 +831,7 @@ async fn perform_restore_inner(config: &Config, job_id: Uuid) -> anyhow::Result<
     let staging = Path::new(&config.backup_artifact_dir)
         .join(".restore-staging")
         .join(job_id.to_string());
-    if fs::try_exists(&staging).await.unwrap_or(false) {
+    if path_exists("restore staging check", &staging).await {
         fs::remove_dir_all(&staging).await?;
     }
     fs::create_dir_all(&staging).await?;
@@ -800,7 +902,7 @@ async fn perform_restore_inner(config: &Config, job_id: Uuid) -> anyhow::Result<
         .map(|transform| transform.id.as_str())
         .collect::<Vec<_>>();
     if planned_transforms != applied_transforms {
-        let _ = drop_database(config, &prepared.candidate_database).await;
+        drop_candidate(config, &prepared.candidate_database).await;
         let mut terminal = restore_jobs::read(config, job_id).await?;
         terminal.retryable = false;
         terminal.updated_at = Utc::now();
@@ -815,7 +917,7 @@ async fn perform_restore_inner(config: &Config, job_id: Uuid) -> anyhow::Result<
         .and_then(|plan| plan.target.schema_fingerprint.as_deref())
         .unwrap_or_default();
     if prepared.validation_report.target_schema.schema_fingerprint != expected_target_contract {
-        let _ = drop_database(config, &prepared.candidate_database).await;
+        drop_candidate(config, &prepared.candidate_database).await;
         let mut terminal = restore_jobs::read(config, job_id).await?;
         terminal.retryable = false;
         terminal.updated_at = Utc::now();
@@ -993,7 +1095,7 @@ async fn perform_restore_inner(config: &Config, job_id: Uuid) -> anyhow::Result<
         );
     }
     finalize_artwork(&artwork).await;
-    let _ = fs::remove_dir_all(&staging).await;
+    report_removal("restore staging", fs::remove_dir_all(&staging).await);
     if let Err(error) = drop_database(config, &prepared.previous_database).await {
         tracing::warn!(database = %prepared.previous_database, error = ?error, "could not remove the previous database after a successful restore");
     }
@@ -1017,16 +1119,23 @@ async fn rollback_activated_candidate(
     cause: anyhow::Error,
 ) -> anyhow::Error {
     let rollback_result = async {
-        if let Ok(mut rollback_job) = restore_jobs::read(config, job_id).await {
-            rollback_job.phase = RestorePhase::RollingBack;
-            rollback_job.message =
-                "Activation failed; restoring the previous database and artwork".into();
-            rollback_job.rollback_state = restore_jobs::RollbackState::InProgress;
-            rollback_job.updated_at = Utc::now();
-            restore_jobs::write(config, &rollback_job).await?;
+        match restore_jobs::read(config, job_id).await {
+            Ok(mut rollback_job) => {
+                rollback_job.phase = RestorePhase::RollingBack;
+                rollback_job.message =
+                    "Activation failed; restoring the previous database and artwork".into();
+                rollback_job.rollback_state = restore_jobs::RollbackState::InProgress;
+                rollback_job.updated_at = Utc::now();
+                restore_jobs::write(config, &rollback_job).await?;
+            }
+            Err(error) => {
+                tracing::warn!(job_id = %job_id, error = %error, "rollback phase not recorded; job unreadable");
+            }
         }
         fs::write(restore_marker_path(), job_id.to_string()).await?;
-        let _ = stop_api_process().await;
+        if let Err(error) = stop_api_process().await {
+            tracing::warn!(job_id = %job_id, error = ?error, "could not stop API before rollback");
+        }
         rollback_databases(
             config,
             &prepared.previous_database,
@@ -1036,13 +1145,18 @@ async fn rollback_activated_candidate(
         if let Some(artwork) = artwork {
             rollback_artwork(artwork).await?;
         }
-        let _ = fs::remove_file(restore_marker_path()).await;
+        report_removal("restore marker", fs::remove_file(restore_marker_path()).await);
         wait_for_api_health(config).await?;
-        if let Ok(mut rollback_job) = restore_jobs::read(config, job_id).await {
-            rollback_job.rollback_state = restore_jobs::RollbackState::Succeeded;
-            rollback_job.retryable = true;
-            rollback_job.updated_at = Utc::now();
-            restore_jobs::write(config, &rollback_job).await?;
+        match restore_jobs::read(config, job_id).await {
+            Ok(mut rollback_job) => {
+                rollback_job.rollback_state = restore_jobs::RollbackState::Succeeded;
+                rollback_job.retryable = true;
+                rollback_job.updated_at = Utc::now();
+                restore_jobs::write(config, &rollback_job).await?;
+            }
+            Err(error) => {
+                tracing::warn!(job_id = %job_id, error = %error, "rollback result not recorded; job unreadable");
+            }
         }
         Ok::<(), anyhow::Error>(())
     }
@@ -1072,7 +1186,7 @@ async fn cleanup_remote_staging(path: &str) {
         .and_then(|name| name.to_str())
         == Some(".remote-staging")
     {
-        let _ = fs::remove_file(path).await;
+        report_removal("remote staging", fs::remove_file(path).await);
     }
 }
 
@@ -1198,7 +1312,7 @@ async fn build_restore_toc(dump: &Path, toc_path: &Path) -> anyhow::Result<()> {
     if !output.status.success() {
         anyhow::bail!(
             "pg_restore could not inspect the recovery dump: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            stderr_text(&output)
         );
     }
     let list = String::from_utf8_lossy(&output.stdout)
@@ -1224,10 +1338,48 @@ async fn run_pg_restore(config: &Config, dump: &Path, toc_path: &Path) -> anyhow
     if output.status.success() {
         return Ok(());
     }
-    anyhow::bail!(
-        "pg_restore failed: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    )
+    anyhow::bail!("pg_restore failed: {}", stderr_text(&output))
+}
+
+/// Creates the unprivileged candidate role. The statement carries the role's
+/// password as a literal, so it runs on a connection with statement logging
+/// off; otherwise `sqlx=debug` would write the password to the log. Failures
+/// are reported without the statement text.
+async fn create_restore_role(
+    config: &Config,
+    role: &str,
+    password: &str,
+    valid_until: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<()> {
+    use sqlx::{postgres::PgConnectOptions, ConnectOptions, Connection};
+    let options = config
+        .database_url
+        .parse::<PgConnectOptions>()
+        .context("parsing the database URL")?
+        .disable_statement_logging();
+    let mut connection = options
+        .connect()
+        .await
+        .context("connecting to create the restore role")?;
+    let statement = format!(
+        "CREATE ROLE {} LOGIN PASSWORD {} VALID UNTIL {} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4",
+        quote_identifier(role),
+        quote_literal(password),
+        quote_literal(&valid_until.to_rfc3339())
+    );
+    let result = sqlx::query(sqlx::AssertSqlSafe(statement))
+        .execute(&mut connection)
+        .await;
+    if let Err(error) = connection.close().await {
+        tracing::debug!(error = %error, "restore role connection close failed");
+    }
+    result.map(|_| ()).context("creating the restore role")
+}
+
+/// A child process's stderr, trimmed and with credentials masked. It becomes
+/// part of an error that is logged and recorded on the restore job.
+fn stderr_text(output: &std::process::Output) -> String {
+    riviamigo_api::logging::redact(String::from_utf8_lossy(&output.stderr).trim()).into_owned()
 }
 
 struct PreparedDatabase {
@@ -1254,6 +1406,7 @@ async fn prepare_restore_database(
         drop_database(config, &restore_database).await?;
     }
     create_database(config, &restore_database).await?;
+    tracing::debug!(job_id = %job_id, "candidate database created");
     let restore_role = format!("riviamigo_restore_owner_{}", job_id.simple());
     let mut role_password_bytes = [0_u8; 32];
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut role_password_bytes);
@@ -1279,8 +1432,8 @@ async fn prepare_restore_database(
         let valid_until = chrono::Utc::now() + chrono::Duration::seconds(config.recovery.restore_deadline_seconds as i64);
         // No memberships, superuser privileges, cluster administration or file/
         // program roles. Only this fresh candidate receives object privileges.
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE ROLE {} LOGIN PASSWORD {} VALID UNTIL {} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4", quote_identifier(&restore_role), quote_literal(&role_password), quote_literal(&valid_until.to_rfc3339()))))
-            .execute(&pool).await?;
+        create_restore_role(&restore_config, &restore_role, &role_password, valid_until).await?;
+        tracing::debug!(job_id = %job_id, "candidate owner role created");
         sqlx::raw_sql(sqlx::AssertSqlSafe(format!("REVOKE CONNECT ON DATABASE {} FROM PUBLIC; GRANT CONNECT, CREATE, TEMPORARY ON DATABASE {} TO {}; GRANT USAGE, CREATE ON SCHEMA public, riviamigo TO {}; ALTER SCHEMA riviamigo OWNER TO {};", quote_identifier(&restore_database), quote_identifier(&restore_database), quote_identifier(&restore_role), quote_identifier(&restore_role), quote_identifier(&restore_role))))
             .execute(&pool).await?;
         // Timescale's installed extension owns its catalog tables. COPY needs
@@ -1293,7 +1446,9 @@ async fn prepare_restore_database(
         }
         pool.close().await;
         build_restore_toc(dump, &toc_path).await?;
+        let dump_started = std::time::Instant::now();
         run_pg_restore(&archive_config, dump, &toc_path).await?;
+        tracing::debug!(job_id = %job_id, duration_ms = dump_started.elapsed().as_millis() as u64, "database dump restored into candidate");
         inject_restore_fault("dump_restored")?;
         let pool = riviamigo_api::db::pool::create_pool(&archive_config.database_url).await?;
         let validation_report = restore_compatibility::prepare_candidate_schema(
@@ -1302,8 +1457,9 @@ async fn prepare_restore_database(
             manifest,
         )
         .await?;
+        tracing::debug!(job_id = %job_id, "candidate schema prepared and validated");
         if let Some(history) = history {
-            if fs::try_exists(history).await.unwrap_or(false) {
+            if path_exists("operational history check", history).await {
                 restore_history::merge(&pool, history, config.recovery.max_history_bytes).await?;
             }
         }
@@ -1316,6 +1472,7 @@ async fn prepare_restore_database(
         // Keep object ownership on this unprivileged role. Promoting archive
         // functions to the bootstrap owner would undo the execution boundary.
         run_psql(config, &format!("ALTER ROLE {} NOLOGIN PASSWORD NULL;", quote_identifier(&restore_role))).await?;
+        tracing::debug!(job_id = %job_id, "candidate owner role locked");
         Ok::<_, anyhow::Error>(validation_report)
     }
     .await;
@@ -1323,13 +1480,13 @@ async fn prepare_restore_database(
         Ok(report) => report,
         Err(error) => {
             if let Err(cleanup) = cleanup_failed_candidate(config, job_id).await {
-                tracing::error!(job_id = %job_id, ?cleanup, "failed candidate cleanup failed");
+                tracing::error!(job_id = %job_id, error = ?cleanup, "candidate cleanup failed; database and credentials may remain");
             }
-            let _ = fs::remove_file(&toc_path).await;
+            report_removal("restore toc", fs::remove_file(&toc_path).await);
             return Err(error);
         }
     };
-    let _ = fs::remove_file(&toc_path).await;
+    report_removal("restore toc", fs::remove_file(&toc_path).await);
     Ok(PreparedDatabase {
         candidate_database: restore_database,
         previous_database,
@@ -1450,10 +1607,7 @@ async fn database_exists(config: &Config, database: &str) -> anyhow::Result<bool
         .output()
         .await?;
     if !output.status.success() {
-        anyhow::bail!(
-            "could not inspect database state: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        anyhow::bail!("could not inspect database state: {}", stderr_text(&output));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim() == "t")
 }
@@ -1470,10 +1624,7 @@ async fn run_psql_on_database(config: &Config, database: &str, sql: &str) -> any
     if output.status.success() {
         return Ok(());
     }
-    anyhow::bail!(
-        "psql failed: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    )
+    anyhow::bail!("psql failed: {}", stderr_text(&output))
 }
 
 async fn run_psql(config: &Config, sql: &str) -> anyhow::Result<()> {
@@ -1486,10 +1637,13 @@ async fn run_psql(config: &Config, sql: &str) -> anyhow::Result<()> {
 
 async fn run_psql_with_retry(config: &Config, sql: &str, attempts: u32) -> anyhow::Result<()> {
     let mut last_error = None;
-    for _ in 0..attempts.max(1) {
+    for attempt in 1..=attempts.max(1) {
         match run_psql(config, sql).await {
             Ok(()) => return Ok(()),
-            Err(error) => last_error = Some(error),
+            Err(error) => {
+                tracing::debug!(attempt, error = %error, "postgres not ready; retrying");
+                last_error = Some(error);
+            }
         }
         sleep(Duration::from_secs(1)).await;
     }
@@ -1604,12 +1758,12 @@ async fn activate_artwork(
         .ok_or_else(|| anyhow::anyhow!("invalid artwork path"))?;
     fs::create_dir_all(parent).await?;
     let incoming = parent.join(format!(".vehicle-images-restore-{job_id}"));
-    if fs::try_exists(&incoming).await.unwrap_or(false) {
+    if path_exists("artwork staging check", &incoming).await {
         fs::remove_dir_all(&incoming).await?;
     }
     copy_directory(source, &incoming).await?;
     let previous = parent.join(format!(".vehicle-images-before-{job_id}"));
-    if fs::try_exists(&destination).await.unwrap_or(false) {
+    if path_exists("artwork destination check", &destination).await {
         fs::rename(&destination, &previous).await?;
     }
     fs::rename(&incoming, &destination).await?;
@@ -1620,21 +1774,26 @@ async fn activate_artwork(
 }
 
 async fn rollback_artwork(activation: &ArtworkActivation) -> anyhow::Result<()> {
-    if fs::try_exists(&activation.destination)
-        .await
-        .unwrap_or(false)
+    if path_exists(
+        "artwork rollback destination check",
+        &activation.destination,
+    )
+    .await
     {
         fs::remove_dir_all(&activation.destination).await?;
     }
-    if fs::try_exists(&activation.previous).await.unwrap_or(false) {
+    if path_exists("artwork rollback previous check", &activation.previous).await {
         fs::rename(&activation.previous, &activation.destination).await?;
     }
     Ok(())
 }
 
 async fn finalize_artwork(activation: &ArtworkActivation) {
-    if fs::try_exists(&activation.previous).await.unwrap_or(false) {
-        let _ = fs::remove_dir_all(&activation.previous).await;
+    if path_exists("previous artwork check", &activation.previous).await {
+        report_removal(
+            "previous artwork",
+            fs::remove_dir_all(&activation.previous).await,
+        );
     }
 }
 

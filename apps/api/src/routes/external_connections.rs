@@ -7,7 +7,7 @@ use crate::services::outbound::{
 use axum::{
     body::Body,
     extract::{OriginalUri, Path, Query, State},
-    http::{header, HeaderMap, HeaderValue, Response, StatusCode},
+    http::{header, HeaderValue, Response, StatusCode},
     routing::{get, post, put},
     Json, Router,
 };
@@ -297,12 +297,18 @@ async fn cache_summary(state: &AppState, id: &str) -> Option<ConnectionCacheResp
         connections::NOMINATIM => {
             let (search_entries, search_bytes) =
                 redis_cache_metrics(state, "external:nominatim:search:*").await;
-            let (address_entries, address_bytes) = sqlx::query_as::<_, (i64, i64)>(
+            let (address_entries, address_bytes) = match sqlx::query_as::<_, (i64, i64)>(
                 "SELECT COUNT(*), pg_total_relation_size('riviamigo.addresses')",
             )
             .fetch_one(&state.pool)
             .await
-            .unwrap_or((0, 0));
+            {
+                Ok(counts) => counts,
+                Err(error) => {
+                    tracing::error!(error = %error, "address cache size query failed");
+                    (0, 0)
+                }
+            };
             Some(ConnectionCacheResponse {
                 entries: search_entries.saturating_add(address_entries.max(0) as u64),
                 bytes: search_bytes.saturating_add(address_bytes.max(0) as u64),
@@ -316,8 +322,12 @@ async fn cache_summary(state: &AppState, id: &str) -> Option<ConnectionCacheResp
 }
 
 async fn redis_cache_metrics(state: &AppState, pattern: &str) -> (u64, u64) {
-    let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await else {
-        return (0, 0);
+    let mut redis = match state.redis.get_multiplexed_async_connection().await {
+        Ok(redis) => redis,
+        Err(error) => {
+            tracing::debug!(error = %error, "cache metrics skipped: redis unavailable");
+            return (0, 0);
+        }
     };
     let mut cursor = 0_u64;
     let mut entries = 0_u64;
@@ -331,7 +341,13 @@ async fn redis_cache_metrics(state: &AppState, pattern: &str) -> (u64, u64) {
             .arg(500)
             .query_async(&mut redis)
             .await;
-        let Ok((next, keys)) = result else { break };
+        let (next, keys) = match result {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::debug!(error = %error, "cache metrics scan incomplete");
+                break;
+            }
+        };
         for key in keys {
             if key.ends_with(":content-type") || key.ends_with(":max-age") {
                 continue;
@@ -389,6 +405,7 @@ async fn purge_connection_cache(
             ));
         }
     };
+    tracing::debug!(connection = %id, count = purged_entries, user_id = %auth.user_id, "connection cache purged");
     Ok(Json(PurgeConnectionCacheResponse {
         purged_entries,
         message: "Persistent cache purged. Existing trip labels and saved places were retained.",
@@ -396,8 +413,12 @@ async fn purge_connection_cache(
 }
 
 async fn purge_redis_cache(state: &AppState, pattern: &str) -> u64 {
-    let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await else {
-        return 0;
+    let mut redis = match state.redis.get_multiplexed_async_connection().await {
+        Ok(redis) => redis,
+        Err(error) => {
+            tracing::warn!(error = %error, "cache purge skipped: redis unavailable");
+            return 0;
+        }
     };
     let mut cursor = 0_u64;
     let mut deleted = 0_u64;
@@ -410,13 +431,21 @@ async fn purge_redis_cache(state: &AppState, pattern: &str) -> u64 {
             .arg(500)
             .query_async(&mut redis)
             .await;
-        let Ok((next, keys)) = result else { break };
+        let (next, keys) = match result {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(error = %error, "cache purge stopped early: redis scan failed");
+                break;
+            }
+        };
         if !keys.is_empty() {
-            let removed: u64 = redis::cmd("UNLINK")
-                .arg(keys)
-                .query_async(&mut redis)
-                .await
-                .unwrap_or(0);
+            let removed: u64 = match redis::cmd("UNLINK").arg(keys).query_async(&mut redis).await {
+                Ok(removed) => removed,
+                Err(error) => {
+                    tracing::warn!(error = %error, "cache purge batch failed: redis unlink failed");
+                    0
+                }
+            };
             deleted = deleted.saturating_add(removed);
         }
         cursor = next;
@@ -586,6 +615,13 @@ async fn update_connection(
     .bind(auth.user_id)
     .execute(&state.pool)
     .await?;
+    tracing::info!(
+        connection = %id,
+        enabled = body.enabled,
+        mode,
+        user_id = %auth.user_id,
+        "external connection settings saved"
+    );
 
     // Endpoint/style changes must never reuse a response from the prior
     // provider. Address labels remain durable; only lookup-result cache keys
@@ -609,13 +645,18 @@ async fn disable_optional(
     auth: AuthUser,
 ) -> Result<Json<ExternalConnectionsResponse>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE riviamigo.external_connection_settings SET enabled = FALSE, mode = 'disabled', updated_at = now(), updated_by = $1 WHERE id = ANY($2)",
     )
     .bind(auth.user_id)
     .bind(connections::OPTIONAL_CONNECTIONS)
     .execute(&state.pool)
     .await?;
+    tracing::info!(
+        count = result.rows_affected(),
+        user_id = %auth.user_id,
+        "optional external connections disabled"
+    );
     Ok(Json(build_response(&state, &auth, true).await?))
 }
 
@@ -1017,6 +1058,11 @@ async fn test_connection(
             }))
         }
         Ok(response) => {
+            tracing::warn!(
+                connection = %id,
+                status = response.status().as_u16(),
+                "connection test failed: provider returned an error"
+            );
             let message = format!("Provider returned HTTP {}", response.status());
             connections::record_test(&state.pool, &id, false, Some(&message)).await;
             Ok(Json(TestConnectionResponse {
@@ -1031,6 +1077,14 @@ async fn test_connection(
             }))
         }
         Err(error) => {
+            // The transport error's Display includes the request URL, which can
+            // carry a query-string key, so only its classification is logged.
+            tracing::warn!(
+                connection = %id,
+                timeout = error.is_timeout(),
+                connect = error.is_connect(),
+                "connection test failed: request did not complete"
+            );
             connections::record_test(&state.pool, &id, false, Some(&error.to_string())).await;
             Ok(Json(TestConnectionResponse {
                 ok: false,
@@ -1128,7 +1182,13 @@ async fn proxy_basemap_tile(
     }
     let response = match request.send().await {
         Ok(response) => response,
-        Err(_) => {
+        Err(error) => {
+            tracing::debug!(
+                provider,
+                timeout = error.is_timeout(),
+                connect = error.is_connect(),
+                "basemap tile request did not complete"
+            );
             connections::record_failure(
                 &state.pool,
                 connections::BASEMAP,
@@ -1141,6 +1201,11 @@ async fn proxy_basemap_tile(
         }
     };
     if !response.status().is_success() {
+        tracing::debug!(
+            provider,
+            status = response.status().as_u16(),
+            "basemap tile provider returned an error"
+        );
         connections::record_failure(
             &state.pool,
             connections::BASEMAP,
@@ -1197,22 +1262,12 @@ fn carto_basemap_key_query(key: &str) -> (&'static str, &str) {
 async fn proxy_openfreemap_resource(
     State(state): State<AppState>,
     _auth: AuthUser,
-    headers: HeaderMap,
     Path(resource): Path<String>,
 ) -> Result<Response<Body>, AppError> {
-    let request_id = headers
-        .get("x-request-id")
-        .and_then(|value| value.to_str().ok());
     let resource_class = openfreemap_resource_class(&resource);
     let started_at = std::time::Instant::now();
     if !openfreemap_resource_is_allowed(&resource) {
-        log_openfreemap_failure(
-            request_id,
-            resource_class,
-            None,
-            "invalid_resource",
-            started_at,
-        );
+        // Caller-caused rejection: the central AppError log already records it.
         return Err(AppError::Validation("invalid OpenFreeMap resource".into()));
     }
     let settings = connections::require_enabled(&state.pool, connections::BASEMAP).await?;
@@ -1247,15 +1302,8 @@ async fn proxy_openfreemap_resource(
     let endpoint = match Url::parse(&format!("https://tiles.openfreemap.org/{resource}")) {
         Ok(endpoint) => endpoint,
         Err(_) => {
-            record_openfreemap_failure(
-                &state,
-                request_id,
-                resource_class,
-                None,
-                "endpoint_parse",
-                started_at,
-            )
-            .await;
+            record_openfreemap_failure(&state, resource_class, None, "endpoint_parse", started_at)
+                .await;
             return Err(AppError::Validation("invalid OpenFreeMap resource".into()));
         }
     };
@@ -1263,30 +1311,15 @@ async fn proxy_openfreemap_resource(
     let client = match outbound_client_for_url(&endpoint, &[]).await {
         Ok(client) => client,
         Err(error) => {
-            record_openfreemap_failure(
-                &state,
-                request_id,
-                resource_class,
-                None,
-                "client_setup",
-                started_at,
-            )
-            .await;
+            record_openfreemap_failure(&state, resource_class, None, "client_setup", started_at)
+                .await;
             return Err(error);
         }
     };
     let response = match client.get(endpoint).send().await {
         Ok(response) => response,
         Err(_) => {
-            record_openfreemap_failure(
-                &state,
-                request_id,
-                resource_class,
-                None,
-                "transport",
-                started_at,
-            )
-            .await;
+            record_openfreemap_failure(&state, resource_class, None, "transport", started_at).await;
             return Err(AppError::DependencyUnavailable(
                 "OpenFreeMap request failed".into(),
             ));
@@ -1297,7 +1330,6 @@ async fn proxy_openfreemap_resource(
         connections::record_failure(&state.pool, connections::BASEMAP, &format!("HTTP {status}"))
             .await;
         log_openfreemap_failure(
-            request_id,
             resource_class,
             Some(status.as_u16()),
             "upstream_status",
@@ -1317,15 +1349,7 @@ async fn proxy_openfreemap_resource(
     let bytes = match read_openfreemap_response_limited(response, 10 * 1024 * 1024).await {
         Ok(bytes) => bytes,
         Err(error_class) => {
-            record_openfreemap_failure(
-                &state,
-                request_id,
-                resource_class,
-                None,
-                error_class,
-                started_at,
-            )
-            .await;
+            record_openfreemap_failure(&state, resource_class, None, error_class, started_at).await;
             let message = match error_class {
                 "response_size" => "OpenFreeMap resource response exceeded the limit",
                 _ => "OpenFreeMap resource response failed",
@@ -1339,7 +1363,6 @@ async fn proxy_openfreemap_resource(
             Err(error) => {
                 record_openfreemap_failure(
                     &state,
-                    request_id,
                     resource_class,
                     None,
                     "invalid_json",
@@ -1369,7 +1392,6 @@ async fn proxy_openfreemap_resource(
 
 async fn record_openfreemap_failure(
     state: &AppState,
-    request_id: Option<&str>,
     resource_class: &'static str,
     upstream_status: Option<u16>,
     error_class: &'static str,
@@ -1381,33 +1403,25 @@ async fn record_openfreemap_failure(
         &format!("OpenFreeMap {error_class}"),
     )
     .await;
-    log_openfreemap_failure(
-        request_id,
-        resource_class,
-        upstream_status,
-        error_class,
-        started_at,
-    );
+    log_openfreemap_failure(resource_class, upstream_status, error_class, started_at);
 }
 
+/// Detail for a failed OpenFreeMap proxy request. The caller returns a
+/// dependency error that the central AppError log already reports at `WARN`,
+/// so this line carries the diagnosis detail at `DEBUG`.
 fn log_openfreemap_failure(
-    request_id: Option<&str>,
     resource_class: &'static str,
     upstream_status: Option<u16>,
     error_class: &'static str,
     started_at: std::time::Instant,
 ) {
-    tracing::warn!(
-        event = "openfreemap.proxy_failed",
+    tracing::debug!(
         provider = "openfreemap",
-        resource_kind = resource_class,
-        style_or_resource_class = resource_class,
-        upstream_status = ?upstream_status,
-        error_class,
+        resource_class,
+        status = upstream_status,
+        reason = error_class,
         duration_ms = started_at.elapsed().as_millis() as u64,
-        cache_state = "miss",
-        request_id = ?request_id,
-        "OpenFreeMap provider request failed"
+        "openfreemap request failed"
     );
 }
 
@@ -1623,7 +1637,15 @@ async fn proxy_json(
         .get(endpoint)
         .send()
         .await
-        .map_err(|_| AppError::DependencyUnavailable(format!("{id} request failed")))?;
+        .map_err(|error| {
+            tracing::debug!(
+                connection = %id,
+                timeout = error.is_timeout(),
+                connect = error.is_connect(),
+                "connection request did not complete"
+            );
+            AppError::DependencyUnavailable(format!("{id} request failed"))
+        })?;
     let status = upstream.status();
     if !status.is_success() {
         connections::record_failure(&state.pool, id, &format!("HTTP {status}")).await;

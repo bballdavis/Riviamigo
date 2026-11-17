@@ -90,6 +90,7 @@ fn parse_u64_env(name: &str, default: u64) -> Result<u64> {
 
 pub fn start_worker(pool: PgPool, config: BackfillConfig) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        tracing::info!("charge payload identity worker started");
         let mut retry_delay = Duration::from_secs(1);
         loop {
             match run_until_complete(&pool, config).await {
@@ -99,17 +100,24 @@ pub fn start_worker(pool: PgPool, config: BackfillConfig) -> tokio::task::JoinHa
                 }
                 Ok(WorkerResult::Busy) => {
                     retry_delay = Duration::from_secs(1);
+                    tracing::debug!(
+                        reason = "lock_held",
+                        "charge payload identity backfill skipped"
+                    );
                     tokio::time::sleep(Duration::from_secs(30)).await;
                 }
                 Err(error) => {
                     let error_text = error.to_string();
-                    tracing::error!(
-                        error = %error,
-                        retry_in_ms = retry_delay.as_millis() as u64,
-                        "charge_payload_identity_worker_failed"
+                    tracing::warn!(
+                        error = ?error,
+                        retry_seconds = retry_delay.as_secs(),
+                        "charge payload identity backfill failed, retrying"
                     );
                     if let Err(status_error) = mark_error(&pool, &error_text).await {
-                        tracing::error!(error = %status_error, "charge_payload_identity_backfill_status_failed");
+                        tracing::error!(
+                            error = %status_error,
+                            "charge payload identity backfill status write failed"
+                        );
                     }
                     tokio::time::sleep(retry_delay).await;
                     retry_delay = next_retry_delay(retry_delay);
@@ -170,10 +178,13 @@ async fn run_locked(pool: &PgPool, config: BackfillConfig) -> Result<WorkerResul
 
     ensure_pending_index(pool).await?;
     mark_started(pool).await?;
+    let started = std::time::Instant::now();
     let mut remaining_estimate = initial_pending;
+    let mut rows_filled_total = 0_i64;
+    let mut identities_inserted_total = 0_i64;
     tracing::info!(
         pending = initial_pending,
-        "charge_payload_identity_backfill_started"
+        "charge payload identity backfill started"
     );
 
     loop {
@@ -185,7 +196,12 @@ async fn run_locked(pool: &PgPool, config: BackfillConfig) -> Result<WorkerResul
             if pending_count(pool).await? == 0 {
                 mark_complete(pool).await?;
                 reconcile_retained_payload_references(pool, RETENTION_RECONCILE_BATCH_SIZE).await?;
-                tracing::info!("charge_payload_identity_backfill_complete");
+                tracing::info!(
+                    rows_filled = rows_filled_total,
+                    identities_inserted = identities_inserted_total,
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    "charge payload identity backfill complete"
+                );
                 return Ok(WorkerResult::Complete);
             }
 
@@ -196,11 +212,13 @@ async fn run_locked(pool: &PgPool, config: BackfillConfig) -> Result<WorkerResul
         }
 
         remaining_estimate = remaining_estimate.saturating_sub(rows_filled);
-        tracing::info!(
+        rows_filled_total += rows_filled;
+        identities_inserted_total += identities_inserted;
+        tracing::debug!(
             rows_filled,
             identities_inserted,
             remaining_estimate,
-            "charge_payload_identity_backfill_progress"
+            "charge payload identity backfill progress"
         );
         tokio::time::sleep(config.pause).await;
 
@@ -211,7 +229,12 @@ async fn run_locked(pool: &PgPool, config: BackfillConfig) -> Result<WorkerResul
             if pending_count(pool).await? == 0 {
                 mark_complete(pool).await?;
                 reconcile_retained_payload_references(pool, RETENTION_RECONCILE_BATCH_SIZE).await?;
-                tracing::info!("charge_payload_identity_backfill_complete");
+                tracing::info!(
+                    rows_filled = rows_filled_total,
+                    identities_inserted = identities_inserted_total,
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    "charge payload identity backfill complete"
+                );
                 return Ok(WorkerResult::Complete);
             }
         }
@@ -393,11 +416,20 @@ pub(crate) async fn reconcile_retained_payload_references(
     .await?;
     transaction.commit().await?;
 
-    tracing::info!(
-        identities_cleared,
-        aliases_cleared,
-        "charge_payload_retention_reconciled"
-    );
+    // Runs every completed pass; only an actual cleanup is worth a summary line.
+    if identities_cleared + aliases_cleared > 0 {
+        tracing::info!(
+            identities_cleared,
+            aliases_cleared,
+            "charge payload retention reconciled"
+        );
+    } else {
+        tracing::debug!(
+            identities_cleared,
+            aliases_cleared,
+            "charge payload retention reconciled"
+        );
+    }
     Ok((identities_cleared, aliases_cleared))
 }
 

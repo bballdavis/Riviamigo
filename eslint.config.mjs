@@ -57,7 +57,7 @@ export default [
       '@typescript-eslint/no-explicit-any': 'error',
       '@eslint-react/no-missing-key': 'error',
       'no-constant-condition': 'off',
-      'no-console': ['warn', { allow: ['warn', 'error', 'log', 'group', 'groupEnd'] }],
+      'no-console': ['warn', { allow: ['warn', 'error', 'info', 'debug', 'log', 'group', 'groupEnd'] }],
       'no-undef': 'off',
       'react-hooks/exhaustive-deps': 'off',
       'react-hooks/rules-of-hooks': 'error',

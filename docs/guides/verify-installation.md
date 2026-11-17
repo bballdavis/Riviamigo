@@ -25,7 +25,7 @@ docker compose --env-file .env -f compose/docker-compose.yml logs --tail=200
 
 For one service, append its Compose service name to the logs command.
 
-For a secure-session failure, inspect the Riviamigo logs for `secure_session_store.unavailable` and confirm the app and Redis containers use the same current `REDIS_PASSWORD`; do not expose either password in a terminal, ticket, or log. Correct the configuration and restart through your normal deployment workflow. The app must become healthy before attempting owner or vehicle setup.
+For a secure-session failure, inspect the Riviamigo logs for `secure session store unavailable` and confirm the app and Redis containers use the same current `REDIS_PASSWORD`; do not expose either password in a terminal, ticket, or log. Correct the configuration and restart through your normal deployment workflow. The app must become healthy before attempting owner or vehicle setup.
 
 ## Check the private origin
 

@@ -16,6 +16,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -126,6 +127,7 @@ pub(super) async fn vehicle_image_cache_asset(
         .get("mirror_relpath")
         .and_then(|value| value.as_str())
     else {
+        debug!(vehicle_id = %vehicle_id, reason = "not_mirrored", "artwork asset not yet mirrored");
         queue_vehicle_artwork_repair(&state, vehicle_id).await;
         return Ok(vehicle_artwork_restoring_response());
     };
@@ -134,14 +136,19 @@ pub(super) async fn vehicle_image_cache_asset(
         .and_then(|value| value.as_str())
         .unwrap_or("application/octet-stream");
     let path = mirror_file_path(&state.config, relpath);
-    let Ok(bytes) = tokio::fs::read(path).await else {
-        queue_vehicle_artwork_repair(&state, vehicle_id).await;
-        return Ok(vehicle_artwork_restoring_response());
+    let bytes = match tokio::fs::read(path).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            debug!(vehicle_id = %vehicle_id, error = %error, reason = "file_unreadable", "artwork asset cache miss");
+            queue_vehicle_artwork_repair(&state, vehicle_id).await;
+            return Ok(vehicle_artwork_restoring_response());
+        }
     };
     let Some(expected_sha256) = metadata.get("sha256").and_then(|value| value.as_str()) else {
         return Ok(vehicle_artwork_placeholder_response());
     };
     if hex::encode(Sha256::digest(&bytes)) != expected_sha256 {
+        warn!(vehicle_id = %vehicle_id, reason = "checksum_mismatch", "artwork asset failed checksum; repair queued");
         queue_vehicle_artwork_repair(&state, vehicle_id).await;
         return Ok(vehicle_artwork_restoring_response());
     }
@@ -193,7 +200,12 @@ pub(super) async fn admin_remirror_vehicle_images(
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
     require_remote_backed_vehicle(&state.pool, vehicle_id).await?;
     match queue_vehicle_artwork_repair_with_mode(&state, vehicle_id, true).await {
-        Ok(_) => {}
+        Ok(true) => {
+            info!(user_id = %auth.user_id, vehicle_id = %vehicle_id, "artwork refresh queued");
+        }
+        Ok(false) => {
+            debug!(user_id = %auth.user_id, vehicle_id = %vehicle_id, reason = "repair_active", "artwork refresh skipped");
+        }
         Err(ArtworkRepairBlocked::Paused) => {
             return Err(AppError::Validation(
                 "data collection is paused for this vehicle; resume it to refresh artwork".into(),
@@ -220,8 +232,15 @@ pub(super) async fn admin_purge_vehicle_artwork_cache(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
     require_remote_backed_vehicle(&state.pool, vehicle_id).await?;
-    let _ = tokio::fs::remove_dir_all(image_cache_root(&state.config).join(vehicle_id.to_string()))
-        .await;
+    // A vehicle with no cached files has nothing to remove, which is not a failure.
+    if let Err(error) =
+        tokio::fs::remove_dir_all(image_cache_root(&state.config).join(vehicle_id.to_string()))
+            .await
+    {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            error!(vehicle_id = %vehicle_id, error = %error, "artwork cache files could not be removed");
+        }
+    }
     sqlx::query(
         "UPDATE riviamigo.vehicle_images
          SET metadata = jsonb_set(metadata, '{mirror_status}', '\"pending\"'::jsonb, true), updated_at = now()
@@ -237,6 +256,7 @@ pub(super) async fn admin_purge_vehicle_artwork_cache(
         ArtworkCacheStateUpdate::Observe,
     )
     .await;
+    info!(user_id = %auth.user_id, vehicle_id = %vehicle_id, "artwork cache purged");
     Ok(Json(
         serde_json::json!({ "ok": true, "vehicle_id": vehicle_id }),
     ))
