@@ -18,6 +18,7 @@ const requiredFiles = [
   "docs/environment-variables.md",
   "docs/architecture/overview.md",
   "docs/architecture/backend-data-flow.md",
+  "docs/architecture/logging.md",
   "docs/development.md",
   "docs/using-riviamigo.md",
   "docs/operations.md",

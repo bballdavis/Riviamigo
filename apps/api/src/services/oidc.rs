@@ -82,7 +82,14 @@ impl<'c> AsyncHttpClient<'c> for HttpsOnlyClient {
                 .body(body)
                 .send()
                 .await
-                .map_err(|_| AppError::DependencyUnavailable("OIDC request failed".into()))?;
+                .map_err(|error| {
+                    tracing::debug!(
+                        timeout = error.is_timeout(),
+                        connect = error.is_connect(),
+                        "OIDC request failed"
+                    );
+                    AppError::DependencyUnavailable("OIDC request failed".into())
+                })?;
             let status = response.status();
             let headers = response.headers().clone();
             let bytes = crate::services::outbound::read_response_limited(
@@ -252,9 +259,22 @@ pub async fn discover(
         .get(endpoint)
         .send()
         .await
-        .map_err(|_| AppError::Validation("OIDC provider is unavailable".into()))?
+        .map_err(|error| {
+            tracing::warn!(
+                timeout = error.is_timeout(),
+                connect = error.is_connect(),
+                "OIDC provider unavailable during discovery"
+            );
+            AppError::Validation("OIDC provider is unavailable".into())
+        })?
         .error_for_status()
-        .map_err(|_| AppError::Validation("OIDC provider discovery failed".into()))?;
+        .map_err(|error| {
+            tracing::warn!(
+                status = error.status().map(|status| status.as_u16()),
+                "OIDC provider discovery returned an error status"
+            );
+            AppError::Validation("OIDC provider discovery failed".into())
+        })?;
     let metadata: ProviderMetadata = crate::services::outbound::read_json(
         response,
         security.oidc_max_response_bytes,
@@ -415,7 +435,7 @@ async fn discover_with_issuer_variants(
         reason = "issuer_mismatch",
         configured_issuer = %issuer,
         detail = last_mismatch.as_deref().unwrap_or("unknown"),
-        "OIDC provider discovery failed: the published issuer matches neither form of the configured issuer"
+        "OIDC discovery issuer matches neither configured form"
     );
     Err(discovery_failed())
 }
@@ -487,17 +507,29 @@ pub async fn exchange_and_verify(
                 .set_pkce_verifier(PkceCodeVerifier::new(transaction.verifier.clone()))
                 .request_async(&http)
                 .await
-                .map_err(|_| AppError::Unauthorized)?;
+                .map_err(|error| {
+                    tracing::debug!(error = %error, "OIDC token exchange failed");
+                    AppError::Unauthorized
+                })?;
             let token = response
                 .extra_fields()
                 .id_token()
-                .ok_or(AppError::Unauthorized)?;
+                .ok_or_else(|| {
+                    tracing::warn!(
+                        reason = "id_token_missing",
+                        "OIDC token response has no id token"
+                    );
+                    AppError::Unauthorized
+                })?;
             let claims = token
                 .claims(
                     &client.id_token_verifier(),
                     &Nonce::new(transaction.nonce.clone()),
                 )
-                .map_err(|_| AppError::Unauthorized)?;
+                .map_err(|error| {
+                    tracing::debug!(error = %error, "OIDC id token rejected");
+                    AppError::Unauthorized
+                })?;
             let subject = claims.subject().as_str().to_owned();
             let mut email = claims
                 .email()
@@ -518,12 +550,22 @@ pub async fn exchange_and_verify(
             if (!email_verified || email.is_none() || required_claim_missing)
                 && client.user_info_url().is_some()
             {
-                if let Ok(request) = client.user_info(
-                    response.access_token().to_owned(),
-                    Some(SubjectIdentifier::new(subject.clone())),
-                ) {
+                if let Ok(request) = client
+                    .user_info(
+                        response.access_token().to_owned(),
+                        Some(SubjectIdentifier::new(subject.clone())),
+                    )
+                    .inspect_err(|error| {
+                        tracing::warn!(error = %error, "OIDC userinfo request could not be built");
+                    })
+                {
                     let userinfo: Result<UserInfoClaims<ProviderClaims, CoreGenderClaim>, _> =
-                        request.request_async(&http).await;
+                        request.request_async(&http).await.inspect_err(|error| {
+                            tracing::warn!(
+                                error = %error,
+                                "OIDC userinfo request failed; using ID token claims only"
+                            );
+                        });
                     if let Ok(userinfo) = userinfo {
                         if (!email_verified || email.is_none())
                             && userinfo.email_verified() == Some(true)

@@ -53,7 +53,7 @@ pub async fn start_workers(
     if !workers_enabled {
         tracing::warn!(
             env = RIVIAN_WORKERS_ENABLED_ENV,
-            "Rivian connection is off: live vehicle data, charge history sync, and artwork repair are paused"
+            "rivian connection is off: live vehicle data, charge history sync, and artwork repair are paused"
         );
         return Ok(handle);
     }
@@ -72,6 +72,10 @@ pub async fn start_workers(
     .fetch_all(&pool)
     .await?;
 
+    tracing::info!(
+        count = enrolled.len(),
+        "vehicle workers requested at startup"
+    );
     for vid in enrolled {
         if !handle
             .send(supervisor::SupervisorCommand::StartWorker { vehicle_id: vid })

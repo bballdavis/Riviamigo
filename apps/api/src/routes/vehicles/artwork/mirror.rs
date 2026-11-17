@@ -2,7 +2,7 @@
 //! and checking which cached files are still valid.
 
 use sha2::{Digest, Sha256};
-use tracing::warn;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 use std::{
@@ -181,7 +181,7 @@ pub(super) async fn mirror_vehicle_images(
     let rows = match fetch_vehicle_image_rows(pool, vehicle_id).await {
         Ok(rows) => rows,
         Err(error) => {
-            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.mirror_rows_failed");
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle images mirror rows failed");
             return;
         }
     };
@@ -189,6 +189,7 @@ pub(super) async fn mirror_vehicle_images(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
+        .inspect_err(|error| error!(error = %error, "artwork mirror http client build failed"))
         .unwrap_or_default();
 
     for row in rows {
@@ -200,19 +201,22 @@ pub(super) async fn mirror_vehicle_images(
         // Each download can take up to the client timeout, so keep an active
         // repair's lease fresh; otherwise a long mirror pass could be taken
         // over as stale and run twice.
-        let _ = sqlx::query(
+        if let Err(error) = sqlx::query(
             "UPDATE riviamigo.vehicle_artwork_cache_state
              SET last_repair_attempt_at = now()
              WHERE vehicle_id = $1 AND status = 'repairing'",
         )
         .bind(vehicle_id)
         .execute(pool)
-        .await;
+        .await
+        {
+            warn!(vehicle_id = %vehicle_id, error = %error, "artwork repair lease refresh failed");
+        }
         let overlays = overlay_entries_from_value(&row.overlays);
         match mirror_vehicle_image_assets(&client, config, vehicle_id, &row.url, &overlays).await {
             Ok(mirror_metadata) => {
                 let merged = merge_metadata(row.metadata.clone(), mirror_metadata);
-                let _ = sqlx::query(
+                if let Err(error) = sqlx::query(
                     "UPDATE riviamigo.vehicle_images
                      SET metadata = $3,
                          updated_at = now()
@@ -222,16 +226,19 @@ pub(super) async fn mirror_vehicle_images(
                 .bind(&row.url)
                 .bind(merged)
                 .execute(pool)
-                .await;
+                .await
+                {
+                    warn!(vehicle_id = %vehicle_id, error = %error, "vehicle images mirror persist failed");
+                }
             }
             Err(error) if !needs_mirror => {
                 // An explicit refresh could not download a replacement. The
                 // existing mirror is still complete and valid, so keep serving
                 // it rather than downgrading the vehicle to packaged fallbacks.
-                warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.remirror_failed_kept_existing");
+                warn!(vehicle_id = %vehicle_id, error = ?error, "vehicle images remirror failed kept existing");
             }
             Err(error) => {
-                warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.mirror_failed");
+                warn!(vehicle_id = %vehicle_id, error = ?error, "vehicle images mirror failed");
                 let merged = merge_metadata(
                     row.metadata.clone(),
                     serde_json::json!({
@@ -240,7 +247,7 @@ pub(super) async fn mirror_vehicle_images(
                         "mirror_error": error.to_string()
                     }),
                 );
-                let _ = sqlx::query(
+                if let Err(error) = sqlx::query(
                     "UPDATE riviamigo.vehicle_images
                      SET metadata = $3,
                          updated_at = now()
@@ -250,7 +257,10 @@ pub(super) async fn mirror_vehicle_images(
                 .bind(&row.url)
                 .bind(merged)
                 .execute(pool)
-                .await;
+                .await
+                {
+                    warn!(vehicle_id = %vehicle_id, error = %error, "vehicle images mirror status persist failed");
+                }
             }
         }
     }

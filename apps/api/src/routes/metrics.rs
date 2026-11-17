@@ -678,7 +678,14 @@ fn stream_metrics(
                 produce_metrics(&state, &request, &mut output, permit)) => result.unwrap_or_else(|_| Err(AppError::DependencyUnavailable("Metric request timed out".into()))),
         };
         if let Err(error) = result {
-            tracing::warn!(?error, "metric response interrupted");
+            // The receiver is gone when the client hung up, which is routine.
+            if sender.is_closed() {
+                tracing::debug!(error = %error, "metric response client disconnected");
+            } else if matches!(error, AppError::DependencyUnavailable(_)) {
+                tracing::warn!(error = %error, "metric response interrupted");
+            } else {
+                tracing::error!(error = %error, "metric response failed");
+            }
             let _ = sender
                 .send(Err(std::io::Error::other("metric response interrupted")))
                 .await;

@@ -450,6 +450,7 @@ async fn create_theme(
     let id: Uuid = row.get("id");
     let etag = theme_etag(id, row.get("etag_version"));
     tx.commit().await?;
+    tracing::info!(theme_id = %id, user_id = %auth.user_id, "custom theme created");
     etag_json(&etag, json!({ "themeId": id, "etag": etag }))
 }
 
@@ -570,6 +571,7 @@ async fn save_revision(
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
+    tracing::debug!(theme_id = %theme_id, revision, user_id = %auth.user_id, "custom theme revision saved");
     let etag = theme_etag(theme_id, new_version);
     etag_json(
         &etag,
@@ -663,6 +665,7 @@ async fn publish_revision(
         apply_custom_selection_tx(&mut tx, auth.user_id, None, theme_id, revision, &base).await?;
     }
     tx.commit().await?;
+    tracing::debug!(theme_id = %theme_id, revision, applied = body.apply, user_id = %auth.user_id, "custom theme revision published");
     let etag = theme_etag(theme_id, new_version);
     etag_json(
         &etag,
@@ -703,6 +706,7 @@ async fn rollback_theme(
         apply_custom_selection_tx(&mut tx, auth.user_id, None, theme_id, body.revision, &base)
             .await?;
     tx.commit().await?;
+    tracing::debug!(theme_id = %theme_id, revision = body.revision, user_id = %auth.user_id, "custom theme selected");
     let (payload, etag) = theme_preferences_payload(&state, auth.user_id).await?;
     etag_json(&etag, payload)
 }
@@ -741,6 +745,7 @@ async fn retire_theme(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    tracing::info!(theme_id = %theme_id, user_id = %auth.user_id, "custom theme retired");
     let etag = theme_etag(theme_id, new_version);
     etag_json(
         &etag,
@@ -804,6 +809,7 @@ async fn theme_preferences_payload(
                 "definitionHash": custom.get::<String, _>("definition_hash"),
             })
         } else {
+            tracing::debug!(user_id = %user_id, theme_id = %theme_id, reason = "unavailable-custom-theme", "theme selection fell back to builtin");
             json!({ "kind": "builtin", "themeId": "classic", "fallbackReason": "unavailable-custom-theme" })
         }
     } else {
@@ -849,6 +855,7 @@ async fn update_theme_preferences(
     .await?;
     require_etag(&headers, &preferences_etag(current_version))?;
 
+    let custom_selection = matches!(body.selection, ThemeSelection::Custom { .. });
     match body.selection {
         ThemeSelection::Builtin { theme_id } => {
             validate_builtin_id(&theme_id)?;
@@ -895,6 +902,7 @@ async fn update_theme_preferences(
         }
     }
     tx.commit().await?;
+    tracing::debug!(user_id = %auth.user_id, mode = %body.mode, custom_selection, "theme preferences updated");
     let (payload, etag) = theme_preferences_payload(&state, auth.user_id).await?;
     etag_json(&etag, payload)
 }

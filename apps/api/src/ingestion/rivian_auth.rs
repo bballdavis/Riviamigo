@@ -30,7 +30,9 @@ async fn bounded_json<T: serde::de::DeserializeOwned>(
         .rivian_max_response_bytes;
     crate::services::outbound::read_json(response, limit, "Rivian provider")
         .await
-        .map_err(|_| {
+        .map_err(|error| {
+            // The caller reports the generic message; keep the cause here.
+            tracing::debug!(error = %error, "rivian response rejected");
             RivianAuthError::UnexpectedResponse(
                 "Rivian response invalid or exceeded the byte limit".into(),
             )
@@ -255,14 +257,17 @@ pub async fn rivian_login(
         .ok_or_else(|| RivianAuthError::UnexpectedResponse("empty login payload".into()))?;
 
     match payload.typename.as_deref() {
-        Some("MobileMFALoginResponse") => Ok(LoginResult::OtpRequired(RivianOtpChallenge {
-            email: email.to_string(),
-            otp_token: payload.otp_token.filter(|s| !s.is_empty()).ok_or_else(|| {
-                RivianAuthError::UnexpectedResponse("missing otpToken in MFA response".into())
-            })?,
-            csrf_token: session.csrf_token,
-            app_session_token: session.app_session_token,
-        })),
+        Some("MobileMFALoginResponse") => {
+            tracing::debug!("rivian login verification code required");
+            Ok(LoginResult::OtpRequired(RivianOtpChallenge {
+                email: email.to_string(),
+                otp_token: payload.otp_token.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    RivianAuthError::UnexpectedResponse("missing otpToken in MFA response".into())
+                })?,
+                csrf_token: session.csrf_token,
+                app_session_token: session.app_session_token,
+            }))
+        }
         _ => Ok(LoginResult::Authenticated(RivianTokenBundle {
             access_token: payload
                 .access_token
@@ -553,7 +558,7 @@ pub async fn rivian_vehicle_images(
                     image_style = style,
                     vehicle_version = version,
                     error = %format_gql_error(&errors),
-                    "rivian.vehicle_images.graphql_error"
+                    "vehicle images style failed"
                 );
                 unauthenticated |= has_unauthenticated_error(&errors);
                 last_error = Some(format_gql_error(&errors));
@@ -600,7 +605,7 @@ pub async fn rivian_vehicle_images(
         ));
     }
 
-    tracing::info!(image_count = images.len(), "rivian.vehicle_images.fetched");
+    tracing::debug!(count = images.len(), "vehicle images fetched");
     Ok(images)
 }
 
@@ -665,6 +670,7 @@ async fn post_graphql(
 
     let response = req.send().await?;
     let status = response.status();
+    tracing::debug!(status = status.as_u16(), "rivian auth request completed");
     let parsed = bounded_json::<LoginResponse>(response).await?;
 
     if status == reqwest::StatusCode::UNAUTHORIZED {

@@ -21,7 +21,7 @@ pub async fn bootstrap_keys(
     if let (Some(priv_pem), Some(pub_pem), Some(age)) =
         (env_jwt_secret, env_jwt_public, env_age_key)
     {
-        tracing::info!("using JWT and AGE keys from environment variables");
+        tracing::info!(source = "environment", "cryptographic keys loaded");
         return Ok(BootstrappedKeys {
             jwt_private_pem: priv_pem,
             jwt_public_pem: pub_pem,
@@ -51,7 +51,7 @@ pub async fn bootstrap_keys(
         age.trim()
             .parse::<age::x25519::Identity>()
             .map_err(|e| anyhow::anyhow!("persisted age_key in system_config is corrupt — clear it and restart to regenerate: {e}"))?;
-        tracing::info!("loaded JWT and AGE keys from database");
+        tracing::info!(source = "database", "cryptographic keys loaded");
         return Ok(BootstrappedKeys {
             jwt_private_pem: priv_pem,
             jwt_public_pem: pub_pem,
@@ -59,8 +59,8 @@ pub async fn bootstrap_keys(
         });
     }
 
-    tracing::info!("generating new JWT RSA-2048 keypair and AGE X25519 identity");
     let generated = generate_keys().context("key generation failed")?;
+    tracing::info!(source = "generated", "cryptographic keys generated");
 
     // Use an advisory lock so concurrent boots don't both generate separate keypairs.
     // Only one session will insert; the others will see ON CONFLICT DO NOTHING and
@@ -102,7 +102,7 @@ pub async fn bootstrap_keys(
         _ => anyhow::bail!("keys missing from system_config after insert"),
     };
 
-    tracing::info!("generated keys persisted to database");
+    tracing::debug!("generated cryptographic keys persisted");
     Ok(BootstrappedKeys {
         jwt_private_pem: priv_pem,
         jwt_public_pem: pub_pem,

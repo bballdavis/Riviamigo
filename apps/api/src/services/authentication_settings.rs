@@ -303,6 +303,13 @@ pub async fn update(
         .bind(body.button_label.unwrap_or(current.button_label)).bind(body.scopes.unwrap_or(current.scopes)).bind(body.token_auth_method.unwrap_or(current.token_auth_method))
         .bind(body.auto_signup.unwrap_or(current.auto_signup)).bind(body.auto_link_verified_email.unwrap_or(current.auto_link_verified_email)).bind(body.oidc_auto_login.unwrap_or(current.oidc_auto_login)).bind(body.allowed_email_domains.unwrap_or(current.allowed_email_domains))
         .bind(required_claim_name).bind(required_claim_value).bind(actor).bind(invalidates_validation).execute(pool).await?;
+    tracing::info!(
+        user_id = %actor,
+        oidc_enabled = resulting_oidc_enabled,
+        password_login_enabled = resulting_password_login,
+        validation_reset = invalidates_validation,
+        "authentication settings changed"
+    );
     load(pool, age_key).await
 }
 

@@ -1,7 +1,7 @@
 //! Artwork repair scheduling: the single-flight claim, the background
 //! repair pass, and the startup repair worker.
 
-use tracing::warn;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use std::time::Duration;
@@ -21,7 +21,7 @@ async fn vehicle_artwork_cache_complete(
     let rows = match fetch_vehicle_image_rows(pool, vehicle_id).await {
         Ok(rows) => rows,
         Err(error) => {
-            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.cache_complete_rows_failed");
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle images cache complete rows failed");
             return false;
         }
     };
@@ -41,7 +41,7 @@ async fn claim_vehicle_artwork_repair(
     match try_claim_vehicle_artwork_repair(pool, vehicle_id, bypass_backoff).await {
         Ok(claimed) => claimed,
         Err(error) => {
-            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.repair_claim_failed");
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle images repair claim failed");
             false
         }
     }
@@ -79,7 +79,10 @@ pub(in crate::routes::vehicles) async fn queue_vehicle_artwork_repair(
     state: &AppState,
     vehicle_id: Uuid,
 ) {
-    let _ = queue_vehicle_artwork_repair_with_mode(state, vehicle_id, false).await;
+    // A blocked repair is a normal outcome of pause, demo, or switch state.
+    if let Err(blocked) = queue_vehicle_artwork_repair_with_mode(state, vehicle_id, false).await {
+        debug!(vehicle_id = %vehicle_id, reason = ?blocked, "artwork repair skipped");
+    }
 }
 
 /// Why an artwork repair must not contact Rivian for a vehicle.
@@ -129,12 +132,16 @@ async fn vehicle_artwork_repair_blocked(
         Ok(Some(row)) => row,
         Ok(None) => return Some(ArtworkRepairBlocked::Missing),
         Err(error) => {
-            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.repair_gate_failed");
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle images repair gate failed");
             return Some(ArtworkRepairBlocked::Missing);
         }
     };
     // An unreadable switch fails closed; startup already rejects it.
-    let workers_enabled = crate::ingestion::rivian_workers_enabled().unwrap_or(false);
+    let workers_enabled = crate::ingestion::rivian_workers_enabled()
+        .inspect_err(|error| {
+            warn!(vehicle_id = %vehicle_id, error = ?error, "rivian workers switch unreadable; artwork repair blocked");
+        })
+        .unwrap_or(false);
     artwork_repair_blocked(
         is_demo_vehicle_key(&rivian_vehicle_id),
         collection_paused,
@@ -205,6 +212,11 @@ async fn repair_vehicle_artwork(
             tokio::time::sleep(Duration::from_secs(5 * (attempt + 1))).await;
         }
     }
+    if failure == ArtworkCacheStateUpdate::RepairFailed {
+        warn!(vehicle_id = %vehicle_id, reason = "repair_failed", "artwork repair gave up; retry scheduled");
+    } else {
+        debug!(vehicle_id = %vehicle_id, reason = "no_provider_artwork", "artwork repair waiting for provider artwork");
+    }
     refresh_vehicle_artwork_cache_state(&pool, &config, vehicle_id, failure).await;
 }
 
@@ -227,7 +239,11 @@ pub fn start_vehicle_artwork_repair_worker(
         )
         .fetch_all(&pool)
         .await
+        .inspect_err(|error| {
+            warn!(error = %error, "artwork repair startup scan failed");
+        })
         .unwrap_or_default();
+        debug!(count = vehicle_ids.len(), "artwork repair startup scan");
 
         for vehicle_id in vehicle_ids {
             if vehicle_artwork_cache_complete(&pool, &config, vehicle_id).await {

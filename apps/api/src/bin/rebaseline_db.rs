@@ -13,7 +13,11 @@ use uuid::Uuid;
 const ADOPTION_LOCK: &str = "riviamigo-schema-rebaseline";
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> std::process::ExitCode {
+    riviamigo_api::logging::run(run()).await
+}
+
+async fn run() -> anyhow::Result<()> {
     let (confirm, backup_path) = parse_args()?;
     let database_url = env::var("DATABASE_URL").context("DATABASE_URL is required")?;
     let pool = PgPoolOptions::new()
@@ -31,10 +35,14 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let result = adopt(&database_url, &pool, confirm, backup_path.as_deref()).await;
-    let _ = sqlx::query("SELECT pg_advisory_unlock(hashtext($1))")
+    if let Err(error) = sqlx::query("SELECT pg_advisory_unlock(hashtext($1))")
         .bind(ADOPTION_LOCK)
         .execute(&pool)
-        .await;
+        .await
+    {
+        // The session lock is also released when the connection closes.
+        tracing::warn!(error = %error, "baseline adoption lock was not released explicitly");
+    }
     result
 }
 

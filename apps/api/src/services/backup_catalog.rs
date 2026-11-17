@@ -40,6 +40,7 @@ pub async fn reconcile_local_catalog(pool: &PgPool, config: &Config) -> Result<u
     .await
     .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
 
+    let scanned = paths.len();
     let mut inserted = 0;
     for path in paths {
         if let Some(run_id) = backup_run_id_from_artifact_path(&path) {
@@ -50,6 +51,7 @@ pub async fn reconcile_local_catalog(pool: &PgPool, config: &Config) -> Result<u
             .fetch_one(pool)
             .await?;
             if active_run {
+                tracing::trace!(run_id = %run_id, reason = "active_run", "backup catalog entry skipped");
                 continue;
             }
         }
@@ -65,6 +67,7 @@ pub async fn reconcile_local_catalog(pool: &PgPool, config: &Config) -> Result<u
         if exists {
             let needs_verification: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM riviamigo.backup_artifacts WHERE storage_type <> 's3' AND storage_path=$1 AND manifest->>'restore_availability'='unavailable')").bind(&storage_path).fetch_one(pool).await?;
             if !needs_verification {
+                tracing::trace!(path = %path.display(), "backup catalog entry already known");
                 continue;
             }
         }
@@ -74,20 +77,21 @@ pub async fn reconcile_local_catalog(pool: &PgPool, config: &Config) -> Result<u
         ) {
             Ok(file) => file,
             Err(error) => {
-                tracing::warn!(error = %error, "backup.catalog.unsafe_local_path");
+                tracing::warn!(path = %path.display(), error = %error, "backup catalog skipped unsafe local path");
                 continue;
             }
         };
         let validated = match validate_open_recovery_package(file, &config.recovery).await {
             Ok(validated) => validated,
             Err(error) => {
-                tracing::warn!(path = %path.display(), error = %error, "backup.catalog.invalid_local_package");
+                tracing::warn!(path = %path.display(), error = %error, "backup catalog skipped invalid local package");
                 continue;
             }
         };
         if exists {
             sqlx::query("UPDATE riviamigo.backup_artifacts SET checksum_sha256=$2, size_bytes=$3, manifest=CASE WHEN jsonb_typeof(manifest)='object' THEN manifest ELSE '{}'::jsonb END || jsonb_build_object('restore_availability','available','package',$4::jsonb) WHERE storage_type <> 's3' AND storage_path=$1")
                 .bind(&storage_path).bind(&validated.checksum_sha256).bind(validated.size_bytes).bind(&validated.manifest).execute(pool).await?;
+            tracing::info!(path = %path.display(), "backup package available again");
             continue;
         }
         let storage_type = if path.starts_with(root.join("imports")) {
@@ -140,6 +144,7 @@ pub async fn reconcile_local_catalog(pool: &PgPool, config: &Config) -> Result<u
         .await?;
         inserted += result.rows_affected() as usize;
     }
+    tracing::debug!(scanned, inserted, "local backup catalog scan finished");
     Ok(inserted)
 }
 

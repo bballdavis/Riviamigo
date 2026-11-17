@@ -24,6 +24,7 @@ pub async fn seed_defaults(pool: &PgPool) -> anyhow::Result<()> {
     }
 
     let defaults: Vec<Value> = serde_json::from_str(BUNDLED_CHART_DEFAULTS)?;
+    let count = defaults.len();
     for chart in defaults {
         let slug = chart["slug"].as_str().unwrap_or_default();
 
@@ -42,6 +43,7 @@ pub async fn seed_defaults(pool: &PgPool) -> anyhow::Result<()> {
             .await?;
     }
 
+    tracing::debug!(count, "bundled chart defaults seeded");
     Ok(())
 }
 

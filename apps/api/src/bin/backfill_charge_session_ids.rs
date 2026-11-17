@@ -11,8 +11,11 @@ use sqlx::{postgres::PgPoolOptions, PgPool};
 use tracing::info;
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+async fn main() -> std::process::ExitCode {
+    riviamigo_api::logging::run(run()).await
+}
+
+async fn run() -> Result<()> {
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = PgPoolOptions::new()
         .max_connections(5)
@@ -61,11 +64,11 @@ async fn backfill_charge_session_ids(pool: &PgPool) -> Result<()> {
             info!(
                 session_id = %session.id,
                 rows = result.rows_affected(),
-                "Stamped telemetry rows"
+                "stamped telemetry rows"
             );
         }
     }
 
-    info!("Backfill complete");
+    info!("backfill complete");
     Ok(())
 }

@@ -48,7 +48,12 @@ pub async fn sanitize(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO riviamigo.authentication_settings (id) VALUES (TRUE)")
         .execute(&mut *tx)
         .await?;
-    tx.commit().await
+    tx.commit().await?;
+    tracing::debug!(
+        protected_tables = PROTECTED_TABLES.len(),
+        "restore sanitation applied"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

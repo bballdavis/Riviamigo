@@ -236,7 +236,7 @@ describe('TripMapChart', () => {
     });
 
     expect(consoleError).toHaveBeenCalledWith(
-      expect.stringContaining('[Riviamigo client] maplibre.error: Error: style request failed'),
+      expect.stringContaining('[riviamigo][ERROR] map: maplibre.error error="Error: style request failed"'),
       expect.objectContaining({
         event: 'maplibre.error',
         status: 503,
@@ -312,7 +312,7 @@ describe('TripMapChart', () => {
 
     await waitFor(() => expect(screen.getByText('Map tiles unavailable')).toBeInTheDocument());
     expect(consoleError).toHaveBeenCalledWith(
-      expect.stringContaining('[Riviamigo client] maplibre.initialization_failed: Error: MapLibre failed to load'),
+      expect.stringContaining('[riviamigo][ERROR] map: maplibre.initialization_failed error="Error: MapLibre failed to load"'),
       expect.objectContaining({ event: 'maplibre.initialization_failed', area: 'map' }),
     );
 

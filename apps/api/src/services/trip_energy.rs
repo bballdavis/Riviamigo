@@ -121,6 +121,12 @@ pub async fn recompute_trip_energy(
         .await?;
         summary.changed += 1;
     }
+    tracing::debug!(
+        vehicle_id = vehicle_id.map(|id| id.to_string()),
+        processed = summary.processed,
+        changed = summary.changed,
+        "trip energy recomputed"
+    );
     Ok(summary)
 }
 

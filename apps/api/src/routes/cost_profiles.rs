@@ -146,6 +146,7 @@ async fn create_profile(
     .fetch_one(&state.pool)
     .await
     .map_err(AppError::from)?;
+    tracing::info!(cost_profile_id = %row.id, user_id = %auth.user_id, "cost profile created");
 
     Ok(Json(row))
 }
@@ -226,9 +227,11 @@ async fn update_profile(
         .bind(id)
         .fetch_all(&state.pool)
         .await?;
+    let recomputed = sessions.len();
     for session_id in sessions {
         recompute_charge_session_cost(&state.pool, session_id).await?;
     }
+    tracing::debug!(cost_profile_id = %id, user_id = %auth.user_id, count = recomputed, "cost profile updated");
 
     Ok(Json(row))
 }
@@ -248,6 +251,7 @@ async fn delete_profile(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
+    tracing::info!(cost_profile_id = %id, user_id = %auth.user_id, "cost profile deleted");
 
     Ok(Json(serde_json::json!({ "deleted": true })))
 }

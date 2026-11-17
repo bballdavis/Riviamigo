@@ -974,7 +974,7 @@ async fn get_trip_map(
         total_trips = rows.len(),
         route_count = routes.len(),
         missing_route_count,
-        "trips.map_data"
+        "trips map data"
     );
 
     Ok(Json(TripMapResponse {
@@ -1034,9 +1034,22 @@ async fn get_trip_detail(
     .fetch_all(&state.pool)
     .await?;
     let cache_key = format!("trips:detail:v3:{vid}:{id}:{sample_interval_seconds}");
-    let mut redis_conn = state.redis.get_multiplexed_async_connection().await.ok();
+    let mut redis_conn = state
+        .redis
+        .get_multiplexed_async_connection()
+        .await
+        .inspect_err(|error| {
+            debug!(trip_id = %id, vehicle_id = %vid, error = %error, "trips detail cache unavailable");
+        })
+        .ok();
     if let Some(conn) = redis_conn.as_mut() {
-        let cached: Option<String> = conn.get(&cache_key).await.ok();
+        let cached: Option<String> = conn
+            .get(&cache_key)
+            .await
+            .inspect_err(|error| {
+                debug!(trip_id = %id, vehicle_id = %vid, error = %error, "trips detail cache read failed");
+            })
+            .ok();
         if let Some(payload) = cached {
             if let Ok(cached) = serde_json::from_str::<TripDetailCachePayload>(&payload) {
                 let mut samples = cached.samples;
@@ -1044,7 +1057,7 @@ async fn get_trip_detail(
                 merge_weather_samples(&mut samples, &weather_rows);
                 let outside_temperature =
                     build_outside_temperature(&trip, &samples, &weather_rows, &raw_elapsed);
-                debug!(trip_id = %id, vehicle_id = %vid, cache_hit = true, "trips.detail_cache");
+                debug!(trip_id = %id, vehicle_id = %vid, cache_hit = true, "trips detail cache");
                 return Ok(Json(TripDetailResponse {
                     trip,
                     sample_interval_seconds,
@@ -1132,8 +1145,11 @@ async fn get_trip_detail(
             power: power_data.metadata.clone(),
         };
         if let Ok(payload) = serde_json::to_string(&payload) {
-            let _: Result<(), redis::RedisError> =
+            let written: Result<(), redis::RedisError> =
                 conn.set_ex(&cache_key, payload, 24 * 60 * 60).await;
+            if let Err(error) = written {
+                debug!(trip_id = %id, vehicle_id = %vid, error = %error, "trips detail cache write failed");
+            }
         }
     }
 
@@ -1143,7 +1159,7 @@ async fn get_trip_detail(
         cache_hit = false,
         sample_interval_seconds,
         point_count = samples.elapsed_s.len(),
-        "trips.detail_data"
+        "trips detail data"
     );
 
     Ok(Json(TripDetailResponse {
@@ -1293,13 +1309,26 @@ async fn get_track(
     };
 
     let cache_key = format!("trips:track:v2:{vid}:{id}:{bucket}");
-    let mut redis_conn = state.redis.get_multiplexed_async_connection().await.ok();
+    let mut redis_conn = state
+        .redis
+        .get_multiplexed_async_connection()
+        .await
+        .inspect_err(|error| {
+            debug!(trip_id = %id, vehicle_id = %vid, error = %error, "trips track cache unavailable");
+        })
+        .ok();
 
     if let Some(conn) = redis_conn.as_mut() {
-        let cached: Option<String> = conn.get(&cache_key).await.ok();
+        let cached: Option<String> = conn
+            .get(&cache_key)
+            .await
+            .inspect_err(|error| {
+                debug!(trip_id = %id, vehicle_id = %vid, error = %error, "trips track cache read failed");
+            })
+            .ok();
         if let Some(payload) = cached {
             if let Ok(points) = serde_json::from_str::<Vec<TrackPoint>>(&payload) {
-                debug!(trip_id = %id, vehicle_id = %vid, cache_hit = true, "trips.track_cache");
+                debug!(trip_id = %id, vehicle_id = %vid, cache_hit = true, "trips track cache");
                 return Ok(Json(points));
             }
         }
@@ -1338,12 +1367,15 @@ async fn get_track(
 
     if let Some(conn) = redis_conn.as_mut() {
         if let Ok(payload) = serde_json::to_string(&points) {
-            let _: Result<(), redis::RedisError> =
+            let written: Result<(), redis::RedisError> =
                 conn.set_ex(&cache_key, payload, 12 * 60 * 60).await;
+            if let Err(error) = written {
+                debug!(trip_id = %id, vehicle_id = %vid, error = %error, "trips track cache write failed");
+            }
         }
     }
 
-    debug!(trip_id = %id, vehicle_id = %vid, cache_hit = false, point_count = points.len(), "trips.track_cache");
+    debug!(trip_id = %id, vehicle_id = %vid, cache_hit = false, point_count = points.len(), "trips track cache");
 
     Ok(Json(points))
 }

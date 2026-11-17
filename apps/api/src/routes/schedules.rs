@@ -128,6 +128,7 @@ async fn put_charging_schedule(
     )
     .await
     .map_err(|e| AppError::RivianApi(e.to_string()))?;
+    tracing::debug!(vehicle_id = %vehicle_id, user_id = %auth.user_id, "charging schedule updated");
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -202,6 +203,7 @@ async fn create_departure_schedule(
     )
     .await
     .map_err(|e| AppError::RivianApi(e.to_string()))?;
+    tracing::debug!(vehicle_id = %vehicle_id, user_id = %auth.user_id, "departure schedule created");
 
     Ok(Json(serde_json::json!({ "rivian_schedule_id": rivian_id })))
 }
@@ -248,6 +250,7 @@ async fn update_departure_schedule(
     )
     .await
     .map_err(|e| AppError::RivianApi(e.to_string()))?;
+    tracing::debug!(vehicle_id = %vehicle_id, user_id = %auth.user_id, "departure schedule updated");
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -284,6 +287,7 @@ async fn delete_departure_schedule(
     )
     .await
     .map_err(|e| AppError::RivianApi(e.to_string()))?;
+    tracing::debug!(vehicle_id = %vehicle_id, user_id = %auth.user_id, "departure schedule deleted");
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }

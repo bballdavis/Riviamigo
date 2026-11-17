@@ -77,12 +77,25 @@ impl ClosureMotionTracker {
                 },
             };
             if let Some(motion) = motion {
+                tracing::trace!(field = %field, motion = ?motion, "closure motion observed");
                 self.motion.insert(field, (motion, now));
             }
         }
 
+        let before_expiry = self.motion.len();
         self.motion.retain(|_, (_, at)| now - *at < MOTION_TTL);
+        let expired = before_expiry - self.motion.len();
+        if expired > 0 {
+            tracing::debug!(
+                count = expired,
+                reason = "ttl_elapsed",
+                "closure motion expired"
+            );
+        }
         let after = self.current();
+        if after != before {
+            tracing::debug!(count = after.len(), "closure motion changed");
+        }
         (after != before).then_some(after)
     }
 

@@ -271,6 +271,15 @@ impl TripSignalFusion {
             diag.odometer_outcome = "invalid";
         }
         diag.moving_segments = self.moving_segments;
+        tracing::trace!(
+            power_outcome = diag.power_outcome,
+            gear_origin = diag.gear_origin,
+            speed_origin = diag.speed_origin,
+            gnss_outcome = diag.gnss_outcome,
+            odometer_outcome = diag.odometer_outcome,
+            moving_segments = diag.moving_segments,
+            "trip signals fused"
+        );
         (joined, diag)
     }
 }

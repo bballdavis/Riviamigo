@@ -2,12 +2,16 @@
 
 Riviamigo reports actionable browser failures through one local diagnostic seam.
 The browser does not send product analytics or diagnostic payloads to a remote
-service.
+service. The same seam also provides leveled `clientLog` output that follows
+the ladder in [Logging Conventions](./logging.md#browser-logging); this page
+covers failure reporting.
 
 ## Diagnostic contract
 
-`@riviamigo/ui/lib/clientDiagnostics` owns `reportClientError()` and the global
-browser handlers. Records use stable event names and include only safe context:
+`@riviamigo/ui/lib/clientDiagnostics` owns `reportClientError()`, `clientLog`,
+and the global browser handlers. Failures print as
+`[riviamigo][WARN|ERROR] area: event error="…"` with the structured record as a
+second console argument, and honor the `rm-log-level` threshold. Records use stable event names and include only safe context:
 area, operation, HTTP status/code, provider, style, resource kind, and request
 ID when available. Authorization headers, response bodies, query strings,
 vehicle identifiers, and map tile coordinates are redacted.

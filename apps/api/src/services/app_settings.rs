@@ -39,6 +39,8 @@ pub async fn set_app_timezone(pool: &PgPool, timezone: Tz) -> Result<(), AppErro
     let mut transaction = pool.begin().await?;
     set_app_timezone_tx(&mut transaction, timezone).await?;
     transaction.commit().await?;
+    // The zone name is left out: it is a coarse location for the installation.
+    tracing::info!("app timezone changed");
     Ok(())
 }
 

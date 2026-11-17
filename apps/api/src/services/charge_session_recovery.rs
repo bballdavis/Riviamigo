@@ -111,16 +111,25 @@ pub async fn recover_missed_charge_sessions(
 
         match classify(window, &overlapping) {
             WindowAction::Insert => {
-                touched.push(insert_session(pool, vehicle_id, window).await?);
+                let session_id = insert_session(pool, vehicle_id, window).await?;
+                tracing::trace!(session_id = %session_id, "charge window session inserted");
+                touched.push(session_id);
                 summary.inserted += 1;
             }
             WindowAction::Close(session_id) => {
                 if close_session(pool, session_id, window).await? {
+                    tracing::trace!(session_id = %session_id, "charge window session closed");
                     touched.push(session_id);
                     summary.closed += 1;
                 }
             }
-            WindowAction::Skip => {}
+            WindowAction::Skip => {
+                tracing::trace!(
+                    reason = "overlaps_recorded_session",
+                    overlapping = overlapping.len(),
+                    "charge window skipped"
+                );
+            }
         }
     }
 
@@ -132,6 +141,12 @@ pub async fn recover_missed_charge_sessions(
         }
         recompute_charge_session_cost(pool, session_id).await?;
     }
+    tracing::debug!(
+        windows = summary.windows,
+        inserted = summary.inserted,
+        closed = summary.closed,
+        "missed charge sessions recovered"
+    );
     Ok(summary)
 }
 

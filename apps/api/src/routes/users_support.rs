@@ -23,7 +23,10 @@ pub fn hash_password(password: &str) -> Result<String, AppError> {
     argon2
         .hash_password(password.as_bytes(), &salt)
         .map(|ph| ph.to_string())
-        .map_err(|_| AppError::Validation("invalid password".into()))
+        .map_err(|error| {
+            tracing::error!(error = %error, "password hash failed");
+            AppError::Validation("invalid password".into())
+        })
 }
 
 #[cfg(test)]

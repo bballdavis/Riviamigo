@@ -13,6 +13,7 @@ use chrono::{DateTime, Utc};
 use futures::{SinkExt, StreamExt};
 use jsonwebtoken::{decode, Algorithm, Validation};
 use serde::Deserialize;
+use tracing::{debug, error, trace, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -253,6 +254,7 @@ async fn handle_socket(
     claims: Claims,
     _permit: crate::services::resource_limits::ResourcePermit,
 ) {
+    debug!(vehicle_id = %vehicle_id, "live socket opened");
     let (mut sink, mut stream) = socket.split();
     let topic = format!("vehicle:{vehicle_id}:status");
     let remaining = chrono::DateTime::from_timestamp(claims.exp, 0)
@@ -267,21 +269,30 @@ async fn handle_socket(
     .await
     {
         Ok(Ok(c)) => c,
-        _ => {
-            tracing::error!("redis pubsub connect failed or timed out");
+        Ok(Err(error)) => {
+            error!(vehicle_id = %vehicle_id, error = %error, "live pubsub connect failed");
+            return;
+        }
+        Err(_) => {
+            error!(vehicle_id = %vehicle_id, "live pubsub connect timed out");
             return;
         }
     };
-    if !matches!(
-        tokio::time::timeout_at(
-            expiry.min(tokio::time::Instant::now() + std::time::Duration::from_secs(5)),
-            pubsub.subscribe(&topic)
-        )
-        .await,
-        Ok(Ok(()))
-    ) {
-        tracing::error!("redis subscribe failed");
-        return;
+    match tokio::time::timeout_at(
+        expiry.min(tokio::time::Instant::now() + std::time::Duration::from_secs(5)),
+        pubsub.subscribe(&topic),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            error!(vehicle_id = %vehicle_id, error = %error, "live pubsub subscribe failed");
+            return;
+        }
+        Err(_) => {
+            error!(vehicle_id = %vehicle_id, "live pubsub subscribe timed out");
+            return;
+        }
     }
 
     let mut keepalive_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
@@ -299,19 +310,37 @@ async fn handle_socket(
                     Some(m) => {
                         let payload: String = match m.get_payload() {
                             Ok(p) => p,
-                            Err(_) => continue,
+                            Err(error) => {
+                                trace!(vehicle_id = %vehicle_id, error = %error, "live message payload unreadable");
+                                continue;
+                            }
                         };
                         if !send_live(&mut sink, Message::Text(payload.into()), expiry).await { break; }
                     }
-                    None => break,
+                    None => {
+                        warn!(vehicle_id = %vehicle_id, reason = "pubsub_closed", "live pubsub stream ended");
+                        break;
+                    }
                 }
             }
             _ = keepalive_interval.tick() => {
                 let authorization = tokio::time::timeout_at(expiry.min(tokio::time::Instant::now() + std::time::Duration::from_secs(5)), async {
                     crate::services::sessions::require_enabled_session(&state.pool, &claims).await
-                        .map_err(|error| match error { AppError::Forbidden | AppError::Unauthorized => (4401, "Session ended"), _ => (1011, "Authorization unavailable") })?;
+                        .map_err(|error| match error {
+                            AppError::Forbidden | AppError::Unauthorized => (4401, "Session ended"),
+                            other => {
+                                error!(vehicle_id = %vehicle_id, error = %other, "live session check failed");
+                                (1011, "Authorization unavailable")
+                            }
+                        })?;
                     require_vehicle_membership(&state.pool, claims.sub, vehicle_id).await
-                        .map_err(|error| match error { AppError::Forbidden | AppError::NotFound => (4403, "Vehicle access removed"), _ => (1011, "Authorization unavailable") })
+                        .map_err(|error| match error {
+                            AppError::Forbidden | AppError::NotFound => (4403, "Vehicle access removed"),
+                            other => {
+                                error!(vehicle_id = %vehicle_id, error = %other, "live vehicle access check failed");
+                                (1011, "Authorization unavailable")
+                            }
+                        })
                 }).await;
                 match authorization {
                     Ok(Ok(_)) => {},
@@ -319,7 +348,11 @@ async fn handle_socket(
                         close_live(&mut sink, code, reason).await;
                         break;
                     }
-                    _ => { close_live(&mut sink, 1011, "Authorization unavailable").await; break; }
+                    Err(_) => {
+                        warn!(vehicle_id = %vehicle_id, reason = "timeout", "live authorization check timed out");
+                        close_live(&mut sink, 1011, "Authorization unavailable").await;
+                        break;
+                    }
                 }
                 if !send_live(&mut sink, Message::Text(LIVE_KEEPALIVE_MESSAGE.into()), expiry).await { break; }
                 if !send_live(&mut sink, Message::Ping(Vec::new().into()), expiry).await { break; }
@@ -336,6 +369,7 @@ async fn handle_socket(
             }
         }
     }
+    debug!(vehicle_id = %vehicle_id, "live socket closed");
 }
 
 async fn send_live(
@@ -358,6 +392,7 @@ async fn close_live(
     code: u16,
     reason: &'static str,
 ) {
+    debug!(close_code = code, reason, "live socket closing");
     let _ = tokio::time::timeout(
         std::time::Duration::from_secs(1),
         sink.send(Message::Close(Some(CloseFrame {

@@ -134,10 +134,13 @@ pub async fn merge(pool: &sqlx::PgPool, path: &Path, maximum: u64) -> anyhow::Re
             de.end()?;
             Ok::<_, anyhow::Error>(())
         });
+        let mut rows = 0_u64;
         while let Some(record) = receiver.recv().await {
             restore_jobs::merge_catalog_snapshot(pool, &record).await?;
+            rows += 1;
         }
         task.await??;
+        tracing::debug!(section = field, rows, "operational history section merged");
     }
     Ok(())
 }

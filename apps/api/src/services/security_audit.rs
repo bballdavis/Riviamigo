@@ -129,7 +129,7 @@ pub fn start_retention_worker(pool: PgPool) -> JoinHandle<()> {
             match outcome {
                 Some(Ok(outcome)) if outcome.changed > 0 => {
                     tracing::info!(
-                        removed = outcome.changed,
+                        rows = outcome.changed,
                         "expired security audit events pruned"
                     )
                 }

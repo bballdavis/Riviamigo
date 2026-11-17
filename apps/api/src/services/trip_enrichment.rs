@@ -5,7 +5,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use reqwest::Client;
 use serde::Serialize;
 use sqlx::{FromRow, PgPool};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -33,6 +33,7 @@ const TELEMETRY_FIX_WINDOW_SECS: f64 = 600.0;
 /// and is skipped while someone's Run now pass is still going.
 pub fn start_reconciliation_worker(pool: PgPool) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        info!("location and weather catch-up worker started");
         loop {
             let outcome = maintenance_jobs::run_automatic(
                 &pool,
@@ -42,11 +43,15 @@ pub fn start_reconciliation_worker(pool: PgPool) -> tokio::task::JoinHandle<()> 
             .await;
             match outcome {
                 Some(Ok(outcome)) => info!(
-                    summary = %outcome.summary,
+                    processed = outcome.processed,
+                    changed = outcome.changed,
                     failed = outcome.failed,
-                    "trip_enrichment.reconciler_complete"
+                    "location and weather catch-up complete"
                 ),
-                Some(Err(error)) => warn!(error = %error, "trip_enrichment.reconciler_failed"),
+                Some(Err(error)) => warn!(
+                    error = ?error,
+                    "location and weather catch-up failed, retrying next pass"
+                ),
                 None => {}
             }
             tokio::time::sleep(RECONCILIATION_INTERVAL).await;
@@ -111,21 +116,35 @@ fn catch_up_outcome(
 /// Returns what the charging-session address step did.
 async fn reconcile_locations(pool: &PgPool, client: &Client) -> BackfillStats {
     if let Err(error) = backfill_trip_coordinates(pool, None).await {
-        warn!(error = %error, "trip_enrichment.reconciler_trip_coordinates_failed");
+        warn!(error = ?error, "trip coordinate catch-up failed");
     }
     if let Err(error) = backfill_trip_geofence_matches(pool, None).await {
-        warn!(error = %error, "trip_enrichment.reconciler_trip_geofences_failed");
+        warn!(error = ?error, "trip geofence catch-up failed");
     }
     if let Err(error) = backfill_charge_session_coordinates(pool, None).await {
-        warn!(error = %error, "trip_enrichment.reconciler_charge_coordinates_failed");
+        warn!(error = ?error, "charge session coordinate catch-up failed");
     }
     match backfill_charge_session_locations(pool, client, None).await {
         Ok(stats) => stats,
         Err(error) => {
-            warn!(error = %error, "trip_enrichment.reconciler_charge_locations_failed");
+            warn!(error = ?error, "charge session location catch-up failed");
             BackfillStats::default()
         }
     }
+}
+
+/// Step-boundary counts for one backfill pass. Per-row outcomes are logged
+/// where they happen; this is the summary a diagnosis starts from.
+fn log_backfill_step(step: &'static str, vehicle_id: Option<Uuid>, stats: BackfillStats) {
+    debug!(
+        step,
+        vehicle_id = vehicle_id.map(|id| id.to_string()),
+        scanned = stats.scanned,
+        filled = stats.filled,
+        failed = stats.failed,
+        skipped = stats.skipped,
+        "catch-up step complete"
+    );
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -387,10 +406,11 @@ pub async fn resolve_address_id(
     }
 
     if let Some(id) = find_cached_address_id(pool, lat, lon).await {
-        debug!(lat, lon, address_id = %id, "trip_enrichment.address.cache_hit");
+        debug!(address_id = %id, "address cache hit");
         return Some(id);
     }
 
+    debug!("address cache miss, reverse geocoding");
     reverse_geocode_and_store(pool, client, lat, lon).await
 }
 
@@ -421,12 +441,12 @@ pub async fn backfill_trip_geofence_matches(
         let owner_id = match get_vehicle_owner_id(pool, trip.vehicle_id).await {
             Ok(Some(user_id)) => user_id,
             Ok(None) => {
-                warn!(trip_id = %trip.id, "trip_enrichment.geofence.owner_missing");
+                debug!(trip_id = %trip.id, reason = "owner_missing", "trip geofence match skipped");
                 stats.failed += 1;
                 continue;
             }
             Err(err) => {
-                warn!(trip_id = %trip.id, error = %err, "trip_enrichment.geofence.owner_lookup_failed");
+                warn!(trip_id = %trip.id, error = %err, "trip owner lookup failed, geofence match skipped");
                 stats.failed += 1;
                 continue;
             }
@@ -477,7 +497,7 @@ pub async fn backfill_trip_geofence_matches(
         .execute(pool)
         .await
         {
-            warn!(trip_id = %trip.id, error = %err, "trip_enrichment.geofence.trip_update_failed");
+            warn!(trip_id = %trip.id, error = %err, "trip geofence update failed");
             stats.failed += 1;
             continue;
         }
@@ -496,14 +516,7 @@ pub async fn backfill_trip_geofence_matches(
         stats.filled += 1;
     }
 
-    info!(
-        vehicle_id = ?vehicle_id,
-        scanned = stats.scanned,
-        filled = stats.filled,
-        failed = stats.failed,
-        skipped = stats.skipped,
-        "trip_enrichment.geofence.complete"
-    );
+    log_backfill_step("trip geofences", vehicle_id, stats);
     Ok(stats)
 }
 
@@ -533,12 +546,12 @@ pub async fn backfill_charge_session_geofence_matches(
         let owner_id = match get_vehicle_owner_id(pool, session.vehicle_id).await {
             Ok(Some(user_id)) => user_id,
             Ok(None) => {
-                warn!(session_id = %session.id, "trip_enrichment.charge_geofence.owner_missing");
+                debug!(session_id = %session.id, reason = "owner_missing", "charge session geofence match skipped");
                 stats.failed += 1;
                 continue;
             }
             Err(err) => {
-                warn!(session_id = %session.id, error = %err, "trip_enrichment.charge_geofence.owner_lookup_failed");
+                warn!(session_id = %session.id, error = %err, "charge session owner lookup failed, geofence match skipped");
                 stats.failed += 1;
                 continue;
             }
@@ -571,7 +584,7 @@ pub async fn backfill_charge_session_geofence_matches(
         .execute(pool)
         .await
         {
-            warn!(session_id = %session.id, error = %err, "trip_enrichment.charge_geofence.session_update_failed");
+            warn!(session_id = %session.id, error = %err, "charge session geofence update failed");
             stats.failed += 1;
             continue;
         }
@@ -589,14 +602,7 @@ pub async fn backfill_charge_session_geofence_matches(
         stats.filled += 1;
     }
 
-    info!(
-        vehicle_id = ?vehicle_id,
-        scanned = stats.scanned,
-        filled = stats.filled,
-        failed = stats.failed,
-        skipped = stats.skipped,
-        "trip_enrichment.charge_geofence.complete"
-    );
+    log_backfill_step("charge session geofences", vehicle_id, stats);
     Ok(stats)
 }
 
@@ -647,13 +653,7 @@ pub async fn backfill_trip_addresses(
             if start_addr.is_some() {
                 filled_any = true;
             } else {
-                warn!(
-                    trip_id = %trip.id,
-                    lat = trip.start_lat,
-                    lng = trip.start_lng,
-                    started_at = %trip.started_at,
-                    "trip_enrichment.address.start_lookup_failed"
-                );
+                debug!(trip_id = %trip.id, "trip start address unresolved");
                 failed_any = true;
             }
         }
@@ -669,13 +669,7 @@ pub async fn backfill_trip_addresses(
             if end_addr.is_some() {
                 filled_any = true;
             } else {
-                warn!(
-                    trip_id = %trip.id,
-                    lat = trip.end_lat,
-                    lng = trip.end_lng,
-                    started_at = %trip.started_at,
-                    "trip_enrichment.address.end_lookup_failed"
-                );
+                debug!(trip_id = %trip.id, "trip end address unresolved");
                 failed_any = true;
             }
         }
@@ -701,7 +695,7 @@ pub async fn backfill_trip_addresses(
         .execute(pool)
         .await
         {
-            warn!(trip_id = %trip.id, error = %err, "trip_enrichment.address.trip_update_failed");
+            warn!(trip_id = %trip.id, error = %err, "trip address update failed");
             stats.failed += 1;
             continue;
         }
@@ -717,14 +711,7 @@ pub async fn backfill_trip_addresses(
         }
     }
 
-    info!(
-        vehicle_id = ?vehicle_id,
-        scanned = stats.scanned,
-        filled = stats.filled,
-        failed = stats.failed,
-        skipped = stats.skipped,
-        "trip_enrichment.address.complete"
-    );
+    log_backfill_step("trip addresses", vehicle_id, stats);
     Ok(stats)
 }
 
@@ -814,13 +801,7 @@ pub async fn backfill_trip_coordinates(
         stats.filled += 1;
     }
 
-    info!(
-        vehicle_id = ?vehicle_id,
-        scanned = stats.scanned,
-        filled = stats.filled,
-        skipped = stats.skipped,
-        "trip_enrichment.trip_coordinates.complete"
-    );
+    log_backfill_step("trip coordinates", vehicle_id, stats);
     Ok(stats)
 }
 
@@ -874,13 +855,7 @@ pub async fn backfill_charge_session_coordinates(
         stats.filled += 1;
     }
 
-    info!(
-        vehicle_id = ?vehicle_id,
-        scanned = stats.scanned,
-        filled = stats.filled,
-        skipped = stats.skipped,
-        "trip_enrichment.charge_coordinates.complete"
-    );
+    log_backfill_step("charge session coordinates", vehicle_id, stats);
     Ok(stats)
 }
 
@@ -919,12 +894,12 @@ pub async fn backfill_charge_session_locations(
         let owner_id = match get_vehicle_owner_id(pool, session.vehicle_id).await {
             Ok(Some(user_id)) => user_id,
             Ok(None) => {
-                warn!(session_id = %session.id, "trip_enrichment.charge_location.owner_missing");
+                debug!(session_id = %session.id, reason = "owner_missing", "charge session place skipped");
                 stats.failed += 1;
                 continue;
             }
             Err(err) => {
-                warn!(session_id = %session.id, error = %err, "trip_enrichment.charge_location.owner_lookup_failed");
+                warn!(session_id = %session.id, error = %err, "charge session owner lookup failed, place skipped");
                 stats.failed += 1;
                 continue;
             }
@@ -940,12 +915,7 @@ pub async fn backfill_charge_session_locations(
         .await?;
 
         if matched.geofence_id.is_none() && matched.address_id.is_none() {
-            warn!(
-                session_id = %session.id,
-                lat = session.location_lat,
-                lng = session.location_lng,
-                "trip_enrichment.charge_location.lookup_failed"
-            );
+            debug!(session_id = %session.id, reason = "no_place_match", "charge session place unresolved");
             stats.failed += 1;
             continue;
         }
@@ -965,7 +935,7 @@ pub async fn backfill_charge_session_locations(
         .execute(pool)
         .await
         {
-            warn!(session_id = %session.id, error = %err, "trip_enrichment.charge_location.session_update_failed");
+            warn!(session_id = %session.id, error = %err, "charge session place update failed");
             stats.failed += 1;
             continue;
         }
@@ -983,21 +953,14 @@ pub async fn backfill_charge_session_locations(
         // A newly matched geofence can carry a cost profile (e.g. home rates).
         if matched.geofence_id.is_some() {
             if let Err(err) = recompute_charge_session_cost(pool, session.id).await {
-                warn!(session_id = %session.id, error = %err, "trip_enrichment.charge_location.cost_recompute_failed");
+                warn!(session_id = %session.id, error = ?err, "charge session cost recompute failed");
             }
         }
 
         stats.filled += 1;
     }
 
-    info!(
-        vehicle_id = ?vehicle_id,
-        scanned = stats.scanned,
-        filled = stats.filled,
-        failed = stats.failed,
-        skipped = stats.skipped,
-        "trip_enrichment.charge_location.complete"
-    );
+    log_backfill_step("charge session locations", vehicle_id, stats);
     Ok(stats)
 }
 
@@ -1049,12 +1012,12 @@ pub async fn enqueue_trip_weather_enrichment(
         }
     }
 
-    info!(
-        vehicle_id = ?vehicle_id,
+    debug!(
+        vehicle_id = vehicle_id.map(|id| id.to_string()),
         scanned = stats.scanned,
         queued = stats.filled,
         skipped = stats.skipped,
-        "trip_enrichment.weather_jobs.queued"
+        "weather enrichment jobs queued"
     );
     Ok(stats)
 }
@@ -1105,21 +1068,15 @@ where
                         .execute(pool)
                         .await
                 {
-                    warn!(trip_id = %trip.id, error = %err, "trip_enrichment.outside_temp.update_failed");
+                    warn!(trip_id = %trip.id, error = %err, "trip outside temperature update failed");
                     stats.failed += 1;
                 } else {
                     stats.filled += 1;
-                    debug!(trip_id = %trip.id, outside_temp_c = value, "trip_enrichment.outside_temp.updated");
+                    trace!(trip_id = %trip.id, outside_temp_c = value, "trip outside temperature stored");
                 }
             }
             None => {
-                warn!(
-                    trip_id = %trip.id,
-                    lat = trip.start_lat,
-                    lng = trip.start_lng,
-                    started_at = %trip.started_at,
-                    "trip_enrichment.outside_temp.lookup_failed"
-                );
+                debug!(trip_id = %trip.id, reason = "no_provider_value", "trip outside temperature unavailable");
                 stats.failed += 1;
             }
         }
@@ -1129,14 +1086,7 @@ where
         }
     }
 
-    info!(
-        vehicle_id = ?vehicle_id,
-        scanned = stats.scanned,
-        filled = stats.filled,
-        failed = stats.failed,
-        skipped = stats.skipped,
-        "trip_enrichment.outside_temp.complete"
-    );
+    log_backfill_step("trip outside temperatures", vehicle_id, stats);
     Ok(stats)
 }
 
@@ -1159,6 +1109,10 @@ async fn find_cached_address_id(pool: &PgPool, lat: f64, lon: f64) -> Option<Uui
     .bind(ADDRESS_CACHE_RADIUS_METERS)
     .fetch_optional(pool)
     .await
+    .inspect_err(|error| {
+        // Treated as a cache miss, so the provider lookup still runs.
+        warn!(error = %error, "address cache lookup failed");
+    })
     .ok()
     .flatten()
 }
@@ -1169,17 +1123,44 @@ async fn reverse_geocode_and_store(
     lat: f64,
     lon: f64,
 ) -> Option<Uuid> {
+    let started = std::time::Instant::now();
     let raw = match nominatim::reverse(pool, client, lat, lon).await {
         Ok(Some(raw)) => raw,
-        Ok(None) => return None,
-        Err(crate::errors::AppError::ExternalConnectionDisabled(_)) => return None,
+        Ok(None) => {
+            debug!("reverse geocode returned no address");
+            return None;
+        }
+        Err(crate::errors::AppError::ExternalConnectionDisabled(_)) => {
+            debug!(
+                provider = "nominatim",
+                reason = "connection_disabled",
+                "address lookup skipped"
+            );
+            return None;
+        }
         Err(err) => {
-            warn!(error = %err, "trip_enrichment.address.request_failed");
+            warn!(
+                provider = "nominatim",
+                error = %err,
+                duration_ms = started.elapsed().as_millis() as u64,
+                "address lookup failed, trip left without address"
+            );
             return None;
         }
     };
 
-    let display_name = raw.get("display_name")?.as_str()?.to_string();
+    let Some(display_name) = raw
+        .get("display_name")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+    else {
+        debug!(
+            provider = "nominatim",
+            reason = "missing_display_name",
+            "reverse geocode response unusable, address skipped"
+        );
+        return None;
+    };
     let osm_id = raw.get("osm_id").and_then(|value| value.as_i64());
     let address = raw.get("address").and_then(|value| value.as_object());
 
@@ -1261,11 +1242,11 @@ async fn reverse_geocode_and_store(
 
     match result {
         Ok(id) => {
-            info!(lat, lon, address_id = %id, "trip_enrichment.address.stored");
+            debug!(address_id = %id, "address stored");
             Some(id)
         }
         Err(err) => {
-            warn!(error = %err, lat, lon, "trip_enrichment.address.insert_failed");
+            error!(error = %err, "address write failed, trip left without address");
             None
         }
     }

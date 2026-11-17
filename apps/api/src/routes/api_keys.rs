@@ -213,6 +213,12 @@ async fn create_api_key(
         .record_tx(&mut tx)
         .await?;
     tx.commit().await?;
+    tracing::info!(
+        user_id = %auth.user_id,
+        api_key_id = %record.id,
+        vehicle_id = %record.vehicle_id,
+        "API key issued"
+    );
 
     Ok((
         StatusCode::CREATED,
@@ -256,6 +262,7 @@ async fn revoke_api_key(
         .record_tx(&mut tx)
         .await?;
     tx.commit().await?;
+    tracing::info!(user_id = %auth.user_id, api_key_id = %id, "API key revoked");
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -338,6 +345,12 @@ async fn rotate_api_key(
         .record_tx(&mut tx)
         .await?;
     tx.commit().await?;
+    tracing::info!(
+        user_id = %auth.user_id,
+        api_key_id = %record.id,
+        rotated_from_id = %id,
+        "API key rotated"
+    );
 
     Ok((
         StatusCode::CREATED,

@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::{
     client::IntoClientRequest, protocol::CloseFrame, Error as WsError, Message,
@@ -397,10 +398,11 @@ const VEHICLE_STATE_FIELDS: &[VehicleStateField] = &[
     VehicleStateField::optional("serviceMode", "serviceMode { timeStamp value }"),
 ];
 
+/// The message is deliberately generic: Rivian's rejection text is response
+/// content and must not reach the error chain that callers log.
 #[derive(Debug, thiserror::Error)]
-#[error("Rivian WS subscription rejected: {reason}")]
+#[error("Rivian WS subscription rejected by the VehicleState schema")]
 struct RivianSubscriptionRejection {
-    reason: String,
     invalid_fields: Vec<String>,
 }
 
@@ -438,14 +440,25 @@ impl VehicleStateSubscriptionHealth {
             let count = self.failure_counts.entry(field_name.clone()).or_default();
             *count += 1;
 
+            // The first rejection of a field is the condition; repeats on later
+            // reconnects are DEBUG until the field is disabled.
             let descriptor = vehicle_state_field(field_name);
             if descriptor.is_none() {
-                tracing::warn!(
-                    vehicle_id = %vehicle_id,
-                    field = %field_name,
-                    failures = *count,
-                    "Rivian WS schema rejected unknown VehicleState field"
-                );
+                if *count == 1 {
+                    tracing::warn!(
+                        vehicle_id = %vehicle_id,
+                        field = %field_name,
+                        failures = *count,
+                        "rivian ws schema rejected unknown vehicle state field"
+                    );
+                } else {
+                    tracing::debug!(
+                        vehicle_id = %vehicle_id,
+                        field = %field_name,
+                        failures = *count,
+                        "rivian ws schema rejected unknown vehicle state field again"
+                    );
+                }
                 continue;
             }
 
@@ -460,23 +473,31 @@ impl VehicleStateSubscriptionHealth {
                         field = %field_name,
                         failures = *count,
                         critical_reason = reason,
-                        "Rivian WS VehicleState field disabled after repeated schema rejection"
+                        "rivian ws vehicle state field disabled after repeated schema rejection"
                     );
                 } else {
                     tracing::warn!(
                         vehicle_id = %vehicle_id,
                         field = %field_name,
                         failures = *count,
-                        "Rivian WS VehicleState field disabled after repeated schema rejection"
+                        "rivian ws vehicle state field disabled after repeated schema rejection"
                     );
                 }
-            } else {
+            } else if *count == 1 {
                 tracing::warn!(
                     vehicle_id = %vehicle_id,
                     field = %field_name,
                     failures = *count,
                     disable_threshold = VEHICLE_STATE_FIELD_FAILURE_DISABLE_THRESHOLD,
-                    "Rivian WS VehicleState field rejected by schema"
+                    "rivian ws vehicle state field rejected by schema"
+                );
+            } else {
+                tracing::debug!(
+                    vehicle_id = %vehicle_id,
+                    field = %field_name,
+                    failures = *count,
+                    disable_threshold = VEHICLE_STATE_FIELD_FAILURE_DISABLE_THRESHOLD,
+                    "rivian ws vehicle state field rejected by schema again"
                 );
             }
         }
@@ -550,11 +571,15 @@ pub async fn run_ws_loop(
     let max_backoff = config.rivian_ws_reconnect_max_seconds.max(initial_backoff);
     let mut backoff_secs = initial_backoff;
     let mut subscription_health = VehicleStateSubscriptionHealth::default();
+    // Failed connection attempts since the last subscription was established.
+    // connect_and_subscribe resets it and logs the recovery.
+    let failed_attempts = AtomicU32::new(0);
+    let mut credential_load_failures: u32 = 0;
     if subscription_health.disabled_count() > 0 {
-        tracing::info!(
+        tracing::debug!(
             vehicle_id = %vehicle_id,
             disabled_fields = subscription_health.disabled_count(),
-            "Rivian WS starting with known-unsupported VehicleState fields disabled"
+            "rivian ws starting with known-unsupported vehicle state fields disabled"
         );
     }
 
@@ -564,9 +589,33 @@ pub async fn run_ws_loop(
         )
         .await
         {
-            Ok((_, tokens)) => tokens,
+            Ok((_, tokens)) => {
+                if credential_load_failures > 0 {
+                    tracing::info!(
+                        vehicle_id = %vehicle_id,
+                        attempts = credential_load_failures,
+                        "rivian ws credentials available again"
+                    );
+                    credential_load_failures = 0;
+                }
+                tokens
+            }
             Err(error) => {
-                tracing::warn!(vehicle_id=%vehicle_id, err=%error, "could not load current Rivian credentials for WS reconnect");
+                credential_load_failures = credential_load_failures.saturating_add(1);
+                if credential_load_failures == 1 {
+                    tracing::warn!(
+                        vehicle_id = %vehicle_id,
+                        error = %error,
+                        "rivian ws reconnect skipped: credentials unavailable"
+                    );
+                } else {
+                    tracing::debug!(
+                        vehicle_id = %vehicle_id,
+                        attempt = credential_load_failures,
+                        error = %error,
+                        "rivian ws reconnect skipped: credentials unavailable"
+                    );
+                }
                 tokio::select! {
                     _ = tokio::time::sleep(tokio::time::Duration::from_secs(jittered_backoff_secs(backoff_secs))) => {}
                     _ = shutdown.recv() => { break; }
@@ -579,11 +628,11 @@ pub async fn run_ws_loop(
         // so a hold learned by the Parallax socket also applies here.
         let session_key = rivian_ws_backoff::session_key(&tokens.user_session_token);
         if let Some((remaining, reason)) = rivian_ws_backoff::remaining_hold(session_key) {
-            tracing::info!(
+            tracing::debug!(
                 vehicle_id = %vehicle_id,
                 reason = reason.as_str(),
                 wait_seconds = remaining.as_secs(),
-                "Rivian WS waiting out a shared session hold before reconnecting"
+                "rivian ws waiting out shared session hold"
             );
             if !rivian_ws_backoff::wait_for_hold(session_key, &mut shutdown).await {
                 break;
@@ -599,18 +648,20 @@ pub async fn run_ws_loop(
             WsSubscription {
                 query: &subscription_query,
                 disabled_field_count: subscription_health.disabled_count(),
+                failed_attempts: &failed_attempts,
             },
         )
         .await
         {
             Ok(WsLoopEnd::Shutdown) => {
-                tracing::info!(vehicle_id = %vehicle_id, "WS connection closed gracefully");
+                tracing::info!(vehicle_id = %vehicle_id, "rivian ws stopped");
                 break;
             }
             Ok(WsLoopEnd::ConnectionTtlExpired) => {
-                tracing::info!(
+                // Rivian rotates connections on a TTL; this is routine.
+                tracing::debug!(
                     vehicle_id = %vehicle_id,
-                    "Rivian WS connection TTL expired; renewing subscription"
+                    "rivian ws connection ttl expired; renewing subscription"
                 );
                 backoff_secs = initial_backoff;
             }
@@ -618,12 +669,13 @@ pub async fn run_ws_loop(
                 let Some(SessionHold(reason)) = e.downcast_ref::<SessionHold>().copied() else {
                     unreachable!("guarded by downcast_ref");
                 };
+                failed_attempts.fetch_add(1, Ordering::Relaxed);
                 let delay = rivian_ws_backoff::start_hold(session_key, reason);
                 tracing::warn!(
                     vehicle_id = %vehicle_id,
                     reason = reason.as_str(),
                     hold_seconds = delay.as_secs(),
-                    "Rivian WS held off; both subscription sockets wait before reconnecting"
+                    "rivian ws held off; both subscription sockets wait before reconnecting"
                 );
                 let _ = tx
                     .send(WsInboundEvent {
@@ -649,10 +701,11 @@ pub async fn run_ws_loop(
                     let healed = subscription_health
                         .record_rejection(&vehicle_id, &rejection.invalid_fields);
                     if healed {
-                        tracing::warn!(
+                        // The per-field disable line above already reports the change at WARN/ERROR.
+                        tracing::debug!(
                             vehicle_id = %vehicle_id,
                             disabled_fields = subscription_health.disabled_count(),
-                            "Rivian WS subscription query degraded after schema rejection"
+                            "rivian ws subscription query degraded after schema rejection"
                         );
                         let _ = tx
                             .send(WsInboundEvent {
@@ -672,8 +725,29 @@ pub async fn run_ws_loop(
                             .await;
                     }
                 }
+                // Connection errors are logged here, once, by the caller that
+                // handles them. Repeats until the next subscription is
+                // established are DEBUG; recovery is logged in connect_and_subscribe.
+                // The error is formatted with `%`: its chain can carry transport
+                // detail whose Debug output is not safe to log.
+                let attempt = failed_attempts.fetch_add(1, Ordering::Relaxed) + 1;
                 let delay = jittered_backoff_secs(backoff_secs);
-                tracing::warn!(vehicle_id = %vehicle_id, err = %e, backoff = delay, "WS error, reconnecting");
+                if attempt == 1 {
+                    tracing::warn!(
+                        vehicle_id = %vehicle_id,
+                        error = %e,
+                        retry_seconds = delay,
+                        "rivian ws error; reconnecting"
+                    );
+                } else {
+                    tracing::debug!(
+                        vehicle_id = %vehicle_id,
+                        attempt,
+                        error = %e,
+                        retry_seconds = delay,
+                        "rivian ws error; reconnecting"
+                    );
+                }
                 let _ = tx
                     .send(WsInboundEvent {
                         kind: WsInboundKind::Control,
@@ -698,6 +772,7 @@ pub async fn run_ws_loop(
 struct WsSubscription<'a> {
     query: &'a str,
     disabled_field_count: usize,
+    failed_attempts: &'a AtomicU32,
 }
 
 async fn connect_and_subscribe(
@@ -729,11 +804,11 @@ async fn connect_and_subscribe(
                     battery_cell_type: None,
                 })
                 .await;
-            tracing::warn!(
+            // The caller logs the failure with the status; this is the detail trail.
+            tracing::debug!(
                 vehicle_id = %vehicle_id,
-                rivian_vehicle_id = %rivian_veh_id,
                 http_status = status.as_u16(),
-                "Rivian WS handshake rejected"
+                "rivian ws handshake rejected"
             );
             anyhow::bail!("Rivian WS handshake rejected with HTTP {status}");
         }
@@ -785,7 +860,8 @@ async fn connect_and_subscribe(
         let next = match tokio::time::timeout_at(ack_deadline, ws.next()).await {
             Ok(next) => next,
             Err(_) => {
-                tracing::warn!(vehicle_id = %vehicle_id, "Rivian WS did not acknowledge connection_init");
+                // The caller logs the hold at WARN with its reason.
+                tracing::debug!(vehicle_id = %vehicle_id, "rivian ws did not acknowledge connection_init");
                 return Err(SessionHold(HoldReason::NotAcknowledged).into());
             }
         };
@@ -807,10 +883,11 @@ async fn connect_and_subscribe(
                 if v.get("type").and_then(|x| x.as_str()) == Some("connection_ack") {
                     break;
                 }
-                tracing::warn!(
+                // Only the type is logged; the frame body is provider content.
+                tracing::debug!(
                     vehicle_id = %vehicle_id,
-                    message = %truncate_ws_message(&t),
-                    "Rivian WS message before ack"
+                    message_type = message_type.as_deref().unwrap_or("unknown"),
+                    "rivian ws message received before ack"
                 );
             }
             Some(Ok(Message::Ping(data))) => {
@@ -879,6 +956,21 @@ async fn connect_and_subscribe(
         })
         .await;
 
+    // Subscriptions are sent; this is the point the session counts as established.
+    let recovered_after = subscription.failed_attempts.swap(0, Ordering::Relaxed);
+    if recovered_after > 0 {
+        tracing::info!(
+            vehicle_id = %vehicle_id,
+            attempts = recovered_after,
+            "rivian ws reconnected"
+        );
+    } else {
+        tracing::debug!(vehicle_id = %vehicle_id, "rivian ws subscribed");
+    }
+    // Frame parse failures are logged at WARN once per connection; later ones
+    // are TRACE so a malformed stream cannot flood the log.
+    let mut parse_failures: u32 = 0;
+
     loop {
         tokio::select! {
             _ = shutdown.recv() => { return Ok(WsLoopEnd::Shutdown); }
@@ -887,6 +979,12 @@ async fn connect_and_subscribe(
                     Some(Ok(Message::Text(text))) => {
                         let value: Value = serde_json::from_str(&text).unwrap_or_default();
                         let message_type = message_type(&value);
+                        tracing::trace!(
+                            vehicle_id = %vehicle_id,
+                            message_type = message_type.as_deref().unwrap_or("unknown"),
+                            bytes = text.len(),
+                            "rivian ws frame received"
+                        );
                         if matches!(message_type.as_deref(), Some("error") | Some("complete")) {
                             if value.get("id").and_then(Value::as_str) == Some("2") {
                                 let _ = tx.send(WsInboundEvent {
@@ -905,12 +1003,13 @@ async fn connect_and_subscribe(
                             // rather than silently downgrading to a degraded subscription.
                             let reason = truncate_ws_message(&text);
                             let invalid_fields = rejected_vehicle_state_fields(&value);
-                            tracing::error!(
+                            // The rejection is reported by the caller and by the
+                            // per-field line in record_rejection; the body stays out of logs.
+                            tracing::debug!(
                                 vehicle_id = %vehicle_id,
                                 message_type = message_type.as_deref().unwrap_or("unknown"),
-                                message = %reason,
                                 invalid_fields = ?invalid_fields,
-                                "Rivian WS subscription rejected by VehicleState schema"
+                                "rivian ws subscription rejected by vehicle state schema"
                             );
                             let _ = tx.send(WsInboundEvent {
                                 kind: WsInboundKind::Control,
@@ -925,11 +1024,7 @@ async fn connect_and_subscribe(
                                 charging_session: None,
                                 battery_cell_type: None,
                             }).await;
-                            return Err(RivianSubscriptionRejection {
-                                reason,
-                                invalid_fields,
-                            }
-                            .into());
+                            return Err(RivianSubscriptionRejection { invalid_fields }.into());
                         }
                         match classify_text_message(&text, *vehicle_id) {
                             Ok(inbound) => {
@@ -944,7 +1039,21 @@ async fn connect_and_subscribe(
                                 }).await;
                             }
                             Err(e) => {
-                                tracing::warn!(vehicle_id = %vehicle_id, err = %e, "parse error");
+                                parse_failures = parse_failures.saturating_add(1);
+                                if parse_failures == 1 {
+                                    tracing::warn!(
+                                        vehicle_id = %vehicle_id,
+                                        error = %e,
+                                        "rivian ws frame parse failed"
+                                    );
+                                } else {
+                                    tracing::trace!(
+                                        vehicle_id = %vehicle_id,
+                                        failures = parse_failures,
+                                        error = %e,
+                                        "rivian ws frame parse failed"
+                                    );
+                                }
                                 let _ = tx.send(WsInboundEvent {
                                     kind: WsInboundKind::Control,
                                     received_at: Utc::now(),
@@ -967,11 +1076,11 @@ async fn connect_and_subscribe(
                         }
                         let ttl_expired = is_rivian_connection_ttl_expired(frame.as_ref());
                         if ttl_expired {
-                            tracing::info!(
+                            tracing::debug!(
                                 vehicle_id = %vehicle_id,
                                 close_code = frame.as_ref().map(|f| f.code.to_string()),
                                 close_reason = frame.as_ref().map(|f| f.reason.to_string()),
-                                "Rivian WS close frame"
+                                "rivian ws close frame received"
                             );
                             crate::services::ingestion_capture::record(
                                 *vehicle_id,
@@ -1002,19 +1111,22 @@ async fn connect_and_subscribe(
                                 charging_session: None,
                                 battery_cell_type: None,
                             }).await;
-                            tracing::warn!(
+                            // The caller logs the reconnect at WARN; the close
+                            // detail stays at DEBUG so it is logged once.
+                            tracing::debug!(
                                 vehicle_id = %vehicle_id,
                                 close_code = frame.as_ref().map(|f| f.code.to_string()),
                                 close_reason = %reason,
-                                "Rivian WS subscription closed (4410) — reconnecting"
+                                "rivian ws subscription closed: no active subscriptions"
                             );
                             anyhow::bail!("Rivian WS subscription closed: {reason}");
                         }
-                        tracing::warn!(
+                        // The caller logs the reconnect at WARN; the close detail stays at DEBUG.
+                        tracing::debug!(
                             vehicle_id = %vehicle_id,
                             close_code = frame.as_ref().map(|f| f.code.to_string()),
                             close_reason = frame.as_ref().map(|f| f.reason.to_string()),
-                            "Rivian WS close frame"
+                            "rivian ws close frame received"
                         );
                         anyhow::bail!("WS closed");
                     }
@@ -1211,11 +1323,12 @@ pub(crate) fn jittered_backoff_secs(base: u64) -> u64 {
 }
 
 fn record_hold_close(vehicle_id: &Uuid, reason: HoldReason, frame: Option<&CloseFrame>) {
-    tracing::warn!(
+    // The caller logs the hold at WARN with its reason; this is the close detail.
+    tracing::debug!(
         vehicle_id = %vehicle_id,
         reason = reason.as_str(),
         close_code = frame.map(|f| f.code.to_string()),
-        "Rivian WS closed with a session hold"
+        "rivian ws closed with session hold"
     );
     crate::services::ingestion_capture::record(
         *vehicle_id,
@@ -1235,7 +1348,13 @@ fn truncate_ws_message(value: &str) -> String {
     if value.len() <= MAX_LEN {
         return value.to_string();
     }
-    format!("{}...", &value[..MAX_LEN])
+    // Cut on a character boundary; a byte index inside a multibyte character
+    // would panic.
+    let mut end = MAX_LEN;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &value[..end])
 }
 
 fn rejected_vehicle_state_fields(value: &Value) -> Vec<String> {
@@ -1272,6 +1391,15 @@ fn rejected_vehicle_state_field(message: &str) -> Option<String> {
 mod tests {
     use super::*;
     use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
+    #[test]
+    fn truncation_never_splits_a_multibyte_character() {
+        // 499 ASCII bytes then a 3-byte character straddling the 500 byte limit.
+        let text = format!("{}€{}", "a".repeat(499), "b".repeat(50));
+        let truncated = truncate_ws_message(&text);
+        assert_eq!(truncated, format!("{}...", "a".repeat(499)));
+        assert_eq!(truncate_ws_message("short"), "short");
+    }
 
     #[test]
     fn rivian_ws_request_includes_required_handshake_headers() {

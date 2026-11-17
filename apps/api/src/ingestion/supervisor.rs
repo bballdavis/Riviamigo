@@ -120,9 +120,21 @@ where
     R: FnOnce(broadcast::Receiver<()>) -> RF,
     RF: Future<Output = WorkerExit>,
 {
+    // Failed reads so far in a row. The first is a warning; the rest repeat
+    // every retry, so they are debug, and the recovery is logged once.
+    let mut failed_reads: u32 = 0;
     loop {
         match is_paused().await {
-            Ok(false) => break,
+            Ok(false) => {
+                if failed_reads > 0 {
+                    tracing::info!(
+                        vehicle_id = %vehicle_id,
+                        attempt = failed_reads,
+                        "collection setting readable again; starting worker"
+                    );
+                }
+                break;
+            }
             Ok(true) => {
                 tracing::info!(
                     vehicle_id = %vehicle_id,
@@ -131,12 +143,23 @@ where
                 return WorkerExit::NeedsAction;
             }
             Err(error) => {
-                tracing::warn!(
-                    vehicle_id = %vehicle_id,
-                    err = %error,
-                    retry_seconds = retry.as_secs(),
-                    "worker start deferred: the vehicle's collection setting could not be read"
-                );
+                failed_reads = failed_reads.saturating_add(1);
+                if failed_reads == 1 {
+                    tracing::warn!(
+                        vehicle_id = %vehicle_id,
+                        error = %error,
+                        retry_seconds = retry.as_secs(),
+                        "worker start deferred: the vehicle's collection setting could not be read"
+                    );
+                } else {
+                    tracing::debug!(
+                        vehicle_id = %vehicle_id,
+                        error = %error,
+                        attempt = failed_reads,
+                        retry_seconds = retry.as_secs(),
+                        "worker start still deferred: collection setting unreadable"
+                    );
+                }
                 tokio::select! {
                     _ = tokio::time::sleep(retry) => {}
                     _ = shutdown.recv() => return WorkerExit::Stopped,
@@ -294,6 +317,7 @@ impl WorkerSupervisor {
             config,
         });
         let mut sup = WorkerSupervisor::new(launcher, workers_enabled, cmd_rx);
+        tracing::info!(workers_enabled, "worker supervisor started");
 
         tokio::spawn(async move { sup.run().await });
 
@@ -359,7 +383,7 @@ impl WorkerSupervisor {
                 match prepare_worker_start(&mut self.workers, vehicle_id) {
                     StartAction::Spawn => self.spawn_worker(vehicle_id),
                     StartAction::AlreadyRunning => {}
-                    StartAction::Deferred => tracing::info!(
+                    StartAction::Deferred => tracing::debug!(
                         vehicle_id = %vehicle_id,
                         "worker start deferred until the previous worker has stopped"
                     ),
@@ -392,6 +416,10 @@ impl WorkerSupervisor {
                 }
             }
             SupervisorCommand::Shutdown => {
+                tracing::info!(
+                    count = self.workers.len(),
+                    "worker supervisor shutting down"
+                );
                 let timeout = self.stop_timeout;
                 for (vehicle_id, slot) in self.workers.drain() {
                     if let WorkerSlot::Running((handle, shutdown_tx)) = slot {
@@ -454,8 +482,9 @@ impl WorkerSupervisor {
         if launch.started_at.elapsed() >= WORKER_RETRY_RESET_AFTER {
             launch.retry_attempt = 0;
         }
+        let attempt = launch.retry_attempt.saturating_add(1);
         let delay = worker_retry_delay(launch.retry_attempt);
-        launch.retry_attempt = launch.retry_attempt.saturating_add(1);
+        launch.retry_attempt = attempt;
         self.workers
             .insert(vehicle_id, WorkerSlot::RetryPending { generation });
         let retry_tx = self.retry_tx.clone();
@@ -465,7 +494,9 @@ impl WorkerSupervisor {
         });
         tracing::warn!(
             vehicle_id = %vehicle_id,
+            attempt = attempt,
             retry_seconds = delay.as_secs(),
+            reason = "transient_failure",
             "worker exited on a transient failure; restarting it after a delay"
         );
     }
@@ -482,6 +513,7 @@ impl WorkerSupervisor {
         }
         self.workers.remove(&vehicle_id);
         if self.workers_enabled {
+            tracing::debug!(vehicle_id = %vehicle_id, "scheduled worker restart due");
             self.spawn_worker(vehicle_id);
         }
     }

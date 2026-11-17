@@ -48,11 +48,11 @@ async fn start_site_job(
     Path(kind): Path<String>,
 ) -> Result<Json<MaintenanceJobStatus>, AppError> {
     require_admin(&state, auth.user_id).await?;
-    Ok(Json(
-        maintenance_jobs::spawn_site(state.pool.clone(), &kind, auth.user_id)
-            .await
-            .map_err(map_error)?,
-    ))
+    let status = maintenance_jobs::spawn_site(state.pool.clone(), &kind, auth.user_id)
+        .await
+        .map_err(map_error)?;
+    tracing::info!(job = status.kind, user_id = %auth.user_id, "site maintenance job requested");
+    Ok(Json(status))
 }
 
 async fn list_vehicle_jobs(
@@ -74,11 +74,17 @@ async fn start_vehicle_job(
     Path((vehicle_id, kind)): Path<(Uuid, String)>,
 ) -> Result<Json<MaintenanceJobStatus>, AppError> {
     require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
-    Ok(Json(
+    let status =
         maintenance_jobs::spawn_vehicle(state.pool.clone(), vehicle_id, &kind, auth.user_id)
             .await
-            .map_err(map_error)?,
-    ))
+            .map_err(map_error)?;
+    tracing::info!(
+        vehicle_id = %vehicle_id,
+        job = status.kind,
+        user_id = %auth.user_id,
+        "vehicle maintenance job requested"
+    );
+    Ok(Json(status))
 }
 
 async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> {

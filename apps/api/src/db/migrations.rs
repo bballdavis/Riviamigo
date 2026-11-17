@@ -207,6 +207,11 @@ async fn run_current_migrations_locked(
             }
         }
     };
+    if ledger_action == MigrationLedgerAction::UsedPublic {
+        tracing::debug!(action = ?ledger_action, "migration ledger validated");
+    } else {
+        tracing::info!(action = ?ledger_action, "migration ledger updated");
+    }
 
     set_public_search_path(connection).await?;
     let applied: Vec<i64> = read_ledger(connection, "public")
@@ -224,21 +229,22 @@ async fn run_current_migrations_locked(
         tracing::info!("database migrations are up to date");
     } else {
         tracing::info!(
-            pending = ?pending,
+            count = pending.len(),
             "applying database migrations; the API does not accept requests until they finish, and data repairs on large databases can take a long time"
         );
+        tracing::debug!(pending = ?pending, "pending database migrations");
     }
     let started = std::time::Instant::now();
+    let pending_count = pending.len();
     let heartbeat = (!pending.is_empty()).then(|| {
-        let pending = pending.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(MIGRATION_HEARTBEAT);
             interval.tick().await;
             loop {
                 interval.tick().await;
                 tracing::info!(
-                    elapsed_secs = started.elapsed().as_secs(),
-                    pending = ?pending,
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    count = pending_count,
                     "database migrations still running"
                 );
             }
@@ -251,8 +257,8 @@ async fn run_current_migrations_locked(
     outcome.context("apply current Riviamigo migrations")?;
     if !pending.is_empty() {
         tracing::info!(
-            elapsed_secs = started.elapsed().as_secs(),
-            applied = pending.len(),
+            duration_ms = started.elapsed().as_millis() as u64,
+            count = pending.len(),
             "database migrations applied"
         );
     }

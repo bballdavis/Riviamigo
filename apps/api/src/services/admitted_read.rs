@@ -94,17 +94,23 @@ impl Drop for AdmittedRead {
                     control.close().await
                 })
                 .await;
-                if !matches!(cancelled, Ok(Ok(()))) {
-                    tracing::warn!(
+                match cancelled {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::warn!(
                         backend_pid = pid,
-                        "heavy read cancellation failed; waiting for database deadline"
-                    );
+                        error = %error,
+                        "heavy read cancellation failed, waiting for database deadline"
+                    ),
+                    Err(_elapsed) => tracing::warn!(
+                        backend_pid = pid,
+                        "heavy read cancellation timed out, waiting for database deadline"
+                    ),
                 }
             }
             // Rollback drains the pending server response. Keep admission
             // until that work has ended, even if the client has disconnected.
             if let Err(error) = tx.rollback().await {
-                tracing::warn!(?error, "heavy read rollback failed");
+                tracing::warn!(error = %error, "heavy read rollback failed");
             }
         });
     }

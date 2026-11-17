@@ -72,8 +72,11 @@ struct ReplayTelemetryRow {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+async fn main() -> std::process::ExitCode {
+    riviamigo_api::logging::run(run()).await
+}
+
+async fn run() -> Result<()> {
     let args = parse_args()?;
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let pool = PgPoolOptions::new()
@@ -114,7 +117,7 @@ fn parse_args() -> Result<Args> {
 async fn rebuild_vehicle_history(pool: &PgPool, client: &Client, args: Args) -> Result<()> {
     let vehicles = load_vehicle_scope(pool, args.vehicle_id).await?;
     if vehicles.is_empty() {
-        info!("No vehicles found for rebuild");
+        info!("no vehicles found for rebuild");
         return Ok(());
     }
 

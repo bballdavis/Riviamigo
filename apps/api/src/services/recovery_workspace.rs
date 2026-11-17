@@ -157,7 +157,7 @@ fn sweep_abandoned_workspaces(parent: &Dir) -> usize {
     let ids = match workspace_ids(parent) {
         Ok(ids) => ids,
         Err(error) => {
-            tracing::warn!(%error, "recovery_workspace.sweep_list_failed");
+            tracing::warn!(error = %error, "recovery workspace sweep skipped: listing failed");
             return 0;
         }
     };
@@ -170,12 +170,12 @@ fn sweep_abandoned_workspaces(parent: &Dir) -> usize {
             Ok(true) => reclaimed += 1,
             Ok(false) => {}
             Err(error) => {
-                tracing::warn!(workspace = %id, %error, "recovery_workspace.sweep_failed");
+                tracing::warn!(workspace = %id, error = %error, "recovery workspace sweep failed");
             }
         }
     }
     if reclaimed > 0 {
-        tracing::info!(reclaimed, "recovery_workspace.abandoned_reclaimed");
+        tracing::info!(reclaimed, "abandoned recovery workspaces reclaimed");
     }
     reclaimed
 }
@@ -216,7 +216,9 @@ impl RecoveryWorkspace {
         active_workspaces().insert(name.clone());
         let forget = |parent: &Dir, remove_lock: bool| {
             if remove_lock {
-                let _ = parent.remove_file(lock_name(&name));
+                if let Err(error) = parent.remove_file(lock_name(&name)) {
+                    tracing::warn!(workspace = %name, error = %error, "recovery workspace lock removal failed");
+                }
             }
             active_workspaces().remove(&name);
         };
@@ -265,6 +267,7 @@ impl RecoveryWorkspace {
             forget(&parent, true);
             return Err(error.into());
         }
+        tracing::debug!(workspace = %name, "recovery workspace created");
         let workspace = Arc::new(Self {
             parent,
             path: root.join(WORK_DIR).join(&name),
@@ -301,8 +304,12 @@ impl Drop for RecoveryWorkspace {
     fn drop(&mut self) {
         // Remove the directory, then the lock file; the lock itself is
         // released afterwards when `_lock` is dropped.
-        let _ = self.parent.remove_dir_all(&self.name);
-        let _ = self.parent.remove_file(lock_name(&self.name));
+        if let Err(error) = self.parent.remove_dir_all(&self.name) {
+            tracing::warn!(workspace = %self.name, error = %error, "recovery workspace removal failed");
+        }
+        if let Err(error) = self.parent.remove_file(lock_name(&self.name)) {
+            tracing::warn!(workspace = %self.name, error = %error, "recovery workspace lock removal failed");
+        }
         active_workspaces().remove(&self.name);
     }
 }

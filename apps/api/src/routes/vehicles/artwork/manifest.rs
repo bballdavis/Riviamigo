@@ -2,7 +2,7 @@
 //! the entries tagged with this vehicle.
 
 use sha2::{Digest, Sha256};
-use tracing::{info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use std::time::Duration;
@@ -78,10 +78,12 @@ async fn cache_vehicle_images(
             )
             .await;
             if image_count == 0 {
-                info!(vehicle_id = %vehicle_id, "vehicle.images.no_provider_artwork");
+                // A new delivery or preorder can have no provider artwork yet;
+                // the standard model image is the expected fallback.
+                debug!(vehicle_id = %vehicle_id, "vehicle images no provider artwork");
                 ArtworkCachePass::NoProviderArtwork
             } else {
-                info!(vehicle_id = %vehicle_id, image_count, "vehicle.images.cached");
+                info!(vehicle_id = %vehicle_id, image_count, "vehicle images cached");
                 ArtworkCachePass::Attempted
             }
         }
@@ -94,7 +96,7 @@ async fn cache_vehicle_images(
                 &error.to_string(),
             )
             .await;
-            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.add.image_cache_failed");
+            warn!(vehicle_id = %vehicle_id, error = ?error, "vehicle images manifest failed");
             ArtworkCachePass::Attempted
         }
     }
@@ -177,7 +179,7 @@ pub(super) async fn ensure_vehicle_images_cached(
     let rows = match fetch_vehicle_image_rows(pool, vehicle_id).await {
         Ok(rows) => rows,
         Err(error) => {
-            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_rows_failed");
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle images backfill rows failed");
             return ArtworkCachePass::Attempted;
         }
     };
@@ -203,7 +205,8 @@ pub(super) async fn ensure_vehicle_images_cached(
     let identity = match age_key.parse::<age::x25519::Identity>() {
         Ok(identity) => identity,
         Err(error) => {
-            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_bad_age_key");
+            // Startup validates the age key, so reaching this is a broken invariant.
+            error!(vehicle_id = %vehicle_id, error = %error, "vehicle images backfill bad age key");
             return ArtworkCachePass::Attempted;
         }
     };
@@ -218,7 +221,7 @@ pub(super) async fn ensure_vehicle_images_cached(
         Ok(Some(tokens)) => tokens,
         Ok(None) => return ArtworkCachePass::Attempted,
         Err(error) => {
-            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_credentials_failed");
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle images backfill credentials failed");
             return ArtworkCachePass::Attempted;
         }
     };
@@ -229,7 +232,7 @@ pub(super) async fn ensure_vehicle_images_cached(
         }
         Err(error) => {
             // The owning repair records the sanitized failure and backoff.
-            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_decrypt_failed");
+            warn!(vehicle_id = %vehicle_id, error = ?error, "vehicle images backfill decrypt failed");
             ArtworkCachePass::Attempted
         }
     }

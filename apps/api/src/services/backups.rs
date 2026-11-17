@@ -101,8 +101,8 @@ impl BackupLock {
                 .await
             {
                 Ok(true) => {}
-                Ok(false) => tracing::error!("backup.lock.release_not_owned"),
-                Err(error) => tracing::error!(error = %error, "backup.lock.release_failed"),
+                Ok(false) => tracing::error!(reason = "not_owned", "backup lock release failed"),
+                Err(error) => tracing::error!(error = %error, "backup lock release failed"),
             }
         }
     }
@@ -289,12 +289,12 @@ pub fn start_backup_scheduler(pool: PgPool, config: Config) -> tokio::task::Join
             interval.tick().await;
             if let Err(error) = maybe_run_scheduled_backup(&pool, &config).await {
                 if should_log_scheduler_failure(&mut last_failure_signature, &error) {
-                    tracing::error!(error = ?error, "backup.scheduler.tick_failed");
+                    tracing::error!(error = ?error, "backup scheduler tick failed");
                 } else {
-                    tracing::debug!(error = ?error, "backup.scheduler.tick_failed_repeat");
+                    tracing::debug!(error = ?error, suppressed = true, "backup scheduler tick failed");
                 }
-            } else {
-                last_failure_signature = None;
+            } else if last_failure_signature.take().is_some() {
+                tracing::info!("backup scheduler recovered");
             }
         }
     })
@@ -332,7 +332,7 @@ pub async fn start_backup_now(
     tokio::spawn(async move {
         let result = run_backup_inner_for_run(&pool, &config, run_id, trigger).await;
         if let Err(error) = result {
-            tracing::error!(run_id = %run_id, error = ?error, "backup.async_job_failed");
+            tracing::error!(run_id = %run_id, trigger = trigger.as_str(), error = ?error, "backup run failed");
         }
         lock.release().await;
     });
@@ -420,7 +420,7 @@ async fn insert_running_backup(
     requested_by: Option<Uuid>,
     trigger: BackupRunTrigger,
 ) -> Result<Uuid, AppError> {
-    sqlx::query_scalar(
+    let run_id: Uuid = sqlx::query_scalar(
         r#"
         INSERT INTO riviamigo.backup_runs (
             trigger, status, phase, progress_percent, requested_by, started_at, updated_at
@@ -433,7 +433,9 @@ async fn insert_running_backup(
     .bind(requested_by)
     .fetch_one(pool)
     .await
-    .map_err(AppError::from)
+    .map_err(AppError::from)?;
+    tracing::info!(run_id = %run_id, trigger = trigger.as_str(), "backup requested");
+    Ok(run_id)
 }
 
 async fn update_backup_progress(
@@ -442,6 +444,7 @@ async fn update_backup_progress(
     phase: &str,
     progress_percent: i16,
 ) -> Result<(), AppError> {
+    tracing::debug!(run_id = %run_id, phase, progress_percent, "backup phase entered");
     sqlx::query(
         r#"
         UPDATE riviamigo.backup_runs
@@ -464,10 +467,14 @@ async fn run_backup_inner_for_run(
     run_id: Uuid,
     trigger: BackupRunTrigger,
 ) -> Result<BackupExecutionResult, AppError> {
+    let started = std::time::Instant::now();
+    tracing::info!(run_id = %run_id, trigger = trigger.as_str(), "backup started");
     let settings = match load_settings(pool, config).await {
         Ok(settings) => settings,
         Err(error) => {
-            let _ = mark_backup_run_failed(pool, run_id, &error).await;
+            if let Err(mark_error) = mark_backup_run_failed(pool, run_id, &error).await {
+                tracing::error!(run_id = %run_id, error = %mark_error, "backup run status update failed");
+            }
             return Err(error);
         }
     };
@@ -609,7 +616,7 @@ async fn run_backup_inner_for_run(
                 tracing::warn!(
                     path = %artifact_path.display(),
                     error = %error,
-                    "backup.cleanup.s3_staging_failed"
+                    "backup staging file cleanup failed"
                 );
             }
         }
@@ -627,12 +634,28 @@ async fn run_backup_inner_for_run(
         .execute(pool)
         .await?;
 
+        tracing::info!(
+            run_id = %run_id,
+            trigger = trigger.as_str(),
+            bytes = size_bytes,
+            artifact_count = artifact_ids.len(),
+            duration_ms = started.elapsed().as_millis() as u64,
+            "backup completed"
+        );
         Ok::<BackupExecutionResult, AppError>(BackupExecutionResult { run_id, artifact_ids })
     }
     .await;
 
     if let Err(error) = &execution {
-        mark_backup_run_failed(pool, run_id, error).await?;
+        if let Err(mark_error) = mark_backup_run_failed(pool, run_id, error).await {
+            tracing::error!(
+                run_id = %run_id,
+                job_error = ?error,
+                error = %mark_error,
+                "backup run status update failed"
+            );
+            return Err(mark_error);
+        }
 
         let package_is_cataloged_locally: bool = sqlx::query_scalar(
             r#"
@@ -646,8 +669,14 @@ async fn run_backup_inner_for_run(
         .bind(run_id)
         .fetch_one(pool)
         .await?;
-        if !package_is_cataloged_locally && fs::try_exists(&artifact_path).await.unwrap_or(false) {
-            let _ = fs::remove_file(&artifact_path).await;
+        let package_exists = fs::try_exists(&artifact_path).await.unwrap_or_else(|error| {
+            tracing::warn!(path = %artifact_path.display(), error = %error, "backup package existence check failed");
+            false
+        });
+        if !package_is_cataloged_locally && package_exists {
+            if let Err(error) = fs::remove_file(&artifact_path).await {
+                tracing::warn!(path = %artifact_path.display(), error = %error, "backup failed package cleanup failed");
+            }
         }
     }
 
@@ -686,17 +715,27 @@ async fn maybe_run_scheduled_backup(
         if !is_pg_dump_available().await {
             if !PG_DUMP_UNAVAILABLE_LOGGED.swap(true, Ordering::Relaxed) {
                 tracing::warn!(
-                    "backup.scheduler.skipped_pg_dump_unavailable: {}",
-                    PG_DUMP_UNAVAILABLE_MESSAGE
+                    reason = "pg_dump_unavailable",
+                    detail = PG_DUMP_UNAVAILABLE_MESSAGE,
+                    "backup scheduler skipped"
+                );
+            } else {
+                tracing::debug!(
+                    reason = "pg_dump_unavailable",
+                    suppressed = true,
+                    "backup scheduler skipped"
                 );
             }
             return Ok(None);
         }
-        PG_DUMP_UNAVAILABLE_LOGGED.store(false, Ordering::Relaxed);
+        if PG_DUMP_UNAVAILABLE_LOGGED.swap(false, Ordering::Relaxed) {
+            tracing::info!("backup scheduler resumed: pg_dump is available");
+        }
     }
 
     let settings = load_settings(pool, config).await?;
     if !settings.enabled {
+        tracing::trace!(reason = "disabled", "backup scheduler tick skipped");
         return Ok(None);
     }
 
@@ -717,6 +756,7 @@ async fn maybe_run_scheduled_backup(
     .await?;
 
     if existing.is_some() {
+        tracing::trace!(reason = "run_exists", "backup scheduler tick skipped");
         return Ok(None);
     }
 
@@ -1375,6 +1415,14 @@ fn validate_recovery_file_sync(
         }
     }
 
+    tracing::debug!(
+        format,
+        format_version = format_version.unwrap_or_default(),
+        members = member_count,
+        expanded_bytes,
+        compressed_bytes = metadata.len(),
+        "recovery package validated"
+    );
     Ok(ValidatedRecoveryPackage {
         manifest,
         checksum_sha256: package_checksum,
@@ -1508,6 +1556,7 @@ fn validate_v2_artwork_component(
 async fn execute_pg_dump(config: &Config, dump_path: &Path) -> Result<(), AppError> {
     // Parse connection components from the URL so the password is not exposed
     // on the process command line (visible via `ps`).
+    let started = std::time::Instant::now();
     let url = url::Url::parse(&config.database_url)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("invalid DATABASE_URL: {e}")))?;
 
@@ -1547,6 +1596,10 @@ async fn execute_pg_dump(config: &Config, dump_path: &Path) -> Result<(), AppErr
         .map_err(|error| AppError::Internal(anyhow::anyhow!("failed to spawn pg_dump: {error}")))?;
 
     if output.status.success() {
+        tracing::debug!(
+            duration_ms = started.elapsed().as_millis() as u64,
+            "pg_dump completed"
+        );
         return Ok(());
     }
 
@@ -1685,6 +1738,11 @@ async fn build_recovery_manifest(
         serde_json::to_vec(&cache_files)
             .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?,
     ));
+    tracing::debug!(
+        cache_files = cache_files.len(),
+        cache_bytes = cache_size_bytes,
+        "recovery package components collected"
+    );
 
     Ok(json!({
         "format": RECOVERY_PACKAGE_FORMAT,
@@ -2073,12 +2131,13 @@ async fn prune_retained_artifacts(
     .fetch_all(pool)
     .await?;
 
+    let mut pruned = 0_u64;
     for row in rows {
         if let Err(error) = crate::services::artifact_files::remove(
             Path::new(&config.backup_artifact_dir),
             Path::new(&row.storage_path),
         ) {
-            tracing::warn!(artifact_id = %row.id, error = %error, "backup.retention.unsafe_or_unavailable_artifact");
+            tracing::warn!(artifact_id = %row.id, error = %error, "backup retention skipped unavailable artifact");
             sqlx::query("UPDATE riviamigo.backup_artifacts SET manifest = CASE WHEN jsonb_typeof(manifest) = 'object' THEN manifest ELSE '{}'::jsonb END || '{\"restore_availability\":\"unavailable\"}'::jsonb WHERE id = $1").bind(row.id).execute(pool).await?;
             continue;
         }
@@ -2090,7 +2149,13 @@ async fn prune_retained_artifacts(
             .bind(row.id)
             .execute(pool)
             .await?;
+        pruned += 1;
     }
+    tracing::debug!(
+        count = pruned,
+        retention_count,
+        "local backup retention applied"
+    );
 
     Ok(())
 }
@@ -2103,6 +2168,7 @@ async fn prune_remote_artifacts(
     let rows = s3_backups::list(settings)
         .await
         .map_err(|error| AppError::DependencyUnavailable(error.to_string()))?;
+    let mut deleted = 0_u64;
     for row in rows.into_iter().skip(retention_count.max(1) as usize) {
         s3_backups::delete(settings, &row.key)
             .await
@@ -2111,7 +2177,13 @@ async fn prune_remote_artifacts(
             .bind(s3_backups::locator(&settings.bucket, &row.key))
             .execute(pool)
             .await?;
+        deleted += 1;
     }
+    tracing::debug!(
+        count = deleted,
+        retention_count,
+        "remote backup retention applied"
+    );
     Ok(())
 }
 

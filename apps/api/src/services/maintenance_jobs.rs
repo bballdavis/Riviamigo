@@ -307,30 +307,31 @@ where
 {
     debug_assert!(kind.automatic() && kind.scope() == JobScope::Site);
     if let Err(error) = expire_stale_runs(pool).await {
-        tracing::warn!(job = kind.slug(), %error, "failed to expire stale job runs");
+        tracing::warn!(job = kind.slug(), error = %error, "maintenance run expiry failed");
     }
     if let Err(error) = prune_old_runs(pool).await {
-        tracing::warn!(job = kind.slug(), %error, "failed to prune old job runs");
+        tracing::warn!(job = kind.slug(), error = %error, "maintenance run pruning failed");
     }
     let run_id = match insert_run(pool, None, kind, None, "automatic").await {
         Ok(run_id) => Some(run_id),
         Err(MaintenanceJobError::AlreadyRunning) => {
-            tracing::info!(
+            tracing::debug!(
                 job = kind.slug(),
-                "skipping automatic pass; a run is already active"
+                reason = "already_running",
+                "automatic pass skipped"
             );
             return None;
         }
         // Still do the work: it matters more than the record of it.
         Err(error) => {
-            tracing::warn!(job = kind.slug(), %error, "failed to record automatic job run");
+            tracing::error!(job = kind.slug(), error = %error, "automatic job run record failed");
             None
         }
     };
     let outcome = work().await;
     if let Some(run_id) = run_id {
         if let Err(error) = finish(pool, run_id, &outcome).await {
-            tracing::warn!(job = kind.slug(), %error, "failed to record automatic job outcome");
+            tracing::error!(job = kind.slug(), run_id = %run_id, error = %error, "automatic job outcome record failed");
         }
     }
     Some(outcome)
@@ -344,26 +345,34 @@ async fn spawn(
 ) -> Result<MaintenanceJobStatus, MaintenanceJobError> {
     expire_stale_runs(&pool).await?;
     let run_id = insert_run(&pool, vehicle_id, kind, Some(requested_by), "manual").await?;
+    tracing::info!(
+        run_id = %run_id,
+        vehicle_id = vehicle_id.map(|id| id.to_string()),
+        job = kind.slug(),
+        trigger = "manual",
+        "maintenance job started"
+    );
 
     let task_pool = pool.clone();
     tokio::spawn(async move {
+        let vehicle = vehicle_id.map(|id| id.to_string());
         let outcome = run(&task_pool, vehicle_id, kind).await;
         if let Err(error) = finish(&task_pool, run_id, &outcome).await {
-            tracing::warn!(?vehicle_id, job = kind.slug(), %error, "failed to record maintenance job outcome");
+            tracing::error!(run_id = %run_id, vehicle_id = vehicle.clone(), job = kind.slug(), error = %error, "maintenance job outcome record failed");
         }
         match outcome {
             Ok(outcome) => tracing::info!(
-                ?vehicle_id,
+                vehicle_id = vehicle,
                 job = kind.slug(),
                 processed = outcome.processed,
                 changed = outcome.changed,
                 failed = outcome.failed,
-                "maintenance job complete"
+                "maintenance job completed"
             ),
-            Err(error) => tracing::warn!(
-                ?vehicle_id,
+            Err(error) => tracing::error!(
+                vehicle_id = vehicle,
                 job = kind.slug(),
-                error = %error,
+                error = ?error,
                 "maintenance job failed"
             ),
         }
@@ -506,7 +515,7 @@ async fn finish(
 }
 
 async fn expire_stale_runs(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    let result = sqlx::query(
         r#"UPDATE riviamigo.maintenance_job_runs
            SET status = 'error',
                finished_at = now(),
@@ -518,13 +527,19 @@ async fn expire_stale_runs(pool: &PgPool) -> Result<(), sqlx::Error> {
     .bind(INTERRUPTED_MESSAGE)
     .execute(pool)
     .await?;
+    if result.rows_affected() > 0 {
+        tracing::warn!(
+            count = result.rows_affected(),
+            "stale maintenance runs marked interrupted"
+        );
+    }
     Ok(())
 }
 
 /// Keep the table small: automatic jobs add a few rows a day. The latest run
 /// of each job is always kept so the page never loses its last result.
 async fn prune_old_runs(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    let result = sqlx::query(
         r#"DELETE FROM riviamigo.maintenance_job_runs AS run
            WHERE run.status <> 'running'
              AND run.started_at < now() - make_interval(days => $1)
@@ -538,6 +553,10 @@ async fn prune_old_runs(pool: &PgPool) -> Result<(), sqlx::Error> {
     .bind(KEEP_FINISHED_RUNS_DAYS)
     .execute(pool)
     .await?;
+    tracing::debug!(
+        count = result.rows_affected(),
+        "old maintenance runs pruned"
+    );
     Ok(())
 }
 

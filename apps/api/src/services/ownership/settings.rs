@@ -270,7 +270,10 @@ pub async fn load_settings(pool: &PgPool, vehicle_id: Uuid) -> Result<OwnershipS
 pub(super) fn parse_comparisons(vehicle_id: Uuid, value: serde_json::Value) -> Comparisons {
     let serde_json::Value::Object(mut fields) = value else {
         if !value.is_null() {
-            tracing::warn!(%vehicle_id, "ownership.settings.comparisons_unreadable");
+            tracing::warn!(
+                vehicle_id = %vehicle_id,
+                "stored comparison settings unreadable, ignored"
+            );
         }
         return Comparisons::default();
     };
@@ -281,14 +284,20 @@ pub(super) fn parse_comparisons(vehicle_id: Uuid, value: serde_json::Value) -> C
                 .filter_map(|id| match id {
                     serde_json::Value::String(id) => Some(id),
                     _ => {
-                        tracing::warn!(%vehicle_id, "ownership.settings.comparison_id_skipped");
+                        tracing::warn!(
+                            vehicle_id = %vehicle_id,
+                            "stored comparison id unreadable, skipped"
+                        );
                         None
                     }
                 })
                 .collect(),
         ),
         Some(_) => {
-            tracing::warn!(%vehicle_id, "ownership.settings.comparison_ids_unreadable");
+            tracing::warn!(
+                vehicle_id = %vehicle_id,
+                "stored comparison ids unreadable, ignored"
+            );
             None
         }
     };
@@ -296,25 +305,37 @@ pub(super) fn parse_comparisons(vehicle_id: Uuid, value: serde_json::Value) -> C
         None | Some(serde_json::Value::Null) => Vec::new(),
         Some(serde_json::Value::Array(entries)) => entries
             .into_iter()
-            .filter_map(|entry| match serde_json::from_value::<CustomVehicle>(entry) {
-                Ok(mut vehicle) => match repair_stored_label(&vehicle.label, 80) {
-                    Some(label) => {
-                        vehicle.label = label;
-                        Some(vehicle)
-                    }
-                    None => {
-                        tracing::warn!(%vehicle_id, "ownership.settings.custom_vehicle_label_unreadable");
+            .filter_map(
+                |entry| match serde_json::from_value::<CustomVehicle>(entry) {
+                    Ok(mut vehicle) => match repair_stored_label(&vehicle.label, 80) {
+                        Some(label) => {
+                            vehicle.label = label;
+                            Some(vehicle)
+                        }
+                        None => {
+                            tracing::warn!(
+                                vehicle_id = %vehicle_id,
+                                "stored custom vehicle label unreadable, skipped"
+                            );
+                            None
+                        }
+                    },
+                    // The serde message can echo the stored value, which is user text.
+                    Err(_) => {
+                        tracing::warn!(
+                            vehicle_id = %vehicle_id,
+                            "stored custom vehicle unreadable, skipped"
+                        );
                         None
                     }
                 },
-                Err(error) => {
-                    tracing::warn!(%vehicle_id, %error, "ownership.settings.custom_vehicle_skipped");
-                    None
-                }
-            })
+            )
             .collect(),
         Some(_) => {
-            tracing::warn!(%vehicle_id, "ownership.settings.custom_vehicles_unreadable");
+            tracing::warn!(
+                vehicle_id = %vehicle_id,
+                "stored custom vehicles unreadable, ignored"
+            );
             Vec::new()
         }
     };
@@ -330,7 +351,10 @@ pub(super) fn parse_maintenance(
 ) -> std::collections::BTreeMap<String, Vec<MaintenanceItem>> {
     let serde_json::Value::Object(schedules) = value else {
         if !value.is_null() {
-            tracing::warn!(%vehicle_id, "ownership.settings.maintenance_unreadable");
+            tracing::warn!(
+                vehicle_id = %vehicle_id,
+                "stored maintenance settings unreadable, ignored"
+            );
         }
         return Default::default();
     };
@@ -338,28 +362,43 @@ pub(super) fn parse_maintenance(
         .into_iter()
         .filter_map(|(key, schedule)| {
             let serde_json::Value::Array(items) = schedule else {
-                tracing::warn!(%vehicle_id, schedule = %key, "ownership.settings.maintenance_schedule_skipped");
+                tracing::warn!(
+                    vehicle_id = %vehicle_id,
+                    schedule = %key,
+                    "stored maintenance schedule unreadable, skipped"
+                );
                 return None;
             };
             let stored = items.len();
             let parsed: Vec<MaintenanceItem> = items
                 .into_iter()
-                .filter_map(|item| match serde_json::from_value::<MaintenanceItem>(item) {
-                    Ok(mut item) => match repair_stored_label(&item.label, 60) {
-                        Some(label) => {
-                            item.label = label;
-                            Some(item)
-                        }
-                        None => {
-                            tracing::warn!(%vehicle_id, schedule = %key, "ownership.settings.maintenance_label_unreadable");
+                .filter_map(
+                    |item| match serde_json::from_value::<MaintenanceItem>(item) {
+                        Ok(mut item) => match repair_stored_label(&item.label, 60) {
+                            Some(label) => {
+                                item.label = label;
+                                Some(item)
+                            }
+                            None => {
+                                tracing::warn!(
+                                    vehicle_id = %vehicle_id,
+                                    schedule = %key,
+                                    "stored maintenance label unreadable, skipped"
+                                );
+                                None
+                            }
+                        },
+                        // The serde message can echo the stored value, which is user text.
+                        Err(_) => {
+                            tracing::warn!(
+                                vehicle_id = %vehicle_id,
+                                schedule = %key,
+                                "stored maintenance item unreadable, skipped"
+                            );
                             None
                         }
                     },
-                    Err(error) => {
-                        tracing::warn!(%vehicle_id, schedule = %key, %error, "ownership.settings.maintenance_item_skipped");
-                        None
-                    }
-                })
+                )
                 .collect();
             (stored == 0 || !parsed.is_empty()).then_some((key, parsed))
         })
