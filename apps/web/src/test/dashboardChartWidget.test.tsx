@@ -59,6 +59,12 @@ beforeEach(() => {
     delete mockFavoriteState.chart_favorites[key];
   }
   mockUpdateDashboardChartFavorite.mockClear();
+  mockDashboardChartFavorites.mockReset();
+  mockDashboardChartFavorites.mockImplementation(() => ({
+    data: mockFavoriteState,
+    isSuccess: true,
+    isLoading: false,
+  }));
   mockEffectiveCharts.mockReset();
   mockEffectiveCharts.mockImplementation((placement: string | null) => ({
     data: chartSeeds
@@ -284,7 +290,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
   it('keeps assigned Overview loading and errors from falling back to the fixed catalog', () => {
     const instance = assignedOverviewInstance();
     mockEffectiveCharts.mockReturnValue({
-      data: [],
+      data: undefined,
       isSuccess: false,
       isLoading: true,
       isError: false,
@@ -296,7 +302,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
 
     loading.unmount();
     mockEffectiveCharts.mockReturnValue({
-      data: [],
+      data: undefined,
       isSuccess: false,
       isLoading: false,
       isError: true,
@@ -565,10 +571,13 @@ describe('DashboardChartWidget - smoothing controls', () => {
     expect(
       screen.getByRole('button', { name: 'Projected Range by Mileage is the default chart' })
     ).toBeDisabled();
-    expect(mockUpdateDashboardChartFavorite).toHaveBeenCalledWith({
-      key: 'dashboard:test-soc-history',
-      chartId: 'projected-range-mileage',
-    });
+    expect(mockUpdateDashboardChartFavorite).toHaveBeenCalledWith(
+      {
+        key: 'dashboard:test-soc-history',
+        chartId: 'projected-range-mileage',
+      },
+      expect.anything()
+    );
     expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
 
     firstRender.unmount();
@@ -677,6 +686,107 @@ describe('DashboardChartWidget - smoothing controls', () => {
       expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent(favoriteName);
     }
   );
+
+  describe('Overview favorite against a saved State of Charge default', () => {
+    // Older saved Overview copies carry `chartId: 'soc-history'` in the widget
+    // options. That value must never win over the user's favorite.
+    const savedOverview = () => ({
+      ...assignedOverviewInstance(),
+      options: {
+        chartId: 'soc-history',
+        chartIds: ['soc-history', 'projected-range-mileage'],
+        page: 'overview' as const,
+        showPicker: true,
+      },
+    });
+    const overviewCtx = { ...CTX, dashboardSlug: 'dashboard', dashboardConfigId: 'dashboard-a' };
+    const favoriteKey = 'dashboard:dashboard-a:test-projected-range-mileage';
+
+    beforeEach(() => {
+      mockEffectiveCharts.mockReturnValue({
+        data: [chartRecord('soc-history'), chartRecord('projected-range-mileage')],
+        isSuccess: true,
+        isLoading: false,
+        isError: false,
+      });
+    });
+
+    it('waits for favorites when the chart catalog answers first', () => {
+      mockDashboardChartFavorites.mockReturnValue({
+        data: undefined,
+        isSuccess: false,
+        isLoading: true,
+      });
+      const rendered = renderWidget(savedOverview(), overviewCtx);
+
+      expect(screen.getByRole('status')).toHaveTextContent('Loading charts');
+      expect(screen.queryByRole('button', { name: 'Chart' })).toBeNull();
+
+      mockFavoriteState.chart_favorites[favoriteKey] = 'projected-range-mileage';
+      mockDashboardChartFavorites.mockReturnValue({
+        data: mockFavoriteState,
+        isSuccess: true,
+        isLoading: false,
+      });
+      rendered.rerender(<DashboardChartWidget instance={savedOverview()} ctx={overviewCtx} />);
+
+      expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent(
+        'Projected Range by Mileage'
+      );
+    });
+
+    it('keeps the favorite when a background favorites refetch fails', () => {
+      mockFavoriteState.chart_favorites[favoriteKey] = 'projected-range-mileage';
+      mockDashboardChartFavorites.mockReturnValue({
+        data: mockFavoriteState,
+        isSuccess: false,
+        isLoading: false,
+      });
+      renderWidget(savedOverview(), overviewCtx);
+
+      expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent(
+        'Projected Range by Mileage'
+      );
+    });
+
+    it('follows the favorite once it loads after the widget remounted without it', () => {
+      mockDashboardChartFavorites.mockReturnValue({
+        data: undefined,
+        isSuccess: false,
+        isLoading: false,
+      });
+      const rendered = renderWidget(savedOverview(), overviewCtx);
+      expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
+
+      mockFavoriteState.chart_favorites[favoriteKey] = 'projected-range-mileage';
+      mockDashboardChartFavorites.mockReturnValue({
+        data: mockFavoriteState,
+        isSuccess: true,
+        isLoading: false,
+      });
+      rendered.rerender(<DashboardChartWidget instance={savedOverview()} ctx={overviewCtx} />);
+
+      expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent(
+        'Projected Range by Mileage'
+      );
+    });
+
+    it('keeps showing the catalog when a background catalog refetch fails', () => {
+      mockFavoriteState.chart_favorites[favoriteKey] = 'projected-range-mileage';
+      mockEffectiveCharts.mockReturnValue({
+        data: [chartRecord('soc-history'), chartRecord('projected-range-mileage')],
+        isSuccess: false,
+        isLoading: false,
+        isError: true,
+      });
+      renderWidget(savedOverview(), overviewCtx);
+
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent(
+        'Projected Range by Mileage'
+      );
+    });
+  });
 
   it('isolates chart defaults across dashboard config IDs', () => {
     const instance = {
@@ -1388,7 +1498,13 @@ const mockBatteryMileage = vi.fn(
   })
 );
 const mockFavoriteState = { chart_favorites: {} as Record<string, string> };
-const mockDashboardChartFavorites = vi.fn(() => ({ data: mockFavoriteState, isSuccess: true }));
+const mockDashboardChartFavorites = vi.fn(
+  (): {
+    data: typeof mockFavoriteState | undefined;
+    isSuccess: boolean;
+    isLoading: boolean;
+  } => ({ data: mockFavoriteState, isSuccess: true, isLoading: false })
+);
 const mockUpdateDashboardChartFavorite = vi.fn(
   ({ key, chartId }: { key: string; chartId: string }) => {
     mockFavoriteState.chart_favorites[key] = chartId;
@@ -1398,11 +1514,11 @@ const mockEffectiveCharts = vi.fn(
   (
     _placement: string | null
   ): {
-    data: ReturnType<typeof chartRecord>[];
+    data: ReturnType<typeof chartRecord>[] | undefined;
     isSuccess: boolean;
     isLoading: boolean;
     isError: boolean;
-  } => ({ data: [], isSuccess: false, isLoading: true, isError: false })
+  } => ({ data: undefined, isSuccess: false, isLoading: true, isError: false })
 );
 const mockUseChartDatasets = vi.fn();
 
