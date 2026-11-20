@@ -8,7 +8,6 @@ import {
   useChargeCurveAnalysis,
   useChargingChartSeries,
   useDegradation,
-  useDashboardChartFavorites,
   useChartDatasets,
   useEffectiveCharts,
   useEfficiencyByMode,
@@ -20,7 +19,6 @@ import {
   useSocHistory,
   useTirePressureTimeline,
   useTripTags,
-  useUpdateDashboardChartFavorite,
   useVehicles,
 } from '@riviamigo/hooks';
 import {
@@ -81,6 +79,7 @@ import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { useMeasuredWidgetHeight } from '../useMeasuredWidgetHeight';
 import { PhantomDrainChart } from './PhantomDrainChart';
 import { MobileChartViewer } from './MobileChartViewer';
+import { useFavoriteChartSelection } from './useFavoriteChartSelection';
 
 export { buildPhantomDrainDailySeries } from './PhantomDrainChart';
 
@@ -227,18 +226,17 @@ export function DashboardChartWidget({
   const chartOptions = getChartOptions(options.page).filter((option) =>
     options.chartIds.includes(option.value)
   );
-  const defaultStorageKey = chartDefaultStorageKey(ctx, instance);
-  const { data: favoriteResponse, isSuccess: favoritesLoaded } = useDashboardChartFavorites();
-  const updateFavorite = useUpdateDashboardChartFavorite();
-  const chartIdsSignature = options.chartIds.join('|');
-  const serverFavorite = favoriteResponse?.chart_favorites?.[defaultStorageKey];
-  const resolvedFavorite =
-    typeof serverFavorite === 'string' && options.chartIds.includes(serverFavorite)
-      ? serverFavorite
-      : options.chartId;
-  const [chartId, setChartId] = React.useState(options.chartId);
-  const [defaultChartId, setDefaultChartId] = React.useState(options.chartId);
-  const favoriteInitializationRef = React.useRef<string | null>(null);
+  const {
+    chartId: activeChartId,
+    defaultChartId,
+    ready: favoritesReady,
+    selectChart,
+    setDefault: setChartAsDefault,
+  } = useFavoriteChartSelection({
+    storageKey: chartDefaultStorageKey(ctx, instance),
+    chartIds: options.chartIds,
+    fallbackChartId: options.chartId,
+  });
   const [search, setSearch] = React.useState('');
   const [draftChartSettings, setDraftChartSettings] = React.useState(options.chartSettings);
   const [activeAxisRanges, setActiveAxisRanges] = React.useState<DashboardChartResolvedAxisRanges>(
@@ -247,20 +245,9 @@ export function DashboardChartWidget({
   const chartSettingsSignature = JSON.stringify(options.chartSettings);
 
   React.useEffect(() => {
-    if (!favoritesLoaded) return;
-    const initializationKey = `${defaultStorageKey}|${chartIdsSignature}|${options.chartId}`;
-    setDefaultChartId(resolvedFavorite);
-    if (favoriteInitializationRef.current !== initializationKey) {
-      setChartId(resolvedFavorite);
-      favoriteInitializationRef.current = initializationKey;
-    }
-  }, [defaultStorageKey, options.chartId, chartIdsSignature, favoritesLoaded, resolvedFavorite]);
-
-  React.useEffect(() => {
     setDraftChartSettings(options.chartSettings);
   }, [chartSettingsSignature]);
 
-  const activeChartId = options.chartIds.includes(chartId) ? chartId : options.chartId;
   const activeChartDefinition = getChartDefinition(activeChartId);
   const activeCapabilities = activeChartDefinition
     ? {
@@ -281,7 +268,9 @@ export function DashboardChartWidget({
   }, [activeChartId]);
 
   if (options.catalogMode === 'assigned') {
-    if (assignedCatalog.isSuccess) {
+    // A failed background refetch keeps the last catalog; only a catalog that
+    // never loaded shows the loading or error state.
+    if (assignedCatalog.data !== undefined) {
       return (
         <AssignedChartRuntime
           instance={instance}
@@ -313,9 +302,8 @@ export function DashboardChartWidget({
     });
   }
 
-  function setChartAsDefault(nextChartId: string) {
-    setDefaultChartId(nextChartId);
-    updateFavorite.mutate({ key: defaultStorageKey, chartId: nextChartId });
+  if (!favoritesReady) {
+    return <DashboardChartCatalogState instance={instance} message="Loading charts…" />;
   }
 
   return (
@@ -324,7 +312,7 @@ export function DashboardChartWidget({
       options={options}
       chartId={activeChartId}
       chartOptions={chartOptions}
-      onChartChange={setChartId}
+      onChartChange={selectChart}
       search={search}
       onSearchChange={setSearch}
       defaultChartId={defaultChartId}
@@ -570,40 +558,30 @@ function AssignedChartRuntime({
   const available = charts.filter(
     (chart) => chart.isEnabled || options.requiredChartSlugs.includes(chart.slug)
   );
-  const chartIdsSignature = available.map((chart) => chart.slug).join('|');
+  const availableIds = available.map((chart) => chart.slug);
   const chartOptions = available.map((chart) => ({ value: chart.slug, label: chart.name }));
-  const defaultChartId =
-    options.chartId && available.some((chart) => chart.slug === options.chartId)
+  const fallbackChartId =
+    options.chartId && availableIds.includes(options.chartId)
       ? options.chartId
-      : (available[0]?.slug ?? '');
-  const [chartId, setChartId] = React.useState(defaultChartId);
-  const [defaultChartIdState, setDefaultChartId] = React.useState(defaultChartId);
+      : (availableIds[0] ?? '');
   const [search, setSearch] = React.useState('');
   const [draftChartSettings, setDraftChartSettings] = React.useState(options.chartSettings);
   const [activeAxisRanges, setActiveAxisRanges] = React.useState<DashboardChartResolvedAxisRanges>(
     {}
   );
-  const { data: favoriteResponse, isSuccess: favoritesLoaded } = useDashboardChartFavorites();
-  const updateFavorite = useUpdateDashboardChartFavorite();
-  const storageKey = chartDefaultStorageKey(ctx, instance);
-  const favorite = favoriteResponse?.chart_favorites?.[storageKey];
-  const resolvedFavorite =
-    favoritesLoaded && favorite && available.some((chart) => chart.slug === favorite)
-      ? favorite
-      : defaultChartId;
-  const favoriteInitializationRef = React.useRef<string | null>(null);
+  const {
+    chartId,
+    defaultChartId,
+    ready: favoritesReady,
+    selectChart,
+    setDefault: setChartAsDefault,
+  } = useFavoriteChartSelection({
+    storageKey: chartDefaultStorageKey(ctx, instance),
+    chartIds: availableIds,
+    fallbackChartId,
+  });
 
   React.useEffect(() => setDraftChartSettings(options.chartSettings), [options.chartSettings]);
-
-  React.useEffect(() => {
-    if (!available.length) return;
-    const initializationKey = `${storageKey}|${chartIdsSignature}|${defaultChartId}`;
-    setDefaultChartId(resolvedFavorite);
-    if (favoriteInitializationRef.current !== initializationKey) {
-      setChartId(resolvedFavorite);
-      favoriteInitializationRef.current = initializationKey;
-    }
-  }, [chartIdsSignature, defaultChartId, resolvedFavorite, storageKey, available.length]);
 
   const active = available.find((chart) => chart.slug === chartId) ?? available[0];
   const activeDefinition = active ? getChartDefinition(active.slug) : undefined;
@@ -652,11 +630,6 @@ function AssignedChartRuntime({
         }
       : EMPTY_CAPABILITIES;
 
-  function setChartAsDefault(next: string) {
-    setDefaultChartId(next);
-    updateFavorite.mutate({ key: storageKey, chartId: next });
-  }
-
   function updateChartSettings(
     updater: (current: DashboardChartDisplaySettings) => DashboardChartDisplaySettings
   ) {
@@ -666,6 +639,10 @@ function AssignedChartRuntime({
       ctx.updateWidgetOptions?.(instance.id, { chartSettings: next });
       return next;
     });
+  }
+
+  if (active && !favoritesReady) {
+    return <DashboardChartCatalogState instance={instance} message="Loading charts…" />;
   }
 
   if (!active) {
@@ -697,10 +674,10 @@ function AssignedChartRuntime({
       options={options}
       chartId={active.slug}
       chartOptions={chartOptions}
-      onChartChange={setChartId}
+      onChartChange={selectChart}
       search={search}
       onSearchChange={setSearch}
-      defaultChartId={defaultChartIdState}
+      defaultChartId={defaultChartId}
       onSetDefault={setChartAsDefault}
       chartTitle={active.name}
       settings={settings}
