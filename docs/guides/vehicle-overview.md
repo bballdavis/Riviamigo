@@ -41,7 +41,7 @@ The two buttons in the panel's top right switch between the **cluster** view
 (the gauge) and the **current location** map (the crosshair). The map takes
 the place of the stat rows. The battery and the vehicle image stay.
 
-![The Vehicle Overview with the map expanded, showing the vehicle driving at 43 mph in Drive](../assets/guides/dashboards/vehicle-overview-map.webp)
+![The Vehicle Overview with the map expanded, following the vehicle along its route at 43 mph in Drive](../assets/guides/dashboards/vehicle-overview-map.webp)
 
 - **The marker** is a small overhead image of your vehicle, outlined in the
   accent color and turned the way its nose points. Rivian reports the direction
@@ -62,6 +62,8 @@ your account. The Overview opens the way you left it, on any device.
 
 While the vehicle is navigating to a destination, the map also shows where it
 is going:
+
+![The whole-route view: the vehicle, its route across downtown, and the destination marked with the Rivian mark](../assets/guides/dashboards/vehicle-overview-route.webp)
 
 - **The route** the vehicle planned is drawn ahead of it, with the part
   already driven dimmed.

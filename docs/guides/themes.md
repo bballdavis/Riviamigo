@@ -20,6 +20,22 @@ Appearance mode and theme are separate:
 Riviamigo does not copy a previous browser's local theme setting into the
 account. Before sign-in and after logout it uses Classic dark.
 
+## Classic and RAD
+
+The two built-in themes, each in light and dark mode, on the Overview
+dashboard:
+
+| | Light | Dark |
+| --- | --- | --- |
+| **Classic** | ![The Overview dashboard in the Classic theme, light mode](../assets/readme/overview-desktop-classic-light.webp) | ![The Overview dashboard in the Classic theme, dark mode](../assets/readme/overview-desktop-classic-dark.webp) |
+| **RAD** | ![The Overview dashboard in the RAD theme, light mode](../assets/readme/overview-desktop-rad-light.webp) | ![The Overview dashboard in the RAD theme, dark mode](../assets/readme/overview-desktop-rad-dark.webp) |
+
+On a phone:
+
+| Classic, light | Classic, dark | RAD, light | RAD, dark |
+| --- | --- | --- | --- |
+| ![The Overview on a phone in the Classic theme, light mode](../assets/readme/overview-mobile-classic-light.webp) | ![The Overview on a phone in the Classic theme, dark mode](../assets/readme/overview-mobile-classic-dark.webp) | ![The Overview on a phone in the RAD theme, light mode](../assets/readme/overview-mobile-rad-light.webp) | ![The Overview on a phone in the RAD theme, dark mode](../assets/readme/overview-mobile-rad-dark.webp) |
+
 ## Create a custom theme
 
 Choose **Create custom theme**, name it, and select Classic or RAD as its base.

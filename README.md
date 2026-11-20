@@ -18,7 +18,7 @@ With all that said, but shoutout to the guys over at Teslamate, I definitely use
 
 ## What Riviamigo does
 
-- **Vehicle overview:** See battery state, estimated range, charging status, lock state, tire pressure, cabin details, vehicle details, and other current information in one place.
+- **Vehicle overview:** See battery state, estimated range, charging status, lock state, tire pressure, cabin details, vehicle details, and other current information in one place. A live map follows the vehicle and, while it is navigating, shows its route, destination, and arrival time.
 - **Battery and health:** Follow state of charge, range, charging limits, battery history, phantom drain, and the health signals Rivian makes available.
 - **Charging:** Review charging sessions, energy use, charging curves, connection status, and charging history.
 - **Trips and efficiency:** Browse trip history, route context, mileage, driving efficiency, and longer-term trends.
@@ -26,7 +26,7 @@ With all that said, but shoutout to the guys over at Teslamate, I definitely use
 - **Custom dashboards:** Use the built-in dashboards as they are, edit the installation-wide defaults, or make personal copies with the widgets and charts you care about.
 - **Multiple vehicles:** Connect and switch between more than one vehicle in the same installation.
 - **Sharing:** Invite other people to the installation and give them access only to the vehicles they should see. Vehicle access can be managed with owner, manager, and viewer roles.
-- **Desktop and mobile:** Use the same responsive interface from a desktop, tablet, or phone, with light and dark themes.
+- **Desktop and mobile:** Use the same responsive interface from a desktop, tablet, or phone, with light and dark modes in the Classic and RAD themes, or a theme of your own.
 - **Optional connections:** Choose whether to use remote, self-hosted, or disabled providers for weather, maps, and geocoding.
 - **Demo vehicles:** Create an R1T, R1S, or R2 with realistic sample history so you can explore the app without connecting a Rivian account.
 
@@ -34,27 +34,42 @@ The exact data available depends on what Rivian reports, and that can change ove
 
 ## A quick look
 
-These are live, redacted views of Riviamigo at desktop and mobile sizes.
+These views show Riviamigo with a demo vehicle at desktop and phone sizes, in both built-in themes. The Overview map shows a drive in progress: the vehicle's navigation route, its destination, and the arrival time. Demo vehicles do not drive, so that drive is simulated for the screenshots.
 
-### Desktop
+### Classic theme
 
 **Overview**
 
 | Light | Dark |
 | --- | --- |
-| ![Riviamigo overview in light mode on desktop](./docs/assets/readme/overview-desktop-light.png) | ![Riviamigo overview in dark mode on desktop](./docs/assets/readme/overview-desktop-dark.png) |
+| ![Riviamigo overview in the Classic theme, light mode, on desktop](./docs/assets/readme/overview-desktop-classic-light.webp) | ![Riviamigo overview in the Classic theme, dark mode, on desktop](./docs/assets/readme/overview-desktop-classic-dark.webp) |
 
 **Charging**
 
 | Light | Dark |
 | --- | --- |
-| ![Riviamigo charging dashboard in light mode on desktop](./docs/assets/readme/charging-desktop-light.png) | ![Riviamigo charging dashboard in dark mode on desktop](./docs/assets/readme/charging-desktop-dark.png) |
+| ![Riviamigo charging dashboard in the Classic theme, light mode, on desktop](./docs/assets/readme/charging-desktop-classic-light.webp) | ![Riviamigo charging dashboard in the Classic theme, dark mode, on desktop](./docs/assets/readme/charging-desktop-classic-dark.webp) |
 
-### Mobile
+### RAD theme
 
-| Overview, light | Overview, dark | Charging, light | Charging, dark |
-| --- | --- | --- | --- |
-| <img src="./docs/assets/readme/overview-mobile-light.png" alt="Riviamigo overview in light mode on mobile" width="180" /> | <img src="./docs/assets/readme/overview-mobile-dark.png" alt="Riviamigo overview in dark mode on mobile" width="180" /> | <img src="./docs/assets/readme/charging-mobile-light.png" alt="Riviamigo charging dashboard in light mode on mobile" width="180" /> | <img src="./docs/assets/readme/charging-mobile-dark.png" alt="Riviamigo charging dashboard in dark mode on mobile" width="180" /> |
+**Overview**
+
+| Light | Dark |
+| --- | --- |
+| ![Riviamigo overview in the RAD theme, light mode, on desktop](./docs/assets/readme/overview-desktop-rad-light.webp) | ![Riviamigo overview in the RAD theme, dark mode, on desktop](./docs/assets/readme/overview-desktop-rad-dark.webp) |
+
+**Charging**
+
+| Light | Dark |
+| --- | --- |
+| ![Riviamigo charging dashboard in the RAD theme, light mode, on desktop](./docs/assets/readme/charging-desktop-rad-light.webp) | ![Riviamigo charging dashboard in the RAD theme, dark mode, on desktop](./docs/assets/readme/charging-desktop-rad-dark.webp) |
+
+### Phone
+
+| | Classic, light | Classic, dark | RAD, light | RAD, dark |
+| --- | --- | --- | --- | --- |
+| Overview | <img src="./docs/assets/readme/overview-mobile-classic-light.webp" alt="Riviamigo overview in the Classic theme, light mode, on a phone" width="180" /> | <img src="./docs/assets/readme/overview-mobile-classic-dark.webp" alt="Riviamigo overview in the Classic theme, dark mode, on a phone" width="180" /> | <img src="./docs/assets/readme/overview-mobile-rad-light.webp" alt="Riviamigo overview in the RAD theme, light mode, on a phone" width="180" /> | <img src="./docs/assets/readme/overview-mobile-rad-dark.webp" alt="Riviamigo overview in the RAD theme, dark mode, on a phone" width="180" /> |
+| Charging | <img src="./docs/assets/readme/charging-mobile-classic-light.webp" alt="Riviamigo charging dashboard in the Classic theme, light mode, on a phone" width="180" /> | <img src="./docs/assets/readme/charging-mobile-classic-dark.webp" alt="Riviamigo charging dashboard in the Classic theme, dark mode, on a phone" width="180" /> | <img src="./docs/assets/readme/charging-mobile-rad-light.webp" alt="Riviamigo charging dashboard in the RAD theme, light mode, on a phone" width="180" /> | <img src="./docs/assets/readme/charging-mobile-rad-dark.webp" alt="Riviamigo charging dashboard in the RAD theme, dark mode, on a phone" width="180" /> |
 
 ## Quick install
 
