@@ -50,6 +50,8 @@ export { AmbientOrbs } from './AmbientOrbs';
 export { AssistantWave } from './AssistantWave';
 export type { AssistantWaveProps } from './AssistantWave';
 
+export { RivianMark } from './RivianMark';
+
 export { MetricTabs } from './MetricTabs';
 export type { MetricTabsProps, MetricTab } from './MetricTabs';
 

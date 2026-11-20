@@ -12,6 +12,7 @@ import {
   type DriveWaveLayout,
   type DriveWaveState,
 } from './overviewDriveWaveLayout';
+import { resolveNavigationArrival, type NavigationArrival } from './overviewNavigation';
 import { useUnitPreferencesVersion } from './useOverviewStatData';
 
 const EASE = 'cubic-bezier(.2,.8,.2,1)';
@@ -50,18 +51,27 @@ export function createMapFrameSource(): MapFrameSource {
  *
  * A single line runs flat along the map's bottom edge and lifts into humps
  * around the values: one large hump for the speed with a smaller one beside it
- * for the gear, or a single low hump around "Parked". Everything under the
- * line is a tinted glass over a blur of the map, and the map stays sharp
- * everywhere above it.
+ * for the gear, or a single low hump around "Parked". While the vehicle is
+ * navigating, a hump to the right holds the arrival time and the time left.
+ * Everything under the line is a tinted glass over a blur of the map, and the
+ * map stays sharp everywhere above it.
  */
-export function OverviewDriveWave({ status, mapFrames }: { status: VehicleStatus | null | undefined; mapFrames?: MapFrameSource | undefined }) {
+export function OverviewDriveWave({ status, mapFrames, arrivalAt }: {
+  status: VehicleStatus | null | undefined;
+  mapFrames?: MapFrameSource | undefined;
+  /** When the vehicle expects to reach its destination, while it is navigating. */
+  arrivalAt?: string | null | undefined;
+}) {
   useUnitPreferencesVersion();
   const state = resolveDriveWaveState(status);
+  const now = useNowMs(arrivalAt ? ARRIVAL_TICK_MS : null);
+  const arrival = resolveNavigationArrival(arrivalAt, now);
   const gradientId = `drive-wave-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
 
   const [containerRef, containerBox] = useBoxSize<HTMLDivElement>();
   const [centerRef, centerBox] = useBoxSize<HTMLDivElement>();
   const [gearRef, gearBox] = useBoxSize<HTMLSpanElement>();
+  const [arrivalRef, arrivalBox] = useBoxSize<HTMLDivElement>();
   const width = containerBox.width;
   const narrow = width > 0 && width <= DRIVE_WAVE_NARROW_WIDTH;
   const glassRef = useRef<HTMLCanvasElement | null>(null);
@@ -89,13 +99,22 @@ export function OverviewDriveWave({ status, mapFrames }: { status: VehicleStatus
   if (!state) return null;
 
   const moving = state.kind === 'moving';
-  const showGear = moving && state.gear !== null;
   const reversing = moving && state.gear === 'R';
+  // The narrow column has room for two humps. The arrival time takes the
+  // gear's place there, except in reverse, where the gear is the warning.
+  const showArrival = arrival !== null && !(narrow && reversing);
+  const showGear = moving && state.gear !== null && !(narrow && showArrival);
   const layout = width > 0 && centerBox.width > 0
-    ? layoutDriveWave(width, centerBox, showGear && gearBox.width > 0 ? gearBox : null)
+    ? layoutDriveWave(
+      width,
+      centerBox,
+      showGear && gearBox.width > 0 ? gearBox : null,
+      showArrival && arrivalBox.width > 0 ? arrivalBox : null,
+    )
     : null;
   const speed = moving ? formatSpeed(state.speedMph) : null;
   const speedSize = narrow ? 22 : width >= 400 ? 30 : 26;
+  const arrivalSize = narrow ? 13 : 15;
 
   return (
     <div
@@ -108,7 +127,7 @@ export function OverviewDriveWave({ status, mapFrames }: { status: VehicleStatus
       className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
       style={{ height: DRIVE_WAVE_HEIGHT }}
     >
-      <span className="sr-only">{describe(state, speed)}</span>
+      <span className="sr-only">{describe(state, speed, arrival)}</span>
       {layout ? (
         <>
           <div
@@ -131,7 +150,7 @@ export function OverviewDriveWave({ status, mapFrames }: { status: VehicleStatus
             <div className="absolute inset-0" style={{ background: `color-mix(in srgb, var(--rm-bg-surface) ${hasGlass ? 68 : 82}%, transparent)` }} />
           </div>
           <svg aria-hidden="true" className="absolute inset-0 h-full w-full overflow-visible" viewBox={`0 0 ${width} ${DRIVE_WAVE_HEIGHT}`}>
-            <defs>{!reversing ? <WaveGradient id={gradientId} width={width} layout={layout} hasGear={showGear} /> : null}</defs>
+            <defs>{!reversing ? <WaveGradient id={gradientId} width={width} layout={layout} /> : null}</defs>
             <path
               d={layout.line}
               fill="none"
@@ -168,26 +187,49 @@ export function OverviewDriveWave({ status, mapFrames }: { status: VehicleStatus
             <span className="font-display text-[13px] font-semibold leading-none text-fg">Parked</span>
           )}
         </div>
+        <div
+          ref={arrivalRef}
+          data-testid="overview-drive-wave-arrival"
+          className={`absolute -translate-x-1/2 whitespace-nowrap ${animate ? 'transition-[left,opacity] duration-500 motion-reduce:transition-none' : ''} ${showArrival ? 'opacity-100' : 'opacity-0'}`}
+          style={{ left: layout?.arrival.x ?? 0, bottom: DRIVE_WAVE_TEXT_BOTTOM, transitionTimingFunction: EASE }}
+        >
+          {arrival ? (
+            <div className="flex flex-col items-center gap-0.5 font-display tabular-nums">
+              <span className="flex items-baseline gap-0.5 leading-none">
+                <span className="font-semibold leading-none tracking-tight text-fg" style={{ fontSize: arrivalSize }}>{arrival.time}</span>
+                {/* The narrow column has no room for the day period; the time left says which half of the day it is. */}
+                {arrival.period && !narrow ? <span className="text-[9px] font-semibold leading-none tracking-[0.04em] text-fg-secondary">{arrival.period}</span> : null}
+              </span>
+              <span className="text-[9px] font-semibold leading-none tracking-[0.08em] text-fg-secondary">{arrival.remaining}</span>
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );
 }
 
-/** Teal along the line, warming to gold over the center hump (the speed, or "Parked"). */
-function WaveGradient({ id, width, layout, hasGear }: { id: string; width: number; layout: DriveWaveLayout; hasGear: boolean }) {
+/** Teal along the flat line, warming to gold over the crest of every hump. */
+function WaveGradient({ id, width, layout }: { id: string; width: number; layout: DriveWaveLayout }) {
   const at = (x: number) => Math.min(1, Math.max(0, x / width));
-  const { center, gear } = layout;
+  const line = 'var(--rm-drive-wave-line)';
+  const crest = 'var(--rm-drive-wave-crest)';
   const blend = 'color-mix(in oklab, var(--rm-drive-wave-line), var(--rm-drive-wave-crest))';
-  const stops: Array<[number, string]> = [
-    [0, 'var(--rm-drive-wave-line)'],
-    [at(hasGear ? gear.x : center.a), 'var(--rm-drive-wave-line)'],
-    [at(center.a + center.s * 0.4), blend],
-    [at(center.a + center.s), 'var(--rm-drive-wave-crest)'],
-    [at(center.b - center.s), 'var(--rm-drive-wave-crest)'],
-    [at(center.b - center.s * 0.4), blend],
-    [at(center.b + center.s * 0.5), 'var(--rm-drive-wave-line)'],
-    [1, 'var(--rm-drive-wave-line)'],
-  ];
+  const stops: Array<[number, string]> = [[0, line]];
+  for (const hump of [layout.gear, layout.center, layout.arrival]) {
+    // A collapsed hump (no gear, no arrival time) has nothing to warm.
+    if (hump.b - hump.a <= 0) continue;
+    const shoulder = Math.min(hump.s, (hump.b - hump.a) / 2);
+    stops.push(
+      [at(hump.a), line],
+      [at(hump.a + shoulder * 0.4), blend],
+      [at(hump.a + shoulder), crest],
+      [at(hump.b - shoulder), crest],
+      [at(hump.b - shoulder * 0.4), blend],
+      [at(hump.b), line],
+    );
+  }
+  stops.push([1, line]);
   return (
     <linearGradient id={id} gradientUnits="userSpaceOnUse" x1={0} x2={width} y1={0} y2={0}>
       {stops.map(([offset, color], index) => <stop key={index} offset={offset} stopColor={color} />)}
@@ -226,11 +268,29 @@ function formatSpeed(speedMph: number | null): { value: string; unit: string } {
   return formatSpeedParts(speedMph) ?? { value: '–', unit: getUnitPreferences().speed_unit === 'kmh' ? 'km/h' : 'mph' };
 }
 
-function describe(state: DriveWaveState, speed: { value: string; unit: string } | null): string {
-  if (state.kind === 'parked') return 'Parked';
+function describe(state: DriveWaveState, speed: { value: string; unit: string } | null, arrival: NavigationArrival | null): string {
+  const arriving = arrival
+    ? `arriving ${[arrival.time, arrival.period].filter(Boolean).join(' ')}, ${arrival.remaining === 'Arriving' ? 'now' : `in ${arrival.remaining}`}`
+    : null;
+  if (state.kind === 'parked') return ['Parked', arriving].filter(Boolean).join(', ');
   const gear = state.gear === 'D' ? 'Drive' : state.gear === 'R' ? 'Reverse' : state.gear === 'N' ? 'Neutral' : null;
   const pace = speed && speed.value !== '–' ? `${speed.value} ${speed.unit}` : null;
-  return [gear, pace].filter(Boolean).join(', ') || 'Moving';
+  return [[gear, pace].filter(Boolean).join(', ') || 'Moving', arriving].filter(Boolean).join(', ');
+}
+
+/** How often the time left is recounted. */
+const ARRIVAL_TICK_MS = 20_000;
+
+/** The current time, refreshed on an interval while there is something counting down. */
+function useNowMs(intervalMs: number | null): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (intervalMs === null) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(timer);
+  }, [intervalMs]);
+  return now;
 }
 
 /**

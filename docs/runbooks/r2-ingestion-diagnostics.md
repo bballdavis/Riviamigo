@@ -29,7 +29,12 @@ A capture file contains:
   was reached;
 - `parallax_envelope`: every Parallax frame with its topic, source timestamp
   and age, decode outcome, whether it reached the canonical worker, the decoded
-  values, and the raw payload bytes (except GNSS, navigation, and network frames). Body
+  values, and the raw payload bytes (except GNSS, navigation, and network frames).
+  A navigation frame's decoded values are counts only: `navigation` is `route`
+  (with `stops`, `charging_stops`, `polyline_source`, `polyline_precision`, and
+  `polyline_points`), `progress`, `unchanged`, or `ended`. To confirm a vehicle
+  sends its route, run a capture while it is navigating and look for a
+  `navigation.navigation_service.trip_info` record with `navigation: route`. Body
   frames also list each closure or lock position with the field it maps to, or
   `null` when Riviamigo does not know the position;
 - `parallax_connection` and `legacy_connection`: subscribe, close, and

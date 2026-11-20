@@ -1,12 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Battery, Car, CheckCircle2, CircleAlert, Gauge, LocateFixed, Lock, Maximize2, Minimize2, Package, PackageOpen, TriangleAlert, Unlock } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Battery, Car, CheckCircle2, CircleAlert, Gauge, LocateFixed, Lock, Maximize2, Minimize2, Package, PackageOpen, Route, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
-import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useUpdateOverviewMapExpanded, useUpdateOverviewView, useUserPreferences, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
+import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useUpdateOverviewMapExpanded, useUpdateOverviewView, useUserPreferences, useVehicleNavigation, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
 import { formatMiles } from '@riviamigo/ui/lib/utils';
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI, formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
 import { AssistantWave, FrunkIcon, LiftgateIcon, Tooltip } from '@riviamigo/ui/primitives';
 import { isVehicleCharging } from '@riviamigo/types';
-import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
+import type { VehicleImages, VehicleNavigation, VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { isVehiclePluggedIn } from '../../dashboardVisibility';
@@ -17,6 +17,7 @@ import { useOverviewStatData, useUnitPreferencesVersion } from './useOverviewSta
 import { resolveOverviewMapOptions, resolveVehicleFacingDeg, type OverviewMapOptions, type OverviewView } from './overviewMap';
 import { OverviewLocationMap } from './OverviewLocationMap';
 import { createMapFrameSource, OverviewDriveWave } from './OverviewDriveWave';
+import { DRIVE_WAVE_HEIGHT } from './overviewDriveWaveLayout';
 
 type AnchorSet = {
   tire: { rl: string; fl: string; rr: string; fr: string };
@@ -75,11 +76,21 @@ const MAP_CANVAS_WIDTH = 'w-full @min-[34rem]/overview:w-[16.25rem] @min-[58rem]
 const MAP_CANVAS_STYLE = { '--rm-map-overlay-inset-x': 'calc((100% - 100cqw) / 2)' } as React.CSSProperties;
 const SOC_DEFAULT_COLUMNS = '@min-[34rem]/overview:grid-cols-[2.25rem_minmax(0,1fr)] @min-[58rem]/overview:grid-cols-[3.75rem_minmax(0,1fr)]';
 const SOC_RAIL_ONLY_COLUMNS = '@min-[34rem]/overview:grid-cols-[minmax(0,1fr)]';
+// One tab in the map panel's top-right corner. The group they sit in carries
+// the shared glass and the rounded inside corner.
+const MAP_TAB_BUTTON = 'inline-flex h-11 w-11 items-center justify-center text-accent transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent @min-[34rem]/overview:h-8 @min-[34rem]/overview:w-8';
+const MAP_TAB_IDLE = 'hover:bg-bg-elevated/85 focus-visible:bg-bg-elevated/85';
+// A tab that is switched on keeps its accent wash under the pointer, so its state never disappears on hover.
+const MAP_TAB_ON = 'bg-accent/25 hover:bg-accent/35 focus-visible:bg-accent/35';
+// Room a framed route keeps clear of the corner tabs (44px on phones) and the panel edges.
+const ROUTE_FIT_TOP = 52;
+const ROUTE_FIT_EDGE = 20;
 
 function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { defaultVehicleId } = useAuth();
   const vehicleId = ctx.vehicleId ?? defaultVehicleId;
   const { data: status } = useCurrentVehicleStatus(vehicleId);
+  const navigation = useVehicleNavigation(vehicleId);
   const { data: vehicles } = useVehicles();
   const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
   const statIds = resolveOverviewStatIds(instance.options?.stats);
@@ -107,6 +118,7 @@ function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ct
   return (
     <CurrentVehicleStatePanel
       status={status}
+      navigation={navigation}
       images={activeVehicle?.images}
       vehicleName={activeVehicle?.display_name}
       vehicleModel={activeVehicle?.model}
@@ -125,6 +137,7 @@ function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ct
 
 export function CurrentVehicleStatePanel({
   status,
+  navigation,
   images,
   vehicleName,
   vehicleModel,
@@ -139,6 +152,8 @@ export function CurrentVehicleStatePanel({
   onMapExpandedChange,
 }: {
   status: VehicleStatus | null | undefined;
+  /** The route the vehicle is navigating and its arrival time, while it has one. */
+  navigation?: VehicleNavigation | null | undefined;
   images?: VehicleImages | null | undefined;
   vehicleName?: string | undefined;
   vehicleModel?: string | undefined;
@@ -174,6 +189,14 @@ export function CurrentVehicleStatePanel({
   // Expansion only applies while the map is showing; the cluster always uses
   // the normal three-column layout, and the map reopens at the saved size.
   const mapExpanded = showMap && mapExpandedPreference;
+  // The map follows the vehicle unless the whole route is asked for. Each new
+  // trip starts out following again.
+  const navigating = navigation != null;
+  const [wholeRouteChosen, setWholeRouteChosen] = useState(false);
+  useEffect(() => {
+    if (!navigating) setWholeRouteChosen(false);
+  }, [navigating]);
+  const showWholeRoute = navigating && wholeRouteChosen;
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const resolvedOverhead = resolveVehicleArtwork(images, vehicleModel, 'overview');
   const baseOverheadLight = resolvedOverhead.light;
@@ -189,7 +212,18 @@ export function CurrentVehicleStatePanel({
   const overlaysLight = getDoorOverlayUrls(images?.all, openDoorStates, 'light');
   const overlaysDark = getDoorOverlayUrls(images?.all, openDoorStates, 'dark');
   const imageStageRef = useRef<HTMLDivElement | null>(null);
-  const [locationPanelRef, locationPanelHeight] = useObservedHeight();
+  const [locationPanelRef, locationPanel] = useObservedSize();
+  const [mapCanvasRef, mapCanvas] = useObservedSize();
+  // The canvas is wider than the panel that clips it, so a framed route has
+  // to stay clear of the hidden margins as well as the tabs and the wave.
+  // Settled, so the expand transition reframes once rather than every frame.
+  const clippedMargin = useSettledValue(Math.max(0, Math.round((mapCanvas.width - locationPanel.width) / 2)), 350);
+  const routeFitPadding = useMemo(() => ({
+    top: ROUTE_FIT_TOP,
+    right: ROUTE_FIT_EDGE + clippedMargin,
+    bottom: DRIVE_WAVE_HEIGHT + ROUTE_FIT_EDGE,
+    left: ROUTE_FIT_EDGE + clippedMargin,
+  }), [clippedMargin]);
   const [mapFrames] = useState(createMapFrameSource);
   const [imageStageHeight, setImageStageHeight] = useState(0);
   const [imageStageWidth, setImageStageWidth] = useState(0);
@@ -337,31 +371,52 @@ export function CurrentVehicleStatePanel({
           <div
             ref={locationPanelRef}
             data-testid="overview-location-panel"
-            className={`@container relative overflow-hidden rounded-xl border border-border bg-bg-surface @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-r-none @min-[34rem]/overview:border-r-0 ${mapExpanded ? 'min-h-96' : 'min-h-60'}`}
+            // `clip`, not `hidden`: the canvas is wider than this panel, and a
+            // hidden overflow can still be scrolled (find-in-page landing on a
+            // pin's name, a scroll-into-view), which would slide the map off-center.
+            className={`@container relative overflow-clip rounded-xl border border-border bg-bg-surface @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-r-none @min-[34rem]/overview:border-r-0 ${mapExpanded ? 'min-h-96' : 'min-h-60'}`}
           >
-            <button
-              type="button"
-              data-testid="overview-map-expand"
-              aria-label={mapExpanded ? 'Collapse map' : 'Expand map'}
-              aria-pressed={mapExpanded}
-              title={mapExpanded ? 'Collapse map' : 'Expand map'}
-              onClick={() => setMapExpanded(!mapExpanded)}
-              className="absolute right-0 top-0 z-20 inline-flex h-11 w-11 items-center justify-center rounded-bl-xl border-b border-l border-border/60 bg-bg-elevated/50 text-accent backdrop-blur-sm transition-colors hover:bg-bg-elevated/85 focus-visible:bg-bg-elevated/85 focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent @min-[34rem]/overview:h-8 @min-[34rem]/overview:w-8 @min-[34rem]/overview:rounded-bl-lg"
-            >
-              {mapExpanded ? <Minimize2 className="h-4 w-4" aria-hidden="true" /> : <Maximize2 className="h-4 w-4" aria-hidden="true" />}
-            </button>
-            <div data-testid="overview-map-canvas" className={`absolute inset-y-0 left-1/2 min-w-full -translate-x-1/2 ${MAP_CANVAS_WIDTH}`} style={MAP_CANVAS_STYLE}>
+            <div className="absolute right-0 top-0 z-20 inline-flex overflow-hidden rounded-bl-xl border-b border-l border-border/60 bg-bg-elevated/50 backdrop-blur-sm @min-[34rem]/overview:rounded-bl-lg">
+              {navigating ? (
+                <button
+                  type="button"
+                  data-testid="overview-map-route"
+                  aria-label="Show whole route"
+                  aria-pressed={showWholeRoute}
+                  title={showWholeRoute ? 'Follow vehicle' : 'Show whole route'}
+                  onClick={() => setWholeRouteChosen(!showWholeRoute)}
+                  className={`${MAP_TAB_BUTTON} border-r border-border/60 ${showWholeRoute ? MAP_TAB_ON : MAP_TAB_IDLE}`}
+                >
+                  <Route className="h-4 w-4" aria-hidden="true" />
+                </button>
+              ) : null}
+              <button
+                type="button"
+                data-testid="overview-map-expand"
+                aria-label={mapExpanded ? 'Collapse map' : 'Expand map'}
+                aria-pressed={mapExpanded}
+                title={mapExpanded ? 'Collapse map' : 'Expand map'}
+                onClick={() => setMapExpanded(!mapExpanded)}
+                className={`${MAP_TAB_BUTTON} ${MAP_TAB_IDLE}`}
+              >
+                {mapExpanded ? <Minimize2 className="h-4 w-4" aria-hidden="true" /> : <Maximize2 className="h-4 w-4" aria-hidden="true" />}
+              </button>
+            </div>
+            <div ref={mapCanvasRef} data-testid="overview-map-canvas" className={`absolute inset-y-0 left-1/2 min-w-full -translate-x-1/2 ${MAP_CANVAS_WIDTH}`} style={MAP_CANVAS_STYLE}>
               <OverviewLocationMap
                 latitude={status?.latitude}
                 longitude={status?.longitude}
                 headingDeg={resolveVehicleFacingDeg(status)}
                 artwork={resolvedOverhead}
                 options={mapOptions}
-                heightPx={locationPanelHeight - 2}
+                heightPx={locationPanel.height - 2}
                 onRenderFrame={mapFrames.publish}
+                route={navigation?.route}
+                showWholeRoute={showWholeRoute}
+                routeFitPadding={routeFitPadding}
               />
             </div>
-            <OverviewDriveWave status={status} mapFrames={mapFrames} />
+            <OverviewDriveWave status={status} mapFrames={mapFrames} arrivalAt={navigation?.destination_eta} />
           </div>
         ) : (
         <div data-testid="overview-stats" className="grid auto-rows-fr gap-2 @min-[34rem]/overview:gap-1.5 @min-[58rem]/overview:gap-2">
@@ -389,19 +444,32 @@ export function CurrentVehicleStatePanel({
   );
 }
 
-/** Tracks an element's border-box height through a callback ref, so it also works for elements that mount later. */
-function useObservedHeight(): [(element: HTMLDivElement | null) => void, number] {
+/** Tracks an element's border-box size through a callback ref, so it also works for elements that mount later. */
+function useObservedSize(): [(element: HTMLDivElement | null) => void, { width: number; height: number }] {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
-  const [height, setHeight] = useState(0);
+  const [size, setSize] = useState({ width: 0, height: 0 });
   useEffect(() => {
     if (!element || typeof ResizeObserver === 'undefined') return;
-    const update = () => setHeight(element.getBoundingClientRect().height);
+    const update = () => {
+      const { width, height } = element.getBoundingClientRect();
+      setSize((previous) => (previous.width === width && previous.height === height ? previous : { width, height }));
+    };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(element);
     return () => observer.disconnect();
   }, [element]);
-  return [setElement, height];
+  return [setElement, size];
+}
+
+/** A value once it has stopped changing for `delayMs`. The first value is used at once. */
+function useSettledValue<T>(value: T, delayMs: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return settled;
 }
 
 const OVERVIEW_VIEW_CHOICES: ReadonlyArray<{ value: OverviewView; label: string; icon: React.ComponentType<{ className?: string }> }> = [

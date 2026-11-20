@@ -83,7 +83,7 @@ export type {
   EfficiencyPillBarDatum,
 } from './EfficiencyPillBarChart';
 export { TripMapChart } from './TripMapChart';
-export type { TripMapChartProps, LatLng, TripMapRoute, MapStyleMode, BasemapConfig } from './TripMapChart';
+export type { TripMapChartProps, LatLng, TripMapRoute, TripMapMarker, TripMapCamera, TripMapFitPadding, MapStyleMode, BasemapConfig } from './TripMapChart';
 export { NEUTRAL_BASEMAP_CONFIG } from './TripMapChart';
 export { SpeedProfileChart } from './SpeedProfileChart';
 export type { SpeedProfileChartProps, SpeedPoint } from './SpeedProfileChart';

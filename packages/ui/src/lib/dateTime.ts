@@ -225,6 +225,28 @@ export function formatAppTime(
   }).format(date);
 }
 
+/**
+ * A clock time split into its digits and its day period, so the period
+ * ("PM") can be set smaller than the time. `period` is null on a 24-hour
+ * clock.
+ */
+export function formatAppTimeParts(value: Date | string | number): { time: string; period: string | null } | null {
+  const date = asDate(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: getAppTimezone(),
+  }).formatToParts(date);
+  const period = parts.find((part) => part.type === 'dayPeriod')?.value.trim() || null;
+  const time = parts
+    .filter((part) => part.type !== 'dayPeriod')
+    .map((part) => part.value)
+    .join('')
+    .trim();
+  return { time, period };
+}
+
 export function formatAppCalendarDate(value: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) return 'Invalid date';
