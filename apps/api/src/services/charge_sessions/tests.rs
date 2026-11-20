@@ -29,23 +29,106 @@ fn charge_summary_classifies_upstream_vehicle_identity() {
 }
 
 #[test]
-fn summary_attribution_admits_unidentified_only_when_allowed() {
+fn summary_attribution_never_admits_foreign_or_wall_charger_only() {
     let mut counts = SummaryAttributionCounts::default();
     assert!(counts.admit(SummaryVehicleMatch::Match, false));
     assert!(counts.admit(SummaryVehicleMatch::Match, true));
     assert!(!counts.admit(SummaryVehicleMatch::Foreign, false));
     assert!(!counts.admit(SummaryVehicleMatch::Foreign, true));
+    assert!(!counts.admit(SummaryVehicleMatch::WallChargerOnly, false));
+    assert!(!counts.admit(SummaryVehicleMatch::WallChargerOnly, true));
     assert!(!counts.admit(SummaryVehicleMatch::Unidentified, false));
     assert!(counts.admit(SummaryVehicleMatch::Unidentified, true));
     assert_eq!(
         counts,
         SummaryAttributionCounts {
             skipped_foreign: 2,
+            skipped_wall_charger: 2,
             skipped_unidentified: 1,
             accepted_unidentified: 1,
         }
     );
     assert!(SummaryAttributionCounts::default().is_empty());
+}
+
+fn wall_charger_summary(
+    vehicle_id: serde_json::Value,
+    data_sources: &[&str],
+) -> ChargeSessionSummaryPayload {
+    serde_json::from_value(serde_json::json!({
+        "transactionId": "txn-wallbox",
+        "startInstant": "2026-11-14T22:34:17.664Z",
+        "endInstant": "2026-11-15T01:15:03Z",
+        "chargerType": "WALLBOX",
+        "vendor": "Home",
+        "isHomeCharger": true,
+        "isPublic": false,
+        "totalEnergyKwh": 29.1529,
+        "vehicleId": vehicle_id,
+        "vehicleName": null,
+        "meta": {
+            "dataSources": data_sources,
+            "transactionIdGroupingKey": ",txn-wallbox"
+        }
+    }))
+    .unwrap()
+}
+
+/// Issue #122: a non-Rivian EV sharing a Rivian Wall Charger produces a
+/// summary carrying only the charger's transaction and no `vehicleId`.
+#[test]
+fn wall_charger_session_without_vehicle_is_never_attributed() {
+    let summary = wall_charger_summary(serde_json::Value::Null, &["TXN:txn-wallbox"]);
+    assert_eq!(
+        summary.vehicle_match("vehicle-a"),
+        SummaryVehicleMatch::WallChargerOnly
+    );
+    let mut counts = SummaryAttributionCounts::default();
+    // Not even for the user's only vehicle.
+    assert!(!counts.admit(summary.vehicle_match("vehicle-a"), true));
+    assert_eq!(counts.skipped_wall_charger, 1);
+}
+
+#[test]
+fn wall_charger_rule_spares_vehicle_reported_and_other_sessions() {
+    // A Rivian on the Wall Charger reports its own transaction and is named.
+    let named = wall_charger_summary(
+        serde_json::json!("vehicle-a"),
+        &["TXN:txn-wallbox", "VTXN:vtxn-1"],
+    );
+    assert_eq!(named.vehicle_match("vehicle-a"), SummaryVehicleMatch::Match);
+    assert_eq!(
+        named.vehicle_match("vehicle-b"),
+        SummaryVehicleMatch::Foreign
+    );
+    // A vehicle-side record keeps an unnamed Wall Charger session unidentified.
+    let vehicle_reported =
+        wall_charger_summary(serde_json::json!(" "), &["TXN:txn-wallbox", " VTXN:vtxn-1"]);
+    assert_eq!(
+        vehicle_reported.vehicle_match("vehicle-a"),
+        SummaryVehicleMatch::Unidentified
+    );
+    // Unnamed public sessions are not Wall Charger sessions.
+    let public: ChargeSessionSummaryPayload = serde_json::from_value(serde_json::json!({
+        "vehicleId": null,
+        "isPublic": true,
+        "meta": { "dataSources": ["CDRS:cdr-1", "TXN:txn-1"] }
+    }))
+    .unwrap();
+    assert_eq!(
+        public.vehicle_match("vehicle-a"),
+        SummaryVehicleMatch::Unidentified
+    );
+    // The charger type is compared without case or padding.
+    let lowercase: ChargeSessionSummaryPayload = serde_json::from_value(serde_json::json!({
+        "chargerType": " wallbox ",
+        "meta": { "dataSources": ["TXN:txn-1"] }
+    }))
+    .unwrap();
+    assert_eq!(
+        lowercase.vehicle_match("vehicle-a"),
+        SummaryVehicleMatch::WallChargerOnly
+    );
 }
 
 #[test]

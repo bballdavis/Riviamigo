@@ -68,7 +68,7 @@ Site-wide jobs cover every vehicle, so only admins see this section.
 
 Pick a vehicle from the list to see its jobs. Only the vehicle's owner or manager can start one; other members can see them.
 
-- **Charging history backfill** downloads the vehicle's full charging history from Rivian and merges it with the sessions Riviamigo recorded.
+- **Charging history backfill** downloads the vehicle's full charging history from Rivian and merges it with the sessions Riviamigo recorded. Charges Rivian assigns to another vehicle on your account are left out, and so are Rivian Wall Charger charges that no vehicle reported, such as a non-Rivian EV sharing the charger. Running the backfill also removes such sessions that earlier versions added from Rivian's history, along with any corrections you made to them. If an earlier version had folded one of this vehicle's own charges into such a session, the backfill adds that charge back from Rivian's history without those corrections. Sessions the vehicle recorded itself are never removed.
 - **Recover missed charging sessions** adds sessions that the vehicle's charging telemetry shows but Riviamigo never recorded, and closes a session left open when Riviamigo restarted during a charge. It only adds sessions where nothing is recorded and only fills in values an open session is missing: it never changes, merges, or removes a recorded session or your corrections. Charges that ended in the last two hours are left for the normal charging tracker.
 
 ## Vehicle images
