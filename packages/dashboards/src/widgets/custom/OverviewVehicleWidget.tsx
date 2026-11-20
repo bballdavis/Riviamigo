@@ -345,7 +345,7 @@ export function CurrentVehicleStatePanel({
           <VehicleLockBadge locks={locks} />
           <div className="absolute inset-1 z-10 flex items-center justify-center">
             {overheadArtworkAvailable ? (
-              <VehicleArtFrame source={apiOverheadFallback} fallbackSource={localOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth} endBadges={anchors.endBadges} unitTransform={unitTransform}>
+              <VehicleArtFrame artwork={overheadArtwork} fallbackSource={localOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth} endBadges={anchors.endBadges} unitTransform={unitTransform}>
                 <VehicleOverheadLayers base={baseOverheadLight ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} isR1tFallback={vehicleModel === 'R1T'} packagedArtCenterPct={packagedArtCenterPct} />
                 <VehicleOverheadLayers base={baseOverheadDark ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" isR1tFallback={vehicleModel === 'R1T'} packagedArtCenterPct={packagedArtCenterPct} />
                 <VehicleLabel className={anchors.tire.rl} value={tires.rl.value} tone={tires.rl.tone} targetTirePressurePsi={targetTirePressurePsi} />
@@ -716,7 +716,7 @@ function VehicleLockBadge({ locks }: { locks: VehicleLocks }) {
 }
 
 function VehicleArtFrame({
-  source,
+  artwork,
   fallbackSource,
   heightPx,
   widthPx,
@@ -724,7 +724,8 @@ function VehicleArtFrame({
   unitTransform,
   children,
 }: {
-  source: string | null | undefined;
+  /** The vehicle's own overhead picture, loaded once by the panel, which also picks the anchors from it. */
+  artwork: ReturnType<typeof useVehicleArtwork>;
   fallbackSource?: string | null | undefined;
   heightPx: number;
   widthPx: number;
@@ -734,7 +735,6 @@ function VehicleArtFrame({
   unitTransform: string;
   children: React.ReactNode;
 }) {
-  const artwork = useVehicleArtwork(source);
   const fallbackArtwork = useVehicleArtwork(fallbackSource);
   // Wait for the real artwork rather than flashing the packaged fallback; the
   // fallback is only for vehicles whose own artwork is missing or broken.

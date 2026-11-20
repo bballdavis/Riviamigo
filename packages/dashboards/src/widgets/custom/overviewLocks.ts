@@ -9,10 +9,13 @@ export interface VehicleLockPart {
 
 export type VehicleLockState = 'locked' | 'unlocked' | 'unknown';
 
+const DOOR_COUNT = 4;
+
 export interface VehicleLocks {
   /**
-   * Unlocked when any part is; locked when every part that has reported is
-   * locked; unknown until one reports.
+   * Unlocked when any part is. Locked when none is and all four doors have
+   * reported locked, so a vehicle that has so far reported only its frunk
+   * does not read as locked. Otherwise unknown.
    */
   state: VehicleLockState;
   parts: VehicleLockPart[];
@@ -51,10 +54,11 @@ export function resolveVehicleLocks(
   } else {
     parts.push(part('rear_gate', 'Rear gate', status?.closure_liftgate_locked ?? status?.closure_tailgate_locked));
   }
-  const reported = parts.filter((entry) => entry.locked !== null);
-  const state: VehicleLockState = reported.some((entry) => entry.locked === false)
+  // The doors come first in the list and every model has four.
+  const doors = parts.slice(0, DOOR_COUNT);
+  const state: VehicleLockState = parts.some((entry) => entry.locked === false)
     ? 'unlocked'
-    : reported.length > 0
+    : doors.every((entry) => entry.locked === true)
       ? 'locked'
       : 'unknown';
   return { state, parts };

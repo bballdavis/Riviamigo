@@ -581,7 +581,12 @@ function AssignedChartRuntime({
     fallbackChartId,
   });
 
-  React.useEffect(() => setDraftChartSettings(options.chartSettings), [options.chartSettings]);
+  // `options` is rebuilt on every render of the widget, so the draft follows
+  // the saved settings by value, as the built-in runtime above does.
+  const chartSettingsSignature = JSON.stringify(options.chartSettings);
+  React.useEffect(() => {
+    setDraftChartSettings(options.chartSettings);
+  }, [chartSettingsSignature]);
 
   const active = available.find((chart) => chart.slug === chartId) ?? available[0];
   const activeDefinition = active ? getChartDefinition(active.slug) : undefined;

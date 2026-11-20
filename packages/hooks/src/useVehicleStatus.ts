@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useMemo, useRef, useCallback, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { create } from 'zustand';
 import type { Vehicle, VehicleStatus } from '@riviamigo/types';
@@ -540,7 +540,13 @@ export function useCurrentVehicleStatus(vehicleId: string | null) {
     placeholderData: (previous) => previous,
   });
 
-  const data = mergeVehicleStatus(query.data ?? null, liveStatus ?? null);
+  // The merge builds a new object, so it is kept until one of its sources
+  // changes. Consumers key effects and memos on this object: one rebuilt on
+  // every render turns an effect that copies it into state into a render loop.
+  const data = useMemo(
+    () => mergeVehicleStatus(query.data ?? null, liveStatus ?? null),
+    [query.data, liveStatus],
+  );
 
   return { ...query, data };
 }

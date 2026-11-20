@@ -133,7 +133,7 @@ fn trip_info(waypoints: Vec<Wire>, legs: Vec<Wire>, overview: Option<&str>) -> V
 fn progress(
     next_stop: Option<DateTime<Utc>>,
     destination: Option<DateTime<Utc>>,
-) -> NavigationTripProgress {
+) -> NavigationTripArrival {
     let mut frame = Wire::default();
     if let Some(next_stop) = next_stop {
         frame = frame.message(1, time(next_stop));
@@ -142,7 +142,7 @@ fn progress(
         frame = frame.message(2, time(destination));
     }
     let frame = frame.int(3, 1).double(4, 5_400.0).double(5, 380.0);
-    NavigationTripProgress::decode(frame.0.as_slice()).unwrap()
+    NavigationTripArrival::decode(frame.0.as_slice()).unwrap()
 }
 
 /// The reference encoder for encoded polylines.
