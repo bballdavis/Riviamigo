@@ -1,18 +1,24 @@
+import { isVehicleCharging } from '@riviamigo/types';
 import type { VehicleStatus } from '@riviamigo/types';
+import { isVehiclePluggedIn } from '../../dashboardVisibility';
 
 /**
  * What the drive wave along the bottom of the overview map shows.
  *
  * Parked keeps it to a single word. Once the vehicle is in gear the line lifts
  * into a large hump around the speed and a smaller one around the gear letter.
+ * Parked on a charger, the gear's hump shows the charging state instead.
  * While the vehicle is navigating, a third hump to the right holds the arrival
  * time.
  */
 export type DriveWaveState =
-  | { kind: 'parked' }
+  | { kind: 'parked'; charging: DriveWaveCharging | null }
   | { kind: 'moving'; gear: DriveWaveGear | null; speedMph: number | null };
 
 export type DriveWaveGear = 'D' | 'R' | 'N';
+
+/** `plugged` is connected to a charger without power flowing. */
+export type DriveWaveCharging = 'charging' | 'plugged';
 
 /** Below this the vehicle is treated as stationary when the gear is unknown. */
 const MOVING_SPEED_MPH = 2;
@@ -26,14 +32,20 @@ const GEAR_LETTERS: Record<string, DriveWaveGear> = {
 export function resolveDriveWaveState(status: VehicleStatus | null | undefined): DriveWaveState | null {
   if (!status) return null;
   const speedMph = typeof status.speed_mph === 'number' && Number.isFinite(status.speed_mph) ? Math.max(0, status.speed_mph) : null;
-  if (status.power_state === 'sleep') return { kind: 'parked' };
+  const parked: DriveWaveState = { kind: 'parked', charging: resolveCharging(status) };
+  if (status.power_state === 'sleep') return parked;
   const rawGear = status.gear_status?.trim().toLowerCase();
-  if (rawGear === 'park') return { kind: 'parked' };
+  if (rawGear === 'park') return parked;
   const gear = rawGear ? GEAR_LETTERS[rawGear] ?? null : null;
   if (gear) return { kind: 'moving', gear, speedMph };
   // No usable gear report: fall back to speed so a moving vehicle still reads as moving.
   if (speedMph !== null && speedMph >= MOVING_SPEED_MPH) return { kind: 'moving', gear: null, speedMph };
-  return { kind: 'parked' };
+  return parked;
+}
+
+function resolveCharging(status: VehicleStatus): DriveWaveCharging | null {
+  if (isVehicleCharging(status)) return 'charging';
+  return isVehiclePluggedIn(status) ? 'plugged' : null;
 }
 
 // ---- geometry ----
@@ -84,7 +96,8 @@ export interface DriveWaveLayout {
  * since the shoulders are still above the text's top corners where they begin
  * to fall. The speed hump stays centered when it can; when space is short the
  * shoulders tighten before anything moves into the flat lead-in at either end.
- * The gear sits to the left of the speed and the arrival time to its right.
+ * The gear (or the charging state) sits to the left of the center value and
+ * the arrival time to its right.
  */
 export function layoutDriveWave(
   width: number,

@@ -127,6 +127,19 @@ describe('layoutDriveWave with an arrival time', () => {
     expect(layout.center.a).toBeGreaterThanOrEqual(12);
   });
 
+  it('keeps a wide charging hump off the corner and the center value as near the midline as it allows', () => {
+    // "Parked" beside a charging hump: a bolt over its label is wider than a gear letter.
+    const parked = { width: 46, height: 13 };
+    const charging = { width: 50, height: 31 };
+    const layout = layoutDriveWave(307, parked, charging);
+    expect(layout.gear.a).toBeGreaterThanOrEqual(12);
+    expect(layout.gear.b).toBeCloseTo(layout.center.a);
+    expect(layout.center.b).toBeLessThanOrEqual(307 - 12);
+    // The crest clears the bolt and its label.
+    expect(layout.gear.crest).toBeLessThan(DRIVE_WAVE_HEIGHT - charging.height);
+    expect(layout.gear.crest).toBeLessThan(layout.center.crest);
+  });
+
   it('keeps one command list with or without the arrival hump so the line can animate', () => {
     const commands = (path: string) => path.replace(/[-\d.,\s]/g, '');
     const withArrival = layoutDriveWave(440, speed, gear, arrival);

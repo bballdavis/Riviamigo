@@ -46,7 +46,9 @@ the place of the stat rows. The battery and the vehicle image stay.
   of travel, so after you back into a space Riviamigo turns that reading around
   to show the way the vehicle actually faces.
 - **The wave** along the bottom of the map shows the gear and speed while the
-  vehicle is moving, or **Parked**.
+  vehicle is moving, or **Parked**. Parked on a charger, a bolt beside
+  **Parked** shows the charging state: grey over **Plugged in** while no power
+  is flowing, lit over **Charging** while it is.
 - **Expand** (the arrows in the map's corner) gives the map more room. The
   battery shrinks to its charge bar and the map takes the space. On a phone it
   makes the map taller instead. Press it again to go back.

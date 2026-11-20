@@ -263,6 +263,16 @@ describe('drive wave arrival time', () => {
     expect(arrival).toBeEmptyDOMElement();
   });
 
+  it('shows charging, Parked, and the arrival time together at a charging stop along the way', () => {
+    vehicleStatus.current = { ...vehicleStatus.current, gear_status: 'park', speed_mph: 0, charger_state: 'Charging', power_state: 'charging' };
+    renderOverview();
+    setNavigation(NAVIGATION);
+    const wave = screen.getByTestId('overview-drive-wave');
+    expect(wave).toHaveTextContent('Parked, charging, arriving 4:12 PM, in 23 min');
+    expect(within(wave).getByTestId('overview-drive-wave-charging')).toHaveAttribute('data-charging-state', 'charging');
+    expect(screen.getByTestId('overview-drive-wave-arrival')).toHaveClass('opacity-100');
+  });
+
   it('keeps the arrival time beside Parked at a stop along the way', () => {
     vehicleStatus.current = { ...vehicleStatus.current, gear_status: 'park', speed_mph: 0 };
     renderOverview();
