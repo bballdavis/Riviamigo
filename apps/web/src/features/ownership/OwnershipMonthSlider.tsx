@@ -1,7 +1,7 @@
 /** The month slider on the chart's time axis: a native range input drawn as the Rivian mark. */
 import { COST_TIMELINE_PLOT_INSET } from '@riviamigo/ui/charts';
+import { RivianMark } from '@riviamigo/ui/primitives';
 import type { Ledger } from './model';
-import { RivianMark } from './RivianMark';
 
 /**
  * The month slider, laid on the chart's time axis: its track spans exactly

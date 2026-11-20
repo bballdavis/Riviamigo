@@ -1,7 +1,9 @@
 import React from 'react';
 
 /**
- * The Rivian compass mark, used as the Ownership month slider's handle.
+ * The Rivian compass mark. It takes the current text color: the Ownership
+ * month slider uses it as its handle and the Overview map as its destination
+ * pin.
  * Path from theSVG's Rivian logo (MIT, https://github.com/glincker/thesvg),
  * cropped to the mark. Rivian is a trademark of Rivian Automotive, LLC.
  */

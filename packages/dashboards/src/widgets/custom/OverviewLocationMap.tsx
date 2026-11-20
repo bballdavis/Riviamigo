@@ -1,10 +1,12 @@
-import React, { useMemo } from 'react';
-import { Car, MapPinOff } from 'lucide-react';
+import React, { useEffect, useMemo, useRef } from 'react';
+import { Car, MapPin, MapPinOff, Zap } from 'lucide-react';
 import { useAuth, useBasemapConfig, useUserPreferences, useVehicleArtwork } from '@riviamigo/hooks';
-import { TripMapChart, type MapStyleMode } from '@riviamigo/ui/charts';
+import { TripMapChart, type MapStyleMode, type TripMapFitPadding, type TripMapMarker, type TripMapRoute } from '@riviamigo/ui/charts';
 import { useDocumentTheme } from '@riviamigo/ui/hooks';
-import { AssistantWave } from '@riviamigo/ui/primitives';
+import { AssistantWave, RivianMark } from '@riviamigo/ui/primitives';
+import type { VehicleNavigationRoute, VehicleNavigationStop } from '@riviamigo/types';
 import type { OverviewMapOptions } from './overviewMap';
+import { decodeNavigationLine, splitRouteAtVehicle, type RoutePoint } from './overviewNavigation';
 
 /** Overhead artwork already resolved for the overview frame (API light/dark, then packaged fallback). */
 export interface OverviewMarkerArtwork {
@@ -13,11 +15,20 @@ export interface OverviewMarkerArtwork {
   fallback?: string | null | undefined;
 }
 
+/** The route line, in the drive wave's own teal. */
+const ROUTE_COLOR_VAR = '--rm-drive-wave-line';
+/** Closest a whole-route view zooms, so a nearly finished route still shows its surroundings. */
+const ROUTE_FIT_MAX_ZOOM = 15;
+
 /**
  * Current-location map for the Vehicle Overview. It reuses the shared trip
  * map renderer, basemap proxy, and the user's map style unless the widget
  * overrides the style or light/dark mode. The vehicle is marked with its own
  * overhead artwork, turned to its compass heading.
+ *
+ * While the vehicle is navigating, its planned route is drawn ahead of it
+ * with a pin at each stop. The map keeps following the vehicle unless
+ * `showWholeRoute` asks for the route to be framed instead.
  */
 export function OverviewLocationMap({
   latitude,
@@ -27,6 +38,9 @@ export function OverviewLocationMap({
   options,
   heightPx,
   onRenderFrame,
+  route,
+  showWholeRoute = false,
+  routeFitPadding,
 }: {
   latitude: number | null | undefined;
   longitude: number | null | undefined;
@@ -36,6 +50,12 @@ export function OverviewLocationMap({
   heightPx: number;
   /** Receives the map canvas after each frame, for overlays that blur what is beneath them. */
   onRenderFrame?: ((canvas: HTMLCanvasElement) => void) | undefined;
+  /** The route the vehicle is navigating, if any. */
+  route?: VehicleNavigationRoute | null | undefined;
+  /** Frame the whole route instead of following the vehicle. */
+  showWholeRoute?: boolean | undefined;
+  /** Space the whole-route view keeps clear for overlays drawn over the map. */
+  routeFitPadding?: TripMapFitPadding | undefined;
 }) {
   const isDark = useDocumentTheme();
   const accessToken = useAuth((state) => state.accessToken);
@@ -61,6 +81,16 @@ export function OverviewLocationMap({
   // packaged fallback art.
   const markerLoading = markerArtwork.isLoading;
   const markerSrc = markerLoading ? null : markerArtwork.src ?? fallbackMarkerArtwork.src ?? null;
+  const routes = useRouteLines(route ?? null, focusPoint);
+  const stopMarkers = useMemo<TripMapMarker[]>(
+    () => (route?.stops ?? []).map((stop, index, stops) => ({
+      // Stable across reroutes, so a pin moves instead of being replaced.
+      id: `navigation-stop-${index}`,
+      point: { lat: stop.latitude, lng: stop.longitude },
+      content: <RouteStopMarker stop={stop} destination={index === stops.length - 1} />,
+    })),
+    [route],
+  );
 
   if (!focusPoint) {
     return (
@@ -75,6 +105,12 @@ export function OverviewLocationMap({
     <div data-testid="overview-location-map" className="h-full w-full">
       <TripMapChart
         track={[]}
+        routes={routes}
+        markers={stopMarkers}
+        camera={showWholeRoute ? 'fit-routes' : 'follow-focus'}
+        fitKey={route?.id}
+        fitPadding={routeFitPadding}
+        fitMaxZoom={ROUTE_FIT_MAX_ZOOM}
         focusPoint={focusPoint}
         focusMarker={<VehicleMapMarker src={markerSrc} loading={markerLoading} />}
         // The loading pill stays level; only the vehicle turns to its heading.
@@ -93,6 +129,76 @@ export function OverviewLocationMap({
         onBasemapRetry={() => void basemap.refetch()}
       />
     </div>
+  );
+}
+
+/**
+ * The route as map lines: the part already driven, dimmed, and the part
+ * ahead. The line is decoded once per route and re-split as the vehicle
+ * moves along it.
+ */
+function useRouteLines(route: VehicleNavigationRoute | null, vehicle: RoutePoint | null): TripMapRoute[] {
+  const line = useMemo(() => (route ? decodeNavigationLine(route) : []), [route]);
+  // The segment the vehicle was last on, so a route that doubles back on
+  // itself is not cut at the return leg.
+  const progress = useRef<{ line: RoutePoint[]; index: number }>({ line, index: 0 });
+  const split = useMemo(
+    () => splitRouteAtVehicle(line, vehicle, progress.current.line === line ? progress.current.index : 0),
+    [line, vehicle],
+  );
+  // Recorded once the split is on screen, so a render React discards cannot move it.
+  useEffect(() => {
+    progress.current = { line, index: split.index };
+  }, [line, split]);
+  return useMemo<TripMapRoute[]>(() => [
+    // The whole-route view frames what is left to drive, not where the vehicle has been.
+    { id: 'navigation-traveled', track: split.traveled, colorVar: ROUTE_COLOR_VAR, width: 4, opacity: 0.35, fit: false },
+    { id: 'navigation-ahead', track: split.ahead, colorVar: ROUTE_COLOR_VAR, width: 5, opacity: 0.95 },
+  ].filter((route) => route.track.length > 1), [split]);
+}
+
+/** A halo in the surface color, so a pin reads on any basemap. */
+const PIN_HALO_FILTER = 'drop-shadow(0 0 1.5px var(--rm-bg-surface)) drop-shadow(0 0 1.5px var(--rm-bg-surface))';
+
+/**
+ * A stop along the route. The destination is the Rivian mark in the drive
+ * wave's gold with its name beneath; a charging stop is a bolt and any other
+ * stop a pin, both in the route's teal.
+ */
+function RouteStopMarker({ stop, destination }: { stop: VehicleNavigationStop; destination: boolean }) {
+  const label = stop.name ?? (destination ? 'Destination' : stop.kind === 'charging' ? 'Charging stop' : 'Stop');
+  if (destination) {
+    return (
+      <span
+        data-testid="overview-map-destination"
+        role="img"
+        aria-label={`Destination: ${label}`}
+        title={label}
+        className="relative flex items-center justify-center"
+        style={{ color: 'var(--rm-drive-wave-crest)' }}
+      >
+        <span style={{ filter: PIN_HALO_FILTER }}><RivianMark className="h-6 w-6" /></span>
+        {stop.name ? (
+          <span className="absolute left-1/2 top-full mt-0.5 max-w-28 -translate-x-1/2 truncate rounded bg-bg-surface/85 px-1 py-px text-[10px] font-medium leading-tight text-fg">
+            {stop.name}
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+  const Icon = stop.kind === 'charging' ? Zap : MapPin;
+  return (
+    <span
+      data-testid="overview-map-stop"
+      data-stop-kind={stop.kind}
+      role="img"
+      aria-label={stop.kind === 'charging' ? `Charging stop: ${label}` : `Stop: ${label}`}
+      title={label}
+      className="flex h-5 w-5 items-center justify-center rounded-full border-2 bg-bg-surface"
+      style={{ borderColor: 'var(--rm-drive-wave-line)', color: 'var(--rm-drive-wave-line)' }}
+    >
+      <Icon className="h-3 w-3" aria-hidden="true" />
+    </span>
   );
 }
 

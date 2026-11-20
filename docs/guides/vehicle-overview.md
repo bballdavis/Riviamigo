@@ -54,6 +54,30 @@ the place of the stat rows. The battery and the vehicle image stay.
 Your choice of cluster or map, and whether the map is expanded, are saved to
 your account. The Overview opens the way you left it, on any device.
 
+### Navigation
+
+While the vehicle is navigating to a destination, the map also shows where it
+is going:
+
+- **The route** the vehicle planned is drawn ahead of it, with the part
+  already driven dimmed.
+- **The destination** is marked with a gold Rivian mark and its name. A
+  charging stop the vehicle added along the way is marked with a bolt, and any
+  other stop with a pin.
+- **The wave** gains the arrival time, with the time left beneath it. In the
+  narrow three-column layout the arrival time takes the gear's place.
+- **Whole route** (the route button beside Expand) zooms out to show what is
+  left of the trip: the vehicle, the remaining stops, and the destination.
+  Press it again to go back to following the vehicle. The button is only there
+  while the vehicle is navigating, and each new trip starts out following the
+  vehicle.
+
+The route appears when the vehicle reports one and disappears when navigation
+ends. It comes from the vehicle's own navigation, so it needs
+[extended vehicle telemetry](./extended-vehicle-telemetry.md), and nothing is
+shown for a drive without a destination. The route, stops, and arrival time
+are shown live only and are never stored; see [Privacy](../privacy.md).
+
 The map needs a reported location. Until the vehicle has reported one, the
 map says **No location reported yet**. The street map behind the marker comes
 from the **Map basemap** connection in **Settings > External Connections**.

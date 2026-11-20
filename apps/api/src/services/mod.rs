@@ -18,6 +18,7 @@ pub mod demo_seed;
 pub mod external_connections;
 pub mod geofences;
 pub mod ingestion_capture;
+pub mod live_navigation;
 pub mod maintenance_jobs;
 pub mod nominatim;
 pub mod oidc;

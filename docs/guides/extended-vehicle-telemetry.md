@@ -93,11 +93,24 @@ canonical connection, including **Unavailable**, which the vehicle reports
 while driving.
 
 While the vehicle is navigating, its navigation progress carries a live
-position, speed, and heading about every five seconds. Riviamigo uses only
-that position fix, which makes trip paths much denser; the destination,
-route, and arrival times in the same message are never decoded or stored. A
-position more than five minutes older than the message is ignored, because
-the vehicle keeps re-sending its last progress after navigation ends.
+position, speed, and heading about every five seconds. That position fix joins
+the trip path, which makes it much denser. A position more than five minutes
+older than the message is ignored, because the vehicle keeps re-sending its
+last progress after navigation ends.
+
+The same subscription carries the route the vehicle's own planner computed:
+the remaining stops with their names, the route line, and the arrival time.
+Riviamigo shows these live on the
+[Vehicle Overview map](./vehicle-overview.md#navigation) and does not store
+them. They are held in the server's memory and sent only over the live
+connection to signed-in members of that vehicle. A route stops being shown
+once the vehicle has not confirmed it for 15 minutes, and comes back if the
+vehicle confirms it again. It is discarded when navigation ends, when a new
+route replaces it, or when the server restarts. The route, the stop names, and
+the arrival time are never written to the database, telemetry history, trips,
+backups, logs, or an ingestion capture. A capture describes a navigation
+message with counts only, such as the number of stops and the number of points
+on the line.
 
 Parallax charging status decides whether charging power is flowing. Live
 charging power (about every five seconds), the energy-breakdown power, and the

@@ -3812,6 +3812,112 @@ async fn verified_enrollment_rejects_unlisted_ids_and_preserves_existing_authori
     server.abort();
 }
 
+type LiveSocket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// The next JSON text frame of the given `type` on a live socket.
+async fn next_live_frame(socket: &mut LiveSocket, kind: &str) -> Value {
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            match socket.next().await {
+                Some(Ok(Message::Text(text))) => {
+                    let frame: Value = serde_json::from_str(text.as_str()).unwrap();
+                    if frame["type"] == kind {
+                        break frame;
+                    }
+                }
+                Some(Ok(Message::Ping(bytes))) => {
+                    let _ = socket.send(Message::Pong(bytes)).await;
+                }
+                Some(Ok(_)) => {}
+                other => panic!("unexpected stream end: {other:?}"),
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("no {kind} frame arrived"))
+}
+
+#[tokio::test]
+async fn live_socket_relays_navigation_held_in_memory_for_its_own_vehicle() {
+    use riviamigo_api::services::live_navigation::{
+        self, LiveNavigation, NavigationRoute, NavigationStop, NavigationStopKind,
+    };
+    use tokio_tungstenite::{connect_async, tungstenite::client::IntoClientRequest};
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "live-navigation@example.com").await;
+    let user: Uuid = sqlx::query_scalar(
+        "SELECT id FROM riviamigo.users WHERE email='live-navigation@example.com'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    let vehicle = insert_vehicle(&app.pool, user, "navigation-fixture", "Navigating").await;
+    let state = app.state.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            routes::build_router(state).into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let navigation = |route_id: &str, eta_minute: i64| LiveNavigation {
+        route: Arc::new(NavigationRoute {
+            id: route_id.into(),
+            polylines: vec!["_p~iF~ps|U_ulLnnqC".into()],
+            polyline_precision: 5,
+            stops: vec![NavigationStop {
+                kind: NavigationStopKind::Place,
+                name: Some("Trailhead".into()),
+                latitude: 40.7,
+                longitude: -120.95,
+                arrival_at: None,
+            }],
+        }),
+        destination_eta: Some(chrono::Utc::now() + chrono::Duration::minutes(eta_minute)),
+        alive_at: chrono::Utc::now(),
+    };
+
+    // A route already under way is sent to a socket that connects mid-drive.
+    live_navigation::publish(vehicle, Some(navigation("route-a", 20)));
+    let mut request = format!("ws://{address}/v1/vehicles/live?vehicle_id={vehicle}")
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        "sec-websocket-protocol",
+        format!("bearer, bearer.{token}").parse().unwrap(),
+    );
+    let (mut socket, _) = connect_async(request).await.unwrap();
+    let first = next_live_frame(&mut socket, "navigation").await;
+    assert!(first.get("data").is_none());
+    assert_eq!(first["navigation"]["active"], true);
+    assert_eq!(first["navigation"]["route"]["id"], "route-a");
+    assert_eq!(
+        first["navigation"]["route"]["stops"][0]["name"],
+        "Trailhead"
+    );
+
+    // Another vehicle's route is never sent on this socket: the next frame is
+    // this vehicle's new arrival time, without the route it already has.
+    live_navigation::publish(Uuid::new_v4(), Some(navigation("route-other", 5)));
+    live_navigation::publish(vehicle, Some(navigation("route-a", 25)));
+    let moved = next_live_frame(&mut socket, "navigation").await;
+    assert_eq!(moved["navigation"]["route_id"], "route-a");
+    assert!(moved["navigation"].get("route").is_none());
+
+    // The end of navigation clears it.
+    live_navigation::publish(vehicle, None);
+    let ended = next_live_frame(&mut socket, "navigation").await;
+    assert_eq!(ended["navigation"], json!({ "active": false }));
+    drop(socket);
+    server.abort();
+}
+
 #[tokio::test]
 async fn live_sockets_enforce_quota_expiry_and_membership_revocation() {
     use futures::{SinkExt, StreamExt};
@@ -3860,12 +3966,12 @@ async fn live_sockets_enforce_quota_expiry_and_membership_revocation() {
         }
         other => panic!("unexpected error: {other}"),
     }
-    // Let the initial authorization check complete, then remove membership.
-    tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+    // A new socket is first told the vehicle is not navigating. The keepalive
+    // after it means the initial authorization check has completed; then
+    // remove membership.
+    let first = next_live_frame(&mut socket, "navigation").await;
+    assert_eq!(first["navigation"], json!({ "active": false }));
+    next_live_frame(&mut socket, "keepalive").await;
     sqlx::query("DELETE FROM riviamigo.vehicle_memberships WHERE vehicle_id=$1 AND user_id=$2")
         .bind(vehicle)
         .bind(user)
