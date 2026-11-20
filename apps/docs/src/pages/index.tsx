@@ -38,8 +38,8 @@ const quickLinks = [
 export default function Home(): ReactElement {
   const darkLogo = useBaseUrl('/logo-lockup-dark.png');
   const lightLogo = useBaseUrl('/logo-lockup-light.png');
-  const darkOverview = useBaseUrl('/overview-desktop-dark.png');
-  const lightOverview = useBaseUrl('/overview-desktop-light.png');
+  const darkOverview = useBaseUrl('/overview-desktop-classic-dark.webp');
+  const lightOverview = useBaseUrl('/overview-desktop-classic-light.webp');
 
   return (
     <Layout
