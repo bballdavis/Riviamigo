@@ -18,12 +18,14 @@ import { resolveOverviewMapOptions, resolveVehicleFacingDeg, type OverviewMapOpt
 import { OverviewLocationMap } from './OverviewLocationMap';
 import { createMapFrameSource, OverviewDriveWave } from './OverviewDriveWave';
 import { DRIVE_WAVE_HEIGHT } from './overviewDriveWaveLayout';
+import { resolveVehicleLocks, type VehicleLocks } from './overviewLocks';
+import { endBadgeMidpointPct, LARGE_END_BADGE_REM, R2_PICTURE_END_BADGES, resolveVehicleUnitTransform, SHARED_END_BADGES, SMALL_END_BADGE_REM, type VehicleEndBadges } from './overviewVehicleLayout';
 
 type AnchorSet = {
   tire: { rl: string; fl: string; rr: string; fr: string };
   doorLocks: { rl: string; fl: string; rr: string; fr: string };
-  frunkLock: string;
-  rearGateLock: string;
+  /** The rear gate and frunk badges. They also decide where the whole unit sits in its panel. */
+  endBadges: VehicleEndBadges;
   sideBinLeftCover?: string;
   sideBinRightCover?: string;
 };
@@ -35,18 +37,22 @@ const R1T_OVERVIEW_FALLBACK_CROSS_AXIS_SCALE = 509 / 446;
 const SHARED_OVERVIEW_ANCHORS: AnchorSet = {
   tire: { rl: 'left-[27%] top-[0%]', fl: 'left-[82%] top-[0%]', rr: 'left-[27%] top-[102%]', fr: 'left-[82%] top-[102%]' },
   doorLocks: { rl: 'left-[43%] top-[-0%]', fl: 'left-[60%] top-[-0%]', rr: 'left-[43%] top-[102%]', fr: 'left-[60%] top-[102%]' },
-  rearGateLock: 'left-[4%] top-1/2',
-  frunkLock: 'left-[102%] top-1/2',
+  endBadges: SHARED_END_BADGES,
 };
 
 // Rivian's real R2 overview render has more empty canvas behind the tailgate
-// than the R1 renders, so the shared 4% rear-gate anchor leaves a visibly wider
+// than the R1 renders, so the shared rear-gate anchor leaves a visibly wider
 // gap than the frunk anchor has at the front. Pull it in to match; the other
 // anchors already sit on their parts. Not used for the packaged fallback art.
 const R2_REAL_ARTWORK_ANCHORS: AnchorSet = {
   ...SHARED_OVERVIEW_ANCHORS,
-  rearGateLock: 'left-[8.8%] top-1/2',
+  endBadges: R2_PICTURE_END_BADGES,
 };
+
+// The end badges read their horizontal position from the frame, which sets
+// these properties from the anchor set in use.
+const REAR_BADGE_ANCHOR = 'left-[var(--overview-rear-badge-x)] top-1/2';
+const FRONT_BADGE_ANCHOR = 'left-[var(--overview-front-badge-x)] top-1/2';
 
 const OVERVIEW_ANCHORS: Record<string, AnchorSet> = {
   default: SHARED_OVERVIEW_ANCHORS,
@@ -204,10 +210,22 @@ export function CurrentVehicleStatePanel({
   const apiOverheadFallback = baseOverheadLight ?? baseOverheadDark;
   const localOverheadFallback = resolvedOverhead.fallback;
   const overheadArtworkAvailable = Boolean(apiOverheadFallback ?? localOverheadFallback);
-  const isR2RealArtwork = (vehicleModel === 'R2' || vehicleModel === 'R2S') && !isDemoVehicle && Boolean(apiOverheadFallback);
+  // Anchors follow the picture that is actually drawn: the R2 set fits only
+  // Rivian's own R2 picture, not the packaged one shown while that picture is
+  // missing or being restored.
+  const overheadArtwork = useVehicleArtwork(apiOverheadFallback);
+  const isR2RealArtwork = (vehicleModel === 'R2' || vehicleModel === 'R2S') && !isDemoVehicle && Boolean(overheadArtwork.src);
   const anchors = isR2RealArtwork
     ? R2_REAL_ARTWORK_ANCHORS
     : OVERVIEW_ANCHORS[vehicleModel ?? ''] ?? SHARED_OVERVIEW_ANCHORS;
+  // The R1T's rear badge is the small tailgate padlock; every other end badge is the large closure badge.
+  const unitTransform = resolveVehicleUnitTransform(
+    anchors.endBadges,
+    vehicleModel === 'R1T' ? SMALL_END_BADGE_REM : LARGE_END_BADGE_REM,
+    LARGE_END_BADGE_REM,
+  );
+  const packagedArtCenterPct = endBadgeMidpointPct(anchors.endBadges);
+  const locks = resolveVehicleLocks(status, vehicleModel);
   const openDoorStates = getOpenDoorStates(status);
   const overlaysLight = getDoorOverlayUrls(images?.all, openDoorStates, 'light');
   const overlaysDark = getDoorOverlayUrls(images?.all, openDoorStates, 'dark');
@@ -227,12 +245,6 @@ export function CurrentVehicleStatePanel({
   const [mapFrames] = useState(createMapFrameSource);
   const [imageStageHeight, setImageStageHeight] = useState(0);
   const [imageStageWidth, setImageStageWidth] = useState(0);
-  const locksKnown = [
-    status?.door_front_left_locked,
-    status?.door_front_right_locked,
-    status?.door_rear_left_locked,
-    status?.door_rear_right_locked,
-  ].some((value) => value !== null && value !== undefined);
   const tires = {
     fl: makeTireDisplay(status?.tire_fl_psi, status?.tire_fl_status, targetTirePressurePsi),
     fr: makeTireDisplay(status?.tire_fr_psi, status?.tire_fr_status, targetTirePressurePsi),
@@ -330,15 +342,12 @@ export function CurrentVehicleStatePanel({
           </div>
         </div>
         <div ref={imageStageRef} data-testid="overview-image-stage" className="relative min-h-60 overflow-hidden rounded-2xl border border-border bg-bg-surface/70 p-1 @min-[34rem]/overview:min-h-0 @min-[58rem]/overview:min-h-60">
-          <div className="absolute right-3 top-3 z-30 inline-flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 px-2 py-1 text-[11px] text-fg-tertiary shadow-sm backdrop-blur">
-            {status?.doors_locked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3 text-accent" />}
-            {locksKnown ? (status?.doors_locked ? 'Locked' : 'Unlocked') : 'Locks pending'}
-          </div>
+          <VehicleLockBadge locks={locks} />
           <div className="absolute inset-1 z-10 flex items-center justify-center">
             {overheadArtworkAvailable ? (
-              <VehicleArtFrame source={apiOverheadFallback} fallbackSource={localOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth}>
-                <VehicleOverheadLayers base={baseOverheadLight ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} isR1tFallback={vehicleModel === 'R1T'} />
-                <VehicleOverheadLayers base={baseOverheadDark ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" isR1tFallback={vehicleModel === 'R1T'} />
+              <VehicleArtFrame source={apiOverheadFallback} fallbackSource={localOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth} endBadges={anchors.endBadges} unitTransform={unitTransform}>
+                <VehicleOverheadLayers base={baseOverheadLight ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} isR1tFallback={vehicleModel === 'R1T'} packagedArtCenterPct={packagedArtCenterPct} />
+                <VehicleOverheadLayers base={baseOverheadDark ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" isR1tFallback={vehicleModel === 'R1T'} packagedArtCenterPct={packagedArtCenterPct} />
                 <VehicleLabel className={anchors.tire.rl} value={tires.rl.value} tone={tires.rl.tone} targetTirePressurePsi={targetTirePressurePsi} />
                 <VehicleLabel className={anchors.tire.fl} value={tires.fl.value} tone={tires.fl.tone} targetTirePressurePsi={targetTirePressurePsi} />
                 <VehicleLabel className={anchors.tire.rr} value={tires.rr.value} tone={tires.rr.tone} targetTirePressurePsi={targetTirePressurePsi} />
@@ -348,11 +357,11 @@ export function CurrentVehicleStatePanel({
                 <LockLabel className={anchors.doorLocks.rr} locked={status?.door_rear_right_locked} title="Rear right door lock" />
                 <LockLabel className={anchors.doorLocks.fr} locked={status?.door_front_right_locked} title="Front right door lock" />
                 {vehicleModel === 'R1T' ? (
-                  <LockLabel className={anchors.rearGateLock} locked={rearGateLock} title={rearGateLockTitle} />
+                  <LockLabel className={REAR_BADGE_ANCHOR} locked={rearGateLock} title={rearGateLockTitle} />
                 ) : (
-                  <ClosureLabel className={anchors.rearGateLock} closed={status?.closure_liftgate_closed} locked={status?.closure_liftgate_locked} title="Liftgate" icon={LiftgateIcon} description="The rear hatch that opens upward for cargo access." />
+                  <ClosureLabel className={REAR_BADGE_ANCHOR} closed={status?.closure_liftgate_closed} locked={status?.closure_liftgate_locked} title="Liftgate" icon={LiftgateIcon} description="The rear hatch that opens upward for cargo access." />
                 )}
-                <ClosureLabel className={anchors.frunkLock} closed={status?.closure_frunk_closed} locked={status?.closure_frunk_locked} title="Frunk" icon={FrunkIcon} description="The front trunk under the hood." />
+                <ClosureLabel className={FRONT_BADGE_ANCHOR} closed={status?.closure_frunk_closed} locked={status?.closure_frunk_locked} title="Frunk" icon={FrunkIcon} description="The front trunk under the hood." />
                 {vehicleModel === 'R1T' && anchors.sideBinLeftCover && (
                   <ClosureLabel className={anchors.sideBinLeftCover} closed={status?.side_bin_left_closed} title="Left side bin cover" />
                 )}
@@ -564,6 +573,7 @@ function LockLabel({ className, locked, title }: { className: string; locked: bo
   const known = locked !== null && locked !== undefined;
   const unlocked = known && locked === false;
   const Icon = unlocked ? Unlock : Lock;
+  // `h-6 w-6` is SMALL_END_BADGE_REM: the unit is centered by this width when the badge sits at an end.
   return (
     <span
       title={title}
@@ -587,6 +597,7 @@ function ClosureLabel({ className, closed, locked, title, icon, description }: {
   const Icon = icon ?? (open ? PackageOpen : Package);
   const stateLabel = known ? (open ? 'open' : 'closed') : 'unavailable';
   // Custom closure glyphs carry more detail than the stock icons, so they get a larger badge.
+  // `h-9 w-9` is LARGE_END_BADGE_REM: the unit is centered by this width when the badge sits at an end.
   const size = icon ? 'h-9 w-9' : 'h-6 w-6';
   const tone = open
     ? icon ? 'border-status-danger bg-status-danger text-fg-on-accent' : 'border-accent/60 bg-bg-elevated/90 text-accent'
@@ -646,17 +657,81 @@ function ClosureLabel({ className, closed, locked, title, icon, description }: {
   );
 }
 
+const LOCK_STATE_COPY: Record<VehicleLocks['state'], { headline: string; badge: string; dot: string }> = {
+  locked: { headline: 'Locked', badge: 'border-status-positive/60 bg-bg-elevated/90 text-status-positive', dot: 'bg-status-positive' },
+  unlocked: { headline: 'Unlocked', badge: 'border-accent/60 bg-bg-elevated/90 text-accent', dot: 'bg-accent' },
+  unknown: { headline: 'Waiting for lock state', badge: 'border-border bg-bg-elevated/60 text-fg-tertiary', dot: 'bg-fg-tertiary' },
+};
+
+/**
+ * Whether the vehicle is locked, as one icon in the panel's corner. Its
+ * tooltip lists every lock the model has, so the icon needs no caption.
+ */
+function VehicleLockBadge({ locks }: { locks: VehicleLocks }) {
+  const copy = LOCK_STATE_COPY[locks.state];
+  const Icon = locks.state === 'unlocked' ? Unlock : Lock;
+  return (
+    <Tooltip
+      side="bottom"
+      align="end"
+      className="absolute right-3 top-3 z-30"
+      contentClassName="w-56 rounded-xl border-border/80 bg-bg-elevated/95 px-3 py-3 text-xs shadow-2xl backdrop-blur"
+      content={(
+        <div className="grid gap-2" data-testid="overview-lock-tooltip">
+          <div className="flex items-center gap-2 font-medium text-fg">
+            <span className={`inline-block h-2 w-2 rounded-full ${copy.dot}`} aria-hidden="true" />
+            {copy.headline}
+          </div>
+          <div className="grid gap-1">
+            {locks.parts.map((part) => (
+              <div key={part.id} data-testid="overview-lock-row" data-locked={part.locked ?? 'unknown'} className="flex items-center justify-between gap-3">
+                <span className="min-w-0 truncate text-fg-secondary">{part.label}</span>
+                {part.locked === null ? (
+                  <span className="shrink-0 text-fg-tertiary">No report</span>
+                ) : (
+                  <span className={`inline-flex shrink-0 items-center gap-1 ${part.locked ? 'text-fg-tertiary' : 'font-medium text-accent'}`}>
+                    {part.locked ? <Lock className="h-3 w-3" aria-hidden="true" /> : <Unlock className="h-3 w-3" aria-hidden="true" />}
+                    {part.locked ? 'Locked' : 'Unlocked'}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    >
+      {/* The pseudo-element widens the touch target to 44px without growing the badge. */}
+      <span
+        data-testid="overview-lock-badge"
+        data-lock-state={locks.state}
+        role="img"
+        aria-label={`Vehicle locks: ${copy.headline.toLowerCase()}`}
+        tabIndex={0}
+        className={`relative inline-flex h-7 w-7 items-center justify-center rounded-lg border shadow-sm backdrop-blur before:absolute before:-inset-2 before:content-[''] focus:outline-none focus-visible:ring-1 focus-visible:ring-accent ${copy.badge}`}
+      >
+        <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+      </span>
+    </Tooltip>
+  );
+}
+
 function VehicleArtFrame({
   source,
   fallbackSource,
   heightPx,
   widthPx,
+  endBadges,
+  unitTransform,
   children,
 }: {
   source: string | null | undefined;
   fallbackSource?: string | null | undefined;
   heightPx: number;
   widthPx: number;
+  /** Where the rear gate and frunk badges sit along the frame. */
+  endBadges: VehicleEndBadges;
+  /** Slides the frame so the unit, measured across those two badges, is centered in its panel. */
+  unitTransform: string;
   children: React.ReactNode;
 }) {
   const artwork = useVehicleArtwork(source);
@@ -689,9 +764,11 @@ function VehicleArtFrame({
         containerType: 'inline-size',
         height: frameHeight,
         width: frameWidth,
-        transform: 'translateX(-5%)',
+        transform: unitTransform,
         '--vehicle-frame-height': `${frameHeight}px`,
         '--vehicle-frame-width': `${frameWidth}px`,
+        '--overview-rear-badge-x': `${endBadges.rearPct}%`,
+        '--overview-front-badge-x': `${endBadges.frontPct}%`,
       } as React.CSSProperties}
     >
       {loading ? (
@@ -710,6 +787,7 @@ function VehicleOverheadLayers({
   darkClassName,
   vehicleName,
   isR1tFallback,
+  packagedArtCenterPct,
 }: {
   base: string | null | undefined;
   fallbackBase?: string | null | undefined;
@@ -717,6 +795,8 @@ function VehicleOverheadLayers({
   darkClassName: string;
   vehicleName?: string | undefined;
   isR1tFallback: boolean;
+  /** The frame position, in percent of its width, midway between the two end badges. */
+  packagedArtCenterPct: number;
 }) {
   const imageStyle = {
     height: 'var(--vehicle-frame-width)',
@@ -727,11 +807,11 @@ function VehicleOverheadLayers({
   const fallbackProps = {
     style: {
       ...imageStyle,
-      // The shared rear/front lock anchors sit at 4% and 102%. Center the
-      // packaged fallback at their midpoint whenever it is displayed, for real
-      // and demo vehicles alike, leaving Rivian artwork and all annotations on
-      // their established coordinates.
-      left: '53%',
+      // The packaged pictures are drawn centered on their canvas, so center
+      // them midway between the rear and front badges whenever one is
+      // displayed, for real and demo vehicles alike. Rivian artwork and all
+      // annotations stay on their established coordinates.
+      left: `${packagedArtCenterPct}%`,
       transform: isR1tFallback
         ? `translate(-50%, -50%) rotate(90deg) scaleX(${R1T_OVERVIEW_FALLBACK_CROSS_AXIS_SCALE})`
         : imageStyle.transform,

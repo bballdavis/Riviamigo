@@ -23,9 +23,11 @@ The cluster view has three areas, left to right:
   time to full appears here too.
 - **Vehicle.** An overhead image of your vehicle with a pressure reading at
   each tire, outlined in green, amber, or red by tire health. Lock icons sit on
-  each door, the frunk, and the rear gate, plus the side bins on an R1T, and
-  the badge in the corner says whether the vehicle is locked. With Rivian's own
-  vehicle artwork, open doors are drawn open on the image.
+  each door, the frunk, and the rear gate, plus the side bins on an R1T. The
+  padlock in the corner shows whether the vehicle is locked: green and closed
+  when every lock is locked, open when any is not. Hover over it, or tap it on
+  a phone, to see each lock by name. With Rivian's own vehicle artwork, open
+  doors are drawn open on the image.
 - **Stat rows.** Five current readings, such as driver mode, altitude, cabin
   temperature, speed, and software update status. You choose which five; see
   [Choose the stat rows](#choose-the-stat-rows).
