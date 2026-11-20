@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const overviewMocks = vi.hoisted(() => ({
@@ -124,8 +124,8 @@ const expectedAnchors = {
       fl: 'left-[60%] top-[-0%]',
       rr: 'left-[43%] top-[102%]',
       fr: 'left-[60%] top-[102%]',
-      rearGate: 'left-[4%] top-1/2',
-      frunk: 'left-[102%] top-1/2',
+      rearGate: '4%',
+      frunk: '102%',
       sideBinLeft: 'left-[36%] top-[24%]',
       sideBinRight: 'left-[36%] top-[76%]',
     },
@@ -143,13 +143,13 @@ const expectedAnchors = {
       rr: 'left-[43%] top-[102%]',
       fr: 'left-[60%] top-[102%]',
       // Real R2 artwork has more canvas behind the rear gate.
-      rearGate: 'left-[8.8%] top-1/2',
-      frunk: 'left-[102%] top-1/2',
+      rearGate: '8.8%',
+      frunk: '102%',
     },
   },
 } as const;
 
-function renderOverviewForModel(model: 'R1T' | 'R2') {
+function renderOverviewForModel(model: 'R1T' | 'R1S' | 'R2') {
   overviewMocks.model = model;
   render(
     <DashboardRenderer
@@ -198,9 +198,13 @@ describe('overview vehicle anchors', () => {
     expect(screen.getByTitle('Front left door lock')).toHaveClass(anchors.locks.fl);
     expect(screen.getByTitle('Rear right door lock')).toHaveClass(anchors.locks.rr);
     expect(screen.getByTitle('Front right door lock')).toHaveClass(anchors.locks.fr);
+    // The two end badges read their position from the frame, which also centers the unit by them.
+    const frame = screen.getByTestId('overview-vehicle-art-frame');
+    expect(frame.style.getPropertyValue('--overview-rear-badge-x')).toBe(anchors.locks.rearGate);
+    expect(frame.style.getPropertyValue('--overview-front-badge-x')).toBe(anchors.locks.frunk);
     const rearGateTitle = model === 'R1T' ? 'Tailgate lock' : 'Liftgate: closed';
-    expect((model === 'R1T' ? screen.getByTitle(rearGateTitle) : screen.getByLabelText(rearGateTitle).closest('[class*="left-["]'))).toHaveClass(anchors.locks.rearGate);
-    expect(screen.getByLabelText('Frunk: open').closest('[class*="left-["]')).toHaveClass(anchors.locks.frunk);
+    expect((model === 'R1T' ? screen.getByTitle(rearGateTitle) : screen.getByLabelText(rearGateTitle).closest('[class*="left-["]'))).toHaveClass('left-[var(--overview-rear-badge-x)]', 'top-1/2');
+    expect(screen.getByLabelText('Frunk: open').closest('[class*="left-["]')).toHaveClass('left-[var(--overview-front-badge-x)]', 'top-1/2');
     expect(screen.queryByTitle('Tonneau lock')).not.toBeInTheDocument();
     expect(screen.getByTitle('Rear left door lock')).toHaveClass('text-status-positive');
     expect(screen.getByTitle('Front left door lock')).toHaveClass('text-status-positive');
@@ -251,7 +255,8 @@ describe('overview vehicle anchors', () => {
     overviewMocks.isDemo = true;
     renderOverviewForModel(model);
     const anchors = expectedAnchors[model];
-    expect(screen.getByTestId('overview-vehicle-art-frame')).toHaveStyle({ transform: 'translateX(-5%)' });
+    // A demo vehicle never takes the real-R2 anchors, so its end badges stay at 4% and 102%.
+    expect(screen.getByTestId('overview-vehicle-art-frame').style.getPropertyValue('--overview-rear-badge-x')).toBe('4%');
     for (const image of Array.from(document.querySelectorAll('img[src^="/rivian/overhead"]'))) {
       expect(image).toHaveStyle({ left: '50%' });
     }
@@ -290,9 +295,67 @@ describe('overview vehicle anchors', () => {
     }
   });
 
-  it('keeps the real-vehicle overview frame offset unchanged', () => {
+  it.each([
+    // The end badges sit at 4% and 102% of the frame: their midpoint is 3% right of its middle.
+    ['R1S', true, false, 'translateX(-3%)'],
+    // The R1T's rear badge is the 24px padlock against the 36px frunk badge: 3px more.
+    ['R1T', true, false, 'translateX(calc(-3% - 0.1875rem))'],
+    // Rivian's own R2 picture moves the rear badge in to 8.8%.
+    ['R2', true, false, 'translateX(-5.4%)'],
+    ['R2', true, true, 'translateX(-3%)'],
+    // Packaged pictures use the shared badge positions.
+    ['R1S', false, false, 'translateX(-3%)'],
+    ['R1T', false, false, 'translateX(calc(-3% - 0.1875rem))'],
+    ['R2', false, false, 'translateX(-3%)'],
+  ] as const)('centers the %s unit across its end badges (api art=%s, demo=%s)', (model, hasApiArtwork, isDemo, transform) => {
+    overviewMocks.hasApiArtwork = hasApiArtwork;
+    overviewMocks.isDemo = isDemo;
+    renderOverviewForModel(model);
+    expect(screen.getByTestId('overview-vehicle-art-frame').style.transform).toBe(transform);
+  });
+
+  it('shows the lock state as an icon and lists every lock of the model in its tooltip', () => {
     renderOverviewForModel('R1T');
-    expect(screen.getByTestId('overview-vehicle-art-frame')).toHaveStyle({ transform: 'translateX(-5%)' });
+    const badge = screen.getByTestId('overview-lock-badge');
+    // The left side bin is unlocked, so the truck is not locked even though its doors are.
+    expect(badge).toHaveAttribute('data-lock-state', 'unlocked');
+    expect(badge).toHaveAccessibleName('Vehicle locks: unlocked');
+    expect(badge).toHaveTextContent('');
+    expect(badge).toHaveClass('text-accent');
+    expect(screen.queryByTestId('overview-lock-tooltip')).not.toBeInTheDocument();
+
+    fireEvent.focus(badge);
+    const tooltip = screen.getByTestId('overview-lock-tooltip');
+    expect(within(tooltip).getAllByTestId('overview-lock-row').map((row) => row.textContent)).toEqual([
+      'Front left doorLocked',
+      'Front right doorLocked',
+      'Rear left doorLocked',
+      'Rear right doorLocked',
+      'FrunkLocked',
+      'TailgateLocked',
+      'Tonneau coverLocked',
+      'Left side binUnlocked',
+      'Right side binLocked',
+    ]);
+    expect(tooltip).toHaveTextContent(/^Unlocked/);
+    expect(badge).toHaveAttribute('aria-describedby');
+  });
+
+  it('ignores locks the model does not have', () => {
+    // The fixture reports an unlocked side bin, which only an R1T has.
+    renderOverviewForModel('R2');
+    const badge = screen.getByTestId('overview-lock-badge');
+    expect(badge).toHaveAttribute('data-lock-state', 'locked');
+    expect(badge).toHaveClass('text-status-positive');
+    fireEvent.focus(badge);
+    expect(within(screen.getByTestId('overview-lock-tooltip')).getAllByTestId('overview-lock-row').map((row) => row.textContent)).toEqual([
+      'Front left doorLocked',
+      'Front right doorLocked',
+      'Rear left doorLocked',
+      'Rear right doorLocked',
+      'FrunkLocked',
+      'LiftgateLocked',
+    ]);
   });
 
   it('scales only the packaged R1T overview fallback across its short axis', () => {
