@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useMemo, useRef, useCallback, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { create } from 'zustand';
 import type { Vehicle, VehicleStatus } from '@riviamigo/types';
@@ -7,6 +7,7 @@ import { api } from './api';
 import { useAuthReady } from './useAuthState';
 import { useAuth } from './useAuth';
 import { queryKeys } from './queryKeys';
+import { applyNavigationMessage, clearVehicleNavigation, expireNavigationAfterDisconnect } from './useVehicleNavigation';
 
 interface LiveStatusStore {
   status: Record<string, VehicleStatus>;
@@ -219,7 +220,11 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
           | VehicleStatus
           | { type?: string; ts?: string; data?: Partial<VehicleStatus> };
 
-        if ('data' in message && message.data) {
+        if (applyNavigationMessage(vehicleId, message)) {
+          // Live navigation has its own store: it is not vehicle status, so it
+          // must not mark the vehicle online or move its last-updated time.
+          traceFrame(vehicleId, 'ignored', null);
+        } else if ('data' in message && message.data) {
           // Partial update from the server. Strip null/undefined values so they
           // don't overwrite previously-good sensor readings — the server sends
           // explicit nulls for fields absent in this particular message batch.
@@ -260,12 +265,15 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
       socketOpenedAtRef.current = null;
       lastMessageAtRef.current = null;
       setConnected(vehicleId, false);
+      // Nothing confirms a route while the socket is down.
+      expireNavigationAfterDisconnect(vehicleId);
       clientLog.debug('live', 'connection closed', { vehicle_id: vehicleId, code: event?.code });
       if (event?.code === 4403) {
         clientLog.warn('live', 'vehicle access removed', { vehicle_id: vehicleId });
         shouldReconnectRef.current = false;
         removedVehicleRef.current = vehicleId;
         useLiveStatusStore.getState().removeVehicle(vehicleId);
+        clearVehicleNavigation(vehicleId);
         const auth = useAuth.getState();
         if (auth.activeVehicleId === vehicleId) auth.setActiveVehicleId(null);
         if (auth.defaultVehicleId === vehicleId) auth.setDefaultVehicleId(null);
@@ -498,6 +506,8 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
       clearInterval(livenessIntervalRef.current);
       livenessIntervalRef.current = undefined;
       cleanupSocket();
+      // This closes the socket without its close handler running.
+      if (vehicleId) expireNavigationAfterDisconnect(vehicleId);
     };
   }, [
     accessToken,
@@ -530,7 +540,13 @@ export function useCurrentVehicleStatus(vehicleId: string | null) {
     placeholderData: (previous) => previous,
   });
 
-  const data = mergeVehicleStatus(query.data ?? null, liveStatus ?? null);
+  // The merge builds a new object, so it is kept until one of its sources
+  // changes. Consumers key effects and memos on this object: one rebuilt on
+  // every render turns an effect that copies it into state into a render loop.
+  const data = useMemo(
+    () => mergeVehicleStatus(query.data ?? null, liveStatus ?? null),
+    [query.data, liveStatus],
+  );
 
   return { ...query, data };
 }

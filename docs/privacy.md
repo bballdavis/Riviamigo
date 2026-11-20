@@ -8,6 +8,8 @@ Vehicle telemetry, account records, dashboards, and application data are stored 
 
 Your host, reverse proxy, identity provider, and backup provider have their own logs and retention policies. Configure them to match your privacy expectations.
 
+While a vehicle is navigating, its planned route, stop names, and arrival time are shown live on the Vehicle Overview map to signed-in members of that vehicle. This is the one kind of vehicle data Riviamigo does not keep: it is held in the server's memory and sent over the live connection, and is never written to the database, telemetry history, trips, backups, or logs. It is gone when navigation ends or the server restarts. The path the vehicle actually drives is still recorded as a trip, as for any drive.
+
 Vehicle ingestion diagnostics are off by default and can be enabled by an owner or manager for one hour at a time. They record field coverage, timestamps, and decode outcomes for troubleshooting; they do not record raw upstream payloads, credentials, or precise coordinates.
 
 ## Requests to other services

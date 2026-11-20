@@ -21,6 +21,7 @@
     "./lib/vehicleTires": "./src/lib/vehicleTires.ts",
     "./lib/brandAssets": "./src/lib/brandAssets.ts",
     "./lib/color": "./src/lib/color.ts",
+    "./lib/polyline": "./src/lib/polyline.ts",
     "./lib/clientDiagnostics": "./src/lib/clientDiagnostics.ts"
   },
   "scripts": {

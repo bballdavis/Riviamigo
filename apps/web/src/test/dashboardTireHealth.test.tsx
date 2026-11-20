@@ -120,17 +120,22 @@ describe('dashboard tire health', () => {
       last_updated: '2026-06-03T12:00:00Z',
       closure_liftgate_closed: true,
     };
-    const rearGate = () => screen.getByLabelText('Liftgate: closed').closest('[class*="left-["]');
+    // The rear gate badge reads its position from the frame, which is centered by the same number.
+    const rearGateLeft = () => {
+      expect(screen.getByLabelText('Liftgate: closed').closest('[class*="left-["]')?.className).toContain('left-[var(--overview-rear-badge-x)]');
+      const frame = screen.getByTestId('overview-vehicle-art-frame');
+      return { left: frame.style.getPropertyValue('--overview-rear-badge-x'), transform: frame.style.transform };
+    };
 
     const r2 = renderPanel(<CurrentVehicleStatePanel images={images} vehicleModel="R2" status={status} />);
-    expect(rearGate()?.className).toContain('left-[8.8%]');
+    expect(rearGateLeft()).toEqual({ left: '8.8%', transform: 'translateX(-5.4%)' });
     r2.unmount();
 
     const r1s = renderPanel(<CurrentVehicleStatePanel images={images} vehicleModel="R1S" status={status} />);
-    expect(rearGate()?.className).toContain('left-[4%]');
+    expect(rearGateLeft()).toEqual({ left: '4%', transform: 'translateX(-3%)' });
     r1s.unmount();
 
     renderPanel(<CurrentVehicleStatePanel images={images} vehicleModel="R2" isDemoVehicle status={status} />);
-    expect(rearGate()?.className).toContain('left-[4%]');
+    expect(rearGateLeft()).toEqual({ left: '4%', transform: 'translateX(-3%)' });
   });
 });

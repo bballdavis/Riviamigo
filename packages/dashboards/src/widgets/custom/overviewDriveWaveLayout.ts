@@ -1,16 +1,24 @@
+import { isVehicleCharging } from '@riviamigo/types';
 import type { VehicleStatus } from '@riviamigo/types';
+import { isVehiclePluggedIn } from '../../dashboardVisibility';
 
 /**
  * What the drive wave along the bottom of the overview map shows.
  *
  * Parked keeps it to a single word. Once the vehicle is in gear the line lifts
  * into a large hump around the speed and a smaller one around the gear letter.
+ * Parked on a charger, the gear's hump shows the charging state instead.
+ * While the vehicle is navigating, a third hump to the right holds the arrival
+ * time.
  */
 export type DriveWaveState =
-  | { kind: 'parked' }
+  | { kind: 'parked'; charging: DriveWaveCharging | null }
   | { kind: 'moving'; gear: DriveWaveGear | null; speedMph: number | null };
 
 export type DriveWaveGear = 'D' | 'R' | 'N';
+
+/** `plugged` is connected to a charger without power flowing. */
+export type DriveWaveCharging = 'charging' | 'plugged';
 
 /** Below this the vehicle is treated as stationary when the gear is unknown. */
 const MOVING_SPEED_MPH = 2;
@@ -24,14 +32,20 @@ const GEAR_LETTERS: Record<string, DriveWaveGear> = {
 export function resolveDriveWaveState(status: VehicleStatus | null | undefined): DriveWaveState | null {
   if (!status) return null;
   const speedMph = typeof status.speed_mph === 'number' && Number.isFinite(status.speed_mph) ? Math.max(0, status.speed_mph) : null;
-  if (status.power_state === 'sleep') return { kind: 'parked' };
+  const parked: DriveWaveState = { kind: 'parked', charging: resolveCharging(status) };
+  if (status.power_state === 'sleep') return parked;
   const rawGear = status.gear_status?.trim().toLowerCase();
-  if (rawGear === 'park') return { kind: 'parked' };
+  if (rawGear === 'park') return parked;
   const gear = rawGear ? GEAR_LETTERS[rawGear] ?? null : null;
   if (gear) return { kind: 'moving', gear, speedMph };
   // No usable gear report: fall back to speed so a moving vehicle still reads as moving.
   if (speedMph !== null && speedMph >= MOVING_SPEED_MPH) return { kind: 'moving', gear: null, speedMph };
-  return { kind: 'parked' };
+  return parked;
+}
+
+function resolveCharging(status: VehicleStatus): DriveWaveCharging | null {
+  if (isVehicleCharging(status)) return 'charging';
+  return isVehiclePluggedIn(status) ? 'plugged' : null;
 }
 
 // ---- geometry ----
@@ -67,6 +81,8 @@ export interface DriveWaveHump {
 export interface DriveWaveLayout {
   gear: DriveWaveHump;
   center: DriveWaveHump;
+  /** Arrival time, to the right of the center value. */
+  arrival: DriveWaveHump;
   /** Stroke path: flat along the bottom edge, overrunning both sides so the panel clips it. */
   line: string;
   /** Closed shape of everything under the line, for the glass fill. */
@@ -80,8 +96,15 @@ export interface DriveWaveLayout {
  * since the shoulders are still above the text's top corners where they begin
  * to fall. The speed hump stays centered when it can; when space is short the
  * shoulders tighten before anything moves into the flat lead-in at either end.
+ * The gear (or the charging state) sits to the left of the center value and
+ * the arrival time to its right.
  */
-export function layoutDriveWave(width: number, center: DriveWaveBox, gear: DriveWaveBox | null): DriveWaveLayout {
+export function layoutDriveWave(
+  width: number,
+  center: DriveWaveBox,
+  gear: DriveWaveBox | null,
+  arrival: DriveWaveBox | null = null,
+): DriveWaveLayout {
   const narrow = width <= DRIVE_WAVE_NARROW_WIDTH;
   const shoulderPerRise = narrow ? 0.95 : 1.25;
   const edge = CORNER + (narrow ? 4 : 14);
@@ -95,7 +118,10 @@ export function layoutDriveWave(width: number, center: DriveWaveBox, gear: Drive
 
   const c = shape(center);
   const g = gear ? shape(gear) : null;
-  const parts = g ? [g, c] : [c];
+  const r = arrival ? shape(arrival) : null;
+  const parts = [c];
+  if (g) parts.unshift(g);
+  if (r) parts.push(r);
   const flatSum = parts.reduce((total, part) => total + part.flat, 0);
   const shoulderSum = parts.reduce((total, part) => total + 2 * part.s, 0);
   const available = width - 2 * edge;
@@ -108,8 +134,9 @@ export function layoutDriveWave(width: number, center: DriveWaveBox, gear: Drive
   }
 
   const leftOf = g ? g.span : 0;
+  const rightOf = r ? r.span : 0;
   let cx = width / 2;
-  if (cx + c.span / 2 > width - edge) cx = width - edge - c.span / 2;
+  if (cx + c.span / 2 + rightOf > width - edge) cx = width - edge - rightOf - c.span / 2;
   if (cx - c.span / 2 - leftOf < edge) cx = edge + leftOf + c.span / 2;
 
   const centerHump: DriveWaveHump = { a: cx - c.span / 2, b: cx + c.span / 2, crest: c.crest, s: c.s, x: cx };
@@ -119,11 +146,17 @@ export function layoutDriveWave(width: number, center: DriveWaveBox, gear: Drive
     ? { a: centerHump.a - g.span, b: centerHump.a, crest: g.crest, s: g.s, x: centerHump.a - g.span / 2 }
     : { a: centerHump.a, b: centerHump.a, crest: BASE, s: 0, x: centerHump.a };
 
-  const humps = `${hump(gearHump)}${hump(centerHump)}`;
+  // Collapsed the same way when there is no arrival time to show.
+  const arrivalHump: DriveWaveHump = r
+    ? { a: centerHump.b, b: centerHump.b + r.span, crest: r.crest, s: r.s, x: centerHump.b + r.span / 2 }
+    : { a: centerHump.b, b: centerHump.b, crest: BASE, s: 0, x: centerHump.b };
+
+  const humps = `${hump(gearHump)}${hump(centerHump)}${hump(arrivalHump)}`;
   const overrun = DRIVE_WAVE_STROKE * 2;
   return {
     gear: gearHump,
     center: centerHump,
+    arrival: arrivalHump,
     line: `M${n(-overrun)},${n(BASE)} ${humps}L${n(width + overrun)},${n(BASE)}`,
     fill: `M0,${DRIVE_WAVE_HEIGHT} L0,${n(BASE)} ${humps}L${n(width)},${n(BASE)} L${n(width)},${DRIVE_WAVE_HEIGHT} Z`,
   };

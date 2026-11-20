@@ -31,6 +31,7 @@ export {
 	notifyVehicleCredentialsRefreshed,
 	VEHICLE_CREDENTIALS_REFRESHED_EVENT,
 } from './useVehicleStatus';
+export { useVehicleNavigation, useLiveNavigationStore } from './useVehicleNavigation';
 export { useSocHistory, useRangeHistory, usePhantomDrain, usePhantomDrainPeriods, useParkedEnergy, useDegradation, useBatteryHealth, useBatteryMileage, invalidateVehicleCapacityData } from './useBattery';
 export {
 	useTrips,

@@ -8,7 +8,7 @@ slug: /overview/features/
 
 Riviamigo is a private dashboard for the Rivian data you already have access to. It focuses on making that data useful on your own hardware.
 
-- **Overview:** current battery, range, lock state, tire pressure, cabin and vehicle information, plus configurable charts. The overview's location map shows the current gear and speed along its bottom edge while driving, and "Parked" otherwise.
+- **Overview:** current battery, range, lock state, tire pressure, cabin and vehicle information, plus configurable charts. The overview's location map shows the current gear and speed along its bottom edge while driving, and "Parked" otherwise, with a charging indicator while plugged in. While the vehicle is navigating, the map also shows its planned route, stops, and arrival time, live and without storing them.
 - **Battery and health:** battery history, state of charge, charging limits, and available health signals.
 - **Charging:** charging sessions and energy history.
 - **Trips and efficiency:** trip history, route context where available, mileage, efficiency trends, signed net power (direct when available or averaged from SoC updates), and route-aware estimated exterior temperature with explicit provenance.
@@ -68,7 +68,7 @@ Site-wide jobs cover every vehicle, so only admins see this section.
 
 Pick a vehicle from the list to see its jobs. Only the vehicle's owner or manager can start one; other members can see them.
 
-- **Charging history backfill** downloads the vehicle's full charging history from Rivian and merges it with the sessions Riviamigo recorded.
+- **Charging history backfill** downloads the vehicle's full charging history from Rivian and merges it with the sessions Riviamigo recorded. Charges Rivian assigns to another vehicle on your account are left out, and so are Rivian Wall Charger charges that no vehicle reported, such as a non-Rivian EV sharing the charger. Running the backfill also removes such sessions that earlier versions added from Rivian's history, along with any corrections you made to them. If an earlier version had folded one of this vehicle's own charges into such a session, the backfill adds that charge back from Rivian's history without those corrections. Sessions the vehicle recorded itself are never removed.
 - **Recover missed charging sessions** adds sessions that the vehicle's charging telemetry shows but Riviamigo never recorded, and closes a session left open when Riviamigo restarted during a charge. It only adds sessions where nothing is recorded and only fills in values an open session is missing: it never changes, merges, or removes a recorded session or your corrections. Charges that ended in the last two hours are left for the normal charging tracker.
 
 ## Vehicle images

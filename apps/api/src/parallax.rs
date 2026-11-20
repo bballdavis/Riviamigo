@@ -30,6 +30,9 @@ use crate::ingestion::rivian_ws_backoff::{self, HoldReason, SessionHold};
 use crate::ingestion::session_store::{decrypt_tokens, RivianTokenBundle};
 use crate::models::telemetry::{ClosureTransition, PowerState, TelemetryEvent};
 use crate::services::ingestion_capture::{self, Kind as CaptureKind};
+use crate::services::live_navigation;
+
+mod navigation;
 
 const WS_URL: &str = "wss://api.rivian.com/gql-consumer-subscriptions/graphql";
 const SUBSCRIPTION_ID: &str = "riviamigo-parallax-collector";
@@ -60,9 +63,12 @@ const VEHICLE_STATE_TOPICS: &[&str] = &[
     "comfort.cabin.defrost_defog_status",
     // Live charging power, about every five seconds while charging.
     "charging.session.power",
-    // Only the live position fix is decoded; destination, route, and ETA
-    // fields are never modelled, so they are dropped on decode.
+    // The live position fix joins the canonical GNSS path. The arrival time
+    // is read for the live map only and never stored.
     "navigation.navigation_service.trip_progress",
+    // The planned route and stops, for the live map only: held in memory for
+    // the live socket and never stored. See `navigation`.
+    "navigation.navigation_service.trip_info",
 ];
 
 /// The subscription allowlist is also the decoder/persistence boundary.
@@ -127,6 +133,9 @@ pub fn spawn_in_process(
         // Survives reconnects: a snapshot re-sent on the next connection is
         // recognised as one already handled.
         let mut seen = CollectorMemory::default();
+        // A collector that was stopped abruptly leaves its last route in the
+        // live hub. This one starts from what the vehicle sends it.
+        live_navigation::publish(vehicle_id, None);
         let mut credential_failures = FailureStreak::default();
         let mut disconnects = FailureStreak::default();
         loop {
@@ -248,6 +257,8 @@ pub fn spawn_in_process(
                 }
             }
         }
+        // Nothing confirms the route once this collector stops.
+        live_navigation::publish(vehicle_id, None);
         if let Err(error) = release_in_process_lease(&pool, vehicle_id, owner_id).await {
             tracing::warn!(vehicle_id = %vehicle_id, error = ?error, "parallax lease release failed; the next owner waits for it to expire");
         }
@@ -829,20 +840,13 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
             let Some(fix) = value.location_fix else {
                 return Ok(None);
             };
-            let Some(fix_at) = fix
-                .fix_time_ms
-                .filter(|ms| *ms > 0)
-                .and_then(|ms| gnss_fix_time(ms, source_at))
-            else {
-                notes.push("skipped navigation position without a fix time".into());
-                return Ok(None);
+            let fix_at = match fresh_navigation_fix_time(&fix, source_at) {
+                Ok(fix_at) => fix_at,
+                Err(note) => {
+                    notes.push(note.into());
+                    return Ok(None);
+                }
             };
-            if fix_at < source_at - chrono::Duration::seconds(NAVIGATION_FIX_MAX_AGE_SECONDS)
-                || fix_at > source_at + chrono::Duration::seconds(FIX_TIME_MAX_LEAD_SECONDS)
-            {
-                notes.push("skipped stale navigation position".into());
-                return Ok(None);
-            }
             let position = fix
                 .location
                 .and_then(|location| Some((location.latitude?, location.longitude?)))
@@ -1307,10 +1311,33 @@ fn charging_state_is_active(state: i32) -> bool {
 
 #[derive(Clone, PartialEq, ProstMessage)]
 struct NavigationTripProgress {
-    // Tags 1-5 (ETAs, stop index, distance and duration remaining) are
-    // deliberately not modelled: only the vehicle's own position is used.
+    // Tags 1-5 (arrival times, stop index, distance and duration remaining)
+    // are deliberately not modelled here. This struct feeds the stored
+    // position, and a field it does not model cannot fail its decode. The
+    // live map reads the arrival times through `NavigationTripArrival`.
     #[prost(message, optional, tag = "6")]
     location_fix: Option<NavigationGpsFix>,
+}
+
+/// The arrival times in a progress frame, read for the live map only and
+/// never stored. Decoded apart from [`NavigationTripProgress`], so an
+/// unexpected shape here costs the map its live arrival time and nothing
+/// else: the position fix in the same frame is still stored.
+#[derive(Clone, PartialEq, ProstMessage)]
+struct NavigationTripArrival {
+    /// Live arrival time at the next stop.
+    #[prost(message, optional, tag = "1")]
+    next_waypoint_eta: Option<NavigationTimestamp>,
+    /// Live arrival time at the last stop.
+    #[prost(message, optional, tag = "2")]
+    final_destination_eta: Option<NavigationTimestamp>,
+    // Tags 3-5 (stop index, distance and duration remaining) are not modelled.
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct NavigationTimestamp {
+    #[prost(int64, optional, tag = "1")]
+    seconds: Option<i64>,
 }
 
 #[derive(Clone, PartialEq, ProstMessage)]
@@ -1338,6 +1365,25 @@ struct NavigationCoordinate {
 /// After navigation ends the vehicle keeps re-sending its last progress, so a
 /// fix older than this is not the vehicle's position now.
 const NAVIGATION_FIX_MAX_AGE_SECONDS: i64 = 5 * 60;
+
+/// The time of a navigation position fix, when it is recent enough to be the
+/// vehicle's position now. The error is the note saying why it is not.
+fn fresh_navigation_fix_time(
+    fix: &NavigationGpsFix,
+    source_at: DateTime<Utc>,
+) -> std::result::Result<DateTime<Utc>, &'static str> {
+    let fix_at = fix
+        .fix_time_ms
+        .filter(|ms| *ms > 0)
+        .and_then(|ms| gnss_fix_time(ms, source_at))
+        .ok_or("skipped navigation position without a fix time")?;
+    if fix_at < source_at - chrono::Duration::seconds(NAVIGATION_FIX_MAX_AGE_SECONDS)
+        || fix_at > source_at + chrono::Duration::seconds(FIX_TIME_MAX_LEAD_SECONDS)
+    {
+        return Err("skipped stale navigation position");
+    }
+    Ok(fix_at)
+}
 
 #[derive(Clone, PartialEq, ProstMessage)]
 struct ChargingStatus {
@@ -2093,6 +2139,8 @@ pub(crate) struct CollectorMemory {
     /// This vehicle's GNSS frames have carried a speed at least once.
     gnss_reports_speed: bool,
     charging: ChargingGate,
+    /// The route and arrival time for the live map. Memory only.
+    navigation: navigation::NavigationTracker,
 }
 
 /// Whether charging power is flowing, from charging.session.status. Power
@@ -2196,15 +2244,68 @@ async fn record_vehicle_reported(
 /// Raw payload bytes kept in a capture, per envelope.
 const CAPTURE_PAYLOAD_MAX_BYTES: usize = 4096;
 
-/// Raw payloads are captured only for topics that cannot carry location or
-/// network identity, so a capture stays shareable.
+/// Raw payloads are captured only for topics that cannot carry location,
+/// place names, or network identity, so a capture stays shareable.
 fn capture_payload_allowed(topic: &str) -> bool {
     !matches!(
         topic,
         "dynamics.vehicle.gnss"
             | "vehicle.network.state"
             | "navigation.navigation_service.trip_progress"
+            | "navigation.navigation_service.trip_info"
     )
+}
+
+/// Whether a progress frame shows the vehicle is driving its route right now:
+/// the frame itself is current, and so is the position fix inside it. The
+/// vehicle keeps re-sending its last progress after navigation ends, with a
+/// new frame time around the old fix.
+fn confirms_navigation(
+    progress: &NavigationTripProgress,
+    source_at: DateTime<Utc>,
+    received_at: DateTime<Utc>,
+) -> bool {
+    let current = source_at >= received_at - chrono::Duration::seconds(SNAPSHOT_MIN_AGE_SECONDS);
+    current
+        && progress
+            .location_fix
+            .as_ref()
+            .is_some_and(|fix| fresh_navigation_fix_time(fix, source_at).is_ok())
+}
+
+/// Publish what a navigation frame changed, log the start and end of
+/// navigation, and describe the frame in a running capture. Only counts are
+/// logged or captured: the route itself goes to the live socket and nowhere
+/// else.
+fn apply_navigation(
+    vehicle_id: Uuid,
+    tracker: &navigation::NavigationTracker,
+    outcome: navigation::NavigationOutcome,
+    report: &mut EnvelopeReport,
+    capturing: bool,
+) {
+    match outcome.transition {
+        Some(navigation::NavigationTransition::Started) => {
+            tracing::info!(vehicle_id = %vehicle_id, "navigation started");
+        }
+        Some(navigation::NavigationTransition::Ended) => {
+            tracing::info!(vehicle_id = %vehicle_id, "navigation ended");
+        }
+        None => {}
+    }
+    if outcome.summary["navigation"] == "route" {
+        tracing::debug!(vehicle_id = %vehicle_id, summary = %outcome.summary, "navigation route received");
+    }
+    if outcome.changed {
+        live_navigation::publish(vehicle_id, tracker.snapshot());
+    }
+    if capturing {
+        let decoded = report.decoded.get_or_insert_with(|| json!({}));
+        if let (Some(decoded), Value::Object(summary)) = (decoded.as_object_mut(), outcome.summary)
+        {
+            decoded.extend(summary);
+        }
+    }
 }
 
 /// Every entry of a body frame with the canonical field it maps to (or
@@ -2531,7 +2632,36 @@ async fn persist_allowlisted_envelope(
         }
     }
 
+    // A frame dated ahead of the clock must not keep navigation alive longer.
+    let navigation_at = source_at.min(received_at);
+    if topic == navigation::TRIP_PROGRESS_TOPIC {
+        // Decoded again for the live map. The vehicle re-sends its last
+        // progress after navigation ends, so only a current frame with a
+        // fresh position fix counts.
+        let progress = NavigationTripProgress::decode(payload)?;
+        let confirms = confirms_navigation(&progress, source_at, received_at);
+        // The arrival times are a convenience for the map: when they cannot
+        // be read, the route stays up with its planned arrival time.
+        let arrival = NavigationTripArrival::decode(payload).unwrap_or_else(|_| {
+            report
+                .notes
+                .push("skipped navigation arrival times that could not be read".into());
+            NavigationTripArrival::default()
+        });
+        let outcome = memory
+            .navigation
+            .observe_trip_progress(&arrival, navigation_at, confirms);
+        apply_navigation(vehicle_id, &memory.navigation, outcome, report, capturing);
+    }
+
     match topic {
+        navigation::TRIP_INFO_TOPIC => {
+            let outcome =
+                memory
+                    .navigation
+                    .observe_trip_info(payload, navigation_at, &mut report.notes)?;
+            apply_navigation(vehicle_id, &memory.navigation, outcome, report, capturing);
+        }
         "vehicle.network.state" => {
             let value = NetworkState::decode(payload)?;
             let wifi = value.wifi.unwrap_or_default();
@@ -3608,10 +3738,88 @@ mod tests {
     }
 
     #[test]
-    fn navigation_progress_ignores_destination_fields_and_stale_fixes() {
+    fn only_current_progress_with_a_fresh_fix_confirms_navigation() {
+        let now = Utc::now();
+        let progress = |fix_at: Option<DateTime<Utc>>| {
+            NavigationTripProgress::decode(navigation_progress(fix_at, Some(20.0)).as_slice())
+                .unwrap()
+        };
+        let seconds = chrono::Duration::seconds;
+        assert!(confirms_navigation(
+            &progress(Some(now - seconds(3))),
+            now,
+            now
+        ));
+        // Re-sent after navigation ended: a new frame around the old fix.
+        assert!(!confirms_navigation(
+            &progress(Some(now - chrono::Duration::minutes(6))),
+            now,
+            now
+        ));
+        // An old frame replayed on subscribe, however fresh its fix was then.
+        let old = now - chrono::Duration::minutes(6);
+        assert!(!confirms_navigation(
+            &progress(Some(old - seconds(3))),
+            old,
+            now
+        ));
+        // No fix time, or no fix at all.
+        assert!(!confirms_navigation(&progress(None), now, now));
+        assert!(!confirms_navigation(
+            &NavigationTripProgress::default(),
+            now,
+            now
+        ));
+    }
+
+    #[test]
+    fn navigation_route_is_subscribed_but_never_stored_or_captured() {
+        let topic = "navigation.navigation_service.trip_info";
+        assert!(is_allowlisted_topic(topic));
+        // It never becomes a telemetry event, so it cannot reach history or
+        // the latest-status row.
+        assert!(!is_canonical_telemetry_topic(topic));
+        assert!(
+            decode_vehicle_telemetry(topic, &[], Utc::now(), Uuid::new_v4())
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            !capture_payload_allowed(topic),
+            "a raw route carries place names and coordinates"
+        );
+    }
+
+    #[test]
+    fn unreadable_arrival_times_do_not_cost_the_position_fix() {
         let source_at = Utc::now();
-        // Destination ETA (tag 1) and distance remaining (tag 4) are on the
-        // wire but never modelled; with no live fix there is nothing to use.
+        // Tag 1 as a plain number instead of a timestamp message: the arrival
+        // times cannot be read, but the fix in tag 6 must still be stored.
+        let mut frame = vec![0x08, 0x2a];
+        frame.extend(navigation_progress(
+            Some(source_at - chrono::Duration::seconds(3)),
+            Some(20.0),
+        ));
+        assert!(NavigationTripArrival::decode(frame.as_slice()).is_err());
+        let (event, notes) = decode_with_notes(
+            "navigation.navigation_service.trip_progress",
+            &frame,
+            source_at,
+        );
+        assert!(notes.is_empty());
+        let event = event.expect("the position fix is still decoded");
+        assert_eq!(event.latitude, Some(30.25));
+        // And the frame still confirms the vehicle is driving its route.
+        let progress = NavigationTripProgress::decode(frame.as_slice()).unwrap();
+        assert!(confirms_navigation(&progress, source_at, source_at));
+    }
+
+    #[test]
+    fn navigation_progress_stores_nothing_without_a_live_fix() {
+        let source_at = Utc::now();
+        // The next-stop arrival time (tag 1) and distance remaining (tag 4)
+        // never reach the canonical event; with no live fix there is nothing
+        // to store.
         let destination_only = [
             0x0a, 0x02, 0x08, 0x01, 0x21, 0, 0, 0, 0, 0, 0x88, 0xc3, 0x40,
         ];

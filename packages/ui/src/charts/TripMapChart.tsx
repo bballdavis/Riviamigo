@@ -16,7 +16,34 @@ export interface TripMapRoute {
   id: string;
   track: LatLng[];
   color?: string;
+  /**
+   * A CSS custom property (such as `--rm-drive-wave-line`) to take the color
+   * from instead of `color`. It is read again when the theme changes.
+   */
+  colorVar?: string;
+  /** Line width in pixels; defaults to the standard route width. */
+  width?: number;
+  /** Line opacity from 0 to 1; defaults to the standard route opacity. */
+  opacity?: number;
+  /** Set to false to draw the route without framing it. */
+  fit?: boolean;
 }
+
+/** Content pinned to a map location, such as a stop along a route. */
+export interface TripMapMarker {
+  id: string;
+  point: LatLng;
+  content: React.ReactNode;
+}
+
+/**
+ * What the camera frames. `fit-routes` frames the routes, the pinned markers,
+ * and the focus point; `follow-focus` keeps the focus point centered and
+ * draws the rest without reframing.
+ */
+export type TripMapCamera = 'fit-routes' | 'follow-focus';
+
+export interface TripMapFitPadding { top: number; right: number; bottom: number; left: number }
 
 export type MapStyleMode = 'dark' | 'light';
 
@@ -63,6 +90,23 @@ export interface TripMapChartProps {
   focusMarker?: React.ReactNode;
   /** Clockwise degrees from north applied to `focusMarker` (a compass heading). */
   focusRotation?: number | null | undefined;
+  /**
+   * Camera behavior. Left unset, routes are framed when there are any and the
+   * focus point is followed otherwise. With neither routes nor markers there
+   * is nothing to frame, so the focus point is always followed.
+   */
+  camera?: TripMapCamera | undefined;
+  /**
+   * Reframes fitted routes when it changes, instead of whenever their
+   * geometry does. Use it for a route that is redrawn as the vehicle moves.
+   */
+  fitKey?: string | undefined;
+  /** Space kept clear around fitted routes, for overlays drawn over the map. */
+  fitPadding?: number | TripMapFitPadding | undefined;
+  /** Closest zoom a fit may reach, so a short route does not fill the map. */
+  fitMaxZoom?: number | undefined;
+  /** Extra content pinned to map locations. Drawn beneath `focusMarker`. */
+  markers?: TripMapMarker[] | undefined;
   /** Copy shown when there is neither a route nor a focus point. */
   emptyLabel?: string;
   /**
@@ -116,8 +160,10 @@ interface MapApi {
   on(event: string, layerId: string, cb: (event?: unknown) => void): void;
   off(event: string, cb: (event?: unknown) => void): void;
   resize(): void;
-  fitBounds(bounds: [[number, number], [number, number]], options?: { padding?: number; animate?: boolean }): void;
+  fitBounds(bounds: [[number, number], [number, number]], options?: { padding?: number | TripMapFitPadding; animate?: boolean; maxZoom?: number }): void;
   jumpTo?(options: { center: [number, number]; zoom?: number }): void;
+  easeTo?(options: { center: [number, number]; zoom?: number; duration?: number }): void;
+  getZoom?(): number;
   addSource(id: string, source: unknown): void;
   getSource(id: string): MapSourceApi | undefined;
   removeSource(id: string): void;
@@ -166,6 +212,8 @@ export const MAP_TILE_LOAD_TIMEOUT_MS = 20_000;
 /** Avoid flashing the loading indicator for fast loads and cached style swaps. */
 export const MAP_TILE_LOADING_INDICATOR_DELAY_MS = 250;
 const DEFAULT_FOCUS_ZOOM = 14;
+const DEFAULT_FIT_PADDING = 48;
+const CAMERA_EASE_MS = 600;
 
 export const NEUTRAL_BASEMAP_CONFIG: BasemapConfig = {
   enabled: false,
@@ -327,6 +375,11 @@ export function TripMapChart({
   focusZoom = DEFAULT_FOCUS_ZOOM,
   focusMarker,
   focusRotation = null,
+  camera,
+  fitKey,
+  fitPadding,
+  fitMaxZoom,
+  markers,
   emptyLabel = 'No route points in this period',
   compactAttribution = false,
   compactAttributionPlacement = 'bottom-right',
@@ -365,6 +418,19 @@ export function TripMapChart({
   const focusZoomRef = React.useRef(focusZoom);
   const focusRotationRef = React.useRef(0);
   focusRotationRef.current = typeof focusRotation === 'number' && Number.isFinite(focusRotation) ? focusRotation : 0;
+  const fitRef = React.useRef({ key: fitKey, padding: fitPadding, maxZoom: fitMaxZoom });
+  fitRef.current = { key: fitKey, padding: fitPadding, maxZoom: fitMaxZoom };
+  const markersRef = React.useRef(markers);
+  markersRef.current = markers;
+  /** Zoom the map had while following, restored when a fit is left. */
+  const followZoomRef = React.useRef<number | null>(null);
+  // What a keyed framing depends on: the route (by its key) and the room kept
+  // clear around it, so a changed overlay reframes as a changed route does.
+  const fitSignature = fitKey === undefined ? undefined : `${fitKey}|${serializePadding(fitPadding)}`;
+  const fitSignatureRef = React.useRef(fitSignature);
+  fitSignatureRef.current = fitSignature;
+  /** The `fitSignature` the camera last framed. */
+  const lastFitKeyRef = React.useRef<string | undefined>(undefined);
   const latestVisibleRouteSignatureRef = React.useRef<string>('');
   const activePointFrameRef = React.useRef<number | null>(null);
   const lastActivePointRef = React.useRef<LatLng | null>(null);
@@ -415,6 +481,13 @@ export function TripMapChart({
     [routes, track],
   );
   const hasMapContent = routeList.length > 0 || focusPoint !== null;
+  // With nothing to frame, the focus point is all there is to follow.
+  const hasFitTargets = routeList.length > 0 || (markers?.length ?? 0) > 0;
+  const effectiveCamera: TripMapCamera = hasFitTargets
+    ? camera ?? (routeList.length > 0 ? 'fit-routes' : 'follow-focus')
+    : 'follow-focus';
+  const cameraRef = React.useRef<TripMapCamera>(effectiveCamera);
+  cameraRef.current = effectiveCamera;
   const selectedRouteIdSet = React.useMemo(() => new Set(selectedRouteIds), [selectedRouteIds]);
   const visibleRoutes = React.useMemo(
     () => (selectedRouteIds.length > 0
@@ -512,7 +585,8 @@ export function TripMapChart({
         markerConstructorRef.current = (maplibregl as { Marker?: MarkerConstructor }).Marker ?? null;
 
         const routeStart = routeList[0]?.track[0];
-        const firstPoint = routeStart ?? focusPointRef.current;
+        const following = cameraRef.current === 'follow-focus' && focusPointRef.current !== null;
+        const firstPoint = following ? focusPointRef.current : routeStart ?? focusPointRef.current;
         if (!firstPoint) return;
 
         const initialBasemap = basemapRef.current;
@@ -534,7 +608,7 @@ export function TripMapChart({
           container: containerRef.current!,
           ...(initialStyleOptions ? {} : { style: initialStyle }),
           center: [firstPoint.lng, firstPoint.lat],
-          zoom: routeStart ? 12 : focusZoomRef.current,
+          zoom: routeStart && !following ? 12 : focusZoomRef.current,
           // trackResize (default on) keeps the canvas in step with its container, even if it is replaced.
           attributionControl: false,
           transformRequest: (url: string) => {
@@ -667,6 +741,8 @@ export function TripMapChart({
       isLoadedRef.current = false;
       setMapLoaded(false);
       lastRouteSignatureRef.current = '';
+      // A rebuilt map has to be framed again, even for the same route.
+      lastFitKeyRef.current = undefined;
       focusMarkerRef.current?.remove();
       focusMarkerRef.current = null;
       setCustomFocusMarkerShown(false);
@@ -680,14 +756,48 @@ export function TripMapChart({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapLoader, mapRetryVersion, !hasMapContent]);
 
-  // Follow the focus point when there are no routes to frame instead.
+  // Follow the focus point unless routes are being framed instead.
   const focusLat = focusPoint?.lat;
   const focusLng = focusPoint?.lng;
   React.useEffect(() => {
     if (!isLoadedRef.current || !mapRef.current) return;
-    if (focusLat === undefined || focusLng === undefined || routeList.length > 0) return;
+    if (focusLat === undefined || focusLng === undefined || effectiveCamera !== 'follow-focus') return;
     mapRef.current.jumpTo?.({ center: [focusLng, focusLat] });
-  }, [focusLat, focusLng, routeList.length]);
+  }, [focusLat, focusLng, effectiveCamera]);
+
+  // Switching between following and framing moves the camera once. The zoom
+  // in use while following is kept, so leaving a fit returns to it.
+  const previousCameraRef = React.useRef<TripMapCamera>(effectiveCamera);
+  React.useEffect(() => {
+    const previous = previousCameraRef.current;
+    previousCameraRef.current = effectiveCamera;
+    const map = mapRef.current;
+    if (!isLoadedRef.current || !map || previous === effectiveCamera) return;
+    const animate = !prefersReducedMotion();
+    if (effectiveCamera === 'fit-routes') {
+      followZoomRef.current = map.getZoom?.() ?? null;
+      lastFitKeyRef.current = fitSignatureRef.current;
+      fitCamera(map, latestRoutesRef.current, animate);
+      return;
+    }
+    const point = focusPointRef.current;
+    if (!point) return;
+    const target = { center: [point.lng, point.lat] as [number, number], zoom: followZoomRef.current ?? focusZoomRef.current };
+    if (animate && map.easeTo) map.easeTo({ ...target, duration: CAMERA_EASE_MS });
+    else map.jumpTo?.(target);
+  }, [effectiveCamera]);
+
+  // A map with a `fitKey` reframes when the key or the padding changes while
+  // it is framing, not whenever its routes are redrawn.
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!mapLoaded || !map || fitSignature === undefined || effectiveCamera !== 'fit-routes') return;
+    const previous = lastFitKeyRef.current;
+    if (previous === fitSignature) return;
+    lastFitKeyRef.current = fitSignature;
+    // A new map opens already framed; after that the camera moves to the new frame.
+    fitCamera(map, latestRoutesRef.current, previous !== undefined && !prefersReducedMotion());
+  }, [mapLoaded, fitSignature, effectiveCamera]);
 
   // Pin custom focus marker content. DOM markers live outside the map style,
   // so they survive light/dark and basemap swaps without re-adding.
@@ -706,6 +816,8 @@ export function TripMapChart({
     marker.setLngLat([point.lng, point.lat]);
     marker.setRotation(focusRotationRef.current);
     marker.addTo(map);
+    // Above any pinned `markers`, whenever those are added.
+    focusMarkerElement.style.zIndex = '2';
     focusMarkerRef.current = marker;
     setCustomFocusMarkerShown(true);
     return () => {
@@ -788,7 +900,8 @@ export function TripMapChart({
     if (map.getLayer('neutral-background')) {
       map.setPaintProperty('neutral-background', 'background-color', getCssColor('--rm-bg-elevated', CHART_COLORS.muted));
     }
-    if (routeList.length === 0) return;
+    // A map kept open by its focus point clears a route that has ended.
+    if (routeList.length === 0 && !map.getSource(ROUTE_SOURCE_ID)) return;
     syncRoutes(map, visibleRoutes, selectedRouteIds, onRouteClickRef, visibleRouteSignature);
   }, [palette, themeRevision, selectedRouteIds, visibleRouteSignature, visibleRoutes]);
 
@@ -830,8 +943,11 @@ export function TripMapChart({
         },
         properties: {
           id: route.id,
-          color: route.color?.trim() || routeColors[index % routeColors.length],
+          color: route.color?.trim()
+            || (route.colorVar ? getCssColor(route.colorVar, routeColors[index % routeColors.length]!) : routeColors[index % routeColors.length]),
           selected: nextSelectedRouteIds.includes(route.id),
+          ...(route.width === undefined ? {} : { width: route.width }),
+          ...(route.opacity === undefined ? {} : { opacity: route.opacity }),
         },
       })),
     };
@@ -850,8 +966,8 @@ export function TripMapChart({
         source: ROUTE_SOURCE_ID,
         paint: {
           'line-color': ['get', 'color'],
-          'line-width': ['case', ['boolean', ['get', 'selected'], false], 5, 3],
-          'line-opacity': 0.9,
+          'line-width': ['coalesce', ['get', 'width'], ['case', ['boolean', ['get', 'selected'], false], 5, 3]],
+          'line-opacity': ['coalesce', ['get', 'opacity'], 0.9],
         },
       });
     }
@@ -886,13 +1002,32 @@ export function TripMapChart({
       return;
     }
 
+    // A map with a `fitKey` is framed by its own effect when the key changes,
+    // so a route redrawn as the vehicle moves along it does not reframe here.
+    if (fitRef.current.key !== undefined) return;
     const shouldRefit = lastRouteSignatureRef.current !== nextRouteSignature;
     if (shouldRefit) {
-      map.fitBounds(getRouteBounds(nextRoutes), { padding: 48, animate: false });
-      map.resize();
+      if (cameraRef.current === 'fit-routes') {
+        fitCamera(map, nextRoutes, false);
+        map.resize();
+      }
       lastRouteSignatureRef.current = nextRouteSignature;
     }
 
+  }
+
+  /** Frames the routes, the pinned markers, and the focus point when there is one. */
+  function fitCamera(map: MapApi, routesToFit: TripMapRoute[], animate: boolean) {
+    const points = routesToFit.filter((route) => route.fit !== false).flatMap((route) => route.track);
+    for (const marker of markersRef.current ?? []) points.push(marker.point);
+    if (focusPointRef.current) points.push(focusPointRef.current);
+    if (points.length === 0) return;
+    const { padding, maxZoom } = fitRef.current;
+    map.fitBounds(getPointBounds(points), {
+      padding: padding ?? DEFAULT_FIT_PADDING,
+      animate,
+      ...(maxZoom === undefined ? {} : { maxZoom }),
+    });
   }
 
   const attributionId = React.useId();
@@ -913,7 +1048,14 @@ export function TripMapChart({
       </div>
     ) : (
       <div className="relative">
-        {focusMarkerElement && hasFocusMarker ? createPortal(focusMarker, focusMarkerElement) : null}
+        {focusMarkerElement && hasFocusMarker ? <MapPortal target={focusMarkerElement}>{focusMarker}</MapPortal> : null}
+        {mapLoaded && mapRef.current && markerConstructorRef.current
+          ? markers?.map((marker) => (
+            <PinnedMarker key={marker.id} map={mapRef.current!} Marker={markerConstructorRef.current!} point={marker.point}>
+              {marker.content}
+            </PinnedMarker>
+          ))
+          : null}
         <div
           ref={containerRef}
           style={{ height }}
@@ -985,6 +1127,49 @@ export function TripMapChart({
       </div>
     )
   );
+}
+
+/** The one place map content is portalled into a MapLibre marker element. */
+function MapPortal({ target, children }: { target: HTMLElement; children: React.ReactNode }) {
+  return createPortal(children, target);
+}
+
+/**
+ * Pins content to a map location with a DOM marker. It stays upright and the
+ * same size however the map is turned or zoomed.
+ */
+function PinnedMarker({ map, Marker, point, children }: {
+  map: MapApi;
+  Marker: MarkerConstructor;
+  point: LatLng;
+  children: React.ReactNode;
+}) {
+  const [element] = React.useState(() => {
+    const created = document.createElement('div');
+    created.style.zIndex = '1';
+    return created;
+  });
+  const markerRef = React.useRef<MarkerApi | null>(null);
+  const pointRef = React.useRef(point);
+  pointRef.current = point;
+  React.useEffect(() => {
+    const marker = new Marker({ element, anchor: 'center', rotationAlignment: 'viewport', pitchAlignment: 'viewport' });
+    marker.setLngLat([pointRef.current.lng, pointRef.current.lat]);
+    marker.addTo(map);
+    markerRef.current = marker;
+    return () => {
+      marker.remove();
+      markerRef.current = null;
+    };
+  }, [Marker, element, map]);
+  React.useEffect(() => {
+    markerRef.current?.setLngLat([point.lng, point.lat]);
+  }, [point.lat, point.lng]);
+  return <MapPortal target={element}>{children}</MapPortal>;
+}
+
+function prefersReducedMotion() {
+  return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
 }
 
 function mapLibreErrorDetails(event: unknown): {
@@ -1104,8 +1289,7 @@ function getCssColor(variableName: string, fallbackColor: string) {
   return color || fallbackColor;
 }
 
-function getRouteBounds(routeList: TripMapRoute[]) {
-  const allPoints = routeList.flatMap((route) => route.track);
+function getPointBounds(allPoints: LatLng[]) {
   const first = allPoints[0]!;
 
   return allPoints.reduce(
@@ -1113,6 +1297,11 @@ function getRouteBounds(routeList: TripMapRoute[]) {
       [Math.max(bounds[1][0], point.lng), Math.max(bounds[1][1], point.lat)]] as [[number, number], [number, number]],
     [[first.lng, first.lat], [first.lng, first.lat]] as [[number, number], [number, number]],
   );
+}
+
+function serializePadding(padding: number | TripMapFitPadding | undefined) {
+  if (padding === undefined) return '';
+  return typeof padding === 'number' ? String(padding) : `${padding.top},${padding.right},${padding.bottom},${padding.left}`;
 }
 
 function serializePoint(point: LatLng | undefined) {

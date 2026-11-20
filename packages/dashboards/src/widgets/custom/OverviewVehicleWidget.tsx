@@ -1,12 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Battery, Car, CheckCircle2, CircleAlert, Gauge, LocateFixed, Lock, Maximize2, Minimize2, Package, PackageOpen, TriangleAlert, Unlock } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Battery, Car, CheckCircle2, CircleAlert, Gauge, LocateFixed, Lock, Maximize2, Minimize2, Package, PackageOpen, Route, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
-import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useUpdateOverviewMapExpanded, useUpdateOverviewView, useUserPreferences, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
+import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useUpdateOverviewMapExpanded, useUpdateOverviewView, useUserPreferences, useVehicleNavigation, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
 import { formatMiles } from '@riviamigo/ui/lib/utils';
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI, formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
 import { AssistantWave, FrunkIcon, LiftgateIcon, Tooltip } from '@riviamigo/ui/primitives';
 import { isVehicleCharging } from '@riviamigo/types';
-import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
+import type { VehicleImages, VehicleNavigation, VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { isVehiclePluggedIn } from '../../dashboardVisibility';
@@ -17,12 +17,15 @@ import { useOverviewStatData, useUnitPreferencesVersion } from './useOverviewSta
 import { resolveOverviewMapOptions, resolveVehicleFacingDeg, type OverviewMapOptions, type OverviewView } from './overviewMap';
 import { OverviewLocationMap } from './OverviewLocationMap';
 import { createMapFrameSource, OverviewDriveWave } from './OverviewDriveWave';
+import { DRIVE_WAVE_HEIGHT } from './overviewDriveWaveLayout';
+import { resolveVehicleLocks, type VehicleLocks } from './overviewLocks';
+import { endBadgeMidpointPct, LARGE_END_BADGE_REM, R2_PICTURE_END_BADGES, resolveVehicleUnitTransform, SHARED_END_BADGES, SMALL_END_BADGE_REM, type VehicleEndBadges } from './overviewVehicleLayout';
 
 type AnchorSet = {
   tire: { rl: string; fl: string; rr: string; fr: string };
   doorLocks: { rl: string; fl: string; rr: string; fr: string };
-  frunkLock: string;
-  rearGateLock: string;
+  /** The rear gate and frunk badges. They also decide where the whole unit sits in its panel. */
+  endBadges: VehicleEndBadges;
   sideBinLeftCover?: string;
   sideBinRightCover?: string;
 };
@@ -34,18 +37,22 @@ const R1T_OVERVIEW_FALLBACK_CROSS_AXIS_SCALE = 509 / 446;
 const SHARED_OVERVIEW_ANCHORS: AnchorSet = {
   tire: { rl: 'left-[27%] top-[0%]', fl: 'left-[82%] top-[0%]', rr: 'left-[27%] top-[102%]', fr: 'left-[82%] top-[102%]' },
   doorLocks: { rl: 'left-[43%] top-[-0%]', fl: 'left-[60%] top-[-0%]', rr: 'left-[43%] top-[102%]', fr: 'left-[60%] top-[102%]' },
-  rearGateLock: 'left-[4%] top-1/2',
-  frunkLock: 'left-[102%] top-1/2',
+  endBadges: SHARED_END_BADGES,
 };
 
 // Rivian's real R2 overview render has more empty canvas behind the tailgate
-// than the R1 renders, so the shared 4% rear-gate anchor leaves a visibly wider
+// than the R1 renders, so the shared rear-gate anchor leaves a visibly wider
 // gap than the frunk anchor has at the front. Pull it in to match; the other
 // anchors already sit on their parts. Not used for the packaged fallback art.
 const R2_REAL_ARTWORK_ANCHORS: AnchorSet = {
   ...SHARED_OVERVIEW_ANCHORS,
-  rearGateLock: 'left-[8.8%] top-1/2',
+  endBadges: R2_PICTURE_END_BADGES,
 };
+
+// The end badges read their horizontal position from the frame, which sets
+// these properties from the anchor set in use.
+const REAR_BADGE_ANCHOR = 'left-[var(--overview-rear-badge-x)] top-1/2';
+const FRONT_BADGE_ANCHOR = 'left-[var(--overview-front-badge-x)] top-1/2';
 
 const OVERVIEW_ANCHORS: Record<string, AnchorSet> = {
   default: SHARED_OVERVIEW_ANCHORS,
@@ -75,11 +82,21 @@ const MAP_CANVAS_WIDTH = 'w-full @min-[34rem]/overview:w-[16.25rem] @min-[58rem]
 const MAP_CANVAS_STYLE = { '--rm-map-overlay-inset-x': 'calc((100% - 100cqw) / 2)' } as React.CSSProperties;
 const SOC_DEFAULT_COLUMNS = '@min-[34rem]/overview:grid-cols-[2.25rem_minmax(0,1fr)] @min-[58rem]/overview:grid-cols-[3.75rem_minmax(0,1fr)]';
 const SOC_RAIL_ONLY_COLUMNS = '@min-[34rem]/overview:grid-cols-[minmax(0,1fr)]';
+// One tab in the map panel's top-right corner. The group they sit in carries
+// the shared glass and the rounded inside corner.
+const MAP_TAB_BUTTON = 'inline-flex h-11 w-11 items-center justify-center text-accent transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent @min-[34rem]/overview:h-8 @min-[34rem]/overview:w-8';
+const MAP_TAB_IDLE = 'hover:bg-bg-elevated/85 focus-visible:bg-bg-elevated/85';
+// A tab that is switched on keeps its accent wash under the pointer, so its state never disappears on hover.
+const MAP_TAB_ON = 'bg-accent/25 hover:bg-accent/35 focus-visible:bg-accent/35';
+// Room a framed route keeps clear of the corner tabs (44px on phones) and the panel edges.
+const ROUTE_FIT_TOP = 52;
+const ROUTE_FIT_EDGE = 20;
 
 function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { defaultVehicleId } = useAuth();
   const vehicleId = ctx.vehicleId ?? defaultVehicleId;
   const { data: status } = useCurrentVehicleStatus(vehicleId);
+  const navigation = useVehicleNavigation(vehicleId);
   const { data: vehicles } = useVehicles();
   const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
   const statIds = resolveOverviewStatIds(instance.options?.stats);
@@ -107,6 +124,7 @@ function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ct
   return (
     <CurrentVehicleStatePanel
       status={status}
+      navigation={navigation}
       images={activeVehicle?.images}
       vehicleName={activeVehicle?.display_name}
       vehicleModel={activeVehicle?.model}
@@ -125,6 +143,7 @@ function OverviewVehicleWidget({ instance, ctx }: { instance: WidgetInstance; ct
 
 export function CurrentVehicleStatePanel({
   status,
+  navigation,
   images,
   vehicleName,
   vehicleModel,
@@ -139,6 +158,8 @@ export function CurrentVehicleStatePanel({
   onMapExpandedChange,
 }: {
   status: VehicleStatus | null | undefined;
+  /** The route the vehicle is navigating and its arrival time, while it has one. */
+  navigation?: VehicleNavigation | null | undefined;
   images?: VehicleImages | null | undefined;
   vehicleName?: string | undefined;
   vehicleModel?: string | undefined;
@@ -174,6 +195,14 @@ export function CurrentVehicleStatePanel({
   // Expansion only applies while the map is showing; the cluster always uses
   // the normal three-column layout, and the map reopens at the saved size.
   const mapExpanded = showMap && mapExpandedPreference;
+  // The map follows the vehicle unless the whole route is asked for. Each new
+  // trip starts out following again.
+  const navigating = navigation != null;
+  const [wholeRouteChosen, setWholeRouteChosen] = useState(false);
+  useEffect(() => {
+    if (!navigating) setWholeRouteChosen(false);
+  }, [navigating]);
+  const showWholeRoute = navigating && wholeRouteChosen;
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const resolvedOverhead = resolveVehicleArtwork(images, vehicleModel, 'overview');
   const baseOverheadLight = resolvedOverhead.light;
@@ -181,24 +210,41 @@ export function CurrentVehicleStatePanel({
   const apiOverheadFallback = baseOverheadLight ?? baseOverheadDark;
   const localOverheadFallback = resolvedOverhead.fallback;
   const overheadArtworkAvailable = Boolean(apiOverheadFallback ?? localOverheadFallback);
-  const isR2RealArtwork = (vehicleModel === 'R2' || vehicleModel === 'R2S') && !isDemoVehicle && Boolean(apiOverheadFallback);
+  // Anchors follow the picture that is actually drawn: the R2 set fits only
+  // Rivian's own R2 picture, not the packaged one shown while that picture is
+  // missing or being restored.
+  const overheadArtwork = useVehicleArtwork(apiOverheadFallback);
+  const isR2RealArtwork = (vehicleModel === 'R2' || vehicleModel === 'R2S') && !isDemoVehicle && Boolean(overheadArtwork.src);
   const anchors = isR2RealArtwork
     ? R2_REAL_ARTWORK_ANCHORS
     : OVERVIEW_ANCHORS[vehicleModel ?? ''] ?? SHARED_OVERVIEW_ANCHORS;
+  // The R1T's rear badge is the small tailgate padlock; every other end badge is the large closure badge.
+  const unitTransform = resolveVehicleUnitTransform(
+    anchors.endBadges,
+    vehicleModel === 'R1T' ? SMALL_END_BADGE_REM : LARGE_END_BADGE_REM,
+    LARGE_END_BADGE_REM,
+  );
+  const packagedArtCenterPct = endBadgeMidpointPct(anchors.endBadges);
+  const locks = resolveVehicleLocks(status, vehicleModel);
   const openDoorStates = getOpenDoorStates(status);
   const overlaysLight = getDoorOverlayUrls(images?.all, openDoorStates, 'light');
   const overlaysDark = getDoorOverlayUrls(images?.all, openDoorStates, 'dark');
   const imageStageRef = useRef<HTMLDivElement | null>(null);
-  const [locationPanelRef, locationPanelHeight] = useObservedHeight();
+  const [locationPanelRef, locationPanel] = useObservedSize();
+  const [mapCanvasRef, mapCanvas] = useObservedSize();
+  // The canvas is wider than the panel that clips it, so a framed route has
+  // to stay clear of the hidden margins as well as the tabs and the wave.
+  // Settled, so the expand transition reframes once rather than every frame.
+  const clippedMargin = useSettledValue(Math.max(0, Math.round((mapCanvas.width - locationPanel.width) / 2)), 350);
+  const routeFitPadding = useMemo(() => ({
+    top: ROUTE_FIT_TOP,
+    right: ROUTE_FIT_EDGE + clippedMargin,
+    bottom: DRIVE_WAVE_HEIGHT + ROUTE_FIT_EDGE,
+    left: ROUTE_FIT_EDGE + clippedMargin,
+  }), [clippedMargin]);
   const [mapFrames] = useState(createMapFrameSource);
   const [imageStageHeight, setImageStageHeight] = useState(0);
   const [imageStageWidth, setImageStageWidth] = useState(0);
-  const locksKnown = [
-    status?.door_front_left_locked,
-    status?.door_front_right_locked,
-    status?.door_rear_left_locked,
-    status?.door_rear_right_locked,
-  ].some((value) => value !== null && value !== undefined);
   const tires = {
     fl: makeTireDisplay(status?.tire_fl_psi, status?.tire_fl_status, targetTirePressurePsi),
     fr: makeTireDisplay(status?.tire_fr_psi, status?.tire_fr_status, targetTirePressurePsi),
@@ -296,15 +342,12 @@ export function CurrentVehicleStatePanel({
           </div>
         </div>
         <div ref={imageStageRef} data-testid="overview-image-stage" className="relative min-h-60 overflow-hidden rounded-2xl border border-border bg-bg-surface/70 p-1 @min-[34rem]/overview:min-h-0 @min-[58rem]/overview:min-h-60">
-          <div className="absolute right-3 top-3 z-30 inline-flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 px-2 py-1 text-[11px] text-fg-tertiary shadow-sm backdrop-blur">
-            {status?.doors_locked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3 text-accent" />}
-            {locksKnown ? (status?.doors_locked ? 'Locked' : 'Unlocked') : 'Locks pending'}
-          </div>
+          <VehicleLockBadge locks={locks} />
           <div className="absolute inset-1 z-10 flex items-center justify-center">
             {overheadArtworkAvailable ? (
-              <VehicleArtFrame source={apiOverheadFallback} fallbackSource={localOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth}>
-                <VehicleOverheadLayers base={baseOverheadLight ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} isR1tFallback={vehicleModel === 'R1T'} />
-                <VehicleOverheadLayers base={baseOverheadDark ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" isR1tFallback={vehicleModel === 'R1T'} />
+              <VehicleArtFrame artwork={overheadArtwork} fallbackSource={localOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth} endBadges={anchors.endBadges} unitTransform={unitTransform}>
+                <VehicleOverheadLayers base={baseOverheadLight ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} isR1tFallback={vehicleModel === 'R1T'} packagedArtCenterPct={packagedArtCenterPct} />
+                <VehicleOverheadLayers base={baseOverheadDark ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" isR1tFallback={vehicleModel === 'R1T'} packagedArtCenterPct={packagedArtCenterPct} />
                 <VehicleLabel className={anchors.tire.rl} value={tires.rl.value} tone={tires.rl.tone} targetTirePressurePsi={targetTirePressurePsi} />
                 <VehicleLabel className={anchors.tire.fl} value={tires.fl.value} tone={tires.fl.tone} targetTirePressurePsi={targetTirePressurePsi} />
                 <VehicleLabel className={anchors.tire.rr} value={tires.rr.value} tone={tires.rr.tone} targetTirePressurePsi={targetTirePressurePsi} />
@@ -314,11 +357,11 @@ export function CurrentVehicleStatePanel({
                 <LockLabel className={anchors.doorLocks.rr} locked={status?.door_rear_right_locked} title="Rear right door lock" />
                 <LockLabel className={anchors.doorLocks.fr} locked={status?.door_front_right_locked} title="Front right door lock" />
                 {vehicleModel === 'R1T' ? (
-                  <LockLabel className={anchors.rearGateLock} locked={rearGateLock} title={rearGateLockTitle} />
+                  <LockLabel className={REAR_BADGE_ANCHOR} locked={rearGateLock} title={rearGateLockTitle} />
                 ) : (
-                  <ClosureLabel className={anchors.rearGateLock} closed={status?.closure_liftgate_closed} locked={status?.closure_liftgate_locked} title="Liftgate" icon={LiftgateIcon} description="The rear hatch that opens upward for cargo access." />
+                  <ClosureLabel className={REAR_BADGE_ANCHOR} closed={status?.closure_liftgate_closed} locked={status?.closure_liftgate_locked} title="Liftgate" icon={LiftgateIcon} description="The rear hatch that opens upward for cargo access." />
                 )}
-                <ClosureLabel className={anchors.frunkLock} closed={status?.closure_frunk_closed} locked={status?.closure_frunk_locked} title="Frunk" icon={FrunkIcon} description="The front trunk under the hood." />
+                <ClosureLabel className={FRONT_BADGE_ANCHOR} closed={status?.closure_frunk_closed} locked={status?.closure_frunk_locked} title="Frunk" icon={FrunkIcon} description="The front trunk under the hood." />
                 {vehicleModel === 'R1T' && anchors.sideBinLeftCover && (
                   <ClosureLabel className={anchors.sideBinLeftCover} closed={status?.side_bin_left_closed} title="Left side bin cover" />
                 )}
@@ -337,31 +380,52 @@ export function CurrentVehicleStatePanel({
           <div
             ref={locationPanelRef}
             data-testid="overview-location-panel"
-            className={`@container relative overflow-hidden rounded-xl border border-border bg-bg-surface @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-r-none @min-[34rem]/overview:border-r-0 ${mapExpanded ? 'min-h-96' : 'min-h-60'}`}
+            // `clip`, not `hidden`: the canvas is wider than this panel, and a
+            // hidden overflow can still be scrolled (find-in-page landing on a
+            // pin's name, a scroll-into-view), which would slide the map off-center.
+            className={`@container relative overflow-clip rounded-xl border border-border bg-bg-surface @min-[34rem]/overview:min-h-0 @min-[34rem]/overview:rounded-r-none @min-[34rem]/overview:border-r-0 ${mapExpanded ? 'min-h-96' : 'min-h-60'}`}
           >
-            <button
-              type="button"
-              data-testid="overview-map-expand"
-              aria-label={mapExpanded ? 'Collapse map' : 'Expand map'}
-              aria-pressed={mapExpanded}
-              title={mapExpanded ? 'Collapse map' : 'Expand map'}
-              onClick={() => setMapExpanded(!mapExpanded)}
-              className="absolute right-0 top-0 z-20 inline-flex h-11 w-11 items-center justify-center rounded-bl-xl border-b border-l border-border/60 bg-bg-elevated/50 text-accent backdrop-blur-sm transition-colors hover:bg-bg-elevated/85 focus-visible:bg-bg-elevated/85 focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent @min-[34rem]/overview:h-8 @min-[34rem]/overview:w-8 @min-[34rem]/overview:rounded-bl-lg"
-            >
-              {mapExpanded ? <Minimize2 className="h-4 w-4" aria-hidden="true" /> : <Maximize2 className="h-4 w-4" aria-hidden="true" />}
-            </button>
-            <div data-testid="overview-map-canvas" className={`absolute inset-y-0 left-1/2 min-w-full -translate-x-1/2 ${MAP_CANVAS_WIDTH}`} style={MAP_CANVAS_STYLE}>
+            <div className="absolute right-0 top-0 z-20 inline-flex overflow-hidden rounded-bl-xl border-b border-l border-border/60 bg-bg-elevated/50 backdrop-blur-sm @min-[34rem]/overview:rounded-bl-lg">
+              {navigating ? (
+                <button
+                  type="button"
+                  data-testid="overview-map-route"
+                  aria-label="Show whole route"
+                  aria-pressed={showWholeRoute}
+                  title={showWholeRoute ? 'Follow vehicle' : 'Show whole route'}
+                  onClick={() => setWholeRouteChosen(!showWholeRoute)}
+                  className={`${MAP_TAB_BUTTON} border-r border-border/60 ${showWholeRoute ? MAP_TAB_ON : MAP_TAB_IDLE}`}
+                >
+                  <Route className="h-4 w-4" aria-hidden="true" />
+                </button>
+              ) : null}
+              <button
+                type="button"
+                data-testid="overview-map-expand"
+                aria-label={mapExpanded ? 'Collapse map' : 'Expand map'}
+                aria-pressed={mapExpanded}
+                title={mapExpanded ? 'Collapse map' : 'Expand map'}
+                onClick={() => setMapExpanded(!mapExpanded)}
+                className={`${MAP_TAB_BUTTON} ${MAP_TAB_IDLE}`}
+              >
+                {mapExpanded ? <Minimize2 className="h-4 w-4" aria-hidden="true" /> : <Maximize2 className="h-4 w-4" aria-hidden="true" />}
+              </button>
+            </div>
+            <div ref={mapCanvasRef} data-testid="overview-map-canvas" className={`absolute inset-y-0 left-1/2 min-w-full -translate-x-1/2 ${MAP_CANVAS_WIDTH}`} style={MAP_CANVAS_STYLE}>
               <OverviewLocationMap
                 latitude={status?.latitude}
                 longitude={status?.longitude}
                 headingDeg={resolveVehicleFacingDeg(status)}
                 artwork={resolvedOverhead}
                 options={mapOptions}
-                heightPx={locationPanelHeight - 2}
+                heightPx={locationPanel.height - 2}
                 onRenderFrame={mapFrames.publish}
+                route={navigation?.route}
+                showWholeRoute={showWholeRoute}
+                routeFitPadding={routeFitPadding}
               />
             </div>
-            <OverviewDriveWave status={status} mapFrames={mapFrames} />
+            <OverviewDriveWave status={status} mapFrames={mapFrames} arrivalAt={navigation?.destination_eta} />
           </div>
         ) : (
         <div data-testid="overview-stats" className="grid auto-rows-fr gap-2 @min-[34rem]/overview:gap-1.5 @min-[58rem]/overview:gap-2">
@@ -389,19 +453,32 @@ export function CurrentVehicleStatePanel({
   );
 }
 
-/** Tracks an element's border-box height through a callback ref, so it also works for elements that mount later. */
-function useObservedHeight(): [(element: HTMLDivElement | null) => void, number] {
+/** Tracks an element's border-box size through a callback ref, so it also works for elements that mount later. */
+function useObservedSize(): [(element: HTMLDivElement | null) => void, { width: number; height: number }] {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
-  const [height, setHeight] = useState(0);
+  const [size, setSize] = useState({ width: 0, height: 0 });
   useEffect(() => {
     if (!element || typeof ResizeObserver === 'undefined') return;
-    const update = () => setHeight(element.getBoundingClientRect().height);
+    const update = () => {
+      const { width, height } = element.getBoundingClientRect();
+      setSize((previous) => (previous.width === width && previous.height === height ? previous : { width, height }));
+    };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(element);
     return () => observer.disconnect();
   }, [element]);
-  return [setElement, height];
+  return [setElement, size];
+}
+
+/** A value once it has stopped changing for `delayMs`. The first value is used at once. */
+function useSettledValue<T>(value: T, delayMs: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return settled;
 }
 
 const OVERVIEW_VIEW_CHOICES: ReadonlyArray<{ value: OverviewView; label: string; icon: React.ComponentType<{ className?: string }> }> = [
@@ -496,6 +573,7 @@ function LockLabel({ className, locked, title }: { className: string; locked: bo
   const known = locked !== null && locked !== undefined;
   const unlocked = known && locked === false;
   const Icon = unlocked ? Unlock : Lock;
+  // `h-6 w-6` is SMALL_END_BADGE_REM: the unit is centered by this width when the badge sits at an end.
   return (
     <span
       title={title}
@@ -519,6 +597,7 @@ function ClosureLabel({ className, closed, locked, title, icon, description }: {
   const Icon = icon ?? (open ? PackageOpen : Package);
   const stateLabel = known ? (open ? 'open' : 'closed') : 'unavailable';
   // Custom closure glyphs carry more detail than the stock icons, so they get a larger badge.
+  // `h-9 w-9` is LARGE_END_BADGE_REM: the unit is centered by this width when the badge sits at an end.
   const size = icon ? 'h-9 w-9' : 'h-6 w-6';
   const tone = open
     ? icon ? 'border-status-danger bg-status-danger text-fg-on-accent' : 'border-accent/60 bg-bg-elevated/90 text-accent'
@@ -578,20 +657,84 @@ function ClosureLabel({ className, closed, locked, title, icon, description }: {
   );
 }
 
+const LOCK_STATE_COPY: Record<VehicleLocks['state'], { headline: string; badge: string; dot: string }> = {
+  locked: { headline: 'Locked', badge: 'border-status-positive/60 bg-bg-elevated/90 text-status-positive', dot: 'bg-status-positive' },
+  unlocked: { headline: 'Unlocked', badge: 'border-accent/60 bg-bg-elevated/90 text-accent', dot: 'bg-accent' },
+  unknown: { headline: 'Waiting for lock state', badge: 'border-border bg-bg-elevated/60 text-fg-tertiary', dot: 'bg-fg-tertiary' },
+};
+
+/**
+ * Whether the vehicle is locked, as one icon in the panel's corner. Its
+ * tooltip lists every lock the model has, so the icon needs no caption.
+ */
+function VehicleLockBadge({ locks }: { locks: VehicleLocks }) {
+  const copy = LOCK_STATE_COPY[locks.state];
+  const Icon = locks.state === 'unlocked' ? Unlock : Lock;
+  return (
+    <Tooltip
+      side="bottom"
+      align="end"
+      className="absolute right-3 top-3 z-30"
+      contentClassName="w-56 rounded-xl border-border/80 bg-bg-elevated/95 px-3 py-3 text-xs shadow-2xl backdrop-blur"
+      content={(
+        <div className="grid gap-2" data-testid="overview-lock-tooltip">
+          <div className="flex items-center gap-2 font-medium text-fg">
+            <span className={`inline-block h-2 w-2 rounded-full ${copy.dot}`} aria-hidden="true" />
+            {copy.headline}
+          </div>
+          <div className="grid gap-1">
+            {locks.parts.map((part) => (
+              <div key={part.id} data-testid="overview-lock-row" data-locked={part.locked ?? 'unknown'} className="flex items-center justify-between gap-3">
+                <span className="min-w-0 truncate text-fg-secondary">{part.label}</span>
+                {part.locked === null ? (
+                  <span className="shrink-0 text-fg-tertiary">No report</span>
+                ) : (
+                  <span className={`inline-flex shrink-0 items-center gap-1 ${part.locked ? 'text-fg-tertiary' : 'font-medium text-accent'}`}>
+                    {part.locked ? <Lock className="h-3 w-3" aria-hidden="true" /> : <Unlock className="h-3 w-3" aria-hidden="true" />}
+                    {part.locked ? 'Locked' : 'Unlocked'}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    >
+      {/* The pseudo-element widens the touch target to 44px without growing the badge. */}
+      <span
+        data-testid="overview-lock-badge"
+        data-lock-state={locks.state}
+        role="img"
+        aria-label={`Vehicle locks: ${copy.headline.toLowerCase()}`}
+        tabIndex={0}
+        className={`relative inline-flex h-7 w-7 items-center justify-center rounded-lg border shadow-sm backdrop-blur before:absolute before:-inset-2 before:content-[''] focus:outline-none focus-visible:ring-1 focus-visible:ring-accent ${copy.badge}`}
+      >
+        <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+      </span>
+    </Tooltip>
+  );
+}
+
 function VehicleArtFrame({
-  source,
+  artwork,
   fallbackSource,
   heightPx,
   widthPx,
+  endBadges,
+  unitTransform,
   children,
 }: {
-  source: string | null | undefined;
+  /** The vehicle's own overhead picture, loaded once by the panel, which also picks the anchors from it. */
+  artwork: ReturnType<typeof useVehicleArtwork>;
   fallbackSource?: string | null | undefined;
   heightPx: number;
   widthPx: number;
+  /** Where the rear gate and frunk badges sit along the frame. */
+  endBadges: VehicleEndBadges;
+  /** Slides the frame so the unit, measured across those two badges, is centered in its panel. */
+  unitTransform: string;
   children: React.ReactNode;
 }) {
-  const artwork = useVehicleArtwork(source);
   const fallbackArtwork = useVehicleArtwork(fallbackSource);
   // Wait for the real artwork rather than flashing the packaged fallback; the
   // fallback is only for vehicles whose own artwork is missing or broken.
@@ -621,9 +764,11 @@ function VehicleArtFrame({
         containerType: 'inline-size',
         height: frameHeight,
         width: frameWidth,
-        transform: 'translateX(-5%)',
+        transform: unitTransform,
         '--vehicle-frame-height': `${frameHeight}px`,
         '--vehicle-frame-width': `${frameWidth}px`,
+        '--overview-rear-badge-x': `${endBadges.rearPct}%`,
+        '--overview-front-badge-x': `${endBadges.frontPct}%`,
       } as React.CSSProperties}
     >
       {loading ? (
@@ -642,6 +787,7 @@ function VehicleOverheadLayers({
   darkClassName,
   vehicleName,
   isR1tFallback,
+  packagedArtCenterPct,
 }: {
   base: string | null | undefined;
   fallbackBase?: string | null | undefined;
@@ -649,6 +795,8 @@ function VehicleOverheadLayers({
   darkClassName: string;
   vehicleName?: string | undefined;
   isR1tFallback: boolean;
+  /** The frame position, in percent of its width, midway between the two end badges. */
+  packagedArtCenterPct: number;
 }) {
   const imageStyle = {
     height: 'var(--vehicle-frame-width)',
@@ -659,11 +807,11 @@ function VehicleOverheadLayers({
   const fallbackProps = {
     style: {
       ...imageStyle,
-      // The shared rear/front lock anchors sit at 4% and 102%. Center the
-      // packaged fallback at their midpoint whenever it is displayed, for real
-      // and demo vehicles alike, leaving Rivian artwork and all annotations on
-      // their established coordinates.
-      left: '53%',
+      // The packaged pictures are drawn centered on their canvas, so center
+      // them midway between the rear and front badges whenever one is
+      // displayed, for real and demo vehicles alike. Rivian artwork and all
+      // annotations stay on their established coordinates.
+      left: `${packagedArtCenterPct}%`,
       transform: isR1tFallback
         ? `translate(-50%, -50%) rotate(90deg) scaleX(${R1T_OVERVIEW_FALLBACK_CROSS_AXIS_SCALE})`
         : imageStyle.transform,

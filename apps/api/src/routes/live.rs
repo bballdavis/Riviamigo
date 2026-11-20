@@ -1,4 +1,8 @@
 //! Backend live-status WebSocket: JWT via Sec-WebSocket-Protocol, fan-out from Redis.
+//!
+//! Vehicle status arrives through Redis. Live navigation (the route and
+//! arrival time shown on the Overview map) does not: it is read straight from
+//! process memory, so it is never written anywhere.
 
 use axum::{
     extract::{
@@ -20,6 +24,7 @@ use crate::{
     db::vehicles::{require_vehicle_membership, require_vehicle_read_access},
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser, Claims},
+    services::live_navigation::{self, NavigationCursor},
 };
 
 pub fn router() -> Router<AppState> {
@@ -298,12 +303,40 @@ async fn handle_socket(
     let mut keepalive_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
     let mut msg_stream = pubsub.into_on_message();
 
+    // Navigation is not part of the stored status, so a new socket is told
+    // where it stands right away instead of waiting for the next change.
+    let mut navigation = live_navigation::subscribe(vehicle_id);
+    let mut navigation_open = true;
+    let mut navigation_cursor = NavigationCursor::default();
+    let initial = {
+        let current = navigation.borrow_and_update();
+        navigation_cursor.next_message(current.as_deref(), Utc::now())
+    };
+    if let Some(message) = initial {
+        if !send_live(&mut sink, Message::Text(message.into()), expiry).await {
+            return;
+        }
+    }
+
     loop {
         tokio::select! {
             biased;
             _ = tokio::time::sleep_until(expiry) => {
                 close_live(&mut sink, 4401, "Session expired").await;
                 break;
+            }
+            changed = navigation.changed(), if navigation_open => {
+                if changed.is_err() {
+                    navigation_open = false;
+                    continue;
+                }
+                let message = {
+                    let current = navigation.borrow_and_update();
+                    navigation_cursor.next_message(current.as_deref(), Utc::now())
+                };
+                if let Some(message) = message {
+                    if !send_live(&mut sink, Message::Text(message.into()), expiry).await { break; }
+                }
             }
             msg = msg_stream.next() => {
                 match msg {
@@ -353,6 +386,15 @@ async fn handle_socket(
                         close_live(&mut sink, 1011, "Authorization unavailable").await;
                         break;
                     }
+                }
+                // A route the vehicle stopped confirming goes quiet rather
+                // than changing, so its expiry is checked on this tick.
+                let quiet_navigation = {
+                    let current = navigation.borrow();
+                    navigation_cursor.next_message(current.as_deref(), Utc::now())
+                };
+                if let Some(message) = quiet_navigation {
+                    if !send_live(&mut sink, Message::Text(message.into()), expiry).await { break; }
                 }
                 if !send_live(&mut sink, Message::Text(LIVE_KEEPALIVE_MESSAGE.into()), expiry).await { break; }
                 if !send_live(&mut sink, Message::Ping(Vec::new().into()), expiry).await { break; }

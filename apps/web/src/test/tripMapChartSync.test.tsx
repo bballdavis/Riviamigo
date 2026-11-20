@@ -900,3 +900,241 @@ describe('TripMapChart forced map mode', () => {
     expect(mockMap.setPaintProperty.mock.calls.filter(([layerId]) => layerId === 'label_city')).toEqual([]);
   });
 });
+
+describe('TripMapChart route beside a followed focus point', () => {
+  const BASEMAP = { enabled: true, resolved_provider: 'openfreemap', revision: 'vector-1' };
+  const PADDING = { top: 52, right: 20, bottom: 84, left: 20 };
+
+  function aheadRoute(from: { lat: number; lng: number }): TripMapRoute {
+    return { id: 'navigation-ahead', track: [from, { lat: 1.5, lng: 2.5 }], colorVar: '--rm-drive-wave-line', width: 5, opacity: 0.95 };
+  }
+
+  function routeSource(mockMap: MockMap) {
+    return mockMap.addSource.mock.calls.find(([id]) => id === 'trip-routes')?.[1] as unknown as {
+      data: { features: Array<{ properties: Record<string, unknown> }> };
+    };
+  }
+
+  it('draws the route without leaving the focus point, and frames it only when asked', async () => {
+    const mockMap = Object.assign(new MockMap(), { jumpTo: vi.fn(), easeTo: vi.fn(), getZoom: vi.fn(() => 13.5) });
+    const MapCtor = vi.fn(function Map() { return mockMap; });
+    const mapLoader = vi.fn(async () => ({ Map: MapCtor }));
+    document.documentElement.style.setProperty('--rm-drive-wave-line', '#123456');
+    const props = { track: [], fitKey: 'route-1', fitPadding: PADDING, fitMaxZoom: 15, basemapConfig: BASEMAP, mapLoader: mapLoader as never };
+
+    const { rerender } = render(
+      <TripMapChart {...props} routes={[aheadRoute({ lat: 1, lng: 2 })]} focusPoint={{ lat: 1, lng: 2 }} camera="follow-focus" />,
+    );
+    // Opens on the vehicle at the follow zoom, not on the route's first point at the route zoom.
+    await waitFor(() => expect(MapCtor).toHaveBeenCalledWith(expect.objectContaining({ center: [2, 1], zoom: 14 })));
+    await act(async () => mockMap.emit('load'));
+    await waitFor(() => expect(routeSource(mockMap)).toBeDefined());
+    expect(routeSource(mockMap).data.features[0]!.properties).toMatchObject({
+      id: 'navigation-ahead',
+      color: '#123456',
+      width: 5,
+      opacity: 0.95,
+    });
+    expect(mockMap.fitBounds).not.toHaveBeenCalled();
+
+    // The vehicle moves and the line is redrawn from it: still following.
+    rerender(
+      <TripMapChart {...props} routes={[aheadRoute({ lat: 1.1, lng: 2.1 })]} focusPoint={{ lat: 1.1, lng: 2.1 }} camera="follow-focus" />,
+    );
+    await waitFor(() => expect(mockMap.jumpTo).toHaveBeenCalledWith({ center: [2.1, 1.1] }));
+    expect(mockMap.fitBounds).not.toHaveBeenCalled();
+
+    // Asked for the whole route: framed once, clear of the overlays.
+    rerender(
+      <TripMapChart {...props} routes={[aheadRoute({ lat: 1.1, lng: 2.1 })]} focusPoint={{ lat: 1.1, lng: 2.1 }} camera="fit-routes" />,
+    );
+    await waitFor(() => expect(mockMap.fitBounds).toHaveBeenCalledTimes(1));
+    expect(mockMap.fitBounds).toHaveBeenLastCalledWith(
+      [[2.1, 1.1], [2.5, 1.5]],
+      expect.objectContaining({ padding: PADDING, maxZoom: 15 }),
+    );
+
+    // Driving along a framed route redraws the line but does not reframe it.
+    rerender(
+      <TripMapChart {...props} routes={[aheadRoute({ lat: 1.2, lng: 2.2 })]} focusPoint={{ lat: 1.2, lng: 2.2 }} camera="fit-routes" />,
+    );
+    await waitFor(() => expect(mockMap.sources.get('trip-routes')!.setData).toHaveBeenCalled());
+    expect(mockMap.fitBounds).toHaveBeenCalledTimes(1);
+
+    // A different route is framed afresh.
+    rerender(
+      <TripMapChart {...props} fitKey="route-2" routes={[aheadRoute({ lat: 1.2, lng: 2.2 })]} focusPoint={{ lat: 1.2, lng: 2.2 }} camera="fit-routes" />,
+    );
+    await waitFor(() => expect(mockMap.fitBounds).toHaveBeenCalledTimes(2));
+
+    // Back to following, at the zoom it had before the route was framed.
+    rerender(
+      <TripMapChart {...props} fitKey="route-2" routes={[aheadRoute({ lat: 1.2, lng: 2.2 })]} focusPoint={{ lat: 1.2, lng: 2.2 }} camera="follow-focus" />,
+    );
+    await waitFor(() => expect(mockMap.easeTo).toHaveBeenCalledWith(expect.objectContaining({ center: [2.2, 1.2], zoom: 13.5 })));
+    expect(mockMap.fitBounds).toHaveBeenCalledTimes(2);
+    document.documentElement.style.removeProperty('--rm-drive-wave-line');
+  });
+
+  it('clears the line when the route ends while the focus point keeps the map open', async () => {
+    const mockMap = Object.assign(new MockMap(), { jumpTo: vi.fn() });
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
+    const props = { track: [], focusPoint: { lat: 1, lng: 2 }, camera: 'follow-focus' as const, basemapConfig: BASEMAP, mapLoader: mapLoader as never };
+
+    const { rerender } = render(<TripMapChart {...props} routes={[aheadRoute({ lat: 1, lng: 2 })]} />);
+    await waitFor(() => expect(mapLoader).toHaveBeenCalled());
+    await act(async () => mockMap.emit('load'));
+    await waitFor(() => expect(routeSource(mockMap).data.features).toHaveLength(1));
+
+    rerender(<TripMapChart {...props} routes={[]} />);
+    await waitFor(() => expect(mockMap.sources.get('trip-routes')!.setData).toHaveBeenLastCalledWith(
+      expect.objectContaining({ features: [] }),
+    ));
+    expect(mockMap.remove).not.toHaveBeenCalled();
+  });
+
+  it('keeps a plain route map framing its routes as before', async () => {
+    const mockMap = new MockMap();
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
+    render(<TripMapChart routes={buildRoutes(1)} track={[]} basemapConfig={BASEMAP} mapLoader={mapLoader as never} />);
+    await waitFor(() => expect(mapLoader).toHaveBeenCalled());
+    await act(async () => mockMap.emit('load'));
+    expect(mockMap.fitBounds).toHaveBeenCalledWith([[0, 0], [0.1, 0.1]], { padding: 48, animate: false });
+    // No width or opacity override reaches a route that did not ask for one.
+    expect(routeSource(mockMap).data.features[0]!.properties).toEqual({ id: 'trip-1', color: expect.any(String), selected: false });
+  });
+
+  it('frames what is left to drive: the route ahead, the pins, and the focus point', async () => {
+    const mockMap = Object.assign(new MockMap(), { jumpTo: vi.fn(), easeTo: vi.fn(), getZoom: vi.fn(() => 14) });
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
+    const props = {
+      track: [],
+      focusPoint: { lat: 1, lng: 2 },
+      fitKey: 'route-1',
+      basemapConfig: BASEMAP,
+      mapLoader: mapLoader as never,
+      routes: [
+        // Already driven: drawn, but not part of the frame.
+        { id: 'navigation-traveled', track: [{ lat: 0, lng: 0 }, { lat: 1, lng: 2 }], fit: false },
+        aheadRoute({ lat: 1, lng: 2 }),
+      ],
+      // A pin off the line, such as a destination set back from the road.
+      markers: [{ id: 'stop-0', point: { lat: 1.8, lng: 2.4 }, content: <span>pin</span> }],
+    };
+
+    const { rerender } = render(<TripMapChart {...props} camera="follow-focus" />);
+    await waitFor(() => expect(mapLoader).toHaveBeenCalled());
+    await act(async () => mockMap.emit('load'));
+    await waitFor(() => expect(routeSource(mockMap).data.features).toHaveLength(2));
+
+    rerender(<TripMapChart {...props} camera="fit-routes" />);
+    await waitFor(() => expect(mockMap.fitBounds).toHaveBeenCalledTimes(1));
+    expect(mockMap.fitBounds.mock.calls[0]![0]).toEqual([[2, 1], [2.5, 1.8]]);
+  });
+
+  it('frames the pins when a route has no line to draw', async () => {
+    const mockMap = Object.assign(new MockMap(), { jumpTo: vi.fn(), easeTo: vi.fn(), getZoom: vi.fn(() => 14) });
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
+    const props = {
+      track: [],
+      routes: [],
+      focusPoint: { lat: 1, lng: 2 },
+      fitKey: 'route-1',
+      basemapConfig: BASEMAP,
+      mapLoader: mapLoader as never,
+      markers: [{ id: 'stop-0', point: { lat: 3, lng: 4 }, content: <span>pin</span> }],
+    };
+
+    const { rerender } = render(<TripMapChart {...props} camera="follow-focus" />);
+    await waitFor(() => expect(mapLoader).toHaveBeenCalled());
+    await act(async () => mockMap.emit('load'));
+    expect(mockMap.fitBounds).not.toHaveBeenCalled();
+
+    rerender(<TripMapChart {...props} camera="fit-routes" />);
+    await waitFor(() => expect(mockMap.fitBounds).toHaveBeenCalledTimes(1));
+    expect(mockMap.fitBounds.mock.calls[0]![0]).toEqual([[2, 1], [4, 3]]);
+
+    // A different destination is framed afresh.
+    rerender(<TripMapChart {...props} camera="fit-routes" fitKey="route-2" markers={[{ id: 'stop-0', point: { lat: 5, lng: 6 }, content: <span>pin</span> }]} />);
+    await waitFor(() => expect(mockMap.fitBounds).toHaveBeenCalledTimes(2));
+    expect(mockMap.fitBounds.mock.calls[1]![0]).toEqual([[2, 1], [6, 5]]);
+  });
+
+  it('reframes a framed route when the room around it changes', async () => {
+    const mockMap = Object.assign(new MockMap(), { jumpTo: vi.fn(), easeTo: vi.fn(), getZoom: vi.fn(() => 14) });
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
+    const props = {
+      track: [],
+      routes: [aheadRoute({ lat: 1, lng: 2 })],
+      focusPoint: { lat: 1, lng: 2 },
+      fitKey: 'route-1',
+      camera: 'fit-routes' as const,
+      basemapConfig: BASEMAP,
+      mapLoader: mapLoader as never,
+    };
+
+    // A map that opens on the whole route is framed as soon as it loads.
+    const { rerender } = render(<TripMapChart {...props} fitPadding={PADDING} />);
+    await waitFor(() => expect(mapLoader).toHaveBeenCalled());
+    await act(async () => mockMap.emit('load'));
+    await waitFor(() => expect(mockMap.fitBounds).toHaveBeenCalledTimes(1));
+    expect(mockMap.fitBounds).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ padding: PADDING, animate: false }));
+
+    // The panel got narrower: more of the canvas is hidden on each side.
+    const narrower = { ...PADDING, left: 102, right: 102 };
+    rerender(<TripMapChart {...props} fitPadding={narrower} />);
+    await waitFor(() => expect(mockMap.fitBounds).toHaveBeenCalledTimes(2));
+    expect(mockMap.fitBounds).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ padding: narrower }));
+
+    // An equal padding object is not a change.
+    rerender(<TripMapChart {...props} fitPadding={{ ...narrower }} />);
+    await act(async () => undefined);
+    expect(mockMap.fitBounds).toHaveBeenCalledTimes(2);
+  });
+
+  it('pins extra markers under the focus marker and moves or removes them with their data', async () => {
+    const mockMap = Object.assign(new MockMap(), { jumpTo: vi.fn() });
+    const created: Array<{ element: HTMLElement; options: { rotationAlignment?: string }; setLngLat: ReturnType<typeof vi.fn>; remove: ReturnType<typeof vi.fn> }> = [];
+    const Marker = vi.fn(function Marker(options: { element: HTMLElement; rotationAlignment?: string }) {
+      const marker = {
+        element: options.element,
+        options,
+        setLngLat: vi.fn(() => marker),
+        setRotation: vi.fn(() => marker),
+        addTo: vi.fn(() => marker),
+        remove: vi.fn(),
+      };
+      created.push(marker);
+      return marker;
+    });
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }), Marker }));
+    const props = {
+      track: [],
+      focusPoint: { lat: 1, lng: 2 },
+      focusMarker: <span data-testid="vehicle">car</span>,
+      basemapConfig: BASEMAP,
+      mapLoader: mapLoader as never,
+    };
+    const stop = (lat: number) => [{ id: 'stop-0', point: { lat, lng: 6 }, content: <span data-testid="stop">pin</span> }];
+
+    const { rerender } = render(<TripMapChart {...props} markers={stop(5)} />);
+    await waitFor(() => expect(mapLoader).toHaveBeenCalled());
+    await act(async () => mockMap.emit('load'));
+    await waitFor(() => expect(created).toHaveLength(2));
+    const pin = created.find((marker) => within(marker.element).queryByTestId('stop'))!;
+    const vehicle = created.find((marker) => within(marker.element).queryByTestId('vehicle'))!;
+    expect(pin.setLngLat).toHaveBeenCalledWith([6, 5]);
+    // A pin stays upright; the vehicle turns with the map.
+    expect(pin.options.rotationAlignment).toBe('viewport');
+    expect(Number(vehicle.element.style.zIndex)).toBeGreaterThan(Number(pin.element.style.zIndex));
+
+    // Same id, new place: the pin moves rather than being replaced.
+    rerender(<TripMapChart {...props} markers={stop(7)} />);
+    await waitFor(() => expect(pin.setLngLat).toHaveBeenLastCalledWith([6, 7]));
+    expect(created).toHaveLength(2);
+
+    rerender(<TripMapChart {...props} markers={[]} />);
+    await waitFor(() => expect(pin.remove).toHaveBeenCalled());
+    expect(vehicle.remove).not.toHaveBeenCalled();
+  });
+});
