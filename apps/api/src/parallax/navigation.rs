@@ -19,7 +19,7 @@ use prost::Message as ProstMessage;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use super::{NavigationCoordinate, NavigationTimestamp, NavigationTripProgress};
+use super::{NavigationCoordinate, NavigationTimestamp, NavigationTripArrival};
 use crate::services::live_navigation::{
     LiveNavigation, NavigationRoute, NavigationStop, NavigationStopKind,
 };
@@ -235,7 +235,7 @@ impl NavigationTracker {
     /// route.
     pub(crate) fn observe_trip_progress(
         &mut self,
-        progress: &NavigationTripProgress,
+        progress: &NavigationTripArrival,
         source_at: DateTime<Utc>,
         fix_is_fresh: bool,
     ) -> NavigationOutcome {

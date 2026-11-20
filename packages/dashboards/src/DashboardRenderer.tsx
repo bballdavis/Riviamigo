@@ -87,9 +87,13 @@ function useDashboardViewWidgets(
   const { defaultVehicleId } = useAuth();
   const vehicleId = ctx.vehicleId ?? defaultVehicleId;
   const { data: status } = useCurrentVehicleStatus(hasVisibilityRules ? vehicleId : null);
+  // Keyed on what the status resolves to, not on the status object: a live
+  // frame that leaves the vehicle's connection as it was changes nothing here,
+  // so it neither resets the preview nor re-renders every widget.
+  const liveStateKey = JSON.stringify(dashboardVisibilityStateFromStatus(status));
   const liveState = React.useMemo(
-    () => dashboardVisibilityStateFromStatus(status),
-    [status],
+    () => JSON.parse(liveStateKey) as ReturnType<typeof dashboardVisibilityStateFromStatus>,
+    [liveStateKey],
   );
   const [previewScenario, setPreviewScenario] = React.useState<DashboardPreviewState>(liveState);
   const previewTouchedRef = React.useRef(false);

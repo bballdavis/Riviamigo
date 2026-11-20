@@ -110,9 +110,15 @@ describe('resolveVehicleLocks', () => {
     expect(resolveVehicleLocks(status, 'R1T').state).toBe('unlocked');
   });
 
-  it('is unknown until a lock reports, and locked on a partial report with nothing unlocked', () => {
+  it('is unknown until all four doors have reported, unless something is already unlocked', () => {
     expect(resolveVehicleLocks(null, 'R1S').state).toBe('unknown');
     expect(resolveVehicleLocks({} as VehicleStatus, 'R1T').state).toBe('unknown');
-    expect(resolveVehicleLocks({ door_front_left_locked: true } as VehicleStatus, 'R1S').state).toBe('locked');
+    // A frunk or a single door is not the whole vehicle.
+    expect(resolveVehicleLocks({ closure_frunk_locked: true } as VehicleStatus, 'R1S').state).toBe('unknown');
+    expect(resolveVehicleLocks({ door_front_left_locked: true } as VehicleStatus, 'R1S').state).toBe('unknown');
+    expect(resolveVehicleLocks({ closure_frunk_locked: false } as VehicleStatus, 'R1S').state).toBe('unlocked');
+    // All four doors locked is enough when the closures have not reported.
+    const doorsOnly = { door_front_left_locked: true, door_front_right_locked: true, door_rear_left_locked: true, door_rear_right_locked: true } as VehicleStatus;
+    expect(resolveVehicleLocks(doorsOnly, 'R2').state).toBe('locked');
   });
 });
