@@ -15,6 +15,9 @@ const ciEnv = {
   DEV_REDIS_PORT: '56379',
   DATABASE_URL: 'postgresql://riviamigo:devpassword@127.0.0.1:55432/riviamigo',
   REDIS_URL: 'redis://127.0.0.1:56379',
+  // The API integration tests read this, not REDIS_URL. Without it they reach
+  // for the development stack's Redis on 6379 and fail when it is not running.
+  RIVIAMIGO_TEST_REDIS_URL: 'redis://127.0.0.1:56379/',
   RIVIAMIGO_ENV: 'development',
   // Each API integration test creates and migrates its own database. Unbounded
   // parallelism exhausts connection pools against the local Docker database
