@@ -67,8 +67,13 @@ upstream `vehicleId` before storing or matching it:
 - A summary whose `vehicleId` exactly matches the target vehicle's Rivian ID is
   processed.
 - A summary that names a different vehicle is always skipped.
-- A summary with a null or empty `vehicleId` is attributed to the target vehicle
-  only when the target is the sole non-demo vehicle of its owner
+- A Rivian Wall Charger session with a null or empty `vehicleId` and no
+  vehicle-side record (`chargerType` `WALLBOX` and no `VTXN:` data source) is
+  always skipped. A Wall Charger serves any EV, such as a household's
+  non-Rivian car, and a Rivian charging on it reports its own transaction,
+  which Rivian uses to name the vehicle.
+- Any other summary with a null or empty `vehicleId` is attributed to the
+  target vehicle only when the target is the sole non-demo vehicle of its owner
   (`vehicles.user_id`) and nothing shows that its Rivian account covers other
   vehicles: the current response and the vehicle's retained summaries must not
   name any other upstream vehicle. Otherwise it is skipped, because its vehicle
@@ -78,10 +83,14 @@ upstream `vehicleId` before storing or matching it:
   unidentified there is no evidence to detect the sharing, and those sessions
   are attributed to the polling vehicle.
 
-Each sync or replay run logs one aggregated `info` line with
-`skipped_foreign`, `skipped_unidentified`, and `accepted_unidentified` counts
-when any of them is nonzero. The other vehicle's Rivian ID is never logged.
-Live sync does not retain payloads for skipped summaries.
+Each sync or replay run logs one aggregated `debug` line with
+`skipped_foreign`, `skipped_wall_charger`, `skipped_unidentified`, and
+`accepted_unidentified` counts when any of them is nonzero. The other
+vehicle's Rivian ID is never logged. Live sync does not retain payloads for
+skipped summaries; Rivian returns them again on every request. Supporting
+non-Rivian vehicles later starts at the `WallChargerOnly` classification in
+`services/charge_sessions.rs`, which would route those sessions to their own
+vehicle instead of skipping them.
 
 Canonicalization merges same-vehicle duplicates before promoting their preferred
 external alias. Promotion leaves the current ID unchanged if another row still
@@ -115,19 +124,64 @@ The repair leaves these sessions untouched:
 
 - mixed-source sessions (`telemetry` or `telemetry+rivian_api`), because their
   telemetry evidence belongs to the vehicle they are on;
-- sessions whose Rivian vehicle ID matches no vehicle of the same user;
 - API-only sessions without a Rivian session ID that would collide with an
   existing session on the owner at the same start time.
 
-`diagnose_charge_sessions` reports remaining cases as `misattributed_sessions`.
-Inspect any nonzero count against the retained payload's `vehicleId` before
-planning a targeted repair with a verified backup.
+API-only sessions whose Rivian vehicle ID matches no vehicle of the same user
+are removed by the charge-history backfill instead (next section).
+
+#### Removal of other vehicles' sessions
+
+Earlier releases attributed Wall Charger sessions without a `vehicleId` to an
+owner's only vehicle, and, before vehicle filtering, summaries naming other
+Rivians to the polling vehicle. The charge-history backfill removes the
+API-only sessions those summaries created. It does so inside its full fetch, while holding the
+vehicle's charge-history lock, once Rivian has returned a non-empty history and
+right before applying it; an empty or failed response removes nothing. A
+session is removed only when:
+
+- its `source` is exactly `rivian_api`;
+- Rivian's evidence places it on another vehicle: its stored
+  `rivian_vehicle_id` names a Rivian that none of the user's vehicles is, or it
+  has no `rivian_vehicle_id` and the summary that created it (kept in
+  `rivian_meta`, which outlives payload retention) is a Wall Charger session
+  with a null or empty `vehicleId` and no `VTXN:` data source, and no
+  vehicle-reported summary was merged into it later (no `vtxn` alias);
+- no retained summary linked to it names its own vehicle; and
+- no telemetry, Rivian charge-curve, or Parallax charge-curve samples
+  reference it.
+
+Removal runs only in the backfill because the history it then applies is the
+only source for re-creating a session from Rivian's data. An older release
+could merge the vehicle's own summary into a row that another vehicle's
+summary created; the row keeps the other vehicle's ID, and once the own
+summary's retained payload expires nothing local shows the merge. The backfill
+removes such a row and adds the own session back from Rivian's history, without
+the removed row's corrections. Canonicalization, `rebuild_vehicle_history`, and
+the repair tools never run this removal.
+
+The session's aliases, annotations, and any manual cost or location correction
+are deleted with it; the `removed API-only charge sessions that belong to other
+vehicles` log line reports `removed` and `corrected` counts. Retained payloads are kept and unlinked, and replay does not
+attribute them again. Removals for one vehicle run in one transaction.
+Telemetry-backed sessions are never removed. API-only sessions without a
+Rivian vehicle ID are kept unless their stored summary shows a Wall Charger
+session no vehicle reported; that includes unnamed public sessions and rows
+with no stored summary or no `vehicleId` field, because nothing shows they
+belong to another vehicle.
+
+`diagnose_charge_sessions` reports sessions the next backfill would remove as
+`other_vehicle_api_sessions`. `misattributed_sessions` counts every remaining
+session whose stored Rivian vehicle ID differs from its vehicle's: mixed-source
+sessions, API-only sessions spared by the guards above, and rows the
+reassignment skipped. Inspect a nonzero count against the retained payload's
+`vehicleId` before planning a targeted repair with a verified backup.
 
 After deploying the fix, retry charge-history backfill for each affected vehicle
-and run `diagnose_charge_sessions -- --vehicle <uuid>`. A successful retry alone
-does not prove historical attribution is correct: sessions created from
-unidentified summaries carry no Rivian vehicle ID and are not detected by the
-misattribution count.
+and run `diagnose_charge_sessions -- --vehicle <uuid>`. `other_vehicle_api_sessions`
+should be zero. Rows the guards spare stay as they are: a mixed-source session
+whose API fields came from another vehicle's summary that matched it by time
+still has correct telemetry, and it is not repaired automatically.
 
 ## Diagnostics First
 

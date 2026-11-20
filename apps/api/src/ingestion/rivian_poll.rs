@@ -837,6 +837,9 @@ async fn record_charge_history_sync_succeeded(pool: &PgPool, vehicle_id: Uuid) {
 /// - **`full_backfill = true`** (first-start backfill): additionally INSERTs
 ///   sessions that have no local match at all, tagged with `source = 'rivian_api'`.
 ///   Paginates until the API returns fewer than `PAGE_SIZE` results (cap: 50 pages).
+///   Before applying a non-empty history it removes API-only sessions that
+///   Rivian places on other vehicles
+///   ([`charge_sessions::remove_other_vehicle_api_sessions`]).
 pub async fn fetch_charge_history(
     rivian_vehicle_id: &str,
     vehicle_id: Uuid,
@@ -994,6 +997,13 @@ async fn fetch_charge_history_locked(
     let mut payload_audit_failures = 0usize;
     let mut payload_audit_error_sample: Option<String> = None;
     let summaries = data.get_completed_session_summaries.unwrap_or_default();
+    // A full backfill first drops sessions Rivian places on other vehicles.
+    // It runs under this vehicle's lock and only once Rivian has returned its
+    // history, so any of this vehicle's own sessions caught up in them are
+    // re-created from that history below.
+    if full_backfill && !summaries.is_empty() {
+        charge_sessions::remove_other_vehicle_api_sessions(pool, vehicle_id).await?;
+    }
     // A foreign summary in this response proves the Rivian account has other
     // vehicles, so an unidentified summary cannot be attributed safely.
     let response_has_foreign = summaries.iter().any(|summary| {
@@ -3125,6 +3135,14 @@ mod tests {
         session_id
     }
 
+    async fn session_exists(pool: &PgPool, session_id: uuid::Uuid) -> bool {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM riviamigo.charge_sessions WHERE id = $1)")
+            .bind(session_id)
+            .fetch_one(pool)
+            .await
+            .expect("check session exists")
+    }
+
     async fn session_vehicle(pool: &PgPool, session_id: uuid::Uuid) -> uuid::Uuid {
         sqlx::query_scalar("SELECT vehicle_id FROM riviamigo.charge_sessions WHERE id = $1")
             .bind(session_id)
@@ -3175,18 +3193,25 @@ mod tests {
                 ),
                 ("foreign", Some("another-vehicle"), "2026-06-21T10:00:00Z"),
                 ("unidentified", None, "2026-06-22T10:00:00Z"),
+                // Issue #122: another EV on the Rivian Wall Charger.
+                ("wallbox", None, "2026-06-23T10:00:00Z"),
             ]
             .into_iter()
             .filter(|(label, _, _)| stores_foreign || *label != "foreign")
             {
                 let transaction_id = format!("{label}-{vehicle_id}");
-                let payload = json!({
+                let mut payload = json!({
                     "transactionId": transaction_id,
                     "vehicleId": upstream_vehicle,
                     "startInstant": started_at,
                     "endInstant": started_at.replace("T10", "T11"),
                     "totalEnergyKwh": 12.5
                 });
+                if label == "wallbox" {
+                    payload["chargerType"] = json!("WALLBOX");
+                    payload["isHomeCharger"] = json!(true);
+                    payload["meta"] = json!({ "dataSources": [format!("TXN:{transaction_id}")] });
+                }
                 record_charge_payload_with_ref(
                     &db.pool,
                     vehicle_id,
@@ -3208,7 +3233,13 @@ mod tests {
             .await
             .unwrap();
             let case = format!("has_sibling={has_sibling} stores_foreign={stores_foreign}");
-            let unidentified = transaction_ids.last().unwrap().clone();
+            // The Wall Charger session is never attributed, even to a sole
+            // vehicle that accepts other unidentified summaries.
+            let unidentified = transaction_ids
+                .iter()
+                .find(|id| id.starts_with("unidentified-"))
+                .unwrap()
+                .clone();
             let expected = if accepts_unidentified {
                 vec![transaction_ids[0].clone(), unidentified]
             } else {
@@ -3241,11 +3272,13 @@ mod tests {
                 transaction_ids.len() as i64
             );
             // Sessions built from unidentified summaries carry no upstream
-            // vehicle ID, so they are never reported as misattributed.
+            // vehicle ID, so they are never reported as misattributed, and
+            // only Wall Charger sessions are slated for removal.
             let diagnostics = charge_sessions::diagnose_charge_sessions(&db.pool, Some(vehicle_id))
                 .await
                 .unwrap();
             assert_eq!(diagnostics.misattributed_sessions, 0);
+            assert_eq!(diagnostics.other_vehicle_api_sessions, 0);
         }
 
         let accepting = charge_sessions::vehicles_accepting_unidentified_summaries(&db.pool, None)
@@ -3361,6 +3394,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(before_a.misattributed_sessions, 5);
+        // Only rows naming a Rivian outside the user's vehicles are removable;
+        // B's row is moved and the curve-backed row is spared.
+        assert_eq!(before_a.other_vehicle_api_sessions, 2);
         let before_b = charge_sessions::diagnose_charge_sessions(&db.pool, Some(vehicle_b))
             .await
             .unwrap();
@@ -3424,14 +3460,7 @@ mod tests {
                 Some("telemetry+rivian_api".to_string())
             )]
         );
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM riviamigo.charge_sessions WHERE id = $1)",
-        )
-        .bind(foreign_api)
-        .fetch_one(&db.pool)
-        .await
-        .unwrap();
-        assert!(!exists);
+        assert!(!session_exists(&db.pool, foreign_api).await);
         let b_payload_session: Option<uuid::Uuid> = sqlx::query_scalar(
             "SELECT charge_session_id FROM riviamigo.rivian_charge_payloads WHERE vehicle_id = $1",
         )
@@ -3461,18 +3490,553 @@ mod tests {
         assert_eq!(repeated.misattributed_sessions_reassigned, 0);
         assert_eq!(repeated.duplicate_rows_deleted, 0);
 
+        // Canonicalization never removes sessions; the API-only rows naming a
+        // Rivian outside the user's vehicles wait for A's backfill.
         let a_stats = charge_sessions::canonicalize_charge_sessions(&db.pool, Some(vehicle_a))
             .await
             .unwrap();
         assert_eq!(a_stats.misattributed_sessions_reassigned, 0);
+        let canonical_a = charge_sessions::diagnose_charge_sessions(&db.pool, Some(vehicle_a))
+            .await
+            .unwrap();
+        assert_eq!(canonical_a.misattributed_sessions, 4);
+        assert_eq!(canonical_a.other_vehicle_api_sessions, 2);
+        // B's scope never removes A's rows.
+        assert_eq!(
+            charge_sessions::remove_other_vehicle_api_sessions(&db.pool, vehicle_b)
+                .await
+                .unwrap()
+                .removed,
+            0
+        );
+        assert_eq!(
+            charge_sessions::remove_other_vehicle_api_sessions(&db.pool, vehicle_a)
+                .await
+                .unwrap()
+                .removed,
+            2
+        );
+        for removed in [other_user, unknown_vehicle] {
+            assert!(!session_exists(&db.pool, removed).await);
+        }
+        for kept in [mixed, curve_backed] {
+            assert_eq!(session_vehicle(&db.pool, kept).await, vehicle_a);
+        }
         let after_a = charge_sessions::diagnose_charge_sessions(&db.pool, Some(vehicle_a))
             .await
             .unwrap();
-        assert_eq!(after_a.misattributed_sessions, 4);
+        assert_eq!(after_a.misattributed_sessions, 2);
+        assert_eq!(after_a.other_vehicle_api_sessions, 0);
         let after_b = charge_sessions::diagnose_charge_sessions(&db.pool, Some(vehicle_b))
             .await
             .unwrap();
         assert_eq!(after_b.misattributed_sessions, 0);
+        db.cleanup().await;
+    }
+
+    /// Issue #122: a non-Rivian EV sharing the owner's Rivian Wall Charger.
+    /// Earlier releases attributed its sessions, which carry no `vehicleId`, to
+    /// the user's only vehicle. The backfill's removal step deletes Wall
+    /// Charger sessions no vehicle reported and sessions naming another Rivian,
+    /// and keeps every other row, including other sessions without a vehicle
+    /// ID.
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn charge_history_removes_sessions_without_vehicle_evidence() {
+        let db = DisposableDatabase::new().await;
+        let vehicle_id = seed_vehicle(&db.pool).await;
+        let rivian_vehicle_id = vehicle_rivian_id(&db.pool, vehicle_id).await;
+
+        /// A Wall Charger summary carrying only the charger's transaction.
+        fn wall_charger_summary(
+            transaction_id: Option<&str>,
+            upstream_vehicle: Option<&str>,
+            day: u32,
+        ) -> serde_json::Value {
+            json!({
+                "transactionId": transaction_id,
+                "vehicleId": upstream_vehicle,
+                "startInstant": format!("2026-08-{day:02}T22:00:00Z"),
+                "endInstant": format!("2026-08-{day:02}T23:30:00Z"),
+                "chargerType": "WALLBOX",
+                "isHomeCharger": true,
+                "meta": { "dataSources": [format!("TXN:{}", transaction_id.unwrap_or("none"))] }
+            })
+        }
+
+        async fn seed_with_meta(
+            pool: &PgPool,
+            vehicle_id: uuid::Uuid,
+            source: &str,
+            transaction_id: Option<&str>,
+            upstream_vehicle: Option<&str>,
+            day: u32,
+        ) -> uuid::Uuid {
+            let started_at = format!("2026-08-{day:02}T22:00:00Z");
+            let ended_at = format!("2026-08-{day:02}T23:30:00Z");
+            let session_id = seed_api_attributed_session(
+                pool,
+                vehicle_id,
+                source,
+                transaction_id,
+                upstream_vehicle,
+                &started_at,
+                &ended_at,
+            )
+            .await;
+            sqlx::query("UPDATE riviamigo.charge_sessions SET rivian_meta = $2 WHERE id = $1")
+                .bind(session_id)
+                .bind(wall_charger_summary(transaction_id, upstream_vehicle, day))
+                .execute(pool)
+                .await
+                .expect("seed rivian_meta");
+            session_id
+        }
+
+        async fn link_payload(
+            pool: &PgPool,
+            vehicle_id: uuid::Uuid,
+            session_id: uuid::Uuid,
+            transaction_id: &str,
+            upstream_vehicle: Option<&str>,
+            day: u32,
+        ) {
+            record_charge_payload_with_ref(
+                pool,
+                vehicle_id,
+                "getCompletedSessionSummaries",
+                Some(transaction_id),
+                upstream_vehicle,
+                wall_charger_summary(Some(transaction_id), upstream_vehicle, day),
+            )
+            .await
+            .expect("retain summary payload");
+            sqlx::query(
+                "UPDATE riviamigo.rivian_charge_payloads SET charge_session_id = $2
+                 WHERE vehicle_id = $1 AND rivian_transaction_id = $3",
+            )
+            .bind(vehicle_id)
+            .bind(session_id)
+            .bind(transaction_id)
+            .execute(pool)
+            .await
+            .expect("link summary payload");
+        }
+
+        // Removed: the other EV's Wall Charger session with its payload still
+        // retained, an older one whose payload has expired, a session naming
+        // a Rivian that is not the user's, and one the user corrected by hand.
+        let wallbox = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-wallbox"),
+            None,
+            1,
+        )
+        .await;
+        link_payload(&db.pool, vehicle_id, wallbox, "txn-wallbox", None, 1).await;
+        let expired = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-expired"),
+            Some(""),
+            2,
+        )
+        .await;
+        let other_rivian = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-other-rivian"),
+            Some("someone-elses-rivian"),
+            3,
+        )
+        .await;
+        let corrected = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-corrected"),
+            None,
+            4,
+        )
+        .await;
+        sqlx::query(
+            "UPDATE riviamigo.charge_sessions
+             SET cost_override_mode = 'free', location_override_mode = 'none'
+             WHERE id = $1",
+        )
+        .bind(corrected)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        // Kept: the vehicle's own API-only session.
+        let own = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-own"),
+            Some(&rivian_vehicle_id),
+            5,
+        )
+        .await;
+        // Kept: rows with no stored summary, or a stored summary without a
+        // `vehicleId` key, are not evidence either way.
+        let legacy = seed_api_attributed_session(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-legacy"),
+            None,
+            "2026-08-06T22:00:00Z",
+            "2026-08-06T23:30:00Z",
+        )
+        .await;
+        let keyless = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-keyless"),
+            None,
+            7,
+        )
+        .await;
+        sqlx::query(
+            "UPDATE riviamigo.charge_sessions SET rivian_meta = rivian_meta - 'vehicleId' WHERE id = $1",
+        )
+        .bind(keyless)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        // Kept: a retained summary naming the vehicle is linked to the row,
+        // whether the row has no Rivian vehicle ID or another Rivian's ID that
+        // an older release kept when the own summary was merged into it.
+        let confirmed = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-confirmed"),
+            None,
+            8,
+        )
+        .await;
+        link_payload(
+            &db.pool,
+            vehicle_id,
+            confirmed,
+            "txn-confirmed",
+            Some(&rivian_vehicle_id),
+            8,
+        )
+        .await;
+        let absorbed = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-absorbed-foreign"),
+            Some("someone-elses-rivian"),
+            9,
+        )
+        .await;
+        link_payload(
+            &db.pool,
+            vehicle_id,
+            absorbed,
+            "txn-absorbed-own",
+            Some(&rivian_vehicle_id),
+            9,
+        )
+        .await;
+        // Kept: the vehicle's own telemetry, Rivian charge curve, or Parallax
+        // charge curve references the row.
+        let telemetry_ref = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-telemetry-ref"),
+            None,
+            10,
+        )
+        .await;
+        sqlx::query(
+            "INSERT INTO timeseries.telemetry (ts, vehicle_id, charge_session_id)
+             VALUES ('2026-08-10T22:30:00Z', $1, $2)",
+        )
+        .bind(vehicle_id)
+        .bind(telemetry_ref)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let curve_ref = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-curve-ref"),
+            None,
+            11,
+        )
+        .await;
+        sqlx::query(
+            "INSERT INTO riviamigo.rivian_charge_curve_points (vehicle_id, charge_session_id, ts, power_kw)
+             VALUES ($1, $2, '2026-08-11T22:30:00Z', 11)",
+        )
+        .bind(vehicle_id)
+        .bind(curve_ref)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let parallax_ref = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-parallax-ref"),
+            None,
+            12,
+        )
+        .await;
+        sqlx::query(
+            "INSERT INTO timeseries.parallax_charge_curve_points
+                 (vehicle_id, source_at, segment_index, charge_session_id, power_kw)
+             VALUES ($1, '2026-08-12T22:30:00Z', 0, $2, 11)",
+        )
+        .bind(vehicle_id)
+        .bind(parallax_ref)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        // Kept: a mixed-source row is never API-only.
+        let mixed = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "telemetry+rivian_api",
+            Some("txn-mixed"),
+            None,
+            13,
+        )
+        .await;
+        // Kept: sessions without a vehicle ID that are not Wall Charger
+        // sessions no vehicle reported: an unnamed public charge, and a Wall
+        // Charger charge that the vehicle reported itself.
+        let public_unidentified = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-public"),
+            None,
+            15,
+        )
+        .await;
+        sqlx::query(
+            "UPDATE riviamigo.charge_sessions
+             SET rivian_meta = rivian_meta - 'chargerType' - 'isHomeCharger'
+                 || '{\"isPublic\": true, \"meta\": {\"dataSources\": [\"CDRS:cdr-public\", \"TXN:txn-public\"]}}'::jsonb
+             WHERE id = $1",
+        )
+        .bind(public_unidentified)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let vehicle_reported_wallbox = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-reported-wallbox"),
+            None,
+            16,
+        )
+        .await;
+        sqlx::query(
+            "UPDATE riviamigo.charge_sessions
+             SET rivian_meta = jsonb_set(
+                 rivian_meta, '{meta,dataSources}',
+                 '[\"TXN:txn-reported-wallbox\", \"VTXN:vtxn-reported-wallbox\"]'::jsonb)
+             WHERE id = $1",
+        )
+        .bind(vehicle_reported_wallbox)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        // Kept: a Wall Charger row into which an older release merged a
+        // vehicle-reported summary, shown by its `vtxn` alias.
+        let merged_vehicle_report = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-merged-report"),
+            None,
+            17,
+        )
+        .await;
+        charge_sessions::upsert_external_aliases(
+            &db.pool,
+            merged_vehicle_report,
+            &[ChargeSessionExternalAlias {
+                external_id: "vtxn-merged-report".to_string(),
+                alias_kind: ExternalAliasKind::Vtxn,
+                transaction_id_grouping_key: None,
+            }],
+            None,
+        )
+        .await
+        .unwrap();
+        // Removed, then re-created: an older release merged the vehicle's own
+        // summary into another Rivian's row, and the own payload has expired.
+        let absorbed_expired = seed_with_meta(
+            &db.pool,
+            vehicle_id,
+            "rivian_api",
+            Some("txn-absorbed-expired-other"),
+            Some("someone-elses-rivian"),
+            14,
+        )
+        .await;
+        charge_sessions::upsert_external_aliases(
+            &db.pool,
+            absorbed_expired,
+            &[ChargeSessionExternalAlias {
+                external_id: "txn-absorbed-expired-own".to_string(),
+                alias_kind: ExternalAliasKind::Txn,
+                transaction_id_grouping_key: None,
+            }],
+            None,
+        )
+        .await
+        .unwrap();
+
+        let doomed = [wallbox, expired, other_rivian, corrected, absorbed_expired];
+        let before = charge_sessions::diagnose_charge_sessions(&db.pool, Some(vehicle_id))
+            .await
+            .unwrap();
+        assert_eq!(before.other_vehicle_api_sessions, doomed.len() as i64);
+        // Canonicalization alone never removes sessions.
+        charge_sessions::canonicalize_charge_sessions(&db.pool, Some(vehicle_id))
+            .await
+            .unwrap();
+        for session in doomed {
+            assert!(session_exists(&db.pool, session).await);
+        }
+
+        let removal = charge_sessions::remove_other_vehicle_api_sessions(&db.pool, vehicle_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            removal,
+            charge_sessions::OtherVehicleSessionRemoval {
+                removed: doomed.len() as u64,
+                corrected: 1,
+            }
+        );
+        for session in doomed {
+            assert!(!session_exists(&db.pool, session).await);
+        }
+        // Applying Rivian's history, as the backfill does next, re-creates the
+        // own session that was inside the removed row.
+        let own_summary: charge_sessions::ChargeSessionSummaryPayload =
+            serde_json::from_value(json!({
+                "transactionId": "txn-absorbed-expired-own",
+                "vehicleId": rivian_vehicle_id,
+                "startInstant": "2026-08-14T22:05:00Z",
+                "endInstant": "2026-08-14T23:20:00Z",
+                "totalEnergyKwh": 18.0
+            }))
+            .unwrap();
+        let recreated = charge_sessions::reconcile_completed_session_summary(
+            &db.pool,
+            vehicle_id,
+            &own_summary,
+            UnmatchedInsertPolicy::Always,
+            None,
+        )
+        .await
+        .unwrap()
+        .expect("own session re-created");
+        assert_ne!(recreated, absorbed_expired);
+        let recreated_vehicle: Option<String> = sqlx::query_scalar(
+            "SELECT rivian_vehicle_id FROM riviamigo.charge_sessions WHERE id = $1",
+        )
+        .bind(recreated)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            recreated_vehicle.as_deref(),
+            Some(rivian_vehicle_id.as_str())
+        );
+        for kept in [
+            own,
+            legacy,
+            keyless,
+            confirmed,
+            absorbed,
+            telemetry_ref,
+            curve_ref,
+            parallax_ref,
+            mixed,
+            public_unidentified,
+            vehicle_reported_wallbox,
+            merged_vehicle_report,
+        ] {
+            assert!(session_exists(&db.pool, kept).await, "{kept}");
+        }
+        // The removed row's aliases go with it; its payload stays, unlinked,
+        // and replay does not attribute it again.
+        let wallbox_aliases: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM riviamigo.charge_session_external_aliases
+             WHERE external_id = 'txn-wallbox'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(wallbox_aliases, 0);
+        let wallbox_payload: Option<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT charge_session_id FROM riviamigo.rivian_charge_payloads
+             WHERE vehicle_id = $1 AND rivian_transaction_id = 'txn-wallbox'",
+        )
+        .bind(vehicle_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(wallbox_payload, None);
+
+        charge_sessions::canonicalize_charge_sessions(&db.pool, Some(vehicle_id))
+            .await
+            .unwrap();
+        let after = charge_sessions::diagnose_charge_sessions(&db.pool, Some(vehicle_id))
+            .await
+            .unwrap();
+        assert_eq!(after.other_vehicle_api_sessions, 0);
+        // Only the absorbed row still names another Rivian.
+        assert_eq!(after.misattributed_sessions, 1);
+        // Replay applied the confirming summary to its row.
+        let confirmed_vehicle: Option<String> = sqlx::query_scalar(
+            "SELECT rivian_vehicle_id FROM riviamigo.charge_sessions WHERE id = $1",
+        )
+        .bind(confirmed)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            confirmed_vehicle.as_deref(),
+            Some(rivian_vehicle_id.as_str())
+        );
+        let remaining: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM riviamigo.charge_sessions WHERE vehicle_id = $1",
+        )
+        .bind(vehicle_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        // Twelve kept rows plus the re-created own session.
+        assert_eq!(remaining, 13);
+        assert_eq!(
+            charge_sessions::remove_other_vehicle_api_sessions(&db.pool, vehicle_id)
+                .await
+                .unwrap(),
+            charge_sessions::OtherVehicleSessionRemoval::default()
+        );
         db.cleanup().await;
     }
 
