@@ -339,6 +339,38 @@ describe('overview map drive wave', () => {
     expect(within(wave).getAllByText('Parked').length).toBeGreaterThan(0);
   });
 
+  it('shows a muted bolt over Plugged in while parked on a charger without power flowing', () => {
+    vehicleStatus.current = { ...vehicleStatus.current, gear_status: 'park', speed_mph: 0, charger_state: 'Connected' };
+    const wave = openMap();
+    expect(wave).toHaveAttribute('data-state', 'parked');
+    expect(wave).toHaveAttribute('data-charging', 'plugged');
+    const charging = within(wave).getByTestId('overview-drive-wave-charging');
+    expect(within(charging).getByText('Plugged in')).toHaveClass('text-fg-secondary', 'text-[9px]');
+    const bolt = charging.querySelector('svg')!;
+    expect(bolt).toHaveClass('text-fg-tertiary');
+    expect(bolt).not.toHaveClass('text-accent');
+    expect(within(wave).getByText('Parked, plugged in')).toHaveClass('sr-only');
+    // "Parked" keeps the center.
+    expect(within(wave).getAllByText('Parked').length).toBeGreaterThan(0);
+  });
+
+  it('lights the bolt over Charging while power is flowing', () => {
+    vehicleStatus.current = { ...vehicleStatus.current, gear_status: 'park', speed_mph: 0, charger_state: 'Charging', power_state: 'charging' };
+    const wave = openMap();
+    expect(wave).toHaveAttribute('data-charging', 'charging');
+    const charging = within(wave).getByTestId('overview-drive-wave-charging');
+    expect(within(charging).getByText('Charging')).toBeInTheDocument();
+    expect(charging.querySelector('svg')).toHaveClass('text-accent', 'fill-current');
+    expect(within(wave).getByText('Parked, charging')).toHaveClass('sr-only');
+  });
+
+  it('shows no charging hump while unplugged or in gear', () => {
+    vehicleStatus.current = { ...vehicleStatus.current, gear_status: 'park', speed_mph: 0, charger_state: 'Disconnected' };
+    const wave = openMap();
+    expect(wave).not.toHaveAttribute('data-charging');
+    expect(within(wave).queryByTestId('overview-drive-wave-charging')).not.toBeInTheDocument();
+  });
+
   it('shows the gear and speed once the vehicle is in drive', () => {
     vehicleStatus.current = { ...vehicleStatus.current, gear_status: 'drive', speed_mph: 41.6 };
     const wave = openMap();
@@ -373,13 +405,28 @@ describe('resolveDriveWaveState', () => {
     expect(resolveDriveWaveState({ gear_status: 'Drive', speed_mph: 30 } as never)).toEqual({ kind: 'moving', gear: 'D', speedMph: 30 });
     expect(resolveDriveWaveState({ gear_status: 'reverse', speed_mph: 3 } as never)).toEqual({ kind: 'moving', gear: 'R', speedMph: 3 });
     expect(resolveDriveWaveState({ gear_status: 'neutral', speed_mph: null } as never)).toEqual({ kind: 'moving', gear: 'N', speedMph: null });
-    expect(resolveDriveWaveState({ gear_status: 'park', speed_mph: 0 } as never)).toEqual({ kind: 'parked' });
-    expect(resolveDriveWaveState({ gear_status: 'drive', speed_mph: 0, power_state: 'sleep' } as never)).toEqual({ kind: 'parked' });
+    expect(resolveDriveWaveState({ gear_status: 'park', speed_mph: 0 } as never)).toEqual({ kind: 'parked', charging: null });
+    expect(resolveDriveWaveState({ gear_status: 'drive', speed_mph: 0, power_state: 'sleep' } as never)).toEqual({ kind: 'parked', charging: null });
+  });
+
+  it('reports whether a parked vehicle is plugged in or charging', () => {
+    const parked = { gear_status: 'park', speed_mph: 0 };
+    expect(resolveDriveWaveState({ ...parked, charger_state: 'Connected' } as never)).toEqual({ kind: 'parked', charging: 'plugged' });
+    expect(resolveDriveWaveState({ ...parked, charger_state: 'Charging' } as never)).toEqual({ kind: 'parked', charging: 'charging' });
+    expect(resolveDriveWaveState({ ...parked, charger_state: 'Connected', power_state: 'charging' } as never)).toEqual({ kind: 'parked', charging: 'charging' });
+    expect(resolveDriveWaveState({ ...parked, charger_status: 'chrgr_sts_connected_charging' } as never)).toEqual({ kind: 'parked', charging: 'charging' });
+    // A finished charge, or asleep on the charger, is still plugged in.
+    expect(resolveDriveWaveState({ ...parked, charger_state: 'Done' } as never)).toEqual({ kind: 'parked', charging: 'plugged' });
+    expect(resolveDriveWaveState({ power_state: 'sleep', charger_state: 'Connected' } as never)).toEqual({ kind: 'parked', charging: 'plugged' });
+    expect(resolveDriveWaveState({ ...parked, charger_state: 'Disconnected', charger_status: 'chrgr_sts_not_connected' } as never)).toEqual({ kind: 'parked', charging: null });
+    expect(resolveDriveWaveState({ ...parked, charger_state: 'Unknown' } as never)).toEqual({ kind: 'parked', charging: null });
+    // A vehicle in gear shows its gear, whatever the charger last reported.
+    expect(resolveDriveWaveState({ gear_status: 'drive', speed_mph: 12, charger_state: 'Connected' } as never)).toEqual({ kind: 'moving', gear: 'D', speedMph: 12 });
   });
 
   it('falls back to speed when no gear is reported, and to nothing without a status', () => {
     expect(resolveDriveWaveState({ gear_status: null, speed_mph: 25 } as never)).toEqual({ kind: 'moving', gear: null, speedMph: 25 });
-    expect(resolveDriveWaveState({ gear_status: null, speed_mph: 0.5 } as never)).toEqual({ kind: 'parked' });
+    expect(resolveDriveWaveState({ gear_status: null, speed_mph: 0.5 } as never)).toEqual({ kind: 'parked', charging: null });
     expect(resolveDriveWaveState(null)).toBeNull();
   });
 });

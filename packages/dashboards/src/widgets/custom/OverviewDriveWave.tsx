@@ -1,4 +1,5 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { Zap } from 'lucide-react';
 import { formatSpeedParts, getUnitPreferences } from '@riviamigo/ui/lib/utils';
 import type { VehicleStatus } from '@riviamigo/types';
 import {
@@ -51,8 +52,10 @@ export function createMapFrameSource(): MapFrameSource {
  *
  * A single line runs flat along the map's bottom edge and lifts into humps
  * around the values: one large hump for the speed with a smaller one beside it
- * for the gear, or a single low hump around "Parked". While the vehicle is
- * navigating, a hump to the right holds the arrival time and the time left.
+ * for the gear, or a single low hump around "Parked". Parked on a charger, the
+ * gear's hump holds a bolt instead: muted over "Plugged in", lit over
+ * "Charging". While the vehicle is navigating, a hump to the right holds the
+ * arrival time and the time left.
  * Everything under the line is a tinted glass over a blur of the map, and the
  * map stays sharp everywhere above it.
  */
@@ -70,7 +73,8 @@ export function OverviewDriveWave({ status, mapFrames, arrivalAt }: {
 
   const [containerRef, containerBox] = useBoxSize<HTMLDivElement>();
   const [centerRef, centerBox] = useBoxSize<HTMLDivElement>();
-  const [gearRef, gearBox] = useBoxSize<HTMLSpanElement>();
+  // The hump left of the center value: the gear while moving, the charging state while parked.
+  const [leadRef, leadBox] = useBoxSize<HTMLDivElement>();
   const [arrivalRef, arrivalBox] = useBoxSize<HTMLDivElement>();
   const width = containerBox.width;
   const narrow = width > 0 && width <= DRIVE_WAVE_NARROW_WIDTH;
@@ -100,15 +104,16 @@ export function OverviewDriveWave({ status, mapFrames, arrivalAt }: {
 
   const moving = state.kind === 'moving';
   const reversing = moving && state.gear === 'R';
+  const charging = state.kind === 'parked' ? state.charging : null;
   // The narrow column has room for two humps. The arrival time takes the
-  // gear's place there, except in reverse, where the gear is the warning.
+  // left hump's place there, except in reverse, where the gear is the warning.
   const showArrival = arrival !== null && !(narrow && reversing);
-  const showGear = moving && state.gear !== null && !(narrow && showArrival);
+  const showLead = (charging !== null || (moving && state.gear !== null)) && !(narrow && showArrival);
   const layout = width > 0 && centerBox.width > 0
     ? layoutDriveWave(
       width,
       centerBox,
-      showGear && gearBox.width > 0 ? gearBox : null,
+      showLead && leadBox.width > 0 ? leadBox : null,
       showArrival && arrivalBox.width > 0 ? arrivalBox : null,
     )
     : null;
@@ -124,6 +129,7 @@ export function OverviewDriveWave({ status, mapFrames, arrivalAt }: {
       }}
       data-testid="overview-drive-wave"
       data-state={moving ? `moving-${state.gear ?? 'unknown'}` : 'parked'}
+      data-charging={charging ?? undefined}
       className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
       style={{ height: DRIVE_WAVE_HEIGHT }}
     >
@@ -166,13 +172,31 @@ export function OverviewDriveWave({ status, mapFrames, arrivalAt }: {
         </>
       ) : null}
       <div aria-hidden="true" className={layout ? undefined : 'invisible'}>
-        <span
-          ref={gearRef}
-          className={`absolute -translate-x-1/2 font-display text-sm font-bold leading-none ${animate ? 'transition-[left,opacity] duration-500 motion-reduce:transition-none' : ''} ${reversing ? 'text-status-warning' : 'text-fg'} ${showGear ? 'opacity-100' : 'opacity-0'}`}
+        <div
+          ref={leadRef}
+          className={`absolute -translate-x-1/2 whitespace-nowrap ${animate ? 'transition-[left,opacity] duration-500 motion-reduce:transition-none' : ''} ${showLead ? 'opacity-100' : 'opacity-0'}`}
           style={{ left: layout?.gear.x ?? 0, bottom: DRIVE_WAVE_TEXT_BOTTOM, transitionTimingFunction: EASE }}
         >
-          {moving ? state.gear ?? '' : ''}
-        </span>
+          {charging ? (
+            <div data-testid="overview-drive-wave-charging" data-charging-state={charging} className="flex flex-col items-center gap-0.5 font-display">
+              {/* Lit (filled, in the accent) while power is flowing; an outline in grey while only plugged in. */}
+              <Zap
+                aria-hidden="true"
+                className={`${narrow ? 'h-4 w-4' : 'h-5 w-5'} ${charging === 'charging' ? 'fill-current text-accent' : 'text-fg-tertiary'}`}
+              />
+              {/* The narrow column has room for the bolt alone, beside "Parked". */}
+              {narrow ? null : (
+                <span className="text-[9px] font-semibold leading-none tracking-[0.08em] text-fg-secondary">
+                  {charging === 'charging' ? 'Charging' : 'Plugged in'}
+                </span>
+              )}
+            </div>
+          ) : (
+            <span className={`block font-display text-sm font-bold leading-none ${reversing ? 'text-status-warning' : 'text-fg'}`}>
+              {moving ? state.gear ?? '' : ''}
+            </span>
+          )}
+        </div>
         <div
           ref={centerRef}
           className={`absolute -translate-x-1/2 whitespace-nowrap ${animate ? 'transition-[left] duration-500 motion-reduce:transition-none' : ''}`}
@@ -272,7 +296,10 @@ function describe(state: DriveWaveState, speed: { value: string; unit: string } 
   const arriving = arrival
     ? `arriving ${[arrival.time, arrival.period].filter(Boolean).join(' ')}, ${arrival.remaining === 'Arriving' ? 'now' : `in ${arrival.remaining}`}`
     : null;
-  if (state.kind === 'parked') return ['Parked', arriving].filter(Boolean).join(', ');
+  if (state.kind === 'parked') {
+    const charging = state.charging === 'charging' ? 'charging' : state.charging === 'plugged' ? 'plugged in' : null;
+    return ['Parked', charging, arriving].filter(Boolean).join(', ');
+  }
   const gear = state.gear === 'D' ? 'Drive' : state.gear === 'R' ? 'Reverse' : state.gear === 'N' ? 'Neutral' : null;
   const pace = speed && speed.value !== '–' ? `${speed.value} ${speed.unit}` : null;
   return [[gear, pace].filter(Boolean).join(', ') || 'Moving', arriving].filter(Boolean).join(', ');
