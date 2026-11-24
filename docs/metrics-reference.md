@@ -206,6 +206,22 @@ Used to ensure full parity with the best-in-class EV trackers.
   bucket), `interpolated` (between readings, or the nearest within two
   minutes), or `session_bounds` (a straight line between the session's start
   and end level; cross-session curves treat these as estimated history).
+  Curves are computed when requested and never stored, so a change to this
+  logic applies to every existing session the next time it is read. The
+  Parallax collector and the telemetry worker write separate tables and the
+  curve only reads them, so the source order is a fixed per-point choice, not
+  a race between writers. Three timing effects remain:
+  - On an open session the last few minutes can change between requests: a
+    point moves from an estimate to `recorded` once its reading is stored,
+    and an estimate's centred window reaches up to five minutes past the point.
+  - Where measured power drops out partway through a session, those points
+    fall back to estimates. A `soc_delta` estimate measures energy reaching
+    the battery, so it reads about 5-7% below charger-reported power (about
+    10.5 kW against 11.2 kW on an 11 kW charger), which can show as a small
+    step.
+  - A `charging.session.power` frame that arrives just before the status
+    frame saying charging stopped is stored as a nonzero reading, so the curve
+    can show up to about 60 seconds of power after the stop.
 
 ### Historical API inventory
 - `GET /v1/battery/degradation` — capacity trend over time

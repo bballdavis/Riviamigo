@@ -127,9 +127,18 @@ energy total. The session charge curve draws from these measured readings
 first. Where none cover a minute, it uses the vehicle's charging-curve points,
 then a rate worked out from the running energy total, and only then a rate
 worked out from battery level. The two worked-out rates are marked as
-estimates. Charge
-sessions still start and end from the canonical connection, so there is one
-charge lifecycle. The R2's charge-port door is manual, so its door state is
+estimates.
+
+The curve is worked out each time it is shown, so improvements apply to past
+sessions too. While a session is still charging, its last few minutes can
+change on the next refresh as readings arrive. Where measured readings drop
+out partway through a session, the estimated points can read slightly lower,
+about 5-7%, because they measure the energy that reaches the battery. A
+reading that arrives just before the vehicle reports charging stopped can
+show up to about a minute of power after the stop.
+
+Charge sessions still start and end from the canonical connection, so there
+is one charge lifecycle. The R2's charge-port door is manual, so its door state is
 shown only as open or closed and never as plugged in.
 
 Parallax also reports when a door, gate, frunk, or window is moving. The
