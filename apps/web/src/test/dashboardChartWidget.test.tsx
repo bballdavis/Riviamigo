@@ -18,7 +18,7 @@ import {
   getDefaultBySlug,
   getWidget,
 } from '@riviamigo/dashboards';
-import type { ChartDefinitionV1, ChartRecord } from '@riviamigo/types';
+import type { ChargeCurveAnalysisPoint, ChartDefinitionV1, ChartRecord } from '@riviamigo/types';
 import chartSeeds from '../../../../packages/dashboards/src/charts/defaults/defaults.json';
 import {
   CURRENT_BUNDLED_BASELINE_REVISION,
@@ -1320,7 +1320,7 @@ const mockChargeCurve = vi.fn(() => ({
   data: [{ minutes_elapsed: 0, soc_pct: 20, power_kw: 11.5 }],
   isLoading: false,
 }));
-const mockChargeCurveAnalysis = vi.fn(() => ({
+const mockChargeCurveAnalysis = vi.fn((): { data: ChargeCurveAnalysisPoint[]; isLoading: boolean } => ({
   data: [
     {
       session_id: 's1',
@@ -2178,6 +2178,51 @@ describe('DashboardChartWidget — charging_curve_analysis', () => {
     expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toContain(
       'Observed trend'
     );
+  });
+
+  it('classifies points by soc_method and labels vehicle-measured and energy estimates', () => {
+    mockChargeCurveAnalysis.mockReturnValueOnce({
+      data: [
+        {
+          session_id: 's10',
+          minutes_elapsed: 1,
+          soc_pct: 30,
+          charge_rate_kw: 150,
+          charger_type: 'dc',
+          sample_source: 'parallax_session_power',
+          power_method: 'recorded',
+          soc_method: 'measured',
+        },
+        {
+          session_id: 's10',
+          minutes_elapsed: 2,
+          soc_pct: 33,
+          charge_rate_kw: 145,
+          charger_type: 'dc',
+          sample_source: 'parallax_breakdown',
+          power_method: 'energy_delta',
+          soc_method: 'interpolated',
+        },
+        {
+          // A Rivian API point with a measured battery level is observed data.
+          session_id: 's10',
+          minutes_elapsed: 3,
+          soc_pct: 36,
+          charge_rate_kw: 140,
+          charger_type: 'dc',
+          sample_source: 'rivian_charge_curve_points',
+          power_method: 'recorded',
+          soc_method: 'measured',
+        },
+      ],
+      isLoading: false,
+    });
+
+    renderChart('charging-curve-analysis');
+    const chart = screen.getByTestId('rich-chart');
+    expect(chart.getAttribute('data-series')).not.toContain('Estimated history');
+    expect(chart.getAttribute('data-tooltip-details')).toContain('30 SoC; Recorded kW');
+    expect(chart.getAttribute('data-tooltip-details')).toContain('33 SoC; Energy/time estimate');
   });
 });
 

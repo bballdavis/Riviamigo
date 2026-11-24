@@ -188,12 +188,24 @@ Used to ensure full parity with the best-in-class EV trackers.
   trips by local day.
 - Battery and charge-curve time-series routes return their direct normalized
   telemetry samples when retained. Cross-session DC curves preserve raw
-  session/SoC evidence, collapsing only duplicate readings at the same SoC in
-  the same session. Charge curves identify storage provenance with
-  `sample_source` and rate provenance with `power_method`: `recorded` is a
-  Rivian-supplied kW reading, while `soc_delta` is calculated from observed SoC,
-  capacity, and elapsed time. `rivian_charge_curve_points` use interpolated SoC
-  and are estimated history rather than true-curve inputs.
+  session evidence. A session curve has one point a minute and cross-session DC
+  curves one point every 20 seconds, each built by `services::charge_curve`.
+  Each point's power comes from the first source that covers it: Parallax
+  `charging.session.power` (`sample_source: parallax_session_power`), the
+  Parallax breakdown power (`parallax_breakdown`), legacy telemetry power
+  (`telemetry`), and vehicle charging-curve points held until the next point for
+  at most ten minutes (`parallax_charge_curve_points`,
+  `rivian_charge_curve_points`). These are `power_method: recorded`. Without
+  them, `energy_delta` is the least-squares slope of the Parallax breakdown's
+  running energy total and `soc_delta` the slope of battery level times pack
+  capacity, each over a centred window of two to ten minutes that widens until
+  it spans fifteen reporting steps (0.1 kWh or 0.1%). A one-minute difference
+  of 0.1% battery steps produced false spikes (an 11 kW charger read as up to
+  16.7 kW). AC power is capped at 22 kW and DC at 300 kW. `soc_method` says
+  where the point's battery level came from: `measured` (a reading in its
+  bucket), `interpolated` (between readings, or the nearest within two
+  minutes), or `session_bounds` (a straight line between the session's start
+  and end level; cross-session curves treat these as estimated history).
 
 ### Historical API inventory
 - `GET /v1/battery/degradation` — capacity trend over time

@@ -2149,7 +2149,14 @@ pub(crate) struct CollectorMemory {
 pub(crate) struct ChargingGate {
     active: Option<bool>,
     observed_at: Option<DateTime<Utc>>,
+    /// The last `charging.session.power` reading stored as a sample.
+    last_power_sample: Option<(DateTime<Utc>, f64)>,
 }
+
+/// A stored power reading is kept at least this often while power flows.
+const POWER_SAMPLE_INTERVAL_SECONDS: i64 = 15;
+/// A change this large is stored at once, so ramps and steps keep their shape.
+const POWER_SAMPLE_CHANGE_KW: f64 = 0.5;
 
 impl ChargingGate {
     /// Whether a status frame with this timestamp is at least as new as the
@@ -2170,6 +2177,55 @@ impl ChargingGate {
         self.observed_at = Some(observed_at);
         previous
     }
+
+    /// Whether a power reading should be stored as a sample: the first one,
+    /// one at least 15 seconds after the last stored, a change of 0.5 kW or
+    /// more, or a reading older than the last stored (a late frame).
+    fn wants_power_sample(&self, observed_at: DateTime<Utc>, power_kw: f64) -> bool {
+        match self.last_power_sample {
+            None => true,
+            Some((last_at, last_kw)) => {
+                observed_at < last_at
+                    || (observed_at - last_at).num_seconds() >= POWER_SAMPLE_INTERVAL_SECONDS
+                    || (power_kw - last_kw).abs() >= POWER_SAMPLE_CHANGE_KW
+            }
+        }
+    }
+
+    /// Record a stored power sample. A late frame does not move the marker back.
+    fn stored_power_sample(&mut self, observed_at: DateTime<Utc>, power_kw: f64) {
+        if self
+            .last_power_sample
+            .is_none_or(|(last_at, _)| observed_at >= last_at)
+        {
+            self.last_power_sample = Some((observed_at, power_kw));
+        }
+    }
+}
+
+/// Store one measured charging-power reading. Keyed by vehicle and vehicle
+/// timestamp, so a re-sent frame is stored once.
+async fn insert_power_sample(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    session_id: Option<Uuid>,
+    power_kw: f64,
+    source_at: DateTime<Utc>,
+) -> Result<()> {
+    sqlx::query(
+        r#"INSERT INTO timeseries.parallax_charge_power_samples
+               (vehicle_id, source_at, power_kw, charge_session_id, schema_version)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (vehicle_id, source_at) DO NOTHING"#,
+    )
+    .bind(vehicle_id)
+    .bind(source_at)
+    .bind(power_kw)
+    .bind(session_id)
+    .bind(SCHEMA_VERSION)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 impl CollectorMemory {
@@ -2780,8 +2836,8 @@ async fn persist_allowlisted_envelope(
             sqlx::query(
                 r#"INSERT INTO timeseries.parallax_charge_breakdown_samples
                    (vehicle_id, source_at, received_at, payload_hash, charge_session_id, total_kwh, pack_kwh,
-                    thermal_kwh, duration_minutes, charging_state, completion_state, schema_version)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT DO NOTHING"#,
+                    thermal_kwh, duration_minutes, charging_state, completion_state, schema_version, power_kw)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT DO NOTHING"#,
             )
             .bind(vehicle_id)
             .bind(source_at)
@@ -2795,6 +2851,7 @@ async fn persist_allowlisted_envelope(
             .bind(value.charging_state)
             .bind(None::<i32>)
             .bind(SCHEMA_VERSION)
+            .bind(current_power_kw)
             .execute(pool)
             .await?;
             if let Some(session_id) = associated_session {
@@ -2933,6 +2990,11 @@ async fn persist_allowlisted_envelope(
                 // Zero the live power first: if that write fails, the gate
                 // stays open so the re-sent status retries it.
                 if memory.charging.active == Some(true) && !flowing {
+                    // A stopped charge sends no final zero reading, so the
+                    // stored series ends here explicitly.
+                    insert_power_sample(pool, vehicle_id, associated_session, 0.0, source_at)
+                        .await?;
+                    memory.charging.stored_power_sample(source_at, 0.0);
                     if let Some(session_id) = associated_session {
                         update_parallax_power(pool, vehicle_id, session_id, 0.0, source_at).await?;
                     }
@@ -2970,6 +3032,11 @@ async fn persist_allowlisted_envelope(
                 record_decode_error(pool, vehicle_id).await?;
                 return Ok(EnvelopeOutcome::Rejected);
             };
+            if memory.charging.wants_power_sample(source_at, power_kw) {
+                insert_power_sample(pool, vehicle_id, associated_session, power_kw, source_at)
+                    .await?;
+                memory.charging.stored_power_sample(source_at, power_kw);
+            }
             if let Some(session_id) = associated_session {
                 update_parallax_power(pool, vehicle_id, session_id, power_kw, source_at).await?;
             }
@@ -3868,6 +3935,25 @@ mod tests {
         assert_eq!(gate.active, Some(false));
         assert!(charging_state_is_active(2) && charging_state_is_active(3));
         assert!(!charging_state_is_active(4) && !charging_state_is_active(8));
+    }
+
+    #[test]
+    fn power_samples_are_thinned_but_keep_changes() {
+        let at = Utc::now();
+        let seconds = chrono::Duration::seconds;
+        let mut gate = ChargingGate::default();
+        assert!(gate.wants_power_sample(at, 11.2));
+        gate.stored_power_sample(at, 11.2);
+        // A steady five-second stream is stored about every 15 seconds.
+        assert!(!gate.wants_power_sample(at + seconds(5), 11.3));
+        assert!(!gate.wants_power_sample(at + seconds(10), 11.1));
+        assert!(gate.wants_power_sample(at + seconds(15), 11.2));
+        // A step of 0.5 kW or more is stored at once.
+        assert!(gate.wants_power_sample(at + seconds(5), 10.6));
+        // A late frame is stored, and does not move the marker back.
+        assert!(gate.wants_power_sample(at - seconds(5), 11.2));
+        gate.stored_power_sample(at - seconds(5), 11.2);
+        assert!(!gate.wants_power_sample(at + seconds(5), 11.2));
     }
 
     #[test]

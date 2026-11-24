@@ -5,6 +5,7 @@ use crate::{
     },
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
+    services::charge_curve,
     services::cost::recompute_charge_session_cost,
 };
 use axum::{
@@ -306,54 +307,6 @@ fn resolve_time_bounds(
     (resolved_from, resolved_to)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_fallback_curve_samples(
-    session_id: Uuid,
-    started_at: DateTime<Utc>,
-    ended_at: DateTime<Utc>,
-    charger_type: Option<&str>,
-    soc_start: f64,
-    soc_end: f64,
-    points: &[RawCurvePointRow],
-    cap_kw: f64,
-) -> Vec<CurveSampleRow> {
-    if points.is_empty() {
-        return vec![];
-    }
-
-    let span_minutes = (ended_at - started_at).num_seconds().max(1) as f64 / 60.0;
-    let point_span_seconds = points
-        .first()
-        .zip(points.last())
-        .map(|(first, last)| (last.ts - first.ts).num_seconds().max(1) as f64)
-        .unwrap_or(1.0);
-    let first_ts = points.first().map(|point| point.ts).unwrap_or(started_at);
-
-    points
-        .iter()
-        .map(|row| {
-            let elapsed_minutes = (row.ts - started_at).num_seconds() as f64 / 60.0;
-            let soc = if points.len() == 1 {
-                Some((soc_start + soc_end) / 2.0)
-            } else {
-                let ratio =
-                    ((row.ts - first_ts).num_seconds() as f64 / point_span_seconds).clamp(0.0, 1.0);
-                Some(soc_start + (soc_end - soc_start) * ratio)
-            };
-
-            CurveSampleRow {
-                session_id,
-                minutes_elapsed: elapsed_minutes.clamp(0.0, span_minutes),
-                charge_rate_kw: row.power_kw.unwrap_or(0.0).clamp(0.0, cap_kw),
-                soc,
-                sample_source: row.sample_source.clone(),
-                charger_type: charger_type.map(ToOwned::to_owned),
-                power_method: "recorded",
-            }
-        })
-        .collect()
-}
-
 #[derive(Debug, sqlx::FromRow)]
 struct SummaryAggRow {
     total_kwh: Option<f64>,
@@ -386,17 +339,6 @@ struct WeeklySummaryRow {
 }
 
 #[derive(Debug, sqlx::FromRow)]
-struct CurveRow {
-    minutes_elapsed: Option<f64>,
-    charge_rate_kw: Option<f64>,
-    soc: Option<f64>,
-    #[sqlx(default)]
-    power_method: Option<String>,
-    #[sqlx(default)]
-    sample_source: Option<String>,
-}
-
-#[derive(Debug, sqlx::FromRow)]
 struct CurveAnalysisSessionRow {
     id: Uuid,
     started_at: DateTime<Utc>,
@@ -415,24 +357,7 @@ struct CurveSampleRow {
     sample_source: String,
     charger_type: Option<String>,
     power_method: &'static str,
-}
-
-#[derive(Debug, sqlx::FromRow)]
-struct RawCurvePointRow {
-    ts: DateTime<Utc>,
-    power_kw: Option<f64>,
-    sample_source: String,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, sqlx::FromRow)]
-struct CurveAnalysisValueRow {
-    ts: DateTime<Utc>,
-    minutes_elapsed: f64,
-    charge_rate_kw: Option<f64>,
-    soc: Option<f64>,
-    #[sqlx(default)]
-    power_method: Option<String>,
+    soc_method: &'static str,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -941,6 +866,7 @@ async fn get_curve_analysis(
             "sample_source": row.sample_source,
             "charger_type": row.charger_type,
             "power_method": row.power_method,
+            "soc_method": row.soc_method,
         }))
         .collect::<Vec<_>>())))
 }
@@ -1244,6 +1170,7 @@ async fn get_session_response(
         session.started_at,
         session.ended_at,
         session.charger_type.as_deref(),
+        session.soc_start.zip(session.soc_end),
     )
     .await?;
 
@@ -1278,6 +1205,7 @@ async fn get_session_curve_response(
             session.started_at,
             session.ended_at,
             session.charger_type.as_deref(),
+            session.soc_start.zip(session.soc_end),
         )
         .await?
     )))
@@ -1728,45 +1656,18 @@ mod tests {
         assert_eq!(sessions.len(), 205);
         assert_eq!(daily.iter().map(|day| day.session_count).sum::<i64>(), 205);
     }
-
-    #[test]
-    fn fallback_curve_samples_fill_soc_using_session_bounds() {
-        let session_id = Uuid::new_v4();
-        let started_at = Utc.with_ymd_and_hms(2026, 6, 1, 8, 0, 0).unwrap();
-        let ended_at = Utc.with_ymd_and_hms(2026, 6, 1, 8, 20, 0).unwrap();
-        let points = vec![
-            super::RawCurvePointRow {
-                ts: Utc.with_ymd_and_hms(2026, 6, 1, 8, 2, 0).unwrap(),
-                power_kw: Some(160.0),
-                sample_source: "rivian_charge_curve_points".to_string(),
-            },
-            super::RawCurvePointRow {
-                ts: Utc.with_ymd_and_hms(2026, 6, 1, 8, 10, 0).unwrap(),
-                power_kw: Some(120.0),
-                sample_source: "parallax_charge_curve_points".to_string(),
-            },
-        ];
-
-        let rows = super::build_fallback_curve_samples(
-            session_id,
-            started_at,
-            ended_at,
-            Some("dc"),
-            18.0,
-            76.0,
-            &points,
-            300.0,
-        );
-
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].session_id, session_id);
-        assert_eq!(rows[0].sample_source, "rivian_charge_curve_points");
-        assert!((rows[0].soc.unwrap_or_default() - 18.0).abs() < 0.01);
-        assert!((rows[1].soc.unwrap_or_default() - 76.0).abs() < 0.01);
-        assert!(rows.iter().all(|row| row.charge_rate_kw > 0.0));
-    }
 }
 
+fn is_dc_charger(charger_type: Option<&str>) -> bool {
+    matches!(
+        charger_type.map(str::to_ascii_lowercase).as_deref(),
+        Some("dc" | "dcfc")
+    )
+}
+
+/// One session's charge curve for the session chart: one point a minute.
+/// Unknown charger types get the AC power cap, which only removes impossible
+/// values; see [`charge_curve`] for how each point's power is chosen.
 async fn load_curve(
     pool: &sqlx::PgPool,
     vehicle_id: Uuid,
@@ -1774,223 +1675,39 @@ async fn load_curve(
     started_at: DateTime<Utc>,
     ended_at: Option<DateTime<Utc>>,
     charger_type: Option<&str>,
+    soc_bounds: Option<(f64, f64)>,
 ) -> Result<Vec<serde_json::Value>, AppError> {
-    // Open sessions use now; completed sessions keep their authoritative end.
-    let ended_at = ended_at.unwrap_or_else(Utc::now);
-
-    // Context-aware cap: DC fast chargers can peak ~220 kW on a Rivian so we
-    // allow up to 300 kW.  AC sessions (L1 or L2) are hard-limited by circuit
-    // amperage — even a 80A/240V L2 circuit tops out around 19 kW.  We cap at
-    // 22 kW to give a comfortable margin without letting SOC-gap spikes (from
-    // offline periods) corrupt the curve.  Unknown/null types get the AC cap as
-    // a conservative default; misclassifying a DC session as AC is unlikely
-    // since the charge_detector's AC-spike filter already screens those.
-    let is_dc = matches!(
-        charger_type.map(str::to_ascii_lowercase).as_deref(),
-        Some("dc" | "dcfc")
-    );
-
-    let linked_sample_count = sqlx::query_scalar::<_, i64>(
-        r#"SELECT COUNT(*)::int8
-           FROM timeseries.telemetry
-           WHERE vehicle_id=$1
-             AND charge_session_id=$2
-             AND ts >= $3
-             AND ts <= $4"#,
+    let points = charge_curve::load_charge_curve(
+        pool,
+        vehicle_id,
+        session_id,
+        started_at,
+        ended_at,
+        is_dc_charger(charger_type),
+        soc_bounds,
+        SESSION_CURVE_BUCKET_SECONDS,
     )
-    .bind(vehicle_id)
-    .bind(session_id)
-    .bind(started_at)
-    .bind(ended_at)
-    .fetch_one(pool)
     .await?;
-
-    let (rows, sample_source) = if linked_sample_count >= 2 {
-        (
-            sqlx::query_as::<_, CurveRow>(
-                r#"WITH cap AS (
-                   SELECT COALESCE(
-                       (SELECT battery_capacity_wh
-                        FROM riviamigo.vehicles
-                        WHERE id=$1
-                          AND battery_capacity_wh IS NOT NULL
-                        LIMIT 1),
-                       (SELECT max(battery_capacity_wh)
-                        FROM timeseries.telemetry
-                        WHERE vehicle_id=$1
-                          AND battery_capacity_wh IS NOT NULL)
-                   ) AS default_cap_wh
-               ),
-                samples AS (
-                    SELECT time_bucket('1 minute', t.ts) AS bucket,
-                           AVG(t.battery_level) AS avg_soc,
-                           AVG(ABS(t.power_kw)) FILTER (WHERE t.power_kw IS NOT NULL) AS avg_power_kw,
-                           AVG(t.battery_capacity_wh) AS bucket_cap_wh
-                    FROM timeseries.telemetry t
-                   WHERE t.vehicle_id=$1
-                     AND t.charge_session_id=$2
-                     AND t.ts >= $3
-                     AND t.ts <= $4
-                   GROUP BY 1
-                )
-               SELECT EXTRACT(EPOCH FROM (bucket - $3))::float8 / 60.0 AS minutes_elapsed,
-                      LEAST(
-                          CASE WHEN $5 THEN 300.0 ELSE 22.0 END,
-                          GREATEST(
-                              0.0,
-                              COALESCE(avg_power_kw, CASE
-                                  WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
-                                   AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
-                                  THEN 3600.0 * (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket)) / 100.0
-                                      * COALESCE(bucket_cap_wh, cap.default_cap_wh) / 1000.0
-                                      / EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket)))
-                              END)
-                          )
-                      ) AS charge_rate_kw,
-                      avg_soc AS soc,
-                      CASE
-                          WHEN avg_power_kw IS NOT NULL THEN 'recorded'
-                          WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
-                           AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
-                          THEN 'soc_delta'
-                      END AS power_method
-               FROM samples
-               CROSS JOIN cap
-               WHERE avg_soc IS NOT NULL
-               ORDER BY bucket"#,
-            )
-            .bind(vehicle_id)
-            .bind(session_id)
-            .bind(started_at)
-            .bind(ended_at)
-            .bind(is_dc)
-            .fetch_all(pool)
-            .await?,
-            "telemetry",
-        )
-    } else {
-        (
-            sqlx::query_as::<_, CurveRow>(
-                r#"WITH cap AS (
-                   SELECT COALESCE(
-                       (SELECT battery_capacity_wh
-                        FROM riviamigo.vehicles
-                        WHERE id=$1
-                          AND battery_capacity_wh IS NOT NULL
-                        LIMIT 1),
-                       (SELECT max(battery_capacity_wh)
-                        FROM timeseries.telemetry
-                        WHERE vehicle_id=$1
-                          AND battery_capacity_wh IS NOT NULL)
-                   ) AS default_cap_wh
-               ),
-               samples AS (
-                   SELECT bucket,
-                          avg_soc,
-                          avg_power_kw,
-                          battery_capacity_wh
-                   FROM timeseries.telemetry_1min
-                   WHERE vehicle_id=$1
-                     AND bucket >= $2
-                     AND bucket <= $3
-               )
-               SELECT EXTRACT(EPOCH FROM (bucket - $2))::float8 / 60.0 AS minutes_elapsed,
-                      LEAST(
-                          CASE WHEN $4 THEN 300.0 ELSE 22.0 END,
-                          GREATEST(
-                              0.0,
-                              COALESCE(ABS(avg_power_kw), CASE
-                                  WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
-                                   AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
-                                  THEN 3600.0 * (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket)) / 100.0
-                                      * COALESCE(battery_capacity_wh, cap.default_cap_wh) / 1000.0
-                                      / EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket)))
-                              END)
-                          )
-                      ) AS charge_rate_kw,
-                      avg_soc AS soc,
-                      CASE
-                          WHEN avg_power_kw IS NOT NULL THEN 'recorded'
-                          WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
-                           AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
-                          THEN 'soc_delta'
-                      END AS power_method
-               FROM samples
-               CROSS JOIN cap
-               WHERE avg_soc IS NOT NULL
-               ORDER BY bucket"#,
-            )
-            .bind(vehicle_id)
-            .bind(started_at)
-            .bind(ended_at)
-            .bind(is_dc)
-            .fetch_all(pool)
-            .await?,
-            "telemetry_1min",
-        )
-    };
-
-    if rows.len() < 2 {
-        // Fallback: combine the two explicitly associated curve stores. A
-        // Parallax point wins an exact timestamp collision because it carries
-        // the richer graph sample; canonical telemetry still owns lifecycle.
-        let fallback = sqlx::query_as::<_, CurveRow>(
-            r#"WITH candidates AS (
-                   SELECT ts,power_kw,NULL::float8 AS soc,'rivian_charge_curve_points'::text AS sample_source,1 AS precedence
-                   FROM riviamigo.rivian_charge_curve_points
-                   WHERE vehicle_id=$1 AND charge_session_id=$3 AND power_kw IS NOT NULL AND power_kw > 0
-                   UNION ALL
-                   SELECT source_at AS ts,power_kw,soc,'parallax_charge_curve_points'::text AS sample_source,2 AS precedence
-                   FROM timeseries.parallax_charge_curve_points
-                   WHERE vehicle_id=$1 AND charge_session_id=$3 AND power_kw IS NOT NULL AND power_kw > 0
-               ), resolved AS (
-                   SELECT DISTINCT ON (ts) ts,power_kw,soc,sample_source
-                   FROM candidates ORDER BY ts,precedence DESC
-               )
-               SELECT EXTRACT(EPOCH FROM (ts - $2))::float8 / 60.0 AS minutes_elapsed,
-                      LEAST(CASE WHEN $4 THEN 300.0 ELSE 22.0 END,
-                            GREATEST(0.0, power_kw)) AS charge_rate_kw,
-                      soc,
-                      'recorded'::text AS power_method,
-                      sample_source
-               FROM resolved
-               ORDER BY ts"#,
-        )
-        .bind(vehicle_id)
-        .bind(started_at)
-        .bind(session_id)
-        .bind(is_dc)
-        .fetch_all(pool)
-        .await?;
-        if !fallback.is_empty() {
-            return Ok(fallback
-                .iter()
-                .map(|r| {
-                    serde_json::json!({
-                        "minutes_elapsed": r.minutes_elapsed,
-                        "charge_rate_kw": r.charge_rate_kw,
-                        "soc": r.soc,
-                        "sample_source": r.sample_source.as_deref().unwrap_or("rivian_charge_curve_points"),
-                        "power_method": r.power_method,
-                    })
-                })
-                .collect());
-        }
-    }
-
-    Ok(rows
+    Ok(points
         .iter()
-        .map(|r| {
+        .map(|point| {
             serde_json::json!({
-                "minutes_elapsed": r.minutes_elapsed,
-                "charge_rate_kw": r.charge_rate_kw,
-                "soc": r.soc,
-                "sample_source": sample_source,
-                "power_method": r.power_method,
+                "minutes_elapsed": point.minutes_elapsed,
+                "charge_rate_kw": point.charge_rate_kw,
+                "soc": point.soc,
+                "sample_source": point.sample_source,
+                "power_method": point.power_method,
+                "soc_method": point.soc_method,
             })
         })
         .collect())
 }
+
+/// The session chart plots one point a minute.
+const SESSION_CURVE_BUCKET_SECONDS: i64 = 60;
+/// Curve analysis plots DC power against battery level, where a minute can
+/// cover several percent, so it samples every 20 seconds.
+const ANALYSIS_CURVE_BUCKET_SECONDS: i64 = 20;
 
 #[allow(clippy::too_many_arguments)]
 async fn load_curve_analysis_samples(
@@ -2006,271 +1723,28 @@ async fn load_curve_analysis_samples(
     let Some(ended_at) = ended_at else {
         return Ok(vec![]);
     };
-
-    let is_dc = matches!(
-        charger_type
-            .as_deref()
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("dc" | "dcfc")
-    );
-    let cap_kw = if is_dc { 300.0 } else { 22.0 };
-
-    let linked_sample_count = sqlx::query_scalar::<_, i64>(
-        r#"SELECT COUNT(*)::int8
-           FROM timeseries.telemetry
-           WHERE vehicle_id=$1
-             AND charge_session_id=$2
-             AND ts >= $3
-             AND ts <= $4"#,
-    )
-    .bind(vehicle_id)
-    .bind(session_id)
-    .bind(started_at)
-    .bind(ended_at)
-    .fetch_one(pool)
-    .await?;
-
-    let primary_rows = if linked_sample_count >= 2 {
-        sqlx::query_as::<_, CurveAnalysisValueRow>(
-            r#"WITH cap AS (
-                   SELECT COALESCE(
-                       (SELECT battery_capacity_wh
-                        FROM riviamigo.vehicles
-                        WHERE id=$1
-                          AND battery_capacity_wh IS NOT NULL
-                        LIMIT 1),
-                       (SELECT max(battery_capacity_wh)
-                        FROM timeseries.telemetry
-                        WHERE vehicle_id=$1
-                          AND battery_capacity_wh IS NOT NULL)
-                   ) AS default_cap_wh
-               ),
-                samples AS (
-                    SELECT t.ts AS bucket,
-                           t.battery_level AS soc,
-                           ABS(t.power_kw) AS power_kw,
-                           t.battery_capacity_wh AS capacity_wh
-                    FROM timeseries.telemetry t
-                   WHERE t.vehicle_id=$1
-                     AND t.charge_session_id=$2
-                     AND t.ts >= $3
-                     AND t.ts <= $4
-                ),
-                intervals AS (
-                    SELECT bucket,
-                           soc,
-                           power_kw,
-                           capacity_wh,
-                           LAG(bucket) OVER (ORDER BY bucket) AS previous_bucket,
-                           LAG(soc) OVER (ORDER BY bucket) AS previous_soc
-                    FROM samples
-                    WHERE soc IS NOT NULL
-                ),
-                calculated AS (
-                    SELECT bucket,
-                           soc,
-                           power_kw,
-                           CASE
-                               WHEN power_kw IS NULL
-                                AND soc > previous_soc
-                                AND EXTRACT(EPOCH FROM (bucket - previous_bucket)) BETWEEN 10 AND 300
-                               THEN 3600.0 * (soc - previous_soc) / 100.0
-                                   * COALESCE(capacity_wh, cap.default_cap_wh) / 1000.0
-                                   / EXTRACT(EPOCH FROM (bucket - previous_bucket))
-                           END AS derived_power_kw
-                    FROM intervals
-                    CROSS JOIN cap
-                ),
-                session_soc_points AS (
-                    SELECT MIN(bucket) AS ts,
-                           EXTRACT(EPOCH FROM (MIN(bucket) - $3))::float8 / 60.0 AS minutes_elapsed,
-                           soc,
-                           CASE
-                               WHEN COUNT(*) FILTER (WHERE power_kw IS NOT NULL) > 0
-                               THEN AVG(power_kw) FILTER (WHERE power_kw IS NOT NULL)
-                               ELSE AVG(derived_power_kw)
-                           END AS charge_rate_kw,
-                           CASE
-                               WHEN COUNT(*) FILTER (WHERE power_kw IS NOT NULL) > 0 THEN 'recorded'
-                               WHEN COUNT(*) FILTER (WHERE derived_power_kw IS NOT NULL) > 0 THEN 'soc_delta'
-                           END AS power_method
-                    FROM calculated
-                    WHERE power_kw IS NOT NULL OR derived_power_kw IS NOT NULL
-                    GROUP BY soc
-                )
-               SELECT ts,
-                      minutes_elapsed,
-                      LEAST(
-                          CASE WHEN $5 THEN 300.0 ELSE 22.0 END,
-                          GREATEST(
-                              0.0,
-                              charge_rate_kw
-                          )
-                      ) AS charge_rate_kw,
-                      soc,
-                      power_method
-               FROM session_soc_points
-               ORDER BY ts"#,
-        )
-        .bind(vehicle_id)
-        .bind(session_id)
-        .bind(started_at)
-        .bind(ended_at)
-        .bind(is_dc)
-        .fetch_all(pool)
-        .await?
-    } else {
-        Vec::new()
-    };
-
-    if primary_rows.len() >= 2 {
-        return Ok(primary_rows
-            .into_iter()
-            .map(|row| CurveSampleRow {
-                session_id,
-                minutes_elapsed: row.minutes_elapsed,
-                charge_rate_kw: row.charge_rate_kw.unwrap_or(0.0),
-                soc: row.soc,
-                sample_source: "telemetry".to_string(),
-                charger_type: charger_type.clone(),
-                power_method: if row.power_method.as_deref() == Some("recorded") {
-                    "recorded"
-                } else {
-                    "soc_delta"
-                },
-            })
-            .collect());
-    }
-
-    let minute_sample_count = sqlx::query_scalar::<_, i64>(
-        r#"SELECT COUNT(*)::int8
-           FROM timeseries.telemetry_1min
-           WHERE vehicle_id=$1
-             AND bucket >= $2
-             AND bucket <= $3
-             AND avg_soc IS NOT NULL"#,
-    )
-    .bind(vehicle_id)
-    .bind(started_at)
-    .bind(ended_at)
-    .fetch_one(pool)
-    .await?;
-
-    let minute_rows = if minute_sample_count >= 2 {
-        sqlx::query_as::<_, CurveAnalysisValueRow>(
-            r#"WITH cap AS (
-                   SELECT COALESCE(
-                       (SELECT battery_capacity_wh
-                        FROM riviamigo.vehicles
-                        WHERE id=$1
-                          AND battery_capacity_wh IS NOT NULL
-                        LIMIT 1),
-                       (SELECT max(battery_capacity_wh)
-                        FROM timeseries.telemetry
-                        WHERE vehicle_id=$1
-                          AND battery_capacity_wh IS NOT NULL)
-                   ) AS default_cap_wh
-               ),
-               samples AS (
-                   SELECT bucket,
-                          avg_soc,
-                          avg_power_kw,
-                          battery_capacity_wh
-                   FROM timeseries.telemetry_1min
-                   WHERE vehicle_id=$1
-                     AND bucket >= $2
-                     AND bucket <= $3
-               )
-               SELECT bucket AS ts,
-                      EXTRACT(EPOCH FROM (bucket - $2))::float8 / 60.0 AS minutes_elapsed,
-                      LEAST(
-                          CASE WHEN $4 THEN 300.0 ELSE 22.0 END,
-                          GREATEST(
-                              0.0,
-                              COALESCE(ABS(avg_power_kw), CASE
-                                  WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
-                                   AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
-                                  THEN 3600.0 * (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket)) / 100.0
-                                      * COALESCE(battery_capacity_wh, cap.default_cap_wh) / 1000.0
-                                      / EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket)))
-                              END)
-                          )
-                      ) AS charge_rate_kw,
-                      avg_soc AS soc,
-                      CASE
-                          WHEN avg_power_kw IS NOT NULL THEN 'recorded'
-                          WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
-                           AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
-                          THEN 'soc_delta'
-                      END AS power_method
-               FROM samples
-               CROSS JOIN cap
-               WHERE avg_soc IS NOT NULL
-               ORDER BY bucket"#,
-        )
-        .bind(vehicle_id)
-        .bind(started_at)
-        .bind(ended_at)
-        .bind(is_dc)
-        .fetch_all(pool)
-        .await?
-    } else {
-        Vec::new()
-    };
-
-    if minute_rows.len() >= 2 {
-        return Ok(minute_rows
-            .into_iter()
-            .map(|row| CurveSampleRow {
-                session_id,
-                minutes_elapsed: row.minutes_elapsed,
-                charge_rate_kw: row.charge_rate_kw.unwrap_or(0.0),
-                soc: row.soc,
-                sample_source: "telemetry_1min".to_string(),
-                charger_type: charger_type.clone(),
-                power_method: if row.power_method.as_deref() == Some("recorded") {
-                    "recorded"
-                } else {
-                    "soc_delta"
-                },
-            })
-            .collect());
-    }
-
-    let fallback = sqlx::query_as::<_, RawCurvePointRow>(
-        r#"WITH candidates AS (
-               SELECT ts,power_kw,'rivian_charge_curve_points'::text AS sample_source,1 AS precedence
-               FROM riviamigo.rivian_charge_curve_points
-               WHERE vehicle_id=$1 AND charge_session_id=$2 AND power_kw IS NOT NULL AND power_kw > 0
-               UNION ALL
-               SELECT source_at AS ts,power_kw,'parallax_charge_curve_points'::text AS sample_source,2 AS precedence
-               FROM timeseries.parallax_charge_curve_points
-               WHERE vehicle_id=$1 AND charge_session_id=$2 AND power_kw IS NOT NULL AND power_kw > 0
-           )
-           SELECT DISTINCT ON (ts) ts,power_kw,sample_source
-           FROM candidates ORDER BY ts,precedence DESC"#,
-    )
-    .bind(vehicle_id)
-    .bind(session_id)
-    .fetch_all(pool)
-    .await?;
-
-    let Some((soc_start, soc_end)) = soc_start.zip(soc_end) else {
-        return Ok(vec![]);
-    };
-    if fallback.is_empty() {
-        return Ok(vec![]);
-    }
-
-    Ok(build_fallback_curve_samples(
+    let points = charge_curve::load_charge_curve(
+        pool,
+        vehicle_id,
         session_id,
         started_at,
-        ended_at,
-        charger_type.as_deref(),
-        soc_start,
-        soc_end,
-        &fallback,
-        cap_kw,
-    ))
+        Some(ended_at),
+        is_dc_charger(charger_type.as_deref()),
+        soc_start.zip(soc_end),
+        ANALYSIS_CURVE_BUCKET_SECONDS,
+    )
+    .await?;
+    Ok(points
+        .into_iter()
+        .map(|point| CurveSampleRow {
+            session_id,
+            minutes_elapsed: point.minutes_elapsed,
+            charge_rate_kw: point.charge_rate_kw,
+            soc: point.soc,
+            sample_source: point.sample_source.to_string(),
+            charger_type: charger_type.clone(),
+            power_method: point.power_method,
+            soc_method: point.soc_method,
+        })
+        .collect())
 }

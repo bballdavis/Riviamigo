@@ -1943,23 +1943,31 @@ type ChargeCurvePlotRow = {
   summaryDetail: string | null;
 };
 
+type CurvePowerMethod = 'recorded' | 'energy_delta' | 'soc_delta';
+
 type CurvePoint = ChargeCurveAnalysisPoint & {
   soc_pct: number;
   charge_rate_kw: number;
-  sample_source: 'telemetry' | 'telemetry_1min' | 'rivian_charge_curve_points';
-  power_method: 'recorded' | 'soc_delta';
+  power_method: CurvePowerMethod;
+  /** Battery level drawn as a straight line between the session's start and end. */
+  socEstimated: boolean;
 };
 
-function normalizeSampleSource(value: unknown): CurvePoint['sample_source'] {
-  const source = typeof value === 'string' ? value : '';
-  if (source === 'rivian_charge_curve_points' || source === 'telemetry_1min') return source;
-  return 'telemetry';
+function normalizePowerMethod(value: unknown): CurvePowerMethod {
+  if (value === 'recorded' || value === 'energy_delta') return value;
+  return 'soc_delta';
+}
+
+function isSocEstimated(point: ChargeCurveAnalysisPoint) {
+  if (point.soc_method != null) return point.soc_method === 'session_bounds';
+  // Responses from before soc_method existed marked these by their source.
+  return point.sample_source === 'rivian_charge_curve_points';
 }
 
 function buildChargeCurvePlot(data: ChargeCurveAnalysisPoint[], mode: ChargeCurveMode) {
-  const points = data
+  const points: CurvePoint[] = data
     .filter(
-      (point): point is CurvePoint =>
+      (point): point is ChargeCurveAnalysisPoint & { soc_pct: number } =>
         Number.isFinite(point.soc_pct) &&
         Number.isFinite(point.charge_rate_kw) &&
         point.charge_rate_kw > 0 &&
@@ -1967,17 +1975,16 @@ function buildChargeCurvePlot(data: ChargeCurveAnalysisPoint[], mode: ChargeCurv
     )
     .map((point) => ({
       ...point,
-      sample_source: normalizeSampleSource(point.sample_source),
-      power_method:
-        point.power_method === 'recorded' ? ('recorded' as const) : ('soc_delta' as const),
+      power_method: normalizePowerMethod(point.power_method),
+      socEstimated: isSocEstimated(point),
     }));
 
   if (points.length === 0) {
     return { rows: [] as ChargeCurvePlotRow[], hasEstimatedHistory: false };
   }
 
-  const observed = points.filter((point) => point.sample_source !== 'rivian_charge_curve_points');
-  const estimated = points.filter((point) => point.sample_source === 'rivian_charge_curve_points');
+  const observed = points.filter((point) => !point.socEstimated);
+  const estimated = points.filter((point) => point.socEstimated);
   const rows: ChargeCurvePlotRow[] = [
     ...observed.map((point) => ({
       socPct: point.soc_pct,
@@ -1995,7 +2002,7 @@ function buildChargeCurvePlot(data: ChargeCurveAnalysisPoint[], mode: ChargeCurv
       observedKw: null,
       observedDetail: null,
       estimatedKw: point.charge_rate_kw,
-      estimatedDetail: `${formatExactSoc(point.soc_pct)} SoC; Recorded kW; estimated SoC (excluded from summaries)`,
+      estimatedDetail: `${formatExactSoc(point.soc_pct)} SoC; ${powerMethodLabel([point])}; estimated SoC (excluded from summaries)`,
       summaryKw: null,
       summaryDetail: null,
     })),
@@ -2174,8 +2181,10 @@ function interpolateHexColor(start: string, end: string, ratio: number) {
 function powerMethodLabel(points: CurvePoint[]) {
   const methods = new Set(points.map((point) => point.power_method));
   if (methods.size === 1 && methods.has('recorded')) return 'Recorded kW';
+  if (methods.size === 1 && methods.has('energy_delta')) return 'Energy/time estimate';
   if (methods.size === 1) return 'SoC/time estimate';
-  return 'Recorded and SoC/time estimates';
+  if (!methods.has('recorded')) return 'Energy and SoC/time estimates';
+  return 'Recorded kW and estimates';
 }
 
 function normalizeChargeCurveType(chargerType: ChargeCurveAnalysisPoint['charger_type']) {

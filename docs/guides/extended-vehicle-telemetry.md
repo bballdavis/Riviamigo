@@ -118,7 +118,16 @@ charging-curve power update the active session only while that status says
 the vehicle is connecting or charging, because the vehicle does not send a
 final zero reading when charging stops; when it stops, the session's live
 power is set to zero. Predicted charging-curve segments are not stored as
-observations, and only a valid charging time estimate is used. Charge
+observations, and only a valid charging time estimate is used.
+
+The live charging power is also kept as a history, about one reading every 15
+seconds (sooner when the power changes), ending with a zero when charging
+stops, and the energy breakdown keeps its power reading beside its running
+energy total. The session charge curve draws from these measured readings
+first. Where none cover a minute, it uses the vehicle's charging-curve points,
+then a rate worked out from the running energy total, and only then a rate
+worked out from battery level. The two worked-out rates are marked as
+estimates. Charge
 sessions still start and end from the canonical connection, so there is one
 charge lifecycle. The R2's charge-port door is manual, so its door state is
 shown only as open or closed and never as plugged in.
