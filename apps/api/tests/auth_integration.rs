@@ -3352,6 +3352,9 @@ async fn charging_curve_analysis_uses_fallback_history_for_longer_windows() {
     assert!(rows
         .iter()
         .all(|row| row["power_method"] == json!("recorded")));
+    assert!(rows
+        .iter()
+        .all(|row| row["soc_method"] == json!("session_bounds")));
 }
 
 #[tokio::test]
@@ -3457,19 +3460,27 @@ async fn charging_curve_analysis_uses_elapsed_time_and_strict_dc_sessions() {
     assert!(rows
         .iter()
         .all(|row| row["session_id"] == json!(dc_session_id)));
-    assert_eq!(rows.len(), 2, "one point per session and exact SoC");
-    let recorded = rows
+    // 20-second points: recorded power where telemetry carried it, and a
+    // least-squares battery-level estimate around it (1% over 60 s of a
+    // 110 kWh pack, fitted across all five readings: 52.8 kW).
+    let recorded: Vec<f64> = rows
         .iter()
-        .find(|row| row["soc_pct"] == json!(10.5))
-        .expect("recorded same-SoC point");
-    assert_eq!(recorded["power_method"], json!("recorded"));
-    assert!((recorded["charge_rate_kw"].as_f64().unwrap_or_default() - 110.0).abs() < 0.01);
-    let derived = rows
+        .filter(|row| row["power_method"] == json!("recorded"))
+        .map(|row| row["charge_rate_kw"].as_f64().unwrap_or_default())
+        .collect();
+    assert_eq!(recorded, vec![100.0, 120.0]);
+    let derived: Vec<&serde_json::Value> = rows
         .iter()
-        .find(|row| row["soc_pct"] == json!(11.0))
-        .expect("15-second derived point");
-    assert_eq!(derived["power_method"], json!("soc_delta"));
-    assert!((derived["charge_rate_kw"].as_f64().unwrap_or_default() - 132.0).abs() < 0.01);
+        .filter(|row| row["power_method"] == json!("soc_delta"))
+        .collect();
+    assert!(!derived.is_empty());
+    assert!(derived
+        .iter()
+        .all(|row| (row["charge_rate_kw"].as_f64().unwrap_or_default() - 52.8).abs() < 0.01));
+    assert!(rows
+        .iter()
+        .take(4)
+        .all(|row| row["soc_method"] == json!("measured")));
     assert!(!rows
         .iter()
         .any(|row| row["session_id"] == json!(home_session_id)));

@@ -529,12 +529,45 @@ export interface ChargingNetworkPreference {
   session_count: number;
 }
 
+/**
+ * Where a charge-curve point's power came from. Parallax sources are readings
+ * the vehicle measured; `telemetry` is legacy telemetry power or, with
+ * `power_method: 'soc_delta'`, an estimate from battery level.
+ */
+export type ChargeCurveSampleSource =
+  | 'parallax_session_power'
+  | 'parallax_breakdown'
+  | 'parallax_charge_curve_points'
+  | 'rivian_charge_curve_points'
+  | 'telemetry'
+  | 'telemetry_1min'
+  | (string & {});
+
+/**
+ * `recorded`: power the vehicle reported. `energy_delta`: estimated from the
+ * vehicle's running energy total. `soc_delta`: estimated from battery level.
+ */
+export type ChargeCurvePowerMethod = 'recorded' | 'energy_delta' | 'soc_delta' | (string & {});
+
+/**
+ * `measured`: a battery-level reading in the point's time bucket.
+ * `interpolated`: between nearby readings. `session_bounds`: a straight line
+ * between the session's start and end level, with no reading nearby.
+ */
+export type ChargeCurveSocMethod =
+  | 'measured'
+  | 'interpolated'
+  | 'session_bounds'
+  | 'unknown'
+  | (string & {});
+
 export interface ChargeCurvePoint {
   minutes_elapsed?: number | null;
   soc_pct: number;
   power_kw: number;
-  sample_source?: 'telemetry' | 'telemetry_1min' | 'rivian_charge_curve_points' | string;
-  power_method?: 'recorded' | 'soc_delta' | string;
+  sample_source?: ChargeCurveSampleSource;
+  power_method?: ChargeCurvePowerMethod;
+  soc_method?: ChargeCurveSocMethod;
 }
 
 export interface ChargeCurveAnalysisPoint {
@@ -543,8 +576,9 @@ export interface ChargeCurveAnalysisPoint {
   soc_pct: number | null;
   charge_rate_kw: number;
   charger_type: ChargerType | null;
-  sample_source?: 'telemetry' | 'telemetry_1min' | 'rivian_charge_curve_points' | string;
-  power_method?: 'recorded' | 'soc_delta' | string;
+  sample_source?: ChargeCurveSampleSource;
+  power_method?: ChargeCurvePowerMethod;
+  soc_method?: ChargeCurveSocMethod;
 }
 
 export interface ChargingChartDailyPoint {
