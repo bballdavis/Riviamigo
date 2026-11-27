@@ -1428,7 +1428,7 @@ fn log_openfreemap_failure(
 fn openfreemap_resource_class(resource: &str) -> &'static str {
     match resource.split('/').next() {
         Some("styles") => "style",
-        Some("planet") | Some("natural_earth") => "tile",
+        Some("planet") | Some("backup_planet") | Some("natural_earth") => "tile",
         Some("sprites") => "sprite",
         Some("fonts") => "font",
         _ => "unknown",
@@ -1477,8 +1477,8 @@ fn openfreemap_resource_is_allowed(resource: &str) -> bool {
     }
     match parts.as_slice() {
         ["styles", style] => openfreemap_style_name(style),
-        ["planet"] => true,
-        ["planet", snapshot, z, x, y] => {
+        [tileset] => openfreemap_vector_tileset(tileset),
+        [tileset, snapshot, z, x, y] if openfreemap_vector_tileset(tileset) => {
             openfreemap_planet_snapshot(snapshot)
                 && is_ascii_decimal(z)
                 && is_ascii_decimal(x)
@@ -1502,6 +1502,14 @@ fn openfreemap_resource_is_allowed(resource: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// OpenFreeMap serves the same OpenMapTiles vector tileset under `planet` and
+/// `backup_planet` (an alias for filter lists that block `/planet`). Its hosted
+/// styles may reference either one, so both must pass the proxy or the map is
+/// blank.
+fn openfreemap_vector_tileset(tileset: &str) -> bool {
+    matches!(tileset, "planet" | "backup_planet")
 }
 
 fn openfreemap_style_name(style: &str) -> bool {
@@ -2005,7 +2013,8 @@ mod tests {
     use super::{
         active_endpoint, basemap_proxy_url, basemap_styles, carto_basemap_key_query,
         endpoint_is_private, is_forbidden_ip, is_private_ip, openfreemap_cache_key,
-        openfreemap_resource_is_allowed, parse_private_network_allowlist, resolve_basemap_provider,
+        openfreemap_resource_class, openfreemap_resource_is_allowed,
+        parse_private_network_allowlist, resolve_basemap_provider,
         resolve_effective_basemap_provider_update, rewrite_openfreemap_json,
         should_forward_basemap_bearer_token, should_forward_carto_api_key, validate_tile_template,
         UpdateConnectionBody, BASEMAP_RASTER_ROUTE, OPENFREEMAP_PROXY_ROUTE,
@@ -2076,6 +2085,22 @@ mod tests {
         assert!(openfreemap_resource_is_allowed(
             "planet/20260823_080002_pt/1/2/3.pbf"
         ));
+        assert!(openfreemap_resource_is_allowed("planet"));
+        assert!(openfreemap_resource_is_allowed("backup_planet"));
+        assert!(openfreemap_resource_is_allowed(
+            "backup_planet/20261122_124456_pt/1/2/3.pbf"
+        ));
+        assert!(!openfreemap_resource_is_allowed(
+            "backup_planet/20261122_124456_pt/1/2/3.pbf/extra"
+        ));
+        assert!(!openfreemap_resource_is_allowed(
+            "backup_planet/latest/1/2/3.pbf"
+        ));
+        assert!(!openfreemap_resource_is_allowed("other_planet"));
+        assert!(!openfreemap_resource_is_allowed(
+            "other_planet/20261122_124456_pt/1/2/3.pbf"
+        ));
+        assert_eq!(openfreemap_resource_class("backup_planet"), "tile");
         assert!(openfreemap_resource_is_allowed(
             "natural_earth/ne2sr/1/2/3.png"
         ));
